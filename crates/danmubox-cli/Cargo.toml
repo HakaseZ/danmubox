@@ -1,0 +1,19 @@
+[package]
+name = "danmubox-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "弹幕框调试入口：脱离 UI 验证协议与适配器"
+
+[dependencies]
+danmubox-core.workspace = true
+danmubox-bili.workspace = true
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

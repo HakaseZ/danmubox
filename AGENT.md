@@ -56,12 +56,11 @@ graph LR
 | 上层互不依赖 | `cli` 与 `apps/desktop` 之间不互相依赖；共享逻辑下沉到 `core` |
 | 平台代码隔离 | `#[cfg(target_os = ...)]` 分支尽量收在 `core` 的薄适配层内 |
 
-## 3. 构建 / 测试 / lint 命令（规划值）
+## 3. 构建 / 测试 / lint 命令
 
-仓库目前只有文档，`Cargo.toml` 与前端工程尚未创建，以下命令均为**规划值**，
-落地时以实际 scaffold 结果为准，并同步更新本节与 `README.md`。**不得**把规划值描述为已验证可用。
+Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desktop`（前端）尚未创建，其命令标注为「未可用」。
 
-| 用途 | 规划命令 |
+| 用途 | 命令 |
 |---|---|
 | 全量编译检查 | `cargo check --workspace` |
 | 全量测试 | `cargo test --workspace` |
@@ -70,13 +69,16 @@ graph LR
 | 格式检查 | `cargo fmt --all -- --check` |
 | 格式修复 | `cargo fmt --all` |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` |
-| 前端依赖安装 | `npm --prefix apps/desktop install` |
-| 前端类型检查 | `npm --prefix apps/desktop run typecheck` |
-| 前端构建 | `npm --prefix apps/desktop run build` |
-| 桌面端开发 | `npm --prefix apps/desktop run dev` |
-| 跑 CLI | `cargo run -p danmubox-cli -- <子命令>` |
+| 解析房间（CLI） | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` |
+| 游客态看弹幕（CLI） | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` |
+| 前端依赖安装 | `npm --prefix apps/desktop install`（未可用） |
+| 前端类型检查 | `npm --prefix apps/desktop run typecheck`（未可用） |
+| 前端构建 | `npm --prefix apps/desktop run build`（未可用） |
+| 桌面端开发 | `npm --prefix apps/desktop run dev`（未可用） |
 
-环境变量：`DANMUBOX_LOG`（默认 `info`）。
+环境变量：`DANMUBOX_LOG`（默认 `info`；`debug` 会输出每条业务载荷的原文，是字段校准的采集入口）。
+
+新增或改变命令时，必须同时更新本节与 `README.md` §8；**不得**把未验证的命令写成已验证。
 
 ## 4. Rust 风格
 

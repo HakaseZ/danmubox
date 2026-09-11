@@ -271,6 +271,8 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 ### 10.0 `cmd` → `kind` 映射（规范性）
 
+**产生 `Message` 的命令**：
+
 | `cmd` | `kind` |
 |---|---|
 | `DANMU_MSG` | `danmaku` |
@@ -278,34 +280,52 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `SUPER_CHAT_MESSAGE` / `SUPER_CHAT_MESSAGE_JP` | `superchat` |
 | `INTERACT_WORD` / `INTERACT_WORD_V2` / `ENTRY_EFFECT` | `interact` |
 | `GUARD_BUY` / `USER_TOAST_MSG` | `guard` |
-| `LIVE` / `PREPARING` / `ROOM_CHANGE` / `CUT_OFF` / `ROOM_REAL_TIME_MESSAGE_UPDATE` / `WATCHED_CHANGE` / `LIKE_INFO_V3_CLICK` / `ONLINE_RANK_V2` / `NOTICE_MSG` / `STOP_LIVE_ROOM_LIST` | `system` |
+| `LIVE` / `PREPARING` / `ROOM_CHANGE` / `CUT_OFF` / `NOTICE_MSG` | `system` |
 
-本表之外的所有 `cmd` 一律不产生 `Message`：仅记录 `debug` 日志（命令名 + `room_id`）并丢弃。`kind` 取值集合恒为六种，新增 `cmd` 不得新增 `kind`。
+**计数类命令：不产生 `Message`**，只更新房间内存计数并计入 `counter_updates`（逐条策略见 §10.7）：
+
+`POPULARITY_CHANGE`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`WATCHED_CHANGE`、`LIKE_INFO_V3_CLICK`、`LIKE_INFO_V3_UPDATE`、`ONLINE_RANK_V2`
+
+**已知但直接丢弃的命令**：`STOP_LIVE_ROOM_LIST`（全站停播列表，与当前房间无关）、`HOT_ROOM_NOTIFY`（客户端刷新提示）、`DANMU_MSG_MIRROR`（非本房间镜像弹幕，计入 `mirrored_dropped`）。
+
+其余所有 `cmd` 一律不产生 `Message`：记录 `debug` 日志（命令名 + `room_id`）并计入 `unknown_cmd`。`kind` 取值集合恒为六种，新增 `cmd` 不得新增 `kind`。
+
+> **实测记录（2026-09-11）**：以游客态连接 `room_id=21026051`（在线约 20 万）抓取 35 秒，实际出现 29 条业务载荷，全部落在上表：`DANMU_MSG`、`INTERACT_WORD_V2`、`ENTRY_EFFECT`、`WATCHED_CHANGE`、`LIKE_INFO_V3_UPDATE`、`LIKE_INFO_V3_CLICK`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`POPULARITY_CHANGE`、`ONLINE_RANK_COUNT`、`ONLINE_RANK_V3`、`RANK_CHANGED_V2`、`PK_INFO`、`WIDGET_BANNER`、`UNIVERSAL_EVENT_GIFT`、`UNIVERSAL_EVENT_GIFT_V2`、`SEND_GIFT_V2`、`HOT_ROOM_NOTIFY`、`STOP_LIVE_ROOM_LIST`。
+> 其中 `ONLINE_RANK_COUNT` / `ONLINE_RANK_V3` / `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` / `SEND_GIFT_V2` 尚未归类，当前走 `unknown_cmd`；归类前不得凭命名猜测语义（见附录 A22）。
 
 ### 10.1 `DANMU_MSG`（`kind=danmaku`）
 
 语义：普通聊天弹幕，含文本、发送者、颜色、粉丝牌与勋章信息。
 
-| 归一化字段 | 来源（已确定） | 说明 | 校准状态 |
+| 归一化字段 | 来源（已实测） | 说明 | 校准状态 |
 |---|---|---|---|
-| `content` | `info[1]` | 弹幕文本原文 | 已确定（契约） |
-| `uid` | `info[0][15].user.uid` | 明文用户对象；游客态可能缺失 → 归一化为 `0` | 主体已确定；游客掩码待实测（A3） |
-| `uname` | `info[0][15].user.base.name` | 明文用户对象昵称 | 同上 |
-| `color` | 文本槽位内部颜色字段 | 十进制 RGB 整数；缺失 → `0` | 待实测校准（A2） |
-| `medal_level` | 粉丝牌对象槽位 | 无粉丝牌 → `0` | 待实测校准（A4） |
-| `medal_name` | 粉丝牌对象槽位 | 无粉丝牌 → `""` | 待实测校准（A4） |
-| `guard_level` | 勋章槽位 | `0` 无 / `1` 总督 / `2` 提督 / `3` 舰长 | 待实测校准（A4） |
-| `is_admin` | 房管标记槽位 | 发送者是否房管 | 待实测校准（A5） |
-| `upstream_id` | 上游弹幕标识槽位 | 举报弹幕所需；来源待实测 | 待实测校准（A6） |
-| `ts` | 载荷中的上游时间戳槽位 | 秒级值统一 ×1000 归一为 UTC 毫秒 | 待实测校准（A7） |
+| `content` | `info[1]` | 弹幕文本原文 | 已实测 |
+| `uid` | `info[0][15].user.uid` | 明文用户对象 | 已实测（样本 `3690980265954112`） |
+| `uname` | `info[0][15].user.base.name` | 明文用户对象昵称 | 已实测 |
+| `color` | `info[0][3]` | 十进制 RGB 整数；缺失 → `0` | 已实测（样本 `16777215`） |
+| `medal_level` | `info[0][15].user.medal.level` | 无粉丝牌 → `0` | 已实测（样本 `24`） |
+| `medal_name` | `info[0][15].user.medal.name` | 无粉丝牌 → `""` | 已实测（样本 `绒心柚`） |
+| `guard_level` | `info[0][15].user.guard.level`，缺失时回落 `…user.medal.guard_level` | `0` 无 / `1` 总督 / `2` 提督 / `3` 舰长 | **仅观测到 0**（缺舰长样本，A12） |
+| `is_admin` | `info[2][2] == 1` | 经典槽位 | **未确认**：仅观测到 `0`，缺房管正向样本（A5） |
+| `upstream_id` | `info[0][15].extra` 是 JSON 字符串，取其中的 `id_str` | 举报弹幕所需 | 已实测（样本为 36 位十六进制串） |
+| `ts` | `info[0][4]`（毫秒） | 秒级备选在 `info[0][5]` | 已实测 |
 | `room_id` | 连接上下文 | 取真实 `room_id`，不信任载荷内房间字段 | 已确定（契约） |
 | `amount` | — | 弹幕恒为 `0` | 已确定（契约） |
 
 ```json
-{ "cmd": "DANMU_MSG", "info": [ "用户明文与颜色槽位", "文本", "用户编码信息", "粉丝牌", "等级与守护" ] }
+{ "cmd": "DANMU_MSG",
+  "info": [
+    [0, 1, 25, "<color>", "<ts_ms>", "<ts_sec>", …],
+    "<content>",
+    ["<uid>", "<uname>", …],
+    ["<medal_level>", "<medal_name>", …],
+    …,
+    { "extra": "{\"id_str\":\"…\"}", "user": { "uid": …, "base": { "name": …, "face": … }, "medal": { "level": …, "name": …, "guard_level": … }, "guard": { "level": … } } }
+  ] }
 ```
 
-> `info[1]` 与 `info[0][15].user` 的具体取值已由契约固定；`info` 的其余槽位在实测确认前，实现必须采用「按结构可解析性探测」的容错路径，不得硬编码猜测下标。
+> 上表的取值路径均于 **2026-09-11** 在真实房间（`room_id=21026051`，游客态）用 `DANMUBOX_LOG=debug` 抓取的载荷逐项比对确认，不再是推测。
+> `is_admin` 与 `guard_level` 的非零分支仍缺正向样本，实现必须按零值容错，不得据推测判真。
 
 噪声过滤建议：
 
@@ -360,26 +380,45 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 #### `INTERACT_WORD_V2` 的 protobuf 载荷
 
-`INTERACT_WORD_V2` 与 V1 不同：其载荷**不是 JSON，而是 protobuf**。业务包 JSON 中该命令携带 `data` 字段（base64 字符串），需先 base64 解码再按 protobuf 解析。Rust 侧使用 `prost` 生成/编译 schema 后解码，不得尝试按 JSON 直接解析。
+`INTERACT_WORD_V2` 与 V1 不同：其载荷**不是 JSON，而是 protobuf**，且位于业务包 JSON 的 **`data.pb`** 字段（base64 字符串），不是 `data` 本身。解码顺序：取 `data.pb` → base64 解码 → protobuf 解析。
 
-字段表（字段名来自契约描述，具体 tag 号与嵌套定义须在真实抓包中核对，见 A11）：
+> **易错点（已实测踩过）**：若误把 `data`（对象）当成 base64 字符串，会得到空字节，而空字节在 protobuf 里是合法的「全默认值消息」，于是静默产出一条 `uid=0` 的假消息。实现必须先断言载荷非空，再解码。
 
-| protobuf 字段 | 类型（待核对） | 含义 | 归一化去向 |
-|---|---|---|---|
-| `uid` | 整数 | 触发用户 UID | `Message.uid` |
-| `uname` | 字符串 | 触发用户昵称 | `Message.uname` |
-| `msg_type` | 枚举 / 整数 | 互动类型（进入 / 关注 / 分享等） | 映射为 `Message.content` 文案 |
-| `roomid` | 整数 | 房间号；协议层不信任载荷内房间字段，仍以连接上下文为准 | 仅用于校验/日志 |
-| `timestamp` | 整数 | 上游时间戳 | `Message.ts`（秒级 ×1000） |
-| `medal_info` | 嵌套消息 | 触发用户粉丝牌信息 | `medal_level` / `medal_name` / `guard_level` |
-| `user_info` | 嵌套消息 | 触发用户扩展信息 | 备用；昵称/头像优先取 `uname` |
-| `activity_message` | 嵌套消息 | 活动相关附加信息 | 本期不进入归一化字段 |
+字段表（tag 号于 **2026-09-11** 由 `room_id=21026051` 的样本逐字段比对确认）：
+
+| tag | 字段 | 类型 | 含义 | 归一化去向 |
+|---|---|---|---|---|
+| 1 | `uid` | varint | 触发用户 UID | `Message.uid` |
+| 2 | `uname` | string | 触发用户昵称 | `Message.uname` |
+| 5 | `msg_type` | varint | 互动类型（进入 / 关注 / 分享等） | 映射为 `Message.content` 文案（映射表待实测，A10） |
+| 6 | `roomid` | varint | 房间号；仍以连接上下文为准 | 仅日志/校验 |
+| 7 | `timestamp` | varint（64 位） | 秒级时间戳 | `Message.ts` 备选 |
+| 8 | `timestamp_millisecond` | varint（64 位） | 毫秒级时间戳 | `Message.ts` 首选 |
+| 22 | `user_info` | message | `{1: uid, 2: {1: uname, 2: face}, 3: medal_info{1: name, 2: level}}` | `uname` / 粉丝牌回落来源 |
+
+**不要声明的字段**：样本中还存在 tag `4` / `12` / `15` / `19` / `23` / `24`，其语义未确认（tag 24 携带 `{varint, "通过热门榜", "#F6F7F8"}` 形态的附加信息）。protobuf 解码器会跳过未声明的 tag，因此**少声明比声明错更安全**：字段号或类型写错会导致整条消息解码失败。社区流传的 schema 已发现三处错误，切勿照抄：
+
+| 被纠正项 | 社区写法 | 实测结论 |
+|---|---|---|
+| `timestamp_millisecond` | `uint32` | 毫秒值必然溢出 32 位 → 声明为 64 位 varint |
+| tag 15 | `int32` | 实际是 64 位 varint（样本 `1789134578184130843`） |
+| `activity_message` | tag 23 | 样本中 tag 23 为空、tag 24 才是带文本的附加消息；本期两者都不声明 |
 
 处理约束：
 
-- 解码失败（base64 非法 / protobuf 解析失败）→ 丢弃该命令，计入 `malformed`，连接继续。
+- 载荷缺失、base64 非法、或解码出空字节 → 丢弃该命令，计入 `malformed`，连接继续。
 - 未知 `msg_type` 一律使用「互动」+ 原始枚举数值，禁止臆造语义（见 §15.2）。
 - V1（`INTERACT_WORD`，JSON）与 V2（protobuf）归一化到同一 `kind`，共用 `Message` 结构。
+
+#### `ENTRY_EFFECT`（JSON）
+
+`ENTRY_EFFECT` 是普通 JSON，不是 protobuf。实测（2026-09-11）：
+
+| 归一化字段 | 来源 | 说明 |
+|---|---|---|
+| `uid` | `data.uid` | 触发用户 |
+| `uname` | `data.uinfo.base.name` | **没有 `data.uname`**，必须走 `uinfo` |
+| `content` | 留空 | 展示文案由 UI 生成（如 `data.copy_writing` 中的 `<%昵称%> 来了`） |
 
 噪声过滤建议：
 
@@ -424,12 +463,15 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `PREPARING` | 下播 / 准备中 | 固定文案 | 同上；连续重复仅计一次状态变更 |
 | `ROOM_CHANGE` | 房间信息变更（标题 / 分区 / 封面） | 变更后的标题或分区名 | 仅当房间内存态字段确实变化时写入并广播 |
 | `CUT_OFF` | 直播间被切断 | 固定文案 | 写入缓冲；触发 UI 断流提示 |
+| `POPULARITY_CHANGE` | 人气值变化 | 人气数值 | **高频**：只更新房间内存计数，**不写入会话缓冲**。这是人气值的主要来源；`op=3` 心跳回应携带同一口径的值 |
+| `LIKE_INFO_V3_UPDATE` | 点赞计数更新 | 点赞计数描述 | 同 `LIKE_INFO_V3_CLICK`：只更新计数 |
 | `ROOM_REAL_TIME_MESSAGE_UPDATE` | 关注数 / 粉丝数等实时计数更新 | 计数描述 | **高频**：仅更新房间内存计数，**不写入会话缓冲** |
 | `WATCHED_CHANGE` | 看过人数变化 | 计数描述 | 同上：只更新计数，不入缓冲 |
 | `LIKE_INFO_V3_CLICK` | 点赞信息更新 | 点赞计数描述 | 同上；高频时按时间窗节流广播 |
 | `ONLINE_RANK_V2` | 高能榜 / 在线榜更新 | 榜单摘要 | 只更新内存态并驱动 UI 侧栏，不入缓冲 |
 | `NOTICE_MSG` | 平台公告 / 房间公告 | 公告文本 | 去重后写入缓冲；与 `LIVE` / `PREPARING` 同房间同秒时合并展示 |
 | `STOP_LIVE_ROOM_LIST` | 停播房间列表（全站广播） | 固定文案 + 房间数 | 与当前订阅房间无关的条目直接丢弃 |
+| `HOT_ROOM_NOTIFY` | 客户端刷新提示（阈值 / 延迟策略） | — | 无用户可见内容，直接丢弃；不计入 `unknown_cmd` |
 
 ### 10.8 未知 `cmd` 与载荷形态异常
 
@@ -690,7 +732,27 @@ stateDiagram-v2
 
 ## 附录 A：字段索引待实测校准表
 
-本表是**唯一**允许承载「未实测事实」的位置。表中条目在阶段 1 完成核对前，实现中不得硬编码依赖具体下标 / 枚举值的解析路径；解析实现必须先采用「按结构可解析性探测」的容错路径，核对完成后回填结论并注明日期。采集一律以 `DANMUBOX_LOG=debug` 运行并抓取 debug 日志（方法见附录 B）。
+本表是**唯一**允许承载「未实测事实」的位置。表中条目在核对完成前，实现中不得硬编码依赖具体下标 / 枚举值的解析路径。采集一律以 `DANMUBOX_LOG=debug` 运行并抓取 debug 日志（方法见附录 B）。
+
+### A.0 本轮实测结论（2026-09-11）
+
+采集条件：游客态、`room_id=21026051`（在线约 20 万）与 `room_id=7734200`，累计约 80 秒真实流量。结论已回填 §10.0 / §10.1 / §10.4 / §10.7。
+
+| 编号 | 结论 |
+|---|---|
+| A1 / A2 / A7 | **已解决**：`DANMU_MSG` 的颜色在 `info[0][3]`、毫秒时间戳在 `info[0][4]`、秒时间戳在 `info[0][5]`；用户对象在 `info[0][15].user` |
+| A4 | **部分解决**：粉丝牌在 `info[0][15].user.medal`，等级 `level`、名称 `name`（样本 `24` / `绒心柚`）。`guard_level` 的非零分支仍缺样本（见 A12） |
+| A6 | **已解决**：举报标识在 `info[0][15].extra`（JSON 字符串）的 `id_str`，样本形如 36 位十六进制串 |
+| A7 | **已解决**：`info[0][4]` 是毫秒、`info[0][5]` 是秒，两者同帧出现且相差三个数量级 |
+| A11 | **已解决**：V2 载荷在 `data.pb`（非 `data`）；tag 1/2/5/6/7/8/22 与社区 schema 一致，但 tag 15 类型与 `activity_message` 位置被纠正，且 `timestamp_millisecond` 必须按 64 位声明 |
+| A14 | **已解决**：`ENTRY_EFFECT` 是 JSON；`data.uid` 为 UID，昵称在 `data.uinfo.base.name`（**没有** `data.uname`），展示文案在 `data.copy_writing` |
+| A15 | **部分解决**：认证回应与认证包同帧头（`protover=1`）；线上稳定观测到 `code=0` 表示成功。非 0 取值集合仍缺样本 |
+| A5 | **未解决**：仅观测到 `info[2][2] == 0`，缺房管正向样本，实现按零值容错 |
+| A8 / A9 / A12 / A13 | **未解决**：本轮未出现礼物、SC、大航海样本，字段名仍待采集 |
+| A10 | **未解决**：`msg_type` 的枚举与文案映射仍缺对照样本 |
+| A19 | **部分解决**：`host_list[].host` 可直接拼 `wss://<host>/sub`，首节点连接成功 |
+
+仍需采集的条目不受本轮影响，实现继续按零值 / 丢弃容错处理。
 
 | 编号 | 待核对对象 | 需要确认的内容 | 采集方法 | 核对动作 | 影响面 |
 |---|---|---|---|---|---|
@@ -715,6 +777,8 @@ stateDiagram-v2
 | A19 | `host_list` 元素 | 节点字段名（主机、`wss_port` / `ws_port`）与地址拼接规则、节点顺序是否即优先级 | 同上，打印 `getDanmuInfo` 响应（脱敏） | 对每个节点实际建立一次连接验证可达性 | §2.1、§15.3 |
 | A20 | 僵死判定与 HTTP 心跳必要性 | 上游在心跳停发 / 网络中断时是否主动关闭；90 秒阈值是否合适；缺失 HTTP 心跳时的判死时间 | 同上，做一次「只发 WS 心跳、不发 HTTP 心跳」与一次断网实验 | 观察断开行为，必要时调整阈值并更新 §8.2 / §13.2 | §8、§13.2 |
 | A21 | 游客模式字段覆盖 | 游客态下具体哪些命令 / 字段缺失或被掩码 | 游客连接 + 同一房间登录连接对照 | 对同一时间窗的两份数据做字段差集 | §7.2、§10 各命令 |
+| A22 | 未归类命令 | `ONLINE_RANK_COUNT` / `ONLINE_RANK_V3` / `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` / `SEND_GIFT_V2` 的语义与是否携带用户可见内容 | `DANMUBOX_LOG=debug` 抓取这些命令的原始载荷 | 逐条判断归属（计数类 / 丢弃 / 新消息类），归类后更新 §10.0；**分类前一律计入 `unknown_cmd` 并丢弃，禁止按命名猜测** | §10.0、`unknown_cmd` 计数 |
+| A23 | 人气值口径 | `POPULARITY_CHANGE.data.popularity` 与 `op=3` 心跳回应的数值是否为同一口径、更新频率差异 | 同一房间同时记录两类来源各 ≥10 个值 | 比对数值序列，确认展示时以哪个为准 | §2.1 人气值展示（阶段 3） |
 
 ---
 

@@ -1,0 +1,107 @@
+//! 端口（trait）。`danmubox-core` 只定义能力边界与领域模型，
+//! 所有上游知识（URL、字段下标、签名、protobuf）都在 `danmubox-bili` 内实现。
+//!
+//! 端口集合见 `docs/contract.md` §3。新增能力先把端口补在这里，
+//! 再决定要不要在 IPC 层暴露（`docs/ipc.md` §9）。
+//!
+//! 统一用 `#[async_trait]`：这些端口要以 `Arc<dyn Trait>` 持有，
+//! 原生 `async fn` in trait 不具备 dyn 兼容性。
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+use crate::bus::{Cancel, MessageSink};
+use crate::error::Result;
+use crate::model::{Emote, FollowedRoom, Message, Room, RoomSession, SendOutcome};
+
+/// 登录态。**不含**任何 Cookie 值（`docs/contract.md` §7）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionState {
+    pub logged_in: bool,
+    pub uid: i64,
+    pub nickname: String,
+    pub active_profile: String,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self {
+            logged_in: false,
+            uid: 0,
+            nickname: String::new(),
+            active_profile: "default".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QrChallenge {
+    pub key: String,
+    pub url: String,
+}
+
+/// 扫码状态机的归一化取值；上游未知状态码一律归入 `Pending`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QrState {
+    Pending,
+    Scanned,
+    Confirmed,
+    Expired,
+}
+
+#[async_trait]
+pub trait AuthProvider: Send + Sync {
+    async fn session(&self) -> Result<SessionState>;
+    async fn begin_qr(&self) -> Result<QrChallenge>;
+    async fn poll_qr(&self, key: &str) -> Result<QrState>;
+    async fn logout(&self) -> Result<()>;
+    async fn profiles(&self) -> Result<Vec<String>>;
+    async fn switch_profile(&self, name: &str) -> Result<SessionState>;
+}
+
+#[async_trait]
+pub trait LiveSource: Send + Sync {
+    /// 房间号 / 短号 / URL → 房间元信息。
+    async fn resolve_room(&self, input: &str) -> Result<Room>;
+
+    /// 保持连接直到 `cancel` 触发；心跳、解包、重连与退避都在实现内完成。
+    /// 返回 `Ok(())` 表示被正常取消。
+    async fn stream(&self, room_id: i64, sink: MessageSink, cancel: Cancel) -> Result<()>;
+}
+
+#[async_trait]
+pub trait DanmakuSender: Send + Sync {
+    /// 发送弹幕；被吞的两种情形由上游响应判定（`docs/contract.md` §5）。
+    async fn send(
+        &self,
+        room_id: i64,
+        content: &str,
+        color: Option<i64>,
+        mode: Option<i64>,
+    ) -> Result<SendOutcome>;
+}
+
+#[async_trait]
+pub trait DanmakuReporter: Send + Sync {
+    /// 举报一条弹幕，行为与官方一致；理由取值待实测校准。
+    async fn report(&self, message: &Message, reason: &str) -> Result<()>;
+}
+
+#[async_trait]
+pub trait EmoteProvider: Send + Sync {
+    /// 按我在该房间的身份（粉丝牌 / 大航海 / 房管）加载可用表情包。
+    async fn emotes(&self, room_id: i64, session: &RoomSession) -> Result<Vec<Emote>>;
+}
+
+#[async_trait]
+pub trait RoomCatalog: Send + Sync {
+    /// 关注列表；展示时直播中置顶（用 `crate::model::sort_followed`）。
+    async fn followed(&self) -> Result<Vec<FollowedRoom>>;
+}
+
+#[async_trait]
+pub trait WalletProvider: Send + Sync {
+    /// 电池余额。
+    async fn balance(&self) -> Result<i64>;
+}

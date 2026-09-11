@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/danmubox-core", "crates/danmubox-bili", "crates/danmubox-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+authors = ["zack.he"]
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+danmubox-core = { path = "crates/danmubox-core" }
+danmubox-bili = { path = "crates/danmubox-bili" }
+
+[profile.release]
+lto = "thin"
+strip = true

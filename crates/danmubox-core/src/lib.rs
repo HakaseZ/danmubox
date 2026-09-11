@@ -1,0 +1,30 @@
+//! danmubox 引擎：领域模型、端口、事件总线、会话缓冲与本地文件。
+//!
+//! 本 crate 是唯一的事实来源，**不得**依赖任何具体上游实现（B 站字段、URL、
+//! 签名、protobuf 一律不准出现），也**不得**依赖 `tauri`。上游知识只允许存在于
+//! `danmubox-bili`。
+
+pub mod bus;
+pub mod error;
+pub mod model;
+pub mod ports;
+pub mod prefs;
+pub mod session;
+
+pub use bus::{Cancel, ConnState, Counters, Event, EventBus, MessageSink, StatusEvent};
+pub use error::{Error, Result};
+pub use model::{
+    sort_followed, Emote, EmotePackage, FollowedRoom, Message, MessageKind, Room, RoomSession,
+    SendOutcome,
+};
+pub use prefs::Prefs;
+pub use session::{HistoryQuery, MessageBuffer, RoomRuntime};
+
+/// UTC 毫秒时间戳。
+pub fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}

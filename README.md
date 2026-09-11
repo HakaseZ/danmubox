@@ -56,8 +56,9 @@
 |---|---|
 | 技术选型 | 已完成（结论见 `docs/decisions/`） |
 | 文档基线 | 已按需求基线 [`REQUIREMENTS.md`](REQUIREMENTS.md) 重写，契约见 [`docs/contract.md`](docs/contract.md) |
-| 代码 | **尚未开始**，仓库中不存在源码与构建文件 |
-| 构建 / 测试 / 运行 | 尚无可用命令，本文所有命令均为规划值 |
+| 代码 | **阶段 1 已完成**：`danmubox-core` / `danmubox-bili` / `danmubox-cli` 三个 crate 可编译、可运行，游客态已能连真实直播间收弹幕 |
+| 构建 / 测试 / 运行 | 命令见 §8；`cargo test --workspace` 与 `cargo clippy -- -D warnings` 均通过 |
+| 桌面端 | **尚未开始**（`apps/desktop` 未创建，属阶段 3） |
 
 ## 4. 目标平台
 
@@ -137,22 +138,22 @@ danmubox/
 | [`docs/decisions/0007-credential-file.md`](docs/decisions/0007-credential-file.md) | 凭据存明文 `config.toml`（0600），不进日志 / 前端 / 仓库 | 实现者 |
 | [`docs/decisions/0008-frontend-stack.md`](docs/decisions/0008-frontend-stack.md) | React + TS + Vite + TanStack Virtual + Zustand + CSS Modules | 前端实现者 |
 
-## 8. 规划中的开发命令
+## 8. 开发命令
 
-以下命令均为**规划值**（`Cargo.toml` 与前端工程尚未创建，包管理器将在脚手架落地时确定）；
-执行前以 `AGENT.md` 与 `docs/distribution.md` 的最新版本为准。
+Rust 侧的三个 crate 已可编译运行，下表除桌面端外均为**当前可用**命令。
 
-| 用途 | 命令（规划） | 说明 |
+| 用途 | 命令 | 说明 |
 |---|---|---|
 | 工作区编译检查 | `cargo check --workspace` | 全 crate 检查 |
 | 全量测试 | `cargo test --workspace` | 单元 + 集成 |
-| core 单 crate 测试 | `cargo test -p danmubox-core` | 领域模型与端口 |
-| bili 单 crate 测试 | `cargo test -p danmubox-bili` | 协议与适配器 |
+| core 单 crate 测试 | `cargo test -p danmubox-core` | 领域模型、端口、会话缓冲、偏好 |
+| bili 单 crate 测试 | `cargo test -p danmubox-bili` | 协议解包、WBI、命令归一化、protobuf |
 | 格式检查 | `cargo fmt --all -- --check` | rustfmt |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | warning 视为错误 |
-| 跑 CLI | `cargo run -p danmubox-cli -- <子命令>` | 脱离 UI 验证协议与适配器 |
-| 桌面端开发 | `npm --prefix apps/desktop run dev` | 前端 Vite + Tauri dev |
-| 日志级别 | `DANMUBOX_LOG=debug` | 默认 `info` |
+| 解析房间 | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` | 打印房间元信息 |
+| 游客态看弹幕 | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` | 脱离 UI 验证协议；`--quiet` 只看汇总 |
+| 抓原始载荷 | `DANMUBOX_LOG=debug cargo run -p danmubox-cli -- watch <房间>` | 字段实测校准的采集入口（`docs/protocol.md` 附录 B） |
+| 桌面端开发 | `npm --prefix apps/desktop run dev` | **尚未可用**，`apps/desktop` 属阶段 3 |
 
 ## 9. 数据与隐私声明
 

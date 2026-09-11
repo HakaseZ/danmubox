@@ -164,6 +164,8 @@ fn view(state: &AppState, rooms: &Rooms, room_id: i64) -> Option<RoomView> {
 
 #[tauri::command]
 fn app_info(state: State<'_, AppState>) -> AppInfo {
+    // 前端挂载后第一件事就是调它；这条日志因此也是「页面已加载且 JS 已执行」的信号。
+    tracing::debug!("IPC app_info");
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         data_dir: data_dir().display().to_string(),
@@ -489,6 +491,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppState::new(store))
+        // 白屏排查的入口：这里没有输出就说明 webview 根本没导航成功。
+        .on_page_load(|_webview, payload| {
+            tracing::debug!(url = %payload.url(), "webview 页面加载");
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             let state = app.state::<AppState>();

@@ -58,7 +58,7 @@
 | 文档基线 | 已按需求基线 [`REQUIREMENTS.md`](REQUIREMENTS.md) 重写，契约见 [`docs/contract.md`](docs/contract.md) |
 | 代码 | **阶段 1 已完成**：`danmubox-core` / `danmubox-bili` / `danmubox-cli` 三个 crate 可编译、可运行，游客态已能连真实直播间收弹幕 |
 | 构建 / 测试 / 运行 | 命令见 §8；`cargo test --workspace` 与 `cargo clippy -- -D warnings` 均通过 |
-| 桌面端 | **尚未开始**（`apps/desktop` 未创建，属阶段 3） |
+| 桌面端 | **已可用**：`apps/desktop`（Tauri 2 + React）能打开房间、看弹幕、发弹幕、过滤；需先起前端 dev server（见 §8） |
 
 ## 4. 目标平台
 
@@ -140,7 +140,7 @@ danmubox/
 
 ## 8. 开发命令
 
-Rust 侧的三个 crate 已可编译运行，下表除桌面端外均为**当前可用**命令。
+四个 Rust crate（`core` / `bili` / `cli` / `desktop`）与前端均已可编译运行；下表中除标注外均为**已实测可用**的命令。
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
@@ -158,7 +158,8 @@ Rust 侧的三个 crate 已可编译运行，下表除桌面端外均为**当前
 | 登出 | `cargo run -p danmubox-cli -- logout` | 清空当前 profile 的凭据 |
 | 账号切换 | `cargo run -p danmubox-cli -- profiles --use <名字>` | 改写 `active_profile` |
 | 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败） |
-| 桌面端开发 | `npm --prefix apps/desktop run dev` | **尚未可用**，`apps/desktop` 属阶段 3 |
+| 前端 dev server | `npm --prefix apps/desktop/ui run dev` | **必须先起**，否则桌面端窗口空白（见 `docs/operations.md` §1.1） |
+| 桌面端 | `cargo run -p danmubox-desktop` | 依赖上面的 dev server |
 
 数据目录可用环境变量 `DANMUBOX_HOME` 覆盖（调试与多环境并存时用）。
 

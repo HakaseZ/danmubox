@@ -75,10 +75,10 @@ Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desk
 | 扫码登录（CLI） | `cargo run -p danmubox-cli -- login` |
 | 登出 / 切号（CLI） | `cargo run -p danmubox-cli -- logout`、`-- profiles --use <名字>` |
 | 发弹幕（CLI） | `cargo run -p danmubox-cli -- send <房间> "内容"`（需登录） |
-| 前端依赖安装 | `npm --prefix apps/desktop install`（未可用） |
-| 前端类型检查 | `npm --prefix apps/desktop run typecheck`（未可用） |
-| 前端构建 | `npm --prefix apps/desktop run build`（未可用） |
-| 桌面端开发 | `npm --prefix apps/desktop run dev`（未可用） |
+| 前端依赖安装 | `npm --prefix apps/desktop/ui install` |
+| 前端类型检查 + 构建 | `npm --prefix apps/desktop/ui run build`（= `tsc -b && vite build`） |
+| 前端 dev server | `npm --prefix apps/desktop/ui run dev`（桌面端运行前必须先起） |
+| 桌面端运行 | `cargo run -p danmubox-desktop` |
 
 环境变量：`DANMUBOX_LOG`（默认 `info`；`debug` 会输出每条业务载荷的原文，是字段校准的采集入口）。
 

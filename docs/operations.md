@@ -12,11 +12,41 @@
 
 | 平台 | 启动 | 停止 |
 |---|---|---|
-| macOS | 双击 `danmubox.app`；开发期 `npm run tauri dev` | 关闭窗口即退出（本期不做后台保活）；异常残留用活动监视器结束 `danmubox` |
+| macOS | 双击 `danmubox.app`；开发期见下方两种运行方式 | 关闭窗口即退出（本期不做后台保活）；异常残留用活动监视器结束 `danmubox-desktop` |
 | Windows | 开始菜单 / 桌面快捷方式，或运行安装目录下的 `danmubox.exe` | 关闭窗口即退出；异常残留用任务管理器结束 `danmubox.exe` |
 | Android | 桌面图标，或 `adb shell monkey -p dev.kksk.danmubox -c android.intent.category.LAUNCHER 1` | 从最近任务划掉；彻底停止用「设置 → 应用 → danmubox → 强制停止」 |
 
 应用为纯客户端形态，不启动任何本地网络服务：界面通过 Tauri IPC 与引擎通信，二者之间不需要任何访问凭据（契约 §7）。构建与产物见 `distribution.md`。
+
+#### 桌面端运行方式（2026-09-11 实测）
+
+**当前 `tauri.conf.json` 里配置了 `devUrl`，因此 debug 与 release 构建都会从 `http://localhost:5173` 加载界面**——
+也就是说**必须先起 Vite dev server**，否则窗口是空白的（且不会有任何报错，只有 `webview 页面加载` 日志缺失）。这是实测踩过的坑，不是推测。
+
+```bash
+# 终端 1：前端 dev server（保持运行）
+npm --prefix apps/desktop/ui run dev
+
+# 终端 2：桌面端
+cargo run -p danmubox-desktop
+```
+
+判断界面有没有真正加载，看这条日志（需要 `DANMUBOX_LOG=debug`）：
+
+```bash
+DANMUBOX_LOG=debug cargo run -p danmubox-desktop
+# 正常应出现：webview 页面加载 url=http://localhost:5173/  →  IPC app_info
+# 只看到 "web content process terminated" 而没有页面加载 → dev server 没起或端口不对
+```
+
+要得到**不依赖 dev server 的独立应用**，需用 Tauri CLI 打包（它会关掉 `devUrl` 并生成 `.app` / `.msi` / APK）：
+
+```bash
+npm --prefix apps/desktop/ui run build     # 先出前端产物
+npx @tauri-apps/cli build                  # 需要时再装：npm i -D @tauri-apps/cli
+```
+
+单独 `cargo build --release` **不会**产生可独立运行的产物——它仍指向 `devUrl`。这一点已实测确认。
 
 ### 1.2 日志级别 `DANMUBOX_LOG`
 

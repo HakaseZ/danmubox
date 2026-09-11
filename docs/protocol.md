@@ -304,7 +304,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 其余所有 `cmd` 一律不产生 `Message`：记录 `debug` 日志（命令名 + `room_id`）并计入 `unknown_cmd`。`kind` 取值集合恒为六种，新增 `cmd` 不得新增 `kind`。
 
-> **实测记录（2026-09-11）**：以游客态连接 `room_id=21026051`（在线约 20 万）抓取 35 秒，实际出现 29 条业务载荷，全部落在上表：`DANMU_MSG`、`INTERACT_WORD_V2`、`ENTRY_EFFECT`、`WATCHED_CHANGE`、`LIKE_INFO_V3_UPDATE`、`LIKE_INFO_V3_CLICK`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`POPULARITY_CHANGE`、`ONLINE_RANK_COUNT`、`ONLINE_RANK_V3`、`RANK_CHANGED_V2`、`PK_INFO`、`WIDGET_BANNER`、`UNIVERSAL_EVENT_GIFT`、`UNIVERSAL_EVENT_GIFT_V2`、`SEND_GIFT_V2`、`HOT_ROOM_NOTIFY`、`STOP_LIVE_ROOM_LIST`。
+> **实测记录（2026-09-11）**：以游客态连接一个在线约 20 万的在播房间（房间号不写入仓库，见 `AGENT.md` §8）抓取 35 秒，实际出现 29 条业务载荷，全部落在上表：`DANMU_MSG`、`INTERACT_WORD_V2`、`ENTRY_EFFECT`、`WATCHED_CHANGE`、`LIKE_INFO_V3_UPDATE`、`LIKE_INFO_V3_CLICK`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`POPULARITY_CHANGE`、`ONLINE_RANK_COUNT`、`ONLINE_RANK_V3`、`RANK_CHANGED_V2`、`PK_INFO`、`WIDGET_BANNER`、`UNIVERSAL_EVENT_GIFT`、`UNIVERSAL_EVENT_GIFT_V2`、`SEND_GIFT_V2`、`HOT_ROOM_NOTIFY`、`STOP_LIVE_ROOM_LIST`。
 > 其中 `ONLINE_RANK_COUNT` / `ONLINE_RANK_V3` / `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` / `SEND_GIFT_V2` 尚未归类，当前走 `unknown_cmd`；归类前不得凭命名猜测语义（见附录 A22）。
 
 ### 10.1 `DANMU_MSG`（`kind=danmaku`）
@@ -338,7 +338,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
   ] }
 ```
 
-> 上表的取值路径均于 **2026-09-11** 在真实房间（`room_id=21026051`，游客态）用 `DANMUBOX_LOG=debug` 抓取的载荷逐项比对确认，不再是推测。
+> 上表的取值路径均于 **2026-09-11** 在一个真实在播房间（游客态；房间号不写入仓库）用 `DANMUBOX_LOG=debug` 抓取的载荷逐项比对确认，不再是推测。
 > `is_admin` 与 `guard_level` 的非零分支仍缺正向样本，实现必须按零值容错，不得据推测判真。
 
 噪声过滤建议：
@@ -398,7 +398,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 > **易错点（已实测踩过）**：若误把 `data`（对象）当成 base64 字符串，会得到空字节，而空字节在 protobuf 里是合法的「全默认值消息」，于是静默产出一条 `uid=0` 的假消息。实现必须先断言载荷非空，再解码。
 
-字段表（tag 号于 **2026-09-11** 由 `room_id=21026051` 的样本逐字段比对确认）：
+字段表（tag 号于 **2026-09-11** 由实测样本逐字段比对确认，房间号不写入仓库）：
 
 | tag | 字段 | 类型 | 含义 | 归一化去向 |
 |---|---|---|---|---|
@@ -761,7 +761,7 @@ stateDiagram-v2
 
 ### A.0 本轮实测结论（2026-09-11）
 
-采集条件：游客态、`room_id=21026051`（在线约 20 万）与 `room_id=7734200`，累计约 80 秒真实流量。结论已回填 §10.0 / §10.1 / §10.4 / §10.7。
+采集条件：游客态，两个在播房间（含一个在线约 20 万的大房间；房间号不写入仓库），累计约 80 秒真实流量。结论已回填 §10.0 / §10.1 / §10.4 / §10.7。
 
 | 编号 | 结论 |
 |---|---|
@@ -777,6 +777,8 @@ stateDiagram-v2
 | A10 | **未解决**：`msg_type` 的枚举与文案映射仍缺对照样本 |
 | A19 | **部分解决**：`host_list[].host` 可直接拼 `wss://<host>/sub`，首节点连接成功 |
 | A20 | **部分解决**：实测到上游会主动断开 TLS（`peer closed connection without sending TLS close_notify`），客户端按 5000ms 退避重连成功；缺失 HTTP 心跳的判死时间仍缺样本 |
+| A25 | **已解决**：`msg/send` 的表单 body 形态（含 `w_rid` 与 `csrf` / `csrf_token`）被上游接受 |
+| A16 | **部分解决**：`ok` 分支已复核——登录态真实发送后弹幕确实出现在公开弹幕流；被吞两分支仍缺样本 |
 
 仍需采集的条目不受本轮影响，实现继续按零值 / 丢弃容错处理。
 
@@ -797,7 +799,7 @@ stateDiagram-v2
 | A13 | `USER_TOAST_MSG` | 播报文本、角色、数量字段；与 `GUARD_BUY` 的时间关系 | 同上 | 同一次开通同时记录两条命令，确认合并规则 | `guard` 会话内合并与文案 |
 | A14 | `ENTRY_EFFECT` | 触发用户的 UID / 昵称 / 舰长等级字段位置 | 同上 | 以高价值账号进场触发，记录字段 | `interact` 归一化 |
 | A15 | `op=8` 认证回应 | body 字段名、`code` 的实际取值集合与各分类归属 | 同上，另加「未登录 / 登录失效」两种状态各一次 | 记录全部出现过的 `code` 与对应状态，建立粗分类表 | §13.3、§15.2 |
-| A16 | `msg/send` 被吞判定 | `msg` / `message` == `"f"` / `"k"` 的可复现性；`data.mode_info.extra` 的 `content` 回显形态 | 同上，用会触发风控的内容与在关闭公开弹幕的直播间各发一次 | 复核 `"f"` / `"k"` 判定后写死规则，记录 `extra` 的 JSON 形状 | §11.2、`SendOutcome` |
+| A16 | `msg/send` 被吞判定 | `msg` / `message` == `"f"` / `"k"` 的可复现性；`data.mode_info.extra` 的 `content` 回显形态 | 用会触发风控的内容与在关闭公开弹幕的直播间各发一次 | `ok` 分支**已复核**（真实发送后弹幕确实出现在公开弹幕流）；`"f"` / `"k"` 分支仍缺样本，实现按字符判定即可 | §11.2、`SendOutcome` |
 | A17 | `SendOutcome` 各错误码 | `rate_limited` / `medal_required` / `muted` / `failed` 各自对应的上游 `code` 与 message 文案 | 同上；需构造频率限制、粉丝牌不足、被禁言三类场景各一次 | 记录 `code` + message + 场景，建立归一化映射表 | §11.3、UI 失败提示 |
 | A18 | `msg/send` 请求参数 | `color` / `mode` 的合法取值域与默认值（IPC 侧初值 0–16777215 / {1,4,5}） | 同上，用边界值与疑似模式值各发一次 | 确认合法域后回填本节与 [`ipc.md`](ipc.md) | 发送侧校验 |
 | A19 | `host_list` 元素 | 节点字段名（主机、`wss_port` / `ws_port`）与地址拼接规则、节点顺序是否即优先级 | 同上，打印 `getDanmuInfo` 响应（脱敏） | 对每个节点实际建立一次连接验证可达性 | §2.1、§15.3 |
@@ -806,7 +808,7 @@ stateDiagram-v2
 | A22 | 未归类命令 | `ONLINE_RANK_COUNT` / `ONLINE_RANK_V3` / `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` / `SEND_GIFT_V2` 的语义与是否携带用户可见内容 | `DANMUBOX_LOG=debug` 抓取这些命令的原始载荷 | 逐条判断归属（计数类 / 丢弃 / 新消息类），归类后更新 §10.0；**分类前一律计入 `unknown_cmd` 并丢弃，禁止按命名猜测** | §10.0、`unknown_cmd` 计数 |
 | A23 | 人气值口径 | `POPULARITY_CHANGE.data.popularity` 与 `op=3` 心跳回应的数值是否为同一口径、更新频率差异 | 同一房间同时记录两类来源各 ≥10 个值 | 比对数值序列，确认展示时以哪个为准 | §2.1 人气值展示（阶段 3） |
 | A24 | 上游主动断连的周期与诱因 | 20 分钟长连中出现 1 次 `peer closed connection without sending TLS close_notify`；是否为常态轮换、是否与心跳节奏或房间热度相关 | 连续多次 ≥2 小时长连，记录每次断连的时刻、距上次心跳的间隔、当时房间人气 | 若呈周期性，在 §13.2 登记预期轮换间隔，避免把正常轮换当成故障 | §13.2、S1-AC2 判定标准 |
-| A25 | `msg/send` 的请求形态 | 参数放 body 还是 query；`rnd` 的取值语义；`csrf` 与 `csrf_token` 是否必须是同一值；`w_rid` 是否必需 | 登录态下各发一条，用抓包或对照官方 web 客户端请求 | 确认后在 §11.1 写死；若与实现不符，改 `send.rs` 并补一条记录 | §11.1、`send.rs` |
+| A25 | `msg/send` 的请求形态 | 参数放 body 还是 query；`rnd` 的取值语义；`csrf` 与 `csrf_token` 是否必须是同一值；`w_rid` 是否必需 | 登录态下各发一条，用抓包或对照官方 web 客户端请求 | **已验证**：`application/x-www-form-urlencoded` body（含 `w_rid`、`csrf` / `csrf_token`）的上报被上游接受且弹幕成功出现；`rnd` 语义仍未知但不影响发送 | §11.1、`send.rs` |
 
 ---
 

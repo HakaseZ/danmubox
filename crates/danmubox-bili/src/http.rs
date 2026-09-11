@@ -86,6 +86,9 @@ impl BiliHttp {
         let client = reqwest::Client::builder()
             .default_headers(default_headers())
             .timeout(std::time::Duration::from_secs(15))
+            // 心跳间隔 60s，若让空闲连接存活到下一次调用就会被上游回收的连接坑到；
+            // 30s 的池内空闲上限保证心跳总是新建连接（见 `web_heartbeat` 的实测说明）。
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::Internal(format!("build http client: {e}")))?;
         Ok(Self { client, cookie })
@@ -239,6 +242,11 @@ impl BiliHttp {
     }
 
     /// 上游 HTTP 心跳：每 60 秒一次，缺它长连接会被判死（`docs/protocol.md` §8.2）。
+    ///
+    /// 实测（2026-09-11，20 分钟长连）：该端点会出现**传输层**失败，典型成因是
+    /// 空闲连接被上游回收后被连接池复用。因此这里做两件事：
+    /// 缩短空闲连接存活时间（心跳间隔 60s > 30s，池内连接不会留到下一次），
+    /// 以及失败后**重试一次**。两者都只针对传输层；业务 code 非 0 仍按错误上报。
     pub async fn web_heartbeat(&self, room_id: i64) -> Result<()> {
         use base64::Engine as _;
         let hb = base64::engine::general_purpose::STANDARD.encode(format!("60|{room_id}|1|0"));
@@ -246,8 +254,22 @@ impl BiliHttp {
             .append_pair("pf", "web")
             .append_pair("hb", &hb)
             .finish();
+        let url = format!("{EP_WEB_HEARTBEAT}?{query}");
+
+        match self.heartbeat_once(&url).await {
+            Ok(()) => Ok(()),
+            Err(first) => {
+                tracing::debug!(%first, "HTTP 心跳首次失败，重试一次");
+                self.heartbeat_once(&url).await.map_err(|second| {
+                    Error::Upstream(format!("webHeartBeat 重试后仍失败: {second}"))
+                })
+            }
+        }
+    }
+
+    async fn heartbeat_once(&self, url: &str) -> Result<()> {
         let value = self
-            .get(&format!("{EP_WEB_HEARTBEAT}?{query}"))
+            .get(url)
             .send()
             .await
             .map_err(|e| Error::Upstream(format!("webHeartBeat: {e}")))?

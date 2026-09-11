@@ -170,6 +170,7 @@ impl BiliLive {
         let heartbeat_http = {
             let session = session.clone();
             let http = self.http.clone();
+            let counters = Arc::clone(&self.counters);
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
@@ -180,6 +181,7 @@ impl BiliLive {
                         break;
                     }
                     if let Err(err) = http.web_heartbeat(room_id).await {
+                        Counters::bump(&counters.heartbeat_failures);
                         tracing::warn!(room_id, %err, "上游 HTTP 心跳失败");
                     }
                 }

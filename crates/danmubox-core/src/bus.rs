@@ -82,6 +82,8 @@ pub struct Counters {
     /// 计数类命令（人气/看过/点赞/榜单）：按 `docs/protocol.md` §10.7
     /// 只更新房间内存计数，**不写入会话缓冲**。
     pub counter_updates: AtomicU64,
+    /// 上游 HTTP 心跳失败次数。S1-AC2 要用它判断「是否因缺心跳被判死」。
+    pub heartbeat_failures: AtomicU64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +96,7 @@ pub struct CounterSnapshot {
     pub mirrored_dropped: u64,
     pub unknown_cmd: u64,
     pub counter_updates: u64,
+    pub heartbeat_failures: u64,
 }
 
 impl Counters {
@@ -107,6 +110,7 @@ impl Counters {
             mirrored_dropped: self.mirrored_dropped.load(Ordering::Relaxed),
             unknown_cmd: self.unknown_cmd.load(Ordering::Relaxed),
             counter_updates: self.counter_updates.load(Ordering::Relaxed),
+            heartbeat_failures: self.heartbeat_failures.load(Ordering::Relaxed),
         }
     }
 

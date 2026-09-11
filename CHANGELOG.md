@@ -51,6 +51,21 @@
   `danmubox-cli` 新增 `session` / `login`（终端渲染二维码）/ `logout` / `profiles` 子命令。
 - 凭据值遮蔽：`Profile` 与 `AppConfig` 的 `Debug` 均为手写实现，只输出字段名与 profile 名。
 
+### Fixed
+
+- **上游 HTTP 心跳的传输层失败**：20 分钟真实长连中出现偶发 `error sending request`
+  （同机 `curl` 连续 200，差异在连接复用——心跳间隔 60s 大于上游空闲连接存活时间，
+  被回收的连接留在池里复用即失败）。处理：HTTP 客户端池内空闲上限降为 30s、
+  传输层失败立即重试一次、失败计入 `heartbeat_failures` 计数并在 CLI 汇总可见。
+  规范同步见 `docs/protocol.md` §8.2。
+- 认证回应与认证包同帧头（`protover=1`）却只在非心跳分支处理 op=8，导致 `Connected`
+  状态永不广播；已修正并补测试。
+- `INTERACT_WORD_V2` 的 protobuf 载荷路径由 `data` 改为 **`data.pb`**：原先取错字段会
+  base64 解出空字节，而空字节是合法的「全默认值 protobuf」，于是静默产出 `uid=0` 的假消息；
+  现在载荷缺失/为空一律丢弃并计入 `malformed`。
+- 计数类命令（`WATCHED_CHANGE` 等）此前每条都生成 `system` 消息塞进会话缓冲，违反
+  `docs/protocol.md` §10.7 的「不写入会话缓冲」；现改为只更新计数。
+
 ### Changed
 
 - 需求来源变更：基线由选型讨论原文改为 [`REQUIREMENTS.md`](REQUIREMENTS.md)；选型讨论原文已归档到 `docs/.archive/`（不进 git），

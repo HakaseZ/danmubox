@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use danmubox_bili::{BiliAuth, BiliLive};
-use danmubox_core::ports::{AuthProvider, LiveSource, QrState};
+use danmubox_bili::{BiliAuth, BiliLive, BiliSender};
+use danmubox_core::ports::{AuthProvider, DanmakuSender, LiveSource, QrState};
 use danmubox_core::{
     config_path, prefs_path, ConfigStore, Event, EventBus, HistoryQuery, Prefs, RoomRuntime,
 };
@@ -45,6 +45,16 @@ enum Command {
     },
     /// 登出：清空当前 profile 的凭据字段
     Logout,
+    /// 发送一条弹幕（需登录）
+    Send {
+        /// 房间号 / 短号 / URL
+        room: String,
+        /// 弹幕内容
+        text: String,
+        /// 颜色（十进制 RGB，默认白色）
+        #[arg(long)]
+        color: Option<i64>,
+    },
     /// 列出凭据文件中的 profiles；`--use` 切换当前 profile
     Profiles {
         #[arg(long = "use")]
@@ -79,7 +89,32 @@ async fn main() -> Result<()> {
             print_session(&store).await?;
         }
         Command::Profiles { use_profile } => profiles(&store, use_profile).await?,
+        Command::Send { room, text, color } => send(&store, &room, &text, color).await?,
     }
+    Ok(())
+}
+
+async fn send(store: &Arc<ConfigStore>, room: &str, text: &str, color: Option<i64>) -> Result<()> {
+    let live = BiliLive::with_store(Arc::clone(store))?;
+    let resolved = live.resolve_room(room).await?;
+    let sender = BiliSender::new(Arc::clone(store))?;
+    let outcome = sender
+        .send(resolved.room_id, text, color, None)
+        .await
+        .context("发送失败")?;
+    println!("# 房间 {} 发送结果：{:?}", resolved.room_id, outcome);
+    println!(
+        "# 含义：{}",
+        match outcome {
+            danmubox_core::SendOutcome::Ok => "已发出并进入公开弹幕流",
+            danmubox_core::SendOutcome::BlockedPlatform => "被平台风控吞掉（划线红线）",
+            danmubox_core::SendOutcome::BlockedRoom => "被直播间吞掉（划线黄线）",
+            danmubox_core::SendOutcome::RateLimited => "被限流",
+            danmubox_core::SendOutcome::MedalRequired => "粉丝牌等级不足",
+            danmubox_core::SendOutcome::Muted => "已被禁言",
+            danmubox_core::SendOutcome::Failed => "失败，原始 code 见 debug 日志",
+        }
+    );
     Ok(())
 }
 

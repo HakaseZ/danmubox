@@ -510,6 +510,17 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | 关键参数 | `roomid`（真实房间号）、`msg`（文本）、`color`、`mode`、`csrf`（取 `bili_jct`） |
 | 前置校验 | 未登录直接拒绝；同房间最小间隔 2s；相同内容 5s 内去重（见 §15.1） |
 
+请求形态（实现约定，**待实测复核**，见 A25）：
+
+| 项 | 实现取值 | 说明 |
+|---|---|---|
+| 载体 | `application/x-www-form-urlencoded` 的 **body** | 参数放 body 而非 query |
+| 附加参数 | `fontsize=25`、`rnd`、`csrf_token`（同 `csrf`）、`wts` | `csrf` 与 `csrf_token` 都取 `bili_jct` |
+| 签名 | 全部参数（含 `wts`）经 WBI 签名，附 `w_rid` | 复用 `auth.md` §4 的签名实现 |
+| 默认值 | `color` 缺省 `16777215`（白）、`mode` 缺省 `1` | 越界取值的行为见 A18 |
+
+本地节流命中时**不发请求**，直接以 `RATE_LIMITED` 返回，并且**不刷新**节流窗口（避免被拦下的尝试延后下一次合法发送）。
+
 ### 11.2 被吞判定（`msg` / `message` 字段）
 
 上游 HTTP 返回 `code=0` 不等价于「弹幕已进入公开弹幕流」。存在被静默吞掉的情况，以响应里的 `msg` / `message` 字段判别：
@@ -795,6 +806,7 @@ stateDiagram-v2
 | A22 | 未归类命令 | `ONLINE_RANK_COUNT` / `ONLINE_RANK_V3` / `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` / `SEND_GIFT_V2` 的语义与是否携带用户可见内容 | `DANMUBOX_LOG=debug` 抓取这些命令的原始载荷 | 逐条判断归属（计数类 / 丢弃 / 新消息类），归类后更新 §10.0；**分类前一律计入 `unknown_cmd` 并丢弃，禁止按命名猜测** | §10.0、`unknown_cmd` 计数 |
 | A23 | 人气值口径 | `POPULARITY_CHANGE.data.popularity` 与 `op=3` 心跳回应的数值是否为同一口径、更新频率差异 | 同一房间同时记录两类来源各 ≥10 个值 | 比对数值序列，确认展示时以哪个为准 | §2.1 人气值展示（阶段 3） |
 | A24 | 上游主动断连的周期与诱因 | 20 分钟长连中出现 1 次 `peer closed connection without sending TLS close_notify`；是否为常态轮换、是否与心跳节奏或房间热度相关 | 连续多次 ≥2 小时长连，记录每次断连的时刻、距上次心跳的间隔、当时房间人气 | 若呈周期性，在 §13.2 登记预期轮换间隔，避免把正常轮换当成故障 | §13.2、S1-AC2 判定标准 |
+| A25 | `msg/send` 的请求形态 | 参数放 body 还是 query；`rnd` 的取值语义；`csrf` 与 `csrf_token` 是否必须是同一值；`w_rid` 是否必需 | 登录态下各发一条，用抓包或对照官方 web 客户端请求 | 确认后在 §11.1 写死；若与实现不符，改 `send.rs` 并补一条记录 | §11.1、`send.rs` |
 
 ---
 

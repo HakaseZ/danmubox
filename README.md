@@ -157,6 +157,7 @@ Rust 侧的三个 crate 已可编译运行，下表除桌面端外均为**当前
 | 扫码登录 | `cargo run -p danmubox-cli -- login` | 终端渲染二维码，轮询至确认 |
 | 登出 | `cargo run -p danmubox-cli -- logout` | 清空当前 profile 的凭据 |
 | 账号切换 | `cargo run -p danmubox-cli -- profiles --use <名字>` | 改写 `active_profile` |
+| 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败） |
 | 桌面端开发 | `npm --prefix apps/desktop run dev` | **尚未可用**，`apps/desktop` 属阶段 3 |
 
 数据目录可用环境变量 `DANMUBOX_HOME` 覆盖（调试与多环境并存时用）。

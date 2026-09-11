@@ -50,6 +50,11 @@
   `danmubox-bili` 的 HTTP 客户端改为按当前 profile 实时取 Cookie；
   `danmubox-cli` 新增 `session` / `login`（终端渲染二维码）/ `logout` / `profiles` 子命令。
 - 凭据值遮蔽：`Profile` 与 `AppConfig` 的 `Debug` 均为手写实现，只输出字段名与 profile 名。
+- **阶段 3 进行中（发弹幕路径）**：`danmubox-bili` 新增 `BiliSender`（实现 `DanmakuSender`）——
+  本地节流（同房间 2s、相同内容 5s，命中时不发请求且不延长窗口）、WBI 签名后的表单 POST、
+  以及 `SendOutcome` 归一化（`"f"` / `"k"` 被吞判定与被吞原文回显解析）；
+  未实测的错误码一律归为 `failed` 并保留原始 code，不猜测语义。
+  `danmubox-cli` 新增 `send` 子命令。请求形态登记为待实测项 A25。
 
 ### Fixed
 

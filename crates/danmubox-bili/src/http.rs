@@ -300,8 +300,28 @@ impl BiliHttp {
             .map(str::to_string))
     }
 
+    /// POST 表单。`body` 必须已是签名后的查询串（含 `w_rid`）。
+    pub async fn post_form(&self, url: &str, body: &str) -> Result<Value> {
+        let mut request = self.client.post(url).header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        );
+        if let Some(cookie) = self.current_cookie() {
+            request = request.header(COOKIE, cookie);
+        }
+        let response = request
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
+        response
+            .json::<Value>()
+            .await
+            .map_err(|e| Error::Upstream(format!("响应解析失败: {e}")))
+    }
+
     /// WBI 的 `img_key` / `sub_key`，取自 `nav` 的图片文件名。
-    async fn wbi_keys(&self) -> Result<(String, String)> {
+    pub(crate) async fn wbi_keys(&self) -> Result<(String, String)> {
         let value = self
             .get(EP_NAV)
             .send()

@@ -8,10 +8,12 @@ pub mod cmd;
 pub mod http;
 pub mod pb;
 pub mod proto;
+pub mod send;
 pub mod wbi;
 
 mod ws;
 
 pub use auth::{profile_from_cookies, qr_state_from_code, BiliAuth};
 pub use http::{normalize_room_input, BiliHttp, CookieMode, DanmuInfo};
+pub use send::{failure_detail, outcome_from_response, swallowed_content, BiliSender, Throttle};
 pub use ws::{jitter, next_backoff, BiliLive, INITIAL_BACKOFF, MAX_BACKOFF};

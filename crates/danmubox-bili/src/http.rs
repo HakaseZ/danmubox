@@ -21,6 +21,25 @@ const EP_ROOM_PLAY_INFO: &str =
 const EP_DANMU_INFO: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
 const EP_WEB_HEARTBEAT: &str =
     "https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat";
+/// 扫码登录：生成二维码。
+pub const EP_QR_GENERATE: &str =
+    "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
+/// 扫码登录：轮询扫码状态。
+pub const EP_QR_POLL: &str = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll";
+
+/// 从响应头收集 `Set-Cookie` 的键值对（只取第一个 `=` 之前作为名）。
+fn collect_set_cookies(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter_map(|raw| {
+            let pair = raw.split(';').next()?.trim();
+            let (name, value) = pair.split_once('=')?;
+            Some((name.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
 
 /// `getDanmuInfo` 的结果：长连接票据与候选地址。
 #[derive(Debug, Clone)]
@@ -29,11 +48,20 @@ pub struct DanmuInfo {
     pub hosts: Vec<String>,
 }
 
+/// Cookie 来源。`Store` 让请求实时读取当前 profile，
+/// 因此切换账号后无需重建客户端。
+#[derive(Clone)]
+pub enum CookieMode {
+    Guest,
+    Fixed(String),
+    Store(std::sync::Arc<danmubox_core::ConfigStore>),
+}
+
 /// B 站 HTTP 客户端。Cookie 只在进程内传递，绝不写日志。
 #[derive(Clone)]
 pub struct BiliHttp {
     client: reqwest::Client,
-    cookie: Option<String>,
+    cookie: CookieMode,
 }
 
 impl BiliHttp {
@@ -42,6 +70,19 @@ impl BiliHttp {
     }
 
     pub fn with_cookie(cookie: Option<String>) -> Result<Self> {
+        let mode = match cookie {
+            Some(value) if !value.is_empty() => CookieMode::Fixed(value),
+            _ => CookieMode::Guest,
+        };
+        Self::with_mode(mode)
+    }
+
+    /// 凭据来自凭据文件：登录态与游客态由文件内容决定。
+    pub fn with_store(store: std::sync::Arc<danmubox_core::ConfigStore>) -> Result<Self> {
+        Self::with_mode(CookieMode::Store(store))
+    }
+
+    fn with_mode(cookie: CookieMode) -> Result<Self> {
         let client = reqwest::Client::builder()
             .default_headers(default_headers())
             .timeout(std::time::Duration::from_secs(15))
@@ -50,12 +91,35 @@ impl BiliHttp {
         Ok(Self { client, cookie })
     }
 
+    fn current_cookie(&self) -> Option<String> {
+        match &self.cookie {
+            CookieMode::Guest => None,
+            CookieMode::Fixed(value) => Some(value.clone()),
+            CookieMode::Store(store) => store.cookie_header(),
+        }
+    }
+
     fn get(&self, url: &str) -> reqwest::RequestBuilder {
         let mut req = self.client.get(url);
-        if let Some(cookie) = &self.cookie {
+        if let Some(cookie) = self.current_cookie() {
             req = req.header(COOKIE, cookie);
         }
         req
+    }
+
+    /// GET 并同时取回 JSON 与 `Set-Cookie`（扫码轮询需要读回凭据）。
+    pub async fn get_with_cookies(&self, url: &str) -> Result<(Value, Vec<(String, String)>)> {
+        let response = self
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
+        let cookies = collect_set_cookies(response.headers());
+        let value = response
+            .json::<Value>()
+            .await
+            .map_err(|e| Error::Upstream(format!("响应解析失败: {e}")))?;
+        Ok((value, cookies))
     }
 
     /// `buvid3` / `buvid4`：`getDanmuInfo` 的必需 Cookie。
@@ -191,6 +255,27 @@ impl BiliHttp {
             .await
             .map_err(|e| Error::Upstream(format!("webHeartBeat decode: {e}")))?;
         require_ok(&value, "webHeartBeat")
+    }
+
+    /// 已登录账号的昵称。未登录或上游返回非 0 code 时返回 `None`——
+    /// 查昵称失败不应让整个 `session_status` 失败。
+    pub async fn account_nickname(&self) -> Result<Option<String>> {
+        let value = self
+            .get(EP_NAV)
+            .send()
+            .await
+            .map_err(|e| Error::Upstream(format!("nav: {e}")))?
+            .json::<Value>()
+            .await
+            .map_err(|e| Error::Upstream(format!("nav decode: {e}")))?;
+        if value.get("code").and_then(Value::as_i64) != Some(0) {
+            return Ok(None);
+        }
+        Ok(value
+            .pointer("/data/uname")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string))
     }
 
     /// WBI 的 `img_key` / `sub_key`，取自 `nav` 的图片文件名。

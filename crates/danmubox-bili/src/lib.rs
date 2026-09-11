@@ -3,6 +3,7 @@
 //! 这里是**唯一**允许出现 B 站 URL、字段下标、签名算法与 protobuf 的 crate
 //! （`docs/contract.md` §3 的上游隔离约束）。逆向或协议变更只改这里。
 
+pub mod auth;
 pub mod cmd;
 pub mod http;
 pub mod pb;
@@ -11,5 +12,6 @@ pub mod wbi;
 
 mod ws;
 
-pub use http::{normalize_room_input, BiliHttp, DanmuInfo};
+pub use auth::{profile_from_cookies, qr_state_from_code, BiliAuth};
+pub use http::{normalize_room_input, BiliHttp, CookieMode, DanmuInfo};
 pub use ws::{jitter, next_backoff, BiliLive, INITIAL_BACKOFF, MAX_BACKOFF};

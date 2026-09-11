@@ -5,18 +5,22 @@
 //! `danmubox-bili`。
 
 pub mod bus;
+pub mod config;
 pub mod error;
 pub mod model;
+pub mod paths;
 pub mod ports;
 pub mod prefs;
 pub mod session;
 
 pub use bus::{Cancel, ConnState, Counters, Event, EventBus, MessageSink, StatusEvent};
+pub use config::{AppConfig, ConfigStore, Profile};
 pub use error::{Error, Result};
 pub use model::{
     sort_followed, Emote, EmotePackage, FollowedRoom, Message, MessageKind, Room, RoomSession,
     SendOutcome,
 };
+pub use paths::{config_path, data_dir, prefs_path};
 pub use prefs::Prefs;
 pub use session::{HistoryQuery, MessageBuffer, RoomRuntime};
 

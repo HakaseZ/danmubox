@@ -38,6 +38,9 @@ pub struct BiliLive {
     http: BiliHttp,
     counters: Arc<Counters>,
     buvid3: Mutex<Option<String>>,
+    /// 有凭据文件时，`buvid3` 优先用配置里的（登录后由上游下发），
+    /// 省掉一次 `finger/spi` 请求，也让连接与账号绑定。
+    store: Option<Arc<danmubox_core::ConfigStore>>,
 }
 
 impl BiliLive {
@@ -51,6 +54,17 @@ impl BiliLive {
             http: BiliHttp::with_cookie(cookie)?,
             counters: Arc::new(Counters::default()),
             buvid3: Mutex::new(None),
+            store: None,
+        })
+    }
+
+    /// 凭据来自凭据文件：登录态与游客态由文件内容决定（`docs/contract.md` §4.1）。
+    pub fn with_store(store: Arc<danmubox_core::ConfigStore>) -> Result<Self> {
+        Ok(Self {
+            http: BiliHttp::with_store(Arc::clone(&store))?,
+            counters: Arc::new(Counters::default()),
+            buvid3: Mutex::new(None),
+            store: Some(store),
         })
     }
 
@@ -58,11 +72,15 @@ impl BiliLive {
         Arc::clone(&self.counters)
     }
 
-    /// `buvid3` 在一次进程生命周期内复用；失败时不缓存，下次重试。
+    /// `buvid3` 优先取凭据文件，其次向 `finger/spi` 申请；成功后缓存。
     async fn buvid3(&self) -> Result<String> {
         let mut cached = self.buvid3.lock().await;
         if let Some(value) = cached.as_ref() {
             return Ok(value.clone());
+        }
+        if let Some(value) = self.store.as_ref().and_then(|store| store.buvid3()) {
+            *cached = Some(value.clone());
+            return Ok(value);
         }
         let (buvid3, _buvid4) = self.http.buvid().await?;
         *cached = Some(buvid3.clone());

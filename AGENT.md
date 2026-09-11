@@ -70,7 +70,10 @@ Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desk
 | 格式修复 | `cargo fmt --all` |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` |
 | 解析房间（CLI） | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` |
-| 游客态看弹幕（CLI） | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` |
+| 看弹幕（CLI） | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` |
+| 登录态（CLI） | `cargo run -p danmubox-cli -- session` |
+| 扫码登录（CLI） | `cargo run -p danmubox-cli -- login` |
+| 登出 / 切号（CLI） | `cargo run -p danmubox-cli -- logout`、`-- profiles --use <名字>` |
 | 前端依赖安装 | `npm --prefix apps/desktop install`（未可用） |
 | 前端类型检查 | `npm --prefix apps/desktop run typecheck`（未可用） |
 | 前端构建 | `npm --prefix apps/desktop run build`（未可用） |

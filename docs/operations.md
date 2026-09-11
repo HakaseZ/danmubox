@@ -107,6 +107,19 @@ sid = ""
 
 登出（界面登出，对应 `session_logout`）会清空当前 profile 的凭据并回到游客态；`buvid3` 为设备标识，可从文件保留或重新获取。
 
+#### 命令行入口（阶段 2 起可用）
+
+阶段 2 的登录能力已在 `danmubox-cli` 上可用，界面（阶段 3）落地前可先用它验证与操作：
+
+| 用途 | 命令 |
+|---|---|
+| 查看登录态 | `danmubox session`（只输出状态与 profile 名，**不含任何 Cookie 值**） |
+| 扫码登录 | `danmubox login`（终端直接渲染二维码，轮询至确认；`--timeout` 可调） |
+| 登出 | `danmubox logout`（清空当前 profile 的字段，其余 profile 不动） |
+| 列出 / 切换账号 | `danmubox profiles`、`danmubox profiles --use <名字>` |
+
+数据目录默认取平台路径（`paths::data_dir`）；调试或多环境并存时可用环境变量 `DANMUBOX_HOME` 覆盖，例如 `DANMUBOX_HOME=/tmp/db danmubox session`。
+
 ### 1.5 偏好文件 `prefs.json`
 
 界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为契约 §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_panel_mode`、`filter.keywords`、`history.buffer_rows`）。只存被显式改过的键，缺失的键回落到默认值（契约 §4.2）。

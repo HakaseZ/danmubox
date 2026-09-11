@@ -151,9 +151,15 @@ Rust 侧的三个 crate 已可编译运行，下表除桌面端外均为**当前
 | 格式检查 | `cargo fmt --all -- --check` | rustfmt |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | warning 视为错误 |
 | 解析房间 | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` | 打印房间元信息 |
-| 游客态看弹幕 | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` | 脱离 UI 验证协议；`--quiet` 只看汇总 |
+| 看弹幕 | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` | 有凭据走登录态，否则游客态；`--quiet` 只看汇总 |
 | 抓原始载荷 | `DANMUBOX_LOG=debug cargo run -p danmubox-cli -- watch <房间>` | 字段实测校准的采集入口（`docs/protocol.md` 附录 B） |
+| 登录态 | `cargo run -p danmubox-cli -- session` | 只输出状态与 profile 名，不含 Cookie 值 |
+| 扫码登录 | `cargo run -p danmubox-cli -- login` | 终端渲染二维码，轮询至确认 |
+| 登出 | `cargo run -p danmubox-cli -- logout` | 清空当前 profile 的凭据 |
+| 账号切换 | `cargo run -p danmubox-cli -- profiles --use <名字>` | 改写 `active_profile` |
 | 桌面端开发 | `npm --prefix apps/desktop run dev` | **尚未可用**，`apps/desktop` 属阶段 3 |
+
+数据目录可用环境变量 `DANMUBOX_HOME` 覆盖（调试与多环境并存时用）。
 
 ## 9. 数据与隐私声明
 

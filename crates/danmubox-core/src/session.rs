@@ -143,7 +143,10 @@ pub struct RoomRuntime {
     pub room: Room,
     buffer: Arc<Mutex<MessageBuffer>>,
     bus: EventBus,
+    /// 会话级取消：结束整次房内会话。
     cancel: Cancel,
+    /// 连接级信号：房间内「刷新」触发立即重连，缓冲不变。
+    restart: Arc<tokio::sync::Notify>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -182,13 +185,43 @@ impl RoomRuntime {
             })
         };
 
+        let restart = Arc::new(tokio::sync::Notify::new());
         let driver = {
             let sink = MessageSink::new(bus.clone(), counters);
-            let cancel = cancel.clone();
+            let session = cancel.clone();
+            let restart = Arc::clone(&restart);
             tokio::spawn(async move {
-                match source.stream(room_id, sink.clone(), cancel.clone()).await {
-                    Ok(()) => sink.publish_status(room_id, ConnState::Disconnected, "closed"),
-                    Err(err) => sink.publish_status(room_id, ConnState::Error, err.to_string()),
+                loop {
+                    if session.is_cancelled() {
+                        return;
+                    }
+                    // 每次连接一个子取消信号：会话取消或「刷新」都能只终止当前连接。
+                    let connection = Cancel::new();
+                    let attempt = {
+                        let source = Arc::clone(&source);
+                        let sink = sink.clone();
+                        let connection = connection.clone();
+                        tokio::spawn(async move { source.stream(room_id, sink, connection).await })
+                    };
+                    let mut attempt = attempt;
+
+                    tokio::select! {
+                        _ = &mut attempt => {}
+                        _ = session.cancelled() => {
+                            connection.cancel();
+                            let _ = attempt.await;
+                            return;
+                        }
+                        _ = restart.notified() => {
+                            connection.cancel();
+                            let _ = attempt.await;
+                            sink.publish_status(room_id, ConnState::Connecting, "手动重连");
+                        }
+                    }
+
+                    if session.is_cancelled() {
+                        return;
+                    }
                 }
             })
         };
@@ -198,8 +231,15 @@ impl RoomRuntime {
             buffer,
             bus,
             cancel,
+            restart,
             tasks: vec![collector, driver],
         }
+    }
+
+    /// 房间内「刷新」：立即重建连接，**保持会话缓冲不变**（`docs/contract.md` §4.3）。
+    /// 新连接的首次尝试是立即发起的，因此不经过退避等待。
+    pub fn reconnect(&self) {
+        self.restart.notify_one();
     }
 
     pub fn query(&self, query: &HistoryQuery) -> Vec<Message> {

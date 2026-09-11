@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/danmubox-core", "crates/danmubox-bili", "crates/danmubox-cli"]
+members = [
+    "crates/danmubox-core",
+    "crates/danmubox-bili",
+    "crates/danmubox-cli",
+    "apps/desktop/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"

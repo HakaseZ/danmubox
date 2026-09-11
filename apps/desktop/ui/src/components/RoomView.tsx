@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Composer } from "./Composer";
 import { FilterBar } from "./FilterBar";
 import { MessageList } from "./MessageList";
+import { useApp } from "../store";
 import type { DisplayRow } from "../filtering";
 import type {
   ConnState,
@@ -31,8 +32,6 @@ interface Props {
   onSend: (content: string) => Promise<SendOutcome | undefined>;
   onReport: (message: Message, reason: string) => Promise<void>;
   onPrefs: (patch: Partial<Prefs>) => void;
-  onLoadEmotes: () => void;
-  onLoadBalance: () => void;
 }
 
 const DOT: Record<ConnState, string> = {
@@ -66,8 +65,6 @@ export function RoomView({
   onSend,
   onReport,
   onPrefs,
-  onLoadEmotes,
-  onLoadBalance,
 }: Props) {
   const [showLogs, setShowLogs] = useState(false);
   const [reportTarget, setReportTarget] = useState<Message>();
@@ -75,9 +72,15 @@ export function RoomView({
   const state = status?.state ?? "disconnected";
   const separateGifts = prefs["ui.gift_panel_mode"] === "separate";
 
+  // 从 store 直接取 action：它的身份在渲染之间是稳定的，
+  // 所以下面的 effect 只会在登录态变化时触发。经 props 传内联闭包会导致每次渲染都重跑（曾因此死循环）。
+  const loadBalance = useApp((store) => store.loadBalance);
+  const loadEmotes = useApp((store) => store.loadEmotes);
+  const loggedIn = session?.logged_in ?? false;
+
   useEffect(() => {
-    if (session?.logged_in) onLoadBalance();
-  }, [session?.logged_in, onLoadBalance]);
+    if (loggedIn) void loadBalance();
+  }, [loggedIn, loadBalance]);
 
   const giftRows = separateGifts
     ? rows.filter((row) =>
@@ -147,7 +150,7 @@ export function RoomView({
         lastOutcome={lastOutcome}
         emotes={emotes}
         onSend={onSend}
-        onOpenEmotes={onLoadEmotes}
+        onOpenEmotes={() => void loadEmotes(room.room_id)}
       />
 
       {reportTarget && (

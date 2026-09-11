@@ -414,6 +414,51 @@ fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus) {
     });
 }
 
+/// 前端把 `console.error` / `console.warn` 与未捕获错误转发到这里，
+/// 使 Rust 侧一份日志就能覆盖前后端（配合 `DANMUBOX_LOG=debug`）。
+#[tauri::command]
+fn frontend_log(level: String, message: String) {
+    match level.as_str() {
+        "error" => tracing::error!(target: "danmubox::ui", "{message}"),
+        "warn" => tracing::warn!(target: "danmubox::ui", "{message}"),
+        _ => tracing::debug!(target: "danmubox::ui", "{message}"),
+    }
+}
+
+/// 注入到界面的控制台桥。页面每次加载都会 eval 一次，因此自带去重标记。
+const CONSOLE_BRIDGE: &str = r#"
+(function () {
+  if (window.__danmuboxLogBridge) return;
+  window.__danmuboxLogBridge = true;
+  var send = function (level, message) {
+    try {
+      window.__TAURI_INTERNALS__.invoke('frontend_log', {
+        level: level,
+        message: String(message).slice(0, 2000),
+      });
+    } catch (e) { /* 桥本身出错时不再递归上报 */ }
+  };
+  var stringify = function (value) {
+    if (typeof value === 'string') return value;
+    try { return JSON.stringify(value); } catch (e) { return String(value); }
+  };
+  ['error', 'warn'].forEach(function (level) {
+    var original = console[level].bind(console);
+    console[level] = function () {
+      send(level, Array.prototype.map.call(arguments, stringify).join(' '));
+      original.apply(null, arguments);
+    };
+  });
+  window.addEventListener('error', function (e) {
+    send('error', (e.message || 'error') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var reason = e.reason && (e.reason.stack || e.reason.message) || e.reason;
+    send('error', 'unhandledrejection: ' + stringify(reason));
+  });
+})();
+"#;
+
 /// 把 `tracing` 的日志行桥接成 `danmubox://log` 事件（`docs/ipc.md` §4）。
 mod log_bridge {
     use tokio::sync::broadcast;
@@ -492,8 +537,11 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::new(store))
         // 白屏排查的入口：这里没有输出就说明 webview 根本没导航成功。
-        .on_page_load(|_webview, payload| {
+        .on_page_load(|webview, payload| {
             tracing::debug!(url = %payload.url(), "webview 页面加载");
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let _ = webview.eval(CONSOLE_BRIDGE);
+            }
         })
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -524,7 +572,8 @@ pub fn run() {
             follow_list,
             wallet_balance,
             prefs_get,
-            prefs_set
+            prefs_set,
+            frontend_log
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

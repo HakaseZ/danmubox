@@ -73,6 +73,29 @@ npx @tauri-apps/cli build                  # 需要时再装：npm i -D @tauri-a
 | 数据目录下的 `logs/` | 桌面端（GUI 启动时 stdout 不可见）；实际路径以 `app_info` 返回的数据目录为准 |
 | `danmubox://log` | Tauri IPC 事件，供前端调试面板订阅（契约 §7） |
 
+#### 桌面端调试日志落到文件（推荐）
+
+排查界面问题时，把日志写成文件比在应用里翻日志面板方便：
+
+```bash
+mkdir -p target/logs
+DANMUBOX_LOG=debug cargo run -p danmubox-desktop 2>&1 | tee -a target/logs/app.log
+```
+
+日志**全量**覆盖前后端：Rust 侧的 `tracing` 输出，加上界面里 `console.error` / `console.warn`
+与未捕获错误（通过 `frontend_log` 命令转发，见 `frontend_log` 与 `CONSOLE_BRIDGE`）。
+
+判断界面是否真的加载、以及是否出现异常循环，看这几条：
+
+| 日志 | 含义 |
+|---|---|
+| `webview 页面加载 url=...` | 页面真的导航了；**没有这条就是白屏**（多半是 dev server 没起） |
+| `IPC app_info` | React 已挂载且 IPC 通了；正常是 2 次（StrictMode 双挂载） |
+| `IPC xxx` 在短时间内反复出现 | 前端出现自激循环，是卡死的典型信号 |
+| `ERROR danmubox::ui: ...` | 界面里的 JS 错误原文 |
+
+`target/` 已在 `.gitignore` 中，日志不会被提交。
+
 ### 1.3 数据目录与文件位置（三端）
 
 数据目录下只有凭据文件、偏好文件与桌面端日志；弹幕只在内存，不落盘（契约 §4.3）。

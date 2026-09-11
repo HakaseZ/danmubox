@@ -32,9 +32,7 @@ export function App() {
   const refresh = useApp((state) => state.refresh);
   const send = useApp((state) => state.send);
   const report = useApp((state) => state.report);
-  const loadEmotes = useApp((state) => state.loadEmotes);
   const loadFollowed = useApp((state) => state.loadFollowed);
-  const loadBalance = useApp((state) => state.loadBalance);
   const updatePrefs = useApp((state) => state.updatePrefs);
   const dismissError = useApp((state) => state.dismissError);
   const setNotice = useApp((state) => state.setNotice);
@@ -90,8 +88,6 @@ export function App() {
             if (await report(message, reason)) setNotice("举报已提交");
           }}
           onPrefs={(patch) => void updatePrefs(patch)}
-          onLoadEmotes={() => void loadEmotes(activeRoom.room_id)}
-          onLoadBalance={() => void loadBalance()}
         />
       ) : (
         <RoomList

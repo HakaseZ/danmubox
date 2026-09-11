@@ -1,19 +1,37 @@
 import { useState } from "react";
 
-import type { AppInfo, RoomView as RoomViewData, SessionState } from "../types";
+import type {
+  AppInfo,
+  FollowedRoom,
+  RoomView as RoomViewData,
+  SessionState,
+} from "../types";
 import styles from "../app.module.css";
 
 interface Props {
   rooms: RoomViewData[];
   info?: AppInfo;
   session?: SessionState;
+  followed: FollowedRoom[];
   onAdd: (input: string) => void;
   onOpen: (roomId: number) => void;
   onRemove: (roomId: number) => void;
+  onRefreshFollowed: () => void;
+  onOpenFollowed: (roomId: number) => void;
 }
 
-/** 房间列表页：手动添加 + 已添加房间；关注列表属后续阶段（docs/ui.md §2）。 */
-export function RoomList({ rooms, info, session, onAdd, onOpen, onRemove }: Props) {
+/** 房间列表页：手动添加 + 已添加房间 + 关注列表（docs/ui.md §2）。 */
+export function RoomList({
+  rooms,
+  info,
+  session,
+  followed,
+  onAdd,
+  onOpen,
+  onRemove,
+  onRefreshFollowed,
+  onOpenFollowed,
+}: Props) {
   const [input, setInput] = useState("");
 
   const submit = () => {
@@ -84,6 +102,38 @@ export function RoomList({ rooms, info, session, onAdd, onOpen, onRemove }: Prop
             </button>
           </div>
         ))
+      )}
+
+      {session?.logged_in && (
+        <div className={styles.followSection}>
+          <div className={styles.followHeader}>
+            <h2>关注（直播中置顶）</h2>
+            <button onClick={onRefreshFollowed}>刷新</button>
+          </div>
+          {followed.length === 0 ? (
+            <div className={styles.empty}>
+              尚未拉取，或接口未实测通过（见 docs/protocol.md 的 A28）
+            </div>
+          ) : (
+            followed.map((item) => (
+              <div
+                key={item.room_id}
+                className={styles.followItem}
+                onClick={() => onOpenFollowed(item.room_id)}
+              >
+                <span className={styles.roomCardMain}>
+                  {item.live_status === 1 && (
+                    <span className={styles.live}>● </span>
+                  )}
+                  {item.uname}
+                </span>
+                <span className={styles.roomMeta}>
+                  {item.group_name} {item.room_id}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
       )}
     </div>
   );

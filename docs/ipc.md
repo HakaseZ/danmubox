@@ -67,7 +67,6 @@
 | `chat_report` | `roomId: number`、`upstreamId: string`、`reason: number` | `ReportResult` | `BAD_REQUEST` `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕；`upstreamId` 取 `Message.upstream_id`（契约 §5，举报必需）；`reason` 为上游举报类型码，取值见 §3.2 |
 | `emotes_list` | `roomId: number` | `Emote[]` | `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 按**当前房间身份**（`RoomSession`）加载表情包库：无牌/有牌/房管/大航海看到的面板不同 |
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；排序规则 `live_status == 1` 置顶（契约 §5） |
-| `follow_refresh` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 强制重新拉取关注列表并返回同一结构 |
 | `wallet_balance` | 无 | `WalletBalance` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额；单位与刷新时机见 §3.2 |
 | `prefs_get` | 无 | `PrefsSnapshot`（契约 §8 全部 15 键的**生效值**） | `INTERNAL` | 未写入过的键返回契约 §8 默认值 |
 | `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形 |
@@ -289,7 +288,7 @@ type AppState = {
 | `sendChat(roomId, content, color?, mode?)` | `chat_send` | 见 §7 乐观更新 |
 | `reportDanmaku(roomId, upstreamId, reason)` | `chat_report` | 成功后就地提示；失败按错误码提示 |
 | `loadEmotes(roomId)` | `emotes_list` | 进入房间后调用一次；面板按 `package_kind` 分组 |
-| `refreshFollow()` | `follow_list` / `follow_refresh` | 返回后按 `live_status == 1` 置顶排序渲染 |
+| `refreshFollow()` | `follow_list`（每次实时拉取） | 返回后按 `live_status == 1` 置顶排序渲染 |
 | `refreshWallet()` | `wallet_balance` | 状态栏展示；打开礼物面板时刷新 |
 | `loadPrefs()` / `savePrefs(patch)` | `prefs_get` / `prefs_set` | 写入后用返回值整体覆盖 `prefs.effective` |
 | `loadAppInfo()` | `app_info` | 状态栏与调试面板 |

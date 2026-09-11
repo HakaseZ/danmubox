@@ -7,6 +7,8 @@ import type {
   AppInfo,
   ChatSendResult,
   ConnState,
+  Emote,
+  FollowedRoom,
   Message,
   Prefs,
   RoomView,
@@ -29,7 +31,12 @@ interface AppStore {
   logs: string[];
   lastSend?: ChatSendResult;
   error?: string;
+  notice?: string;
   seeding: boolean;
+
+  emotes: Emote[];
+  followed: FollowedRoom[];
+  balance?: number;
 
   bootstrap: () => Promise<void>;
   addRoom: (input: string) => Promise<void>;
@@ -40,8 +47,13 @@ interface AppStore {
   disconnect: (roomId: number) => Promise<void>;
   refresh: (roomId: number) => Promise<void>;
   send: (roomId: number, content: string) => Promise<SendOutcome | undefined>;
+  report: (message: Message, reason: string) => Promise<boolean>;
+  loadEmotes: (roomId: number) => Promise<void>;
+  loadFollowed: () => Promise<void>;
+  loadBalance: () => Promise<void>;
   updatePrefs: (patch: Partial<Prefs>) => Promise<void>;
   dismissError: () => void;
+  setNotice: (notice?: string) => void;
 }
 
 let unsubscribe: (() => void) | undefined;
@@ -52,6 +64,8 @@ export const useApp = create<AppStore>((set, get) => ({
   status: {},
   logs: [],
   seeding: false,
+  emotes: [],
+  followed: [],
 
   async bootstrap() {
     try {
@@ -179,6 +193,44 @@ export const useApp = create<AppStore>((set, get) => ({
   async updatePrefs(patch) {
     try {
       set({ prefs: await api.prefsSet(patch) });
+    } catch (error) {
+      set({ error: describeError(error) });
+    }
+  },
+
+  setNotice(notice) {
+    set({ notice });
+  },
+
+  async report(message, reason) {
+    try {
+      await api.chatReport(message, reason);
+      return true;
+    } catch (error) {
+      set({ error: describeError(error) });
+      return false;
+    }
+  },
+
+  async loadEmotes(roomId) {
+    try {
+      set({ emotes: await api.emotesList(roomId) });
+    } catch (error) {
+      set({ error: describeError(error) });
+    }
+  },
+
+  async loadFollowed() {
+    try {
+      set({ followed: await api.followList() });
+    } catch (error) {
+      set({ error: describeError(error) });
+    }
+  },
+
+  async loadBalance() {
+    try {
+      set({ balance: await api.walletBalance() });
     } catch (error) {
       set({ error: describeError(error) });
     }

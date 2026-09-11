@@ -18,6 +18,10 @@ pub mod wbi;
 mod ws;
 
 pub use auth::{profile_from_cookies, qr_state_from_code, BiliAuth};
+pub use emote::BiliEmotes;
+pub use follow::BiliFollow;
 pub use http::{normalize_room_input, BiliHttp, CookieMode, DanmuInfo};
+pub use report::BiliReporter;
 pub use send::{failure_detail, outcome_from_response, swallowed_content, BiliSender, Throttle};
+pub use wallet::BiliWallet;
 pub use ws::{jitter, next_backoff, BiliLive, INITIAL_BACKOFF, MAX_BACKOFF};

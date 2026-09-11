@@ -236,7 +236,7 @@ Frontend → Rust 命令（`invoke`）：
 | `chat_send` | 发弹幕，返回 `SendOutcome` |
 | `chat_report` | 举报弹幕 |
 | `emotes_list` | 按身份加载表情包库 |
-| `follow_list` / `follow_refresh` | 关注列表与刷新 |
+| `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令） |
 | `wallet_balance` | 电池余额 |
 | `prefs_get` / `prefs_set` | 偏好读写 |
 | `app_info` | 版本、数据目录、构建信息 |

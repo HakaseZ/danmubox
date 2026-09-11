@@ -305,6 +305,109 @@
   color: var(--ok);
 }
 
+/* ---------------------------------------------------------------- 表情与举报 */
+
+.picker {
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  padding: 8px 14px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.pickerGroup {
+  margin-bottom: 8px;
+}
+
+.pickerTitle {
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin-bottom: 4px;
+}
+
+.pickerItems {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pickerItem {
+  padding: 2px 6px;
+  font-size: 18px;
+  line-height: 24px;
+  min-width: 32px;
+}
+
+.pickerItem img {
+  height: 24px;
+  vertical-align: middle;
+}
+
+.rowAction {
+  opacity: 0;
+  flex: none;
+  font-size: 11px;
+  padding: 0 6px;
+  align-self: center;
+}
+
+.row:hover .rowAction {
+  opacity: 1;
+}
+
+.reportBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-input);
+}
+
+.reportBar input {
+  flex: 1;
+}
+
+/* ---------------------------------------------------------------- 关注列表 */
+
+.followSection {
+  margin-top: 24px;
+}
+
+.followHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.followHeader h2 {
+  font-size: 15px;
+  margin: 0;
+  flex: 1;
+}
+
+.followItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  background: var(--bg-elevated);
+}
+
+.followItem:hover {
+  border-color: var(--accent);
+}
+
+.balance {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
 /* ---------------------------------------------------------------- 通用 */
 
 .error {
@@ -329,6 +432,11 @@
   color: inherit;
   text-decoration: underline;
   padding: 0;
+}
+
+.notice {
+  background: var(--ok);
+  color: #002b12;
 }
 
 .logs {

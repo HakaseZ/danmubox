@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Composer } from "./Composer";
 import { FilterBar } from "./FilterBar";
@@ -6,6 +6,8 @@ import { MessageList } from "./MessageList";
 import type { DisplayRow } from "../filtering";
 import type {
   ConnState,
+  Emote,
+  Message,
   Prefs,
   RoomView as RoomViewData,
   SendOutcome,
@@ -21,11 +23,16 @@ interface Props {
   session?: SessionState;
   lastOutcome?: SendOutcome;
   logs: string[];
+  emotes: Emote[];
+  balance?: number;
   onBack: () => void;
   onRefresh: () => void;
   onDisconnect: () => void;
   onSend: (content: string) => Promise<SendOutcome | undefined>;
+  onReport: (message: Message, reason: string) => Promise<void>;
   onPrefs: (patch: Partial<Prefs>) => void;
+  onLoadEmotes: () => void;
+  onLoadBalance: () => void;
 }
 
 const DOT: Record<ConnState, string> = {
@@ -51,15 +58,26 @@ export function RoomView({
   session,
   lastOutcome,
   logs,
+  emotes,
+  balance,
   onBack,
   onRefresh,
   onDisconnect,
   onSend,
+  onReport,
   onPrefs,
+  onLoadEmotes,
+  onLoadBalance,
 }: Props) {
   const [showLogs, setShowLogs] = useState(false);
+  const [reportTarget, setReportTarget] = useState<Message>();
+  const [reason, setReason] = useState("");
   const state = status?.state ?? "disconnected";
   const separateGifts = prefs["ui.gift_panel_mode"] === "separate";
+
+  useEffect(() => {
+    if (session?.logged_in) onLoadBalance();
+  }, [session?.logged_in, onLoadBalance]);
 
   const giftRows = separateGifts
     ? rows.filter((row) =>
@@ -84,6 +102,9 @@ export function RoomView({
           {STATE_TEXT[state]}
           {status?.detail ? `（${status.detail}）` : ""}
         </span>
+        {balance !== undefined && (
+          <span className={styles.balance}>电池 {balance}</span>
+        )}
         <button onClick={onRefresh} title="长连接卡住或推流中断时手动重连">
           刷新
         </button>
@@ -102,6 +123,7 @@ export function RoomView({
           rows={chatRows}
           anchorUid={room.anchor_uid}
           prefs={prefs}
+          onReport={setReportTarget}
         />
         {separateGifts && (
           <div className={styles.giftPanel}>
@@ -123,14 +145,48 @@ export function RoomView({
         disabled={!room.connected}
         loggedIn={session?.logged_in ?? false}
         lastOutcome={lastOutcome}
+        emotes={emotes}
         onSend={onSend}
+        onOpenEmotes={onLoadEmotes}
       />
+
+      {reportTarget && (
+        <div className={styles.reportBar}>
+          <span className={styles.roomMeta}>
+            举报「{reportTarget.content.slice(0, 24)}」
+          </span>
+          <input
+            value={reason}
+            placeholder="举报理由（取值尚未实测，按原文提交）"
+            onChange={(event) => setReason(event.target.value)}
+          />
+          <button
+            disabled={reason.trim().length === 0}
+            onClick={() => {
+              const target = reportTarget;
+              setReportTarget(undefined);
+              setReason("");
+              void onReport(target, reason.trim());
+            }}
+          >
+            提交举报
+          </button>
+          <button
+            onClick={() => {
+              setReportTarget(undefined);
+              setReason("");
+            }}
+          >
+            取消
+          </button>
+        </div>
+      )}
 
       {showLogs && (
         <div className={styles.logs}>
-          {logs.length === 0 ? "（暂无日志）" : logs.map((line, index) => (
-            <div key={index}>{line}</div>
-          ))}
+          {logs.length === 0
+            ? "（暂无日志）"
+            : logs.map((line, index) => <div key={index}>{line}</div>)}
         </div>
       )}
     </div>

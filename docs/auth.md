@@ -466,11 +466,11 @@ sid = ""
 
 ### 9.3 关注列表与电池余额
 
-- 端口：`RoomCatalog`（关注列表 / 直播状态）与 `WalletProvider`（电池余额）（契约 §3）；IPC `follow_list` / `follow_refresh` / `wallet_balance`（契约 §7）。
+- 端口：`RoomCatalog`（关注列表 / 直播状态）与 `WalletProvider`（电池余额）（契约 §3）；IPC `follow_list` / `wallet_balance`（契约 §7）。
 - 关注列表凭据前提：**必须登录**（`SESSDATA`）；`DedeUserID` 是「查谁的关注」的 vmid 来源（上游是否要求显式 vmid 待实测）。只读，**不需要** `csrf`。
 - 关注列表展示（领域形状见契约 §5）：`live_status == 1` 置顶（REQUIREMENTS.md 需求），同组内其余按 `group_name` 分组展示。
 - 电池余额凭据前提：**必须登录**；只读，不需要 `csrf`；本地以整数表示余额，单位与口径待实测。
-- 缓存与刷新：关注列表/直播状态只在 `follow_refresh` 触发时拉取，不得以轮询压上游；余额在每次进入礼物相关界面时按需拉取，不做后台轮询。
+- 缓存与刷新：关注列表/直播状态只在 `follow_list` 触发时拉取，不得以轮询压上游；余额在每次进入礼物相关界面时按需拉取，不做后台轮询。
 
 **待实测校准（关注列表与电池余额）**
 
@@ -603,7 +603,7 @@ sid = ""
 
 - `contract.md`：唯一事实源；`config.toml`（§4.1）、`prefs.json`（§4.2）、`SendOutcome`（§5）、协议要点（§6）、IPC 命令（§7）、安全红线的总纲。
 - `protocol.md`：WS 帧格式、认证包 / 心跳包精确格式、命令目录、重连状态机、发送与风控（含 `upstream_id` 与举报相关字段的实测记录）。
-- `ipc.md`：`session_status` / `session_qr_start` / `session_qr_poll` / `session_logout` / `profiles_list` / `profiles_switch` / `chat_send` / `chat_report` / `emotes_list` / `follow_list` / `follow_refresh` / `wallet_balance` 的签名与 `danmubox://session` 载荷。
+- `ipc.md`：`session_status` / `session_qr_start` / `session_qr_poll` / `session_logout` / `profiles_list` / `profiles_switch` / `chat_send` / `chat_report` / `emotes_list` / `follow_list` / `wallet_balance` 的签名与 `danmubox://session` 载荷。
 - `architecture.md`：`AuthProvider` 端口的实现位置、`core` / `bili` 的依赖方向与并发模型。
 - `ui.md`：登录界面、扫码状态展示、关注列表与礼物栏的身份徽标渲染。
 - `operations.md`：凭据相关故障的排查决策树与日志脱敏规则。

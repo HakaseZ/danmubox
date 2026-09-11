@@ -8,6 +8,8 @@ import type {
   ApiError,
   AppInfo,
   ChatSendResult,
+  Emote,
+  FollowedRoom,
   Message,
   Prefs,
   Room,
@@ -62,6 +64,14 @@ export const api = {
 
   chatSend: (roomId: number, content: string, color?: number) =>
     invoke<ChatSendResult>("chat_send", { roomId, content, color }),
+
+  /** 举报一条弹幕。理由取值尚未实测，先按不透明字符串传递。 */
+  chatReport: (message: Message, reason: string) =>
+    invoke<void>("chat_report", { message, reason }),
+
+  emotesList: (roomId: number) => invoke<Emote[]>("emotes_list", { roomId }),
+  followList: () => invoke<FollowedRoom[]>("follow_list"),
+  walletBalance: () => invoke<number>("wallet_balance"),
 
   prefsGet: () => invoke<Prefs>("prefs_get"),
   prefsSet: (patch: Partial<Prefs>) => invoke<Prefs>("prefs_set", { patch }),

@@ -7,11 +7,16 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use danmubox_bili::{BiliAuth, BiliLive, BiliSender};
-use danmubox_core::ports::{AuthProvider, DanmakuSender, LiveSource, SessionState};
+use danmubox_bili::{
+    BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender, BiliWallet,
+};
+use danmubox_core::ports::{
+    AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource, RoomCatalog,
+    SessionState, WalletProvider,
+};
 use danmubox_core::{
-    config_path, data_dir, prefs_path, ConfigStore, Counters, Event, EventBus, HistoryQuery,
-    Message, MessageKind, Prefs, Room, RoomRuntime, SendOutcome,
+    config_path, data_dir, prefs_path, ConfigStore, Counters, Emote, Event, EventBus, FollowedRoom,
+    HistoryQuery, Message, MessageKind, Prefs, Room, RoomRuntime, RoomSession, SendOutcome,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
@@ -328,6 +333,46 @@ fn prefs_set(state: State<'_, AppState>, patch: serde_json::Value) -> ApiResult<
     Ok(prefs.effective())
 }
 
+#[tauri::command]
+async fn emotes_list(state: State<'_, AppState>, room_id: i64) -> ApiResult<Vec<Emote>> {
+    let provider = BiliEmotes::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    // 我在该房间的身份（粉丝牌 / 大航海 / 房管）尚未采集，先按零身份请求；
+    // 上游若已按身份下发可用包，这不影响结果。身份采集见 docs/protocol.md 的待实测项。
+    let session = RoomSession {
+        room_id,
+        ..Default::default()
+    };
+    provider
+        .emotes(room_id, &session)
+        .await
+        .map_err(ApiError::from)
+}
+
+#[tauri::command]
+async fn chat_report(
+    state: State<'_, AppState>,
+    message: Message,
+    reason: String,
+) -> ApiResult<()> {
+    let reporter = BiliReporter::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    reporter
+        .report(&message, &reason)
+        .await
+        .map_err(ApiError::from)
+}
+
+#[tauri::command]
+async fn follow_list(state: State<'_, AppState>) -> ApiResult<Vec<FollowedRoom>> {
+    let catalog = BiliFollow::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    catalog.followed().await.map_err(ApiError::from)
+}
+
+#[tauri::command]
+async fn wallet_balance(state: State<'_, AppState>) -> ApiResult<i64> {
+    let wallet = BiliWallet::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    wallet.balance().await.map_err(ApiError::from)
+}
+
 // ---------------------------------------------------------------- 事件转发
 
 /// 把事件总线上的事件转发给前端（`docs/ipc.md` §4 的五个事件名）。
@@ -468,6 +513,10 @@ pub fn run() {
             rooms_reconnect,
             history_query,
             chat_send,
+            chat_report,
+            emotes_list,
+            follow_list,
+            wallet_balance,
             prefs_get,
             prefs_set
         ])

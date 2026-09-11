@@ -98,6 +98,31 @@ export interface ApiError {
   message: string;
 }
 
+export type EmotePackage = "common" | "medal" | "guard" | "admin";
+
+export interface Emote {
+  key: string;
+  package_kind: EmotePackage;
+  text: string;
+  url: string;
+  room_id: number;
+}
+
+export interface FollowedRoom {
+  room_id: number;
+  uname: string;
+  face: string;
+  live_status: number;
+  group_name: string;
+}
+
+export const EMOTE_PACKAGE_LABEL: Record<EmotePackage, string> = {
+  common: "通用",
+  medal: "粉丝牌",
+  guard: "大航海",
+  admin: "房管",
+};
+
 /** 发送结果的用户可见文案（docs/ui.md §6.5）。 */
 export const SEND_OUTCOME_TEXT: Record<SendOutcome, string> = {
   ok: "已发出",

@@ -13,10 +13,11 @@ interface Props {
   row: DisplayRow;
   anchorUid?: number;
   prefs: Prefs;
+  onReport?: (message: Message) => void;
 }
 
 /** 六种 kind 的渲染规范见 docs/ui.md §6.1；互动与系统行的文案由展示层生成。 */
-export function MessageRow({ row, anchorUid, prefs }: Props) {
+export function MessageRow({ row, anchorUid, prefs, onReport }: Props) {
   const { message, count } = row;
   const badges = badgesFor(message, anchorUid);
   const color = cssColor(message.color);
@@ -68,6 +69,20 @@ export function MessageRow({ row, anchorUid, prefs }: Props) {
       )}
       <span className={`${styles.content} ${highlight ?? ""}`}>{text}</span>
       {count > 1 && <span className={styles.merged}>×{count}</span>}
+      {onReport && message.kind === "danmaku" && (
+        <button
+          className={styles.rowAction}
+          title={
+            message.upstream_id.length > 0
+              ? "举报这条弹幕"
+              : "缺少上游弹幕标识，无法举报"
+          }
+          disabled={message.upstream_id.length === 0}
+          onClick={() => onReport(message)}
+        >
+          举报
+        </button>
+      )}
     </div>
   );
 }

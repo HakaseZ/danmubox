@@ -3,17 +3,18 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { MessageRow } from "./MessageRow";
 import type { DisplayRow } from "../filtering";
-import type { Prefs } from "../types";
+import type { Message, Prefs } from "../types";
 import styles from "../app.module.css";
 
 interface Props {
   rows: DisplayRow[];
   anchorUid?: number;
   prefs: Prefs;
+  onReport?: (message: Message) => void;
 }
 
 /** 聊天流。虚拟滚动 + 自动跟随/暂停规则见 docs/ui.md §2、§3。 */
-export function MessageList({ rows, anchorUid, prefs }: Props) {
+export function MessageList({ rows, anchorUid, prefs, onReport }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(prefs["ui.auto_scroll"]);
   const pauseOnHover = prefs["ui.pause_on_hover"];
@@ -79,6 +80,7 @@ export function MessageList({ rows, anchorUid, prefs }: Props) {
                 row={rows[item.index]}
                 anchorUid={anchorUid}
                 prefs={prefs}
+                onReport={onReport}
               />
             </div>
           ))}

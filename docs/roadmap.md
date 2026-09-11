@@ -28,7 +28,7 @@
 | 1 | 游客模式 + 协议解码跑通 | `bili` 协议/WS 适配器 + `core` 会话缓冲与端口 + `danmubox-cli`；brotli、上游 HTTP 心跳、`INTERACT_WORD_V2` protobuf、字段实测校准 | 游客模式用 CLI 连真实房间稳定收弹幕，字段与校准表一致 | 无（起点） | §3 全部验收项通过 + §3.4 每条有结论 |
 | 2 | 登录层 | 明文 `config.toml` 读写（0600 / 原子替换）+ 扫码 + `buvid3`/WBI/`getDanmuInfo` + `prefs.json` | 有凭据直读进入登录态；无凭据扫码可登录；重启后登录态保持 | 阶段 1 | §4 全部验收项通过 |
 | 3 | 交互层 | `chat_send` 与 `SendOutcome` 七态、表情包库、举报、身份徽标、礼物栏双模式、过滤与样式、房间内刷新 | 登录态发弹幕在真实房间可见且失败原因可区分；表情 / 举报 / 刷新可用 | 阶段 2 | §5 全部验收项通过 |
-| 4 | 关注列表 + 电池余额 | `follow_list` / `follow_refresh`、`wallet_balance`、直播中置顶、从关注列表进场 | 关注列表按直播中置顶展示且可一键进场；余额数值可见 | 阶段 2 | §6 全部验收项通过 |
+| 4 | 关注列表 + 电池余额 | `follow_list`、`wallet_balance`、直播中置顶、从关注列表进场 | 关注列表按直播中置顶展示且可一键进场；余额数值可见 | 阶段 2 | §6 全部验收项通过 |
 | 5 | 三端编译 | macOS / Windows / Android 可运行产物 + 三端冒烟记录 | 三端各自跑通同一份手工冒烟清单 | 阶段 3、阶段 4 | §7 全部验收项通过 |
 
 ### 2.1 依赖关系
@@ -186,7 +186,7 @@ graph LR
 
 | 交付物 | 说明 | 对应文档 |
 |---|---|---|
-| 关注列表 | IPC `follow_list` / `follow_refresh`；`FollowedRoom` 含 `room_id` / `uname` / `face` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name`；展示时 `live_status == 1` 置顶 | `docs/contract.md` §5、§7 |
+| 关注列表 | IPC `follow_list`；`FollowedRoom` 含 `room_id` / `uname` / `face` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name`；展示时 `live_status == 1` 置顶 | `docs/contract.md` §5、§7 |
 | 从关注列表进场 | 在列表中直接连接所选房间 | `docs/ui.md`、`docs/ipc.md` |
 | 电池余额 | IPC `wallet_balance`，由 `WalletProvider` 提供 | `docs/contract.md` §3、§7 |
 | 校准表 | 见 §6.4 | `docs/protocol.md` 附录 |
@@ -198,7 +198,7 @@ graph LR
 | S4-AC1 | 登录态调用 `follow_list` | 返回关注房间列表；每条含 `live_status` 与 `group_name` | 响应 JSON |
 | S4-AC2 | 观察列表排序 | `live_status == 1` 的房间置顶；其余保持稳定顺序 | 截图 |
 | S4-AC3 | 从列表选择一个直播中的房间进场 | 进入该房间会话并开始收弹幕 | 截图 |
-| S4-AC4 | 调用 `follow_refresh` | 列表刷新；当前房间的会话缓冲不丢失、不重建 | 刷新前后条数对比 |
+| S4-AC4 | 调用 `follow_list` | 列表刷新；当前房间的会话缓冲不丢失、不重建 | 刷新前后条数对比 |
 | S4-AC5 | 调用 `wallet_balance` | 返回电池余额数值；未登录时返回明确失败而非用 0 冒充余额 | 响应 JSON |
 | S4-AC6 | 逐项完成 §6.4 校准表 | 每条有结论 | 校准表结论 |
 

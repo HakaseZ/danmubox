@@ -98,16 +98,16 @@ mod tests {
     #[test]
     fn decodes_a_roundtripped_payload() {
         let original = InteractWordV2 {
-            uid: 227188005,
-            uname: "某路人livet".into(),
+            uid: 12345,
+            uname: "路人甲".into(),
             msg_type: 1,
-            roomid: 21026051,
+            roomid: 7654321,
             timestamp: 1_789_134_579,
             timestamp_millisecond: 1_789_134_579_109,
             user_info: Some(UserInfo {
-                uid: 227188005,
+                uid: 12345,
                 base: Some(UserBase {
-                    uname: "某路人livet".into(),
+                    uname: "路人甲".into(),
                     face: "https://i0.hdslb.com/bfs/face/aef6.png".into(),
                 }),
                 medal_info: None,
@@ -116,9 +116,9 @@ mod tests {
         let bytes = original.encode_to_vec();
         let decoded = InteractWordV2::decode(bytes.as_slice()).unwrap();
 
-        assert_eq!(decoded.uid, 227188005);
-        assert_eq!(decoded.roomid, 21026051);
-        assert_eq!(decoded.display_name(), "某路人livet");
+        assert_eq!(decoded.uid, 12345);
+        assert_eq!(decoded.roomid, 7654321);
+        assert_eq!(decoded.display_name(), "路人甲");
         assert_eq!(decoded.ts_ms(), Some(1_789_134_579_109));
     }
 
@@ -150,14 +150,14 @@ mod tests {
                     face: "http://x/y.png".into(),
                 }),
                 medal_info: Some(UserMedalInfo {
-                    name: "绒心柚".into(),
+                    name: "粉丝牌".into(),
                     level: 24,
                 }),
             }),
             ..Default::default()
         };
         assert_eq!(decoded.display_name(), "nested");
-        assert_eq!(decoded.medal(), (24, "绒心柚".to_string()));
+        assert_eq!(decoded.medal(), (24, "粉丝牌".to_string()));
         assert_eq!(decoded.ts_ms(), None, "两个时间戳都缺失时不得编造");
     }
 }

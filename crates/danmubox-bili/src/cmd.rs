@@ -302,30 +302,30 @@ mod tests {
             "info": [
                 [0, 1, 25, 16777215, 1_789_134_601_006i64, 1_789_134_600i64, 0, "0cf552e3", 0, 0, 0, "", 0, "{}", "{}",
                  {
-                    "extra": "{\"content\":\"hi\",\"id_str\":\"736eb1a6bf5503664f3851950d6aa4079978\"}",
+                    "extra": "{\"content\":\"hi\",\"id_str\":\"0123456789abcdef0123456789abcdef0123\"}",
                     "user": {
-                        "uid": 3690980265954112i64,
-                        "base": {"name": "掀裙子-柚子", "face": "http://f/x.png"},
-                        "medal": {"level": 24, "name": "绒心柚", "guard_level": 3}
+                        "uid": 123456789012345i64,
+                        "base": {"name": "观众甲", "face": "http://f/x.png"},
+                        "medal": {"level": 24, "name": "粉丝牌", "guard_level": 3}
                     }
                  }],
                 "亏爆57米",
-                [3690980265954112i64, "掀裙子-柚子", 0, 0, 0, 10000, 1, ""],
-                [24, "绒心柚", "柚柚美莎子", 21026051, 1725515, "", 0, 1725515, 1725515, 5414290, 0, 1]
+                [123456789012345i64, "观众甲", 0, 0, 0, 10000, 1, ""],
+                [24, "粉丝牌", "主播甲", 7654321, 1725515, "", 0, 1725515, 1725515, 5414290, 0, 1]
             ]
         });
-        let message = dispatch(21026051, &payload, &counters()).expect("必须解出弹幕");
+        let message = dispatch(7654321, &payload, &counters()).expect("必须解出弹幕");
         assert_eq!(message.kind, MessageKind::Danmaku);
         assert_eq!(message.content, "亏爆57米");
-        assert_eq!(message.uid, 3690980265954112);
-        assert_eq!(message.uname, "掀裙子-柚子");
+        assert_eq!(message.uid, 123456789012345);
+        assert_eq!(message.uname, "观众甲");
         assert_eq!(message.color, 16777215, "颜色在 info[0][3]");
         assert_eq!(message.ts, 1_789_134_601_006, "毫秒时间戳在 info[0][4]");
         assert_eq!(message.medal_level, 24);
-        assert_eq!(message.medal_name, "绒心柚");
+        assert_eq!(message.medal_name, "粉丝牌");
         assert_eq!(message.guard_level, 3);
         assert_eq!(
-            message.upstream_id, "736eb1a6bf5503664f3851950d6aa4079978",
+            message.upstream_id, "0123456789abcdef0123456789abcdef0123",
             "举报标识取自 extra.id_str"
         );
         assert!(!message.is_admin);

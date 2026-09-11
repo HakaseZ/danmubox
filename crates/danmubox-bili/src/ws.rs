@@ -30,6 +30,8 @@ const WS_HEARTBEAT_PERIOD: Duration = Duration::from_secs(30);
 const HTTP_HEARTBEAT_PERIOD: Duration = Duration::from_secs(60);
 /// 会话短于该时长视为「未真正建立」，不重置退避，避免紧循环重连。
 const HEALTHY_SESSION: Duration = Duration::from_secs(30);
+/// 单个弹幕节点的拨号超时；超时即换下一个节点。
+const WS_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// WS 心跳包体：字面量，见 `docs/protocol.md` §8.1。
 const HEARTBEAT_BODY: &[u8] = b"[object Object]";
@@ -91,31 +93,65 @@ impl BiliLive {
     async fn run_once(&self, room_id: i64, sink: &MessageSink, cancel: &Cancel) -> Result<bool> {
         let buvid3 = self.buvid3().await?;
         let info = self.http.danmu_info(room_id, &buvid3).await?;
-        let host = info
-            .hosts
-            .first()
-            .cloned()
-            .ok_or_else(|| Error::Upstream("getDanmuInfo 未返回可用地址".into()))?;
 
-        let url = format!("wss://{host}/sub");
-        let mut request = url
-            .clone()
-            .into_client_request()
-            .map_err(|e| Error::Upstream(format!("构造 WS 请求失败: {e}")))?;
-        {
-            let headers = request.headers_mut();
-            headers.insert("User-Agent", HeaderValue::from_static(UA));
-            headers.insert("Referer", HeaderValue::from_static(REFERER_LIVE));
+        // `host_list` 就是候选节点表：逐个尝试，单个节点拨号必须有超时，
+        // 否则一个不可达节点会让整条连接无限挂起（实测踩过）。
+        let mut last_error: Option<Error> = None;
+        let mut connected = None;
+        let mut chosen_host = String::new();
+        for host in &info.hosts {
+            let url = format!("wss://{host}/sub");
+            let mut request = url
+                .clone()
+                .into_client_request()
+                .map_err(|e| Error::Upstream(format!("构造 WS 请求失败: {e}")))?;
+            {
+                let headers = request.headers_mut();
+                headers.insert("User-Agent", HeaderValue::from_static(UA));
+                headers.insert("Referer", HeaderValue::from_static(REFERER_LIVE));
+            }
+            tracing::debug!(room_id, host = %host, "尝试连接弹幕服务器");
+            match tokio::time::timeout(WS_DIAL_TIMEOUT, tokio_tungstenite::connect_async(request))
+                .await
+            {
+                Ok(Ok((stream, _response))) => {
+                    tracing::debug!(room_id, host = %host, "WS 握手完成");
+                    chosen_host = host.clone();
+                    connected = Some(stream);
+                    break;
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!(room_id, host = %host, %err, "节点连接失败，尝试下一个");
+                    last_error = Some(Error::Upstream(format!("{host} 连接失败: {err}")));
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        room_id,
+                        host = %host,
+                        timeout_ms = WS_DIAL_TIMEOUT.as_millis() as u64,
+                        "节点连接超时，尝试下一个"
+                    );
+                    last_error = Some(Error::Upstream(format!("{host} 连接超时")));
+                }
+            }
         }
-
-        let (stream, _response) = tokio_tungstenite::connect_async(request)
-            .await
-            .map_err(|e| Error::Upstream(format!("连接弹幕服务器失败: {e}")))?;
+        let stream = connected.ok_or_else(|| {
+            last_error.unwrap_or_else(|| Error::Upstream("host_list 为空".into()))
+        })?;
         let (mut write, mut read) = stream.split();
+
+        // 认证包的 uid 必须与换取 token 的账号一致：游客态为 0，登录态为真实 uid。
+        // 实测（2026-09-11）：登录后仍发 uid=0 会被上游在握手后立刻 reset。
+        let uid = self
+            .store
+            .as_ref()
+            .and_then(|store| store.active())
+            .map(|profile| profile.uid())
+            .unwrap_or(0);
 
         // 认证包（op=7，帧头 protover=1，body 里声明想用的载荷版本 3）。
         let auth = serde_json::json!({
-            "uid": 0,
+            "uid": uid,
             "roomid": room_id,
             "protover": proto::PROTOVER_BROTLI,
             "buvid": buvid3,
@@ -123,6 +159,13 @@ impl BiliLive {
             "type": 2,
             "key": info.token,
         });
+        tracing::debug!(
+            room_id,
+            uid,
+            logged_in = uid != 0,
+            host = %chosen_host,
+            "发送认证包"
+        );
         write
             .send(WsMessage::Binary(
                 proto::build_packet(

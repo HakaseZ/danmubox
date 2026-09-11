@@ -103,6 +103,8 @@ impl BiliHttp {
     }
 
     fn get(&self, url: &str) -> reqwest::RequestBuilder {
+        // 只记 URL，不记请求头与 body：凭据从不进日志。
+        tracing::debug!(target: "danmubox_bili::http", method = "GET", url, "上游请求");
         let mut req = self.client.get(url);
         if let Some(cookie) = self.current_cookie() {
             req = req.header(COOKIE, cookie);
@@ -302,6 +304,8 @@ impl BiliHttp {
 
     /// POST 表单。`body` 必须已是签名后的查询串（含 `w_rid`）。
     pub async fn post_form(&self, url: &str, body: &str) -> Result<Value> {
+        // body 里含 csrf 与弹幕原文，一律不记；只记目标地址。
+        tracing::debug!(target: "danmubox_bili::http", method = "POST", url, "上游请求");
         let mut request = self.client.post(url).header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",

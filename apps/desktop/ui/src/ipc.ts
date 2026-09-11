@@ -44,15 +44,25 @@ export interface HistoryQuery {
   q?: string;
 }
 
-export const api = {
-  appInfo: () => invoke<AppInfo>("app_info"),
-  sessionStatus: () => invoke<SessionState>("session_status"),
+/** IPC 唯一入口：失败时把命令名与错误码打到控制台（经日志桥进入 Rust 日志）。 */
+async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    console.error(`IPC ${command} 失败: ${describeError(error)}`);
+    throw error;
+  }
+}
 
-  roomsList: () => invoke<RoomView[]>("rooms_list"),
-  roomsAdd: (input: string) => invoke<RoomView>("rooms_add", { input }),
+export const api = {
+  appInfo: () => call<AppInfo>("app_info"),
+  sessionStatus: () => call<SessionState>("session_status"),
+
+  roomsList: () => call<RoomView[]>("rooms_list"),
+  roomsAdd: (input: string) => call<RoomView>("rooms_add", { input }),
   roomsRemove: (roomId: number) =>
     invoke<void>("rooms_remove", { roomId }),
-  roomsConnect: (roomId: number) => invoke<void>("rooms_connect", { roomId }),
+  roomsConnect: (roomId: number) => call<void>("rooms_connect", { roomId }),
   roomsDisconnect: (roomId: number) =>
     invoke<void>("rooms_disconnect", { roomId }),
   /** 房间内「刷新」：立即重连，不清空已收弹幕。 */
@@ -69,12 +79,12 @@ export const api = {
   chatReport: (message: Message, reason: string) =>
     invoke<void>("chat_report", { message, reason }),
 
-  emotesList: (roomId: number) => invoke<Emote[]>("emotes_list", { roomId }),
-  followList: () => invoke<FollowedRoom[]>("follow_list"),
-  walletBalance: () => invoke<number>("wallet_balance"),
+  emotesList: (roomId: number) => call<Emote[]>("emotes_list", { roomId }),
+  followList: () => call<FollowedRoom[]>("follow_list"),
+  walletBalance: () => call<number>("wallet_balance"),
 
-  prefsGet: () => invoke<Prefs>("prefs_get"),
-  prefsSet: (patch: Partial<Prefs>) => invoke<Prefs>("prefs_set", { patch }),
+  prefsGet: () => call<Prefs>("prefs_get"),
+  prefsSet: (patch: Partial<Prefs>) => call<Prefs>("prefs_set", { patch }),
 };
 
 export interface EventHandlers {

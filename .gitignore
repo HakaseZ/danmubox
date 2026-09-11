@@ -1,0 +1,25 @@
+# 凭据与本地状态：绝不入库（见 docs/decisions/0007-credential-file.md）
+config.toml
+prefs.json
+prefs.json.bak
+*.log
+
+# Rust
+/target/
+**/target/
+
+# 前端
+node_modules/
+dist/
+
+# Tauri 构建产物
+apps/desktop/src-tauri/gen/
+*.dmg
+*.msi
+*.apk
+*.aab
+
+# 编辑器与系统
+.DS_Store
+.idea/
+.vscode/

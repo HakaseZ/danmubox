@@ -314,11 +314,11 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | 归一化字段 | 来源（已实测） | 说明 | 校准状态 |
 |---|---|---|---|
 | `content` | `info[1]` | 弹幕文本原文 | 已实测 |
-| `uid` | `info[0][15].user.uid` | 明文用户对象 | 已实测（样本 `3690980265954112`） |
+| `uid` | `info[0][15].user.uid` | 明文用户对象 | 已实测 |
 | `uname` | `info[0][15].user.base.name` | 明文用户对象昵称 | 已实测 |
 | `color` | `info[0][3]` | 十进制 RGB 整数；缺失 → `0` | 已实测（样本 `16777215`） |
 | `medal_level` | `info[0][15].user.medal.level` | 无粉丝牌 → `0` | 已实测（样本 `24`） |
-| `medal_name` | `info[0][15].user.medal.name` | 无粉丝牌 → `""` | 已实测（样本 `绒心柚`） |
+| `medal_name` | `info[0][15].user.medal.name` | 无粉丝牌 → `""` | 已实测 |
 | `guard_level` | `info[0][15].user.guard.level`，缺失时回落 `…user.medal.guard_level` | `0` 无 / `1` 总督 / `2` 提督 / `3` 舰长 | **仅观测到 0**（缺舰长样本，A12） |
 | `is_admin` | `info[2][2] == 1` | 经典槽位 | **未确认**：仅观测到 `0`，缺房管正向样本（A5） |
 | `upstream_id` | `info[0][15].extra` 是 JSON 字符串，取其中的 `id_str` | 举报弹幕所需 | 已实测（样本为 36 位十六进制串） |
@@ -766,7 +766,7 @@ stateDiagram-v2
 | 编号 | 结论 |
 |---|---|
 | A1 / A2 / A7 | **已解决**：`DANMU_MSG` 的颜色在 `info[0][3]`、毫秒时间戳在 `info[0][4]`、秒时间戳在 `info[0][5]`；用户对象在 `info[0][15].user` |
-| A4 | **部分解决**：粉丝牌在 `info[0][15].user.medal`，等级 `level`、名称 `name`（样本 `24` / `绒心柚`）。`guard_level` 的非零分支仍缺样本（见 A12） |
+| A4 | **部分解决**：粉丝牌在 `info[0][15].user.medal`，等级字段 `level`、名称字段 `name`（样本取值已脱敏）。`guard_level` 的非零分支仍缺样本（见 A12） |
 | A6 | **已解决**：举报标识在 `info[0][15].extra`（JSON 字符串）的 `id_str`，样本形如 36 位十六进制串 |
 | A7 | **已解决**：`info[0][4]` 是毫秒、`info[0][5]` 是秒，两者同帧出现且相差三个数量级 |
 | A11 | **已解决**：V2 载荷在 `data.pb`（非 `data`）；tag 1/2/5/6/7/8/22 与社区 schema 一致，但 tag 15 类型与 `activity_message` 位置被纠正，且 `timestamp_millisecond` 必须按 64 位声明 |

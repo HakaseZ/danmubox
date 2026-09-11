@@ -5,10 +5,14 @@
 
 pub mod auth;
 pub mod cmd;
+pub mod emote;
+pub mod follow;
 pub mod http;
 pub mod pb;
 pub mod proto;
+pub mod report;
 pub mod send;
+pub mod wallet;
 pub mod wbi;
 
 mod ws;

@@ -19,13 +19,9 @@
 
 依赖方向（规范性，契约 §3）：`danmubox-bili` → `danmubox-core`；`danmubox-cli` → `core` + `bili`；`apps/desktop/src-tauri` → `core` + `bili`。**`core` 不得依赖 `bili`，也不得依赖 `tauri`。**
 
-> **后期想法（本期不实现）**：接入 MCP。为此刻意保持架构兼容——core 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层。本期不定义任何 MCP 工具、协议或端点。
+> **后期想法（本期不实现）**：接入 MCP；为此刻意保持架构兼容——core 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层，本期不定义任何 MCP 工具、协议或端点。
 
-消费面共享 core 的硬性规则：
-
-1. **只有 `danmubox-bili` 能触达 B 站**。上层不得自行 `reqwest` 访问 B 站 REST，也不得自建 WS。
-2. **上层不得再定义第二套 `kind` / 错误码 / 偏好键**。对外枚举取自契约 §5，偏好键取自契约 §8。
-3. **凭据只在 `AuthProvider` 实现内解引用使用**；上层拿到的只有会话状态位（模式 / uid / uname / 是否登录 / 失效时间），永远不含 Cookie 值。
+消费面共享 core 的三条硬性规则：**只有 `danmubox-bili` 能触达 B 站**（上层不得自行访问 B 站 REST，也不得自建 WS）；**上层不得再定义第二套 `kind` / 错误码 / 偏好键**（分别取自契约 §5 / §7 / §8）；**凭据只在 `AuthProvider` 实现内解引用使用**，上层拿到的只有会话状态位（模式 / uid / uname / 是否登录 / 失效时间），永远不含 Cookie 值。
 
 ## 2. crate 依赖图
 
@@ -117,7 +113,7 @@ graph LR
 
 | 端口（契约 §3） | 职责（契约原文） | 输入 → 输出领域模型 | 实现落点 |
 |---|---|---|---|
-| `AuthProvider` | 登录态、凭据读写、扫码流程、`buvid3` | 无输入 → `SessionStatus`；`QrStart` / `QrPoll`；`config.toml` 的六个凭据字段 | `bili::auth` |
+| `AuthProvider` | 登录态、凭据读写、扫码流程、`buvid3` | 无输入 → `SessionStatus`；`QrStart` / `QrPoll`；`config.toml` 中当前 profile 的凭据字段 | `bili::auth` |
 | `LiveSource` | 房间解析、建立/断开连接、事件流 | `room_id` + 连接参数 → `Room`；连接期间持续产出 `Message` 与房间状态变化 | `bili::ws`（解析经 `bili::room`） |
 | `DanmakuSender` | 发送弹幕（含被吞状态归一化） | `room_id` + 内容/颜色/模式 → `SendOutcome`（被吞时附上游回显内容与原始 code/message） | `bili::chat` |
 | `DanmakuReporter` | 举报弹幕 | `room_id` + `upstream_id` + 举报类型 → 成功/失败与上游 code | `bili::chat` |
@@ -137,7 +133,7 @@ graph LR
 | `RoomCatalog` | `FollowedRoom` 四字段与分组名 | 关注列表分页、直播状态字段位置 |
 | `WalletProvider` | 一个数值 | 余额接口与单位换算 |
 
-**为什么逆向或协议变更只改 `danmubox-bili`**：core 与 UI 之间、core 与 bili 之间的数据类型是契约 §5 的领域模型，不含任何上游标识；所有「上游长什么样」的知识被压在一个 crate 内的 `proto` / `ws` / `auth` / `room` / `chat` / `emote` / `wallet` 表格里。上游改字段下标、改签名、改包结构或改接口路径时，改动收敛为「重写 `bili` 内对应模块 + 调整该端口的映射」，`core` 的 supervisor、会话缓冲、事件总线与全部 Tauri 命令签名均不变。这条隔离能力是 REQUIREMENTS.md 的直接需求（B 站 API 不可控、可能有后期逆向需求），也是 §2 约束表中「B 站知识只在 `bili`」的检查点。
+**为什么逆向或协议变更只改 `danmubox-bili`**：跨层数据类型是契约 §5 的领域模型，不含任何上游标识；上游改字段下标、签名、包结构或接口路径时，改动收敛为「重写 `bili` 内对应模块 + 调整该端口的映射」，`core` 的 supervisor、会话缓冲、事件总线与全部 Tauri 命令签名均不变（REQUIREMENTS.md §3 的直接需求）。
 
 端口之外的调用方向：**consumer → core → port ← bili**。consumer 从不直接调用 `bili` 的类型，只调用 core 暴露的句柄；core 在构造时接收端口实现（`AuthProvider`、`LiveSource` 等 trait object），`apps/desktop/src-tauri` 与 `danmubox-cli` 是唯一知道「用 `bili` 实现注入」的地方。
 
@@ -196,8 +192,6 @@ graph TD
 | 偏好变更 | `history.buffer_rows` 改小后，下一次写入即按新容量裁剪（可能一次性丢弃最旧若干条）；改大不恢复已丢的消息 |
 | 不变量 | 不落盘、不跨会话、不导出；除本会话缓冲外，core 不保留任何历史 |
 
-契约 §4.3 的取舍原样适用：B 站不提供弹幕历史回放接口，因此「历史」只能是本地本次会话内的缓冲；若将来需要跨会话历史，方案是追加式 JSONL 文件（按天分片），届时另立 ADR。
-
 ### 4.3 通道与背压
 
 | 通道 | 类型 | 容量（设计值） | 语义 |
@@ -214,7 +208,7 @@ graph TD
 | 订阅者落后（`Lagged`） | 订阅者不静默跳过：丢弃落后区间并对该房间重新执行一次 `history_query` 补齐，再继续接收实时流 |
 | 会话缓冲溢出 | 丢最旧一条，前端在会话缓冲切片的 `droppedByRoom` 计数上提示「已折叠 N 条早期消息」 |
 | 上游推送无法识别 | 不打断连接；按 `system` 归一化并计数，连续异常触发一次告警 |
-| 前端渲染跟不上 | UI 按帧节流批量插入，不向 core 回压；峰值处理见 `ui.md` |
+| 前端渲染跟不上 | UI 按帧节流批量插入，不向 core 回压 |
 
 不采用的策略：无界队列（内存不可控）、写端阻塞（一个慢订阅者冻结整个房间）、静默丢包（前端与 core 会话缓冲不一致）。
 
@@ -255,17 +249,15 @@ core 只读写两个本地文件，位置都在契约 §4 的数据目录下：m
 
 | 文件 | 内容 | 权限 | 写入方式 | 读取容错 |
 |---|---|---|---|---|
-| `config.toml` | 凭据：`sessdata` / `bili_jct` / `dede_user_id` / `dede_user_id_ck_md5` / `buvid3` / `buvid4` / `sid`（契约 §4.1 的 `[bilibili]` 段） | **0600** | 原子替换：写临时文件（同目录）→ `fsync` → `rename` | 缺失或必填字段为空 → 按游客启动，走扫码 |
+| `config.toml` | 凭据：顶层 `active_profile` + `[profiles.<name>]` 段，每段七个字段 `sessdata` / `bili_jct` / `dede_user_id` / `dede_user_id_ck_md5` / `buvid3` / `buvid4` / `sid`（契约 §4.1） | **0600** | 原子替换：写临时文件（同目录）→ `fsync` → `rename` | 缺失或 `active_profile` 指向的 profile 必填字段为空 → 按游客启动，走扫码 |
 | `prefs.json` | 界面与过滤偏好，键即契约 §8 的偏好键 | 默认（不含凭据） | 原子替换，同一套临时文件 + rename 路径 | 文件损坏或 JSON 非法 → 按默认值启动，并把损坏副本保留为 `prefs.json.bak` |
 
 规则：
 
-1. **凭据不加密**：形态是明文 TOML，靠 0600 与「只在本机数据目录」约束（契约 §4.1）。「手填 Cookie」在本设计中就是直接编辑 `config.toml`，不另做导入界面、不做导入命令。
-2. **偏好不写进 `config.toml`**：TOML 往返会丢注释与排版，程序每次改偏好都重写凭据文件是事故面；偏好只进 `prefs.json`（契约 §4.1 / §4.2）。
-3. 两个文件都只由 `core::files` 落地；凭据字段的语义（哪些字段必填、何时判定失效）由 `bili::auth` 的 `AuthProvider` 实现决定。
-4. 房间列表只存在于进程内存中，不落盘：契约 §4 只允许上述两个本地文件，因此进程重启后房间列表为空，由 `rooms_add` / `follow_list` 重新建立。
-5. `prefs.json` 只写**被显式改过**的键；读时与默认值合并成生效值全集（契约 §8 读写语义）。
-6. 安全红线见 §9.3：凭据类型不派生 `Debug` / `Display` / `Serialize`，从类型层面杜绝误打印。
+1. 两个文件都只由 `core::files` 落地；凭据字段的语义（哪些字段必填、何时判定失效）由 `bili::auth` 的 `AuthProvider` 实现决定。
+2. 多账号 = 单文件多 profiles：切换账号只改 `active_profile` 并以新凭据重建连接（契约 §4.1），不复制凭据文件，也不新增第二个文件。
+3. 房间列表只存在于进程内存中，不落盘：契约 §4 只允许上述两个本地文件，因此进程重启后房间列表为空，由 `rooms_add` / `follow_list` 重新建立。
+4. 安全红线见 §9.3：凭据类型不派生 `Debug` / `Display` / `Serialize`。
 
 ## 6. 进程拓扑
 
@@ -289,7 +281,7 @@ sequenceDiagram
   participant S as core::session
   P->>P: 读取 DANMUBOX_LOG（默认 info）
   P->>F: 解析数据目录；读取 prefs.json 并与 §8 默认值合并成生效值快照
-  P->>A: 初始化登录态（读 config.toml，字段齐全则直接进入登录态，否则游客/待扫码）
+  P->>A: 初始化登录态（读 config.toml 中 active_profile 指向的 profile，字段齐全则直接进入登录态，否则游客/待扫码）
   P->>B: 创建 EventBus（broadcast）
   P->>S: 构建 SessionHandle 工厂（注入端口实现）
   P->>P: 进入运行态（Tauri 事件循环 / CLI 前台作业）
@@ -300,8 +292,6 @@ sequenceDiagram
 
 1. **偏好早于 UI**：UI 首帧就拿到生效值快照，不需要「先渲染再闪一下改样式」。
 2. **凭据早于任何连接**：连接参数需要登录态参与签名，时序上不会出现「游客连接先建立、登录后重连」。
-3. **认证回应 `code=0` 才算认证成功**；非 0 一律按认证失败处理并进入退避重连，**不得**在未知 code 上编造含义（契约 §6）。
-4. **重连前必须重新解析房间连接参数**（契约 §6），不得复用上一轮的地址与令牌。
 
 ### 7.2 关闭
 
@@ -396,4 +386,4 @@ sequenceDiagram
 
 ---
 
-相关文档：`protocol.md`（协议细节与 `cmd → kind` 归一化表）、`auth.md`（登录、凭据与扫码状态机）、`ipc.md`（Tauri IPC 命令与事件契约）、`ui.md`（渲染、过滤与性能预算）、`decisions/0002-rust-core-shared-surfaces.md`、`decisions/0004-upstream-isolation.md`、`decisions/0005-no-local-database.md`、`decisions/0006-room-supervisor-tasks.md`。
+相关文档：`protocol.md`（协议细节与 `cmd → kind` 归一化表）、`auth.md`（登录、凭据与扫码状态机）、`ipc.md`（Tauri IPC 命令与事件契约）、`ui.md`（渲染、过滤与虚拟列表）、`decisions/0002-rust-core-shared-surfaces.md`、`decisions/0004-upstream-isolation.md`、`decisions/0005-no-local-database.md`、`decisions/0006-room-supervisor-tasks.md`。

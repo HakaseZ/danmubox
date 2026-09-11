@@ -10,7 +10,7 @@
 | 日期 | 2026-09-11 |
 | 决策者 | 项目作者 |
 | 影响面 | `crates/danmubox-core/`（鉴权与本地文件）、`apps/desktop/src-tauri/`（IPC 登录态）、`.gitignore` 覆盖范围、`docs/auth.md`、`docs/operations.md` |
-| 相关文档 | [`../contract.md`](../contract.md) §4.1、§4.2、§7、[`../../a.md`](../../REQUIREMENTS.md)、[`../auth.md`](../auth.md)、[`../operations.md`](../operations.md)、[`../AGENT.md`](../../AGENT.md)、[`0004-upstream-isolation.md`](0004-upstream-isolation.md) |
+| 相关文档 | [`../contract.md`](../contract.md) §4.1、§4.2、§7、[`REQUIREMENTS.md`](../../REQUIREMENTS.md)、[`../auth.md`](../auth.md)、[`../operations.md`](../operations.md)、[`../AGENT.md`](../../AGENT.md)、[`0004-upstream-isolation.md`](0004-upstream-isolation.md) |
 
 ## Context
 
@@ -46,7 +46,7 @@ REQUIREMENTS.md 直接要求：「cookie 弄个配置文件存进去，默认扫
 | 项 | 取值 |
 |---|---|
 | 文件 | 数据目录下 `config.toml`（macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android 应用私有目录） |
-| 格式 | 明文 TOML，`[bilibili]` 段，字段见契约 §4.1 |
+| 格式 | 明文 TOML：顶层 `active_profile` + `[profiles.<name>]` 段，字段见契约 §4.1 |
 | 权限 | `0600`（仅当前用户可读写） |
 | 写入 | 临时文件 + rename 原子替换，避免半写坏文件 |
 | 启动顺序（规范性） | 读文件 → `sessdata` / `bili_jct` / `dede_user_id` 齐全且非空则**直接进入登录态**；否则走扫码（默认入口）→ 成功后原子写回 |

@@ -14,7 +14,6 @@ ADR（Architecture Decision Record）只回答三个问题：**当时面对什�
 | 基线契约 | 命名、共享常量、领域模型、端口边界、IPC 与本地文件契约的唯一事实源 | [`../contract.md`](../contract.md) |
 | 架构文档 | 系统如何分层、如何并发运行 | [`../architecture.md`](../architecture.md) |
 | 接口文档 | IPC 命令与事件、字段的精确契约 | [`../ipc.md`](../ipc.md) |
-| 选型讨论原文 | 决策形成过程的完整上下文 | [`../selection.md`](../selection.md) |
 
 ## 索引
 

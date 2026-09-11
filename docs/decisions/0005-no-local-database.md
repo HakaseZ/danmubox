@@ -10,7 +10,7 @@
 | 日期 | 2026-09-11 |
 | 决策者 | 项目作者 |
 | 影响面 | `crates/danmubox-core/`（会话缓冲与 `history_query`）、`crates/danmubox-bili/`（事件归一化后写入）、`docs/ui.md`、`docs/operations.md`、数据目录内容 |
-| 相关文档 | [`../contract.md`](../contract.md) §4.3、§5、§8、[`../../a.md`](../../REQUIREMENTS.md)、[`0006-room-supervisor-tasks.md`](0006-room-supervisor-tasks.md)、[`0007-credential-file.md`](0007-credential-file.md)、[`../ui.md`](../ui.md) |
+| 相关文档 | [`../contract.md`](../contract.md) §4.3、§5、§8、[`REQUIREMENTS.md`](../../REQUIREMENTS.md)、[`0006-room-supervisor-tasks.md`](0006-room-supervisor-tasks.md)、[`0007-credential-file.md`](0007-credential-file.md)、[`../ui.md`](../ui.md) |
 
 ## Context
 

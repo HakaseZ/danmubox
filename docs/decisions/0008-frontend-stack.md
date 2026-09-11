@@ -10,7 +10,7 @@
 | 日期 | 2026-09-11 |
 | 决策者 | 项目作者 |
 | 影响面 | `apps/desktop/ui/`、`docs/ui.md`、`docs/ipc.md` |
-| 相关文档 | [`0001-tauri-over-flutter.md`](0001-tauri-over-flutter.md)、[`0005-no-local-database.md`](0005-no-local-database.md)、[`../contract.md`](../contract.md) §7、§8、[`../ui.md`](../ui.md)、[`../ipc.md`](../ipc.md)、[`../selection.md`](../selection.md) §2.3 |
+| 相关文档 | [`0001-tauri-over-flutter.md`](0001-tauri-over-flutter.md)、[`0005-no-local-database.md`](0005-no-local-database.md)、[`../contract.md`](../contract.md) §7、§8、[`../ui.md`](../ui.md)、[`../ipc.md`](../ipc.md) |
 
 ## Context
 
@@ -81,7 +81,7 @@
 | 高频更新下的渲染抖动 | 消息密集时每条消息一次 setState 会造成大量重渲染 | 按帧批量提交更新到 store；虚拟化只渲染视口行 |
 | 自动滚动与用户操作打架 | 用户上翻时被强制拉回底部 | 明确的「暂停跟随 / 回到最新」状态机（[`../ui.md`](../ui.md)） |
 | 动态行高测量开销 | SC / 礼物卡片高度不一，测量不当会造成滚动跳动 | 使用虚拟化库的行高测量能力并限定估算误差；保持消息行结构稳定 |
-| 移动 WebView 性能 | Android 厂商 WebView 版本差异可能放大渲染成本 | 常驻 DOM 行数上限；核心逻辑在 Rust 侧，前端只做呈现 |
+| 移动 WebView 性能 | Android 厂商 WebView 版本差异可能放大渲染成本 | 虚拟化只渲染视口行；核心逻辑在 Rust 侧，前端只做呈现 |
 | 无组件库导致的重复劳动 | 基础控件各写一遍 | 将通用控件收敛到 `ui` 内的小型共享组件，不引入外部依赖 |
 | 会话缓冲边界暴露给用户 | 用户回滚到缓冲最早一条后继续上滚，误以为「弹幕丢了」 | 由 UI 明确提示「已到本次会话的最早一条」，不伪装成完整历史 |
 
@@ -97,7 +97,7 @@
 
 否决理由：运行时更小、无虚拟 DOM，对高频列表理论上更有利，但生态更薄——虚拟列表、可维护的移动端调试经验、与 Tauri 集成的现成范例都更少；且本项目的性能瓶颈不在框架层。为边际性能收益承担生态风险不划算。
 
-重新启用的条件：实测证明 React 在目标 Android 设备上无法达到性能预算，且 Svelte/Solid 能通过同样的列表场景验证。
+重新启用的条件：实测证明 React 在目标 Android 设备上无法满足列表滚动与渲染需求，且 Svelte/Solid 能通过同样的列表场景验证。
 
 ### 3. 引入组件库（Ant Design / MUI / shadcn 等）
 

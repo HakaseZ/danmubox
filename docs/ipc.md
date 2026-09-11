@@ -10,12 +10,9 @@
 
 只有一种运行模式：页面运行在 Tauri WebView 中，命令走 `invoke("命令名", 参数)`，事件走 `listen("danmubox://事件名", handler)`。
 
-`vite dev` 只是把前端资源从 dev server 交给 WebView（`tauri dev` 加载 dev URL），WebView 内 `@tauri-apps/api` 始终可用，因此**不存在 HTTP 旁路、不存在第二套等价适配层**；前端所有数据路径都必须经由本节列出的命令与事件。
+`vite dev` 下 WebView 内 `@tauri-apps/api` 同样可用，前端的数据路径只有 `invoke` / `listen` 这一条。
 
-约束（规范性）：命令名与事件名的集合是**封闭**的，前端只能出现 §3 / §4 列出的名字；新增面必须同时改契约 §7、本文与实现，不允许前端私自定义字符串。
-
-- Frontend → Rust 命令（`invoke`，契约 §7）：`session_status` `session_qr_start` `session_qr_poll` `session_logout` `rooms_list` `rooms_add` `rooms_remove` `rooms_connect` `rooms_disconnect` `rooms_reconnect` `history_query` `chat_send` `chat_report` `emotes_list` `follow_list` `follow_refresh` `wallet_balance` `prefs_get` `prefs_set` `app_info`。
-- Rust → Frontend 事件（契约 §7）：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://log`。
+约束（规范性）：命令名与事件名的集合是**封闭**的，与契约 §7 逐条一致（命令清单见 §3、事件清单见 §4）；新增面必须同时改契约 §7、本文与实现，不允许前端私自定义字符串。
 
 > 「手填 Cookie」不设命令：按契约 §4.1，它等于**直接编辑 `config.toml`**，界面只提供数据目录路径与文件说明。
 
@@ -53,10 +50,12 @@
 
 | 命令 | 参数 | 返回 | 错误 | 说明 |
 |---|---|---|---|---|
-| `session_status` | 无 | `SessionStatus` | — | 永不失败；未登录时 `mode="anonymous"`、`uid=0` |
+| `session_status` | 无 | `SessionStatus` | — | 永不失败；未登录时 `mode="anonymous"`、`uid=0`；含当前 `active_profile` |
 | `session_qr_start` | 无 | `QrStart` | `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | 生成二维码；重复调用会作废上一次的 `key` |
 | `session_qr_poll` | `key: string` | `QrPoll` | `NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 轮询扫码状态；未知上游码一律归入 `pending`，`key` 已被消费时为 `NOT_FOUND` |
-| `session_logout` | 无 | `SessionStatus` | `INTERNAL` | 清空 `config.toml` 中的凭据（原子替换）并断开需登录的连接 |
+| `session_logout` | 无 | `SessionStatus` | `INTERNAL` | 清空 `config.toml` 中当前 profile 的凭据（原子替换）并断开需登录的连接 |
+| `profiles_list` | 无 | `ProfileList` | `INTERNAL` | 列出 `config.toml` 中的 profile 名与当前 `active_profile` |
+| `profiles_switch` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换 `active_profile` 并以新凭据重建连接；`name` 不在文件中 → `NOT_FOUND`；不复制凭据文件 |
 | `rooms_list` | 无 | `RoomView[]` | `INTERNAL` | 已添加房间 + 当前连接状态 + 当前会话缓冲条数 |
 | `rooms_add` | `input: string` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号，解析走 `getRoomPlayInfo`；解析不出即 `BAD_REQUEST` |
 | `rooms_remove` | `roomId: number` | `void` | `ROOM_NOT_FOUND` `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
@@ -74,20 +73,7 @@
 | `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形 |
 | `app_info` | 无 | `AppInfo` | — | 版本、数据目录、构建信息、日志级别、平台；不含任何凭据 |
 
-`prefs_set` 的部分补丁示例：
-
-```ts
-// 前端：只提交要改的键，返回值为合并后的全量生效值
-const effective = await invoke<PrefsSnapshot>("prefs_set", {
-  patch: { "ui.font_scale": 1.25, "ui.gift_panel_mode": "separate" },
-});
-```
-
-```rust
-#[tauri::command]
-async fn prefs_set(core: State<'_, CoreHandle>, patch: serde_json::Map<String, serde_json::Value>)
-    -> Result<PrefsSnapshot, IpcError>;
-```
+`prefs_set` 接受部分补丁（只提交要改的键），返回合并后的全量生效值。
 
 ### 3.1 载荷类型
 
@@ -136,7 +122,11 @@ type SessionStatus = {
   uid: number;                // 未登录为 0
   uname: string;              // 未登录为空串
   expires_at: number | null;  // UTC 毫秒，未知为 null
+  active_profile: string;     // `config.toml` 中当前生效的 profile 名
 };
+
+// profiles_list 的返回：profiles 为 `config.toml` 中全部 `[profiles.<name>]` 的名字
+type ProfileList = { active_profile: string; profiles: string[] };
 
 type QrStart = { key: string; url: string; expires_at: number };
 
@@ -206,8 +196,6 @@ type AppInfo = {
 };
 ```
 
-`Message` 的徽标（契约 §5）不需要额外字段：主播由 `uid == RoomView.anchor_uid` 派生；房管看 `is_admin`；大航海看 `guard_level`（`1` 总督 / `2` 提督 / `3` 舰长）。
-
 ### 3.2 待实测校准（B 站侧取值）
 
 以下取值不在契约内、依赖 B 站线上行为，不得凭空写死；核对方法：`DANMUBOX_LOG=debug` 启动 → 复现对应场景 → 从 Tauri 事件 `danmubox://log` 取请求/响应原文 → 回填下表并同步 `protocol.md`。
@@ -243,16 +231,12 @@ type StatusEvent = {
 type LogEntry = { ts: number; level: string; target: string; message: string; span: string | null };
 ```
 
-`danmubox://send` 与 `chat_send` 返回值**同构**：同一次发送两条路径都会到达（先到者生效），前端按「同房间 + 同 `content` + 5s 窗口」幂等归并到同一条 pending 行（与真实消息的合并规则一致，见 §7）。
-
 ## 5. Zustand store 形状
 
 单一 store，按切片组织；切片之间不互相 import，只通过 store 的 actions 协作。
 
 ```ts
-type MessageKind = "danmaku" | "gift" | "superchat" | "interact" | "guard" | "system";
-
-type StoredMessage = {              // store 内部形态：camelCase
+type StoredMessage = {              // store 内部形态：camelCase（`MessageKind` 同 §3.1）
   localId: number;                  // 0 表示尚未获得服务端确认的本地行
   tempId?: string;                  // 仅 pending / blocked / failed 行有
   roomId: number; kind: MessageKind; ts: number;
@@ -294,6 +278,7 @@ type AppState = {
 | `refreshSession()` | `session_status` | 登录态变化入口 |
 | `startQr()` / `pollQr(key)` | `session_qr_start` / `session_qr_poll` | 轮询间隔与超时由 `auth.md` 的状态机决定 |
 | `logout()` | `session_logout` | 清空 `session`，清空 `sessionBuffer` / `emotes` / `follow` / `wallet`，再 `refreshRooms()` |
+| `loadProfiles()` / `switchProfile(name)` | `profiles_list` / `profiles_switch` | 用返回值覆盖 `session`；切换后按「离开房间」规则清空会话缓冲、表情与钱包切片 |
 | `refreshRooms()` | `rooms_list` | 启动时与 `danmubox://room` 事件后调用 |
 | `addRoom(input)` | `rooms_add` | 成功后插入 `rooms.byId` |
 | `removeRoom(roomId)` | `rooms_remove` | 同时删除该房间的 `sessionBuffer.byRoom[roomId]` / `droppedByRoom[roomId]` / `emotes.byRoom[roomId]` |
@@ -318,36 +303,7 @@ type AppState = {
 
 ## 6. 客户端封装
 
-目标：业务组件只 import 一个 `DanmuboxClient` 接口，组件内不出现 `invoke` / `listen` 字面量。
-
-```ts
-interface DanmuboxClient {
-  // 命令（与 §3 同名同参同返回）
-  session_status(): Promise<SessionStatus>;
-  session_qr_start(): Promise<QrStart>;
-  session_qr_poll(key: string): Promise<QrPoll>;
-  session_logout(): Promise<SessionStatus>;
-  rooms_list(): Promise<RoomView[]>;
-  rooms_add(input: string): Promise<RoomView>;
-  rooms_remove(roomId: number): Promise<void>;
-  rooms_connect(roomId: number): Promise<RoomView>;
-  rooms_disconnect(roomId: number): Promise<RoomView>;
-  rooms_reconnect(roomId: number): Promise<RoomView>;
-  history_query(roomId: number, opts?: HistoryOpts): Promise<Message[]>;
-  chat_send(roomId: number, content: string, color?: number, mode?: number): Promise<ChatSendResult>;
-  chat_report(roomId: number, upstreamId: string, reason: number): Promise<ReportResult>;
-  emotes_list(roomId: number): Promise<Emote[]>;
-  follow_list(): Promise<FollowedRoom[]>;
-  follow_refresh(): Promise<FollowedRoom[]>;
-  wallet_balance(): Promise<WalletBalance>;
-  prefs_get(): Promise<PrefsSnapshot>;
-  prefs_set(patch: Partial<PrefsSnapshot>): Promise<PrefsSnapshot>;
-  app_info(): Promise<AppInfo>;
-
-  // 事件：统一为「订阅，返回退订函数」
-  subscribe(handlers: EventHandlers): () => void;
-}
-```
+唯一 IO 边界是适配层：业务组件只 import 一个与 §3 同名、同参、同返回的客户端接口（`DanmuboxClient`），不出现 `invoke` / `listen` 字面量；事件订阅统一为 `subscribe(handlers: EventHandlers): () => void`。
 
 ```ts
 type EventHandlers = {
@@ -359,15 +315,6 @@ type EventHandlers = {
   onLog?(e: LogEntry): void;
 };
 ```
-
-文件划分（规划路径，代码未开始）：
-
-| 文件 | 职责 |
-|---|---|
-| `apps/desktop/ui/src/api/types.ts` | 上表所有类型，唯一来源 |
-| `apps/desktop/ui/src/api/client.ts` | `DanmuboxClient` 接口 + `getClient()` |
-| `apps/desktop/ui/src/api/tauri.ts` | `invoke` / `listen` 实现（唯一实现） |
-| `apps/desktop/ui/src/api/events.ts` | 事件名常量与 handler 分发 |
 
 ## 7. 发弹幕的乐观更新与失败回滚
 
@@ -395,8 +342,8 @@ sequenceDiagram
 | 挂载位置 | `sessionBuffer.byRoom[roomId]` 尾部插入 `state="pending"` 的行，`localId=0`，`tempId` 唯一 |
 | 幂等归并 | `chat_send` 返回值与 `danmubox://send` 同构，按「同房间 + 同 `content` + 5s 窗口」归并到同一 pending 行；真实消息（`localId > 0`）到达时，若同房间存在 `content` 相同、时间差在 5s 内、`uid` 为本人（或 `uid=0` 的 pending 容错）的本地行，则用真实行替换本地行，不新增 |
 | `ok` | 用返回结果把行置为 `remote`；若 `danmubox://message` 先到，以真实行为准，避免同一弹幕出现两行 |
-| `blocked_platform` | pending → `blocked`：**整行加删除线**（`text-decoration: line-through`）并降低不透明度，左侧色条用中性灰，`title` 提示「已被平台风控吞掉，仅你可见」；内容用 `ChatSendResult.content`（上游回显）覆盖，可能与输入不同 |
-| `blocked_room` | pending → `blocked`：同样加删除线，左侧色条用琥珀色，`title` 提示「被直播间吞掉，仅你可见」；用于区分「风控」与「主播/房管」两种吞没来源 |
+| `blocked_platform` | pending → `blocked`：内容用 `ChatSendResult.content`（上游回显，可能与输入不同）覆盖，保留 `tempId` 供划线 |
+| `blocked_room` | pending → `blocked`：同样用上游回显覆盖内容；用于区分「平台风控」与「主播/房管吞没」两种来源 |
 | `rate_limited` | 若由本地节流命中（IPC 错误码 `RATE_LIMITED`），**不插入 pending 行**，直接按 `detail.retry_after_ms` 禁用发送按钮倒计时；若由上游判定（`SendOutcome.rate_limited`），行置 `failed` 并提示上游限频 |
 | `medal_required` / `muted` | 行置 `failed`，分别提示「粉丝牌等级不足」「已被禁言」，保留输入内容，**不**自动重发 |
 | `failed` | 行置 `failed`，提供「重试」按钮（重新走 `chat_send`，生成新的 `tempId`）；`upstream_code` / `upstream_message` 只进调试日志，不直接展示 |
@@ -405,7 +352,7 @@ sequenceDiagram
 | 本地节流 | 发送前检查同房间 2s 最小间隔与相同内容 5s 去重（契约 §4），命中则不发请求，直接提示 |
 | 安全 | 草稿内容不写入 `prefs.json`、不上报；日志只记 `content_len` 与 `outcome`（见 `architecture.md` §9.2） |
 
-样式 token（删除线粗细、色值）由 `ui.md` 定义；本文只规定**语义**：`blocked` 必须与 `pending` / `failed` 在视觉上可区分，且必须能区分平台风控与直播间吞没两种来源。
+`blocked` 行必须与 `pending` / `failed` 在视觉上可区分，且必须能区分平台风控与直播间吞没两种来源；样式 token 由 `ui.md` 定义。
 
 ## 8. 订阅生命周期与内存回收
 
@@ -451,13 +398,11 @@ sequenceDiagram
 
 自检清单（提交前逐条确认）：
 
-1. 命令名与契约 §7 字面一致，未新增第二种拼写；事件名未越出 §4 的六个。
-2. 参数名在前端是 camelCase、Rust 是 snake_case（Tauri 2 默认转换），无例外手写 rename。
-3. 错误只用 §2 的七个码，且 `message` 不参与前端逻辑。
-4. 返回载荷里不含凭据；`session_*` 只返回状态位。
-5. 载荷若含 `Message`，字段与契约 §5 完全一致（snake_case），`kind` 不越出六种。
-6. 若命令涉及历史，只读当前会话缓冲，不得引入跨会话查询或导出。
+1. 命令名与契约 §7 字面一致，事件名未越出 §4 的六个；参数名前端 camelCase、Rust snake_case。
+2. 错误只用 §2 的七个码，且 `message` 不参与前端逻辑。
+3. 返回载荷不含凭据；载荷中的 `Message` 字段与契约 §5 完全一致，`kind` 不越出六种。
+4. 若命令涉及历史，只读当前会话缓冲，不得引入跨会话查询或导出。
 
 ---
 
-相关文档：`architecture.md`（分层、端口/适配器与并发模型）、`ui.md`（渲染与交互、虚拟列表预算、样式 token）、`auth.md`（扫码状态机与凭据）、`protocol.md`（协议与 `cmd → kind`）、`contract.md`（文档基线契约）、`decisions/0008-frontend-stack.md`（前端栈与状态管理）、`../AGENT.md`（作业规范与操作清单）、`../README.md`。
+相关文档：`architecture.md`（分层、端口/适配器与并发模型）、`ui.md`（渲染与交互、虚拟列表、样式 token）、`auth.md`（扫码状态机与凭据）、`protocol.md`（协议与 `cmd → kind`）、`contract.md`（文档基线契约）、`decisions/0008-frontend-stack.md`（前端栈与状态管理）、`../AGENT.md`（作业规范与操作清单）、`../README.md`。

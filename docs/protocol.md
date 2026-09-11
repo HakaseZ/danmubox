@@ -4,7 +4,7 @@
 > 读者：协议层与适配器实现者；排查「连不上 / 收不到弹幕 / 字段为空 / 频繁重连 / 发弹幕被吞」的维护者；需要理解消息来源与语义的 AI agent 使用者。
 > 更新时机：头部布局、`op` / `protover` 语义、认证包或心跳包体、HTTP 心跳地址、`cmd` 与 `kind` 映射、发送判定规则、重连与节流参数发生任何变化时；附录 A 任一「待实测校准」项完成核对并回填结论后。
 
-相关文档：[`contract.md`](contract.md)（唯一事实源：共享常量、领域模型、端口、IPC、偏好键）、[`auth.md`](auth.md)（登录、`buvid3`、WBI 签名、`getDanmuInfo`、扫码）、[`architecture.md`](architecture.md)（每房间 supervisor 与事件总线）、[`ipc.md`](ipc.md)（Tauri 命令与事件）、[`ui.md`](ui.md)（渲染、过滤、合并与虚拟列表）、[`testing.md`](testing.md)（帧 fixture 与回放测试）、[`../a.md`](../REQUIREMENTS.md)（需求基线）。
+相关文档：[`contract.md`](contract.md)（唯一事实源：共享常量、领域模型、端口、IPC、偏好键）、[`auth.md`](auth.md)（登录、`buvid3`、WBI 签名、`getDanmuInfo`、扫码）、[`architecture.md`](architecture.md)（每房间 supervisor 与事件总线）、[`ipc.md`](ipc.md)（Tauri 命令与事件）、[`ui.md`](ui.md)（渲染、过滤、合并与虚拟列表）、[`testing.md`](testing.md)（帧 fixture 与回放测试）、[`REQUIREMENTS.md`](../REQUIREMENTS.md)（需求基线）。
 
 ---
 
@@ -14,10 +14,9 @@
 
 | 纳入 | 不纳入 |
 |---|---|
-| 房间解析、WS 长连、认证、WS 心跳、HTTP 心跳、压缩解包、命令归一化、发送侧被吞归一化、重连与节流 | 直播视频流解码 |
-| `protover=3`（brotli）主动请求；解码侧同时兼容 0 / 1 / 2 / 3 | 弹幕回看、导出、跨会话历史（`contract.md` §4.3 明确排除） |
+| 房间解析、WS 长连、认证、WS 心跳、HTTP 心跳、压缩解包、命令归一化、发送侧被吞归一化、会话内内存缓冲、重连与节流 | 直播视频流解码 |
+| `protover=3`（brotli）主动请求；解码侧同时兼容 0 / 1 / 2 / 3 | 弹幕回看、导出、跨会话历史与任何本地持久化（`contract.md` §4.3 明确排除） |
 | macOS / Windows / Android 三端共用的协议层 | iOS 端、折叠屏布局（后期 enhancement） |
-| 弹幕进入**内存环形缓冲**（一次房内会话） | 任何形式的本地持久化、弹幕回看与导出 |
 
 ### 1.2 术语
 
@@ -31,8 +30,6 @@
 | `host_list` | 弹幕 WS 候选节点列表，含主机名与端口 |
 | `buvid3` | 匿名设备标识 Cookie，`getDanmuInfo` 的前置条件 |
 | WBI 签名 | `getDanmuInfo` 请求所需的查询串签名，实现见 [`auth.md`](auth.md) |
-| `op` | 头部中的操作码，决定帧的**用途**（见 §5） |
-| `protover` | 头部中的**载荷编码版本**（见 §6）；认证包 body 内另有一个同名字段，含义相同但取值固定为 3 |
 | `cmd` | `op=5` 业务载荷中的命令名 |
 | `kind` | 归一化后的六种消息类型之一（见 §10.0） |
 | supervisor | 每房间一个的连接管理 task（见 [`architecture.md`](architecture.md)） |
@@ -41,43 +38,7 @@
 
 ## 2. 端到端连接时序
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as 调用方（UI / CLI）
-    participant P as bili::proto
-    participant A as bili::auth
-    participant B as B 站 REST
-    participant W as B 站弹幕 WS
-    participant E as core::bus（广播）
-
-    U->>P: 输入短号 / URL / 房间号
-    P->>B: GET getRoomPlayInfo
-    B-->>P: 真实 room_id + anchor_uid + live_status
-    P->>A: 请求连接参数
-    A->>B: GET getDanmuInfo（buvid3 + WBI 签名）
-    B-->>A: token + host_list
-    A-->>P: token + wss 端点
-    P->>W: WSS 握手
-    P->>W: op=7 认证包（帧头 protover=1，body JSON protover=3）
-    W-->>P: op=8 认证回应（code）
-    alt code = 0
-        Note over P,W: 认证成功后立即启动两个定时器
-        loop 每 30 秒（首包须在 60 秒内发出）
-            P->>W: op=2 心跳（body 字面量 [object Object]）
-            W-->>P: op=3 人气值 / op=5 业务包
-        end
-        loop 每 60 秒
-            P->>B: GET webHeartBeat（HTTP 心跳，缺它上游判死）
-        end
-        loop 每个 op=5 帧
-            P->>P: 递归拆子包 → 解压 → cmd 分发 → Message
-            P->>E: 广播 Message
-        end
-    else code 非 0
-        P->>P: 原样记录 code 数值 → 进入退避重连
-    end
-```
+完整顺序：房间解析 → `getDanmuInfo` → WSS 握手 → `op=7` 认证 → `op=8` 且 `code=0` 后启动 WS / HTTP 心跳 → `op=5` 分发；任一步失败按 §13 退避重连。
 
 ### 2.1 连接前置步骤
 
@@ -88,7 +49,6 @@ sequenceDiagram
 | 3 | 真实 `room_id` | `GET getDanmuInfo`（需 `buvid3` + WBI） | `token`、`host_list` | 未登录可走游客参数；接口失败 → `UPSTREAM_ERROR` |
 | 4 | `host_list` | 按顺序选取节点 | `wss://{host}/sub` | 全部节点失败 → `UPSTREAM_ERROR` |
 
-> 步骤 2–3 的请求字段、签名步骤与 Cookie 依赖见 [`auth.md`](auth.md)；本层只消费其产出，不重复实现签名逻辑。
 > 主播 UID 由步骤 2 得到，用于派生主播徽标（`uid == Room.anchor_uid`），协议层不再单独请求。
 
 ---
@@ -128,24 +88,10 @@ sequenceDiagram
 
 | 字段 | 说明 |
 |---|---|
-| `packetLen` | 唯一权威的长度来源；解析时先读头再按长度切片，禁止依赖 WS 帧边界推断包边界 |
-| `headerLen` | 预留扩展位；本期恒为 16，body 起点为 `buf[16]` |
-| `protover` | 仅描述**本包 body** 的编码；见 §4.1 与 §6 |
-| `op` | 决定分发路径；未知 `op` 记 `warn` 并丢弃 |
-| `seq` | 本地发送 `op=7` / `op=2` 时填 `1`；上游帧的 `seq` 仅进日志 |
+| `packetLen` | 唯一权威的长度来源；先读头再按长度切片，禁止依赖 WS 帧边界推断包边界 |
 | body | 可能为空（如认证回应之外的保活帧），空 body 直接跳过，不视为错误 |
 
-### 4.1 `protover` 与 `op` 的区别（两个概念常被混淆）
-
-| 维度 | `protover`（偏移 6，2 字节） | `op`（偏移 8，4 字节） |
-|---|---|---|
-| 回答的问题 | 这段 body **怎么编码 / 怎么解** | 这段 body **是干什么用的** |
-| 取值域 | `0` 裸 JSON / `1` 认证与心跳帧头版本 / `2` zlib / `3` brotli | `2` 心跳 / `3` 心跳回应 / `5` 业务 / `7` 认证 / `8` 认证成功 |
-| 典型组合 | 认证包：帧头 `protover=1`，但 body JSON 内 `protover` 字段为 `3` | 认证包：`op=7`；心跳包：`op=2`；业务包：`op=5` |
-| 解析顺序 | 先按 `op` 选分发路径，再按 `protover` 选解码器 | 同左 |
-
-> **一句话记忆**：`op` 是「包的用途」，`protover` 是「body 的编码版本」。
-> 特别注意两处易混：① 认证包与心跳包的**帧头** `protover` 固定为 `1`（body 不经压缩协商编码），而**认证包 body 内部**的 `protover` 字段固定为 `3`——同名不同物；② `op=3` 是「心跳回应」这一用途，与任何 `protover` 取值无关。
+> `op`（§5）决定 body 的**用途与分发路径**，`protover`（§6）决定 body 的**编码与解码器**，两者互不混用；认证包与心跳包的**帧头** `protover` 固定为 `1`，认证包 **body 内**的 `protover` 字段固定为 `3`（同名不同物）。
 
 ---
 
@@ -201,15 +147,7 @@ sequenceDiagram
 示例（游客态，字段顺序不敏感）：
 
 ```json
-{
-  "uid": 0,
-  "roomid": 123456,
-  "protover": 3,
-  "buvid": "设备标识值",
-  "platform": "web",
-  "type": 2,
-  "key": ""
-}
+{ "uid": 0, "roomid": 123456, "protover": 3, "buvid": "设备标识值", "platform": "web", "type": 2, "key": "" }
 ```
 
 ### 7.2 游客与登录形态
@@ -259,9 +197,7 @@ danmubox 必须同时维持**两个**心跳：WS 心跳（`op=2`，保活 WS）�
 | 僵死判定 | 连续 3 个心跳周期（90 秒）内未收到任何入站帧（`op=3` / `op=5` / `op=8`）→ 判定连接僵死，主动断开并重连 |
 | 心跳失败不重试 | 发送失败等价于连接故障，直接进入退避流程，不重复 `op=2` |
 
-### 8.2 HTTP 心跳（`webHeartBeat`，易漏，务必实现）
-
-旧实现常只发 WS 心跳而漏掉 HTTP 心跳，导致连接被上游判死；本节为**必做项**。
+### 8.2 HTTP 心跳（`webHeartBeat`）
 
 | 项 | 值 |
 |---|---|
@@ -284,8 +220,6 @@ hb = base64("60|" + 真实room_id + "|1|0")
 | `1` | 固定值 |
 | `0` | 固定值 |
 
-> 缺此心跳时，上游会在会话超时后切断连接，表现为「WS 心跳正常但仍被断开」。这是必须实现的保活通道，不是可选优化。
-
 ---
 
 ## 9. `op=5` 处理流程与子包递归拆分
@@ -304,41 +238,20 @@ hb = base64("60|" + 真实room_id + "|1|0")
 
 ```text
 fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
-    if depth > 4:
-        warn("nesting depth exceeded"); return []
-    let out = []
-    let buf = payload
+    if depth > 4: warn("nesting depth exceeded"); return []      // 递归深度护栏
+    let (out, buf) = ([], payload)
     while buf.len() >= 16:
-        packet_len = u32_be(buf[0..4])
-        header_len = u16_be(buf[4..6])
-        protover   = u16_be(buf[6..8])
-        op         = u32_be(buf[8..12])
-        seq        = u32_be(buf[12..16])
-
-        if header_len != 16:
-            warn("bad headerLen"); break
-        if packet_len < header_len or packet_len > buf.len():
-            warn("truncated packet"); break          // 丢弃剩余字节，不断连
-        body = buf[header_len .. packet_len]
-        buf  = buf[packet_len ..]
-
+        (packet_len, header_len, protover) = be_u32(buf[0..4]), be_u16(buf[4..6]), be_u16(buf[6..8])
+        if header_len != 16 or packet_len < header_len or packet_len > buf.len():
+            warn("bad or truncated packet"); break               // 丢弃剩余字节，不断连
+        body, buf = buf[header_len..packet_len], buf[packet_len..]
         match protover:
-            3 => {
-                inflated = brotli_decompress(body)         // 失败 → warn + 计数 + 跳过该子包
-                if inflated.len() > 16 MiB: warn; continue
-                out.extend(handle_business(inflated, depth + 1))
-            }
-            2 => {
-                inflated = inflate_zlib(body)              // 失败 → warn + 计数 + 跳过该子包
-                if inflated.len() > 16 MiB: warn; continue
-                out.extend(handle_business(inflated, depth + 1))
-            }
-            0 => out.extend(parse_json_cmds(body))         // 对象或数组 → 展开
-            1 => { count_int_body(); }
-            _ => { warn("unsupported protover"); drop_and_count(); }
-
-    if buf.len() != 0:
-        warn("trailing {n} bytes ignored", buf.len())
+            3 => out.extend(inflate_and_recurse(brotli, body, depth))   // 失败 / 超 16 MiB → warn + 计数 + 跳过该子包
+            2 => out.extend(inflate_and_recurse(zlib, body, depth))     // 同上
+            0 => out.extend(parse_json_cmds(body))                      // 对象或数组 → 展开
+            1 => count_int_body()                                       // 兼容路径：仅计数与日志
+            _ => { warn("unsupported protover"); drop_and_count() }
+    if buf.len() != 0: warn("trailing bytes ignored", buf.len())
     return out
 ```
 
@@ -346,9 +259,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 | 场景 | 处理 |
 |---|---|
-| 子包 `packetLen` 超过剩余长度（截断） | 丢弃剩余字节，保留已解出的命令，`warn` |
 | brotli / zlib 解压抛错 | 丢弃该子包，按编码计入 `bad_brotli` / `bad_zlib`，连接继续 |
-| 解压后超过 16 MiB | 丢弃该子包，计入 `oversize_dropped`，连接继续 |
 | 解压后为空 | 跳过，不计错 |
 | JSON 解析失败 | 丢弃该命令，计入 `malformed` + `debug` 日志（含原始字节长度，不含敏感字段） |
 | 同一帧内混合 `protover` 子包 | 按子包自身 `protover` 分别处理，不做统一假设 |
@@ -399,9 +310,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 噪声过滤建议：
 
 - 空文本或纯空白弹幕不进入会话缓冲，但计入「已收弹幕」计数。
-- 上游可能重复推送同一条弹幕：本期不落库、不做跨会话去重；相同内容由 UI 的相似合并策略（`ui.merge_similar` / `ui.merge_window_ms`）处理。
 - 屏蔽词 / 关键词过滤属于 UI 层规则（见 [`ui.md`](ui.md)），协议层不丢弃原文。
-- 长文本超过 UI 上限时截断显示，缓冲内保留原文。
 
 ### 10.2 `SEND_GIFT`（`kind=gift`）
 
@@ -412,13 +321,12 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `content` | 礼物名称 + 数量的组合描述 | 面向展示的说明文本 | 待实测校准（A8） |
 | `uid` / `uname` | 送礼用户槽位 | 与 `DANMU_MSG` 用户信息结构不一定同形 | 待实测校准（A8） |
 | `amount` | 价格槽位（单价 × 数量，单位为金瓜子） | 无价字段时 `0`，不得猜测 | 待实测校准（A8） |
-| 连击标识 | 礼物标识 + 连击数的字段组合 | 供会话内连击聚合（不落库，见 §12.3） | 待实测校准（A8） |
+| 连击标识 | 礼物标识 + 连击数的字段组合 | 供会话内连击聚合（见 §12.3） | 待实测校准（A8） |
 | `medal_level` / `medal_name` / `guard_level` | 送礼用户粉丝牌槽位 | 无则 `0` / `""` / `0` | 待实测校准（A4） |
 | `ts` | 载荷时间戳槽位 | 归一化为 UTC 毫秒 | 待实测校准（A7） |
 
 噪声过滤建议：
 
-- 连击（combo / batch）会高频重复：按「礼物标识 + 连击序号」在会话内聚合，避免刷屏（见 §12.3）。
 - 单次数量为 0 或礼物标识缺失的载荷视为无效，丢弃并计数。
 - 「免费礼物 / 活动礼物」不做特殊丢弃，价格缺失时 `amount=0` 并保留。
 
@@ -431,15 +339,13 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `content` | SC 正文槽位 | 用户提交的留言文本 | 待实测校准（A9） |
 | `amount` | 金额槽位 | 单位与人民币展示值的关系待核对 | 待实测校准（A9） |
 | `uid` / `uname` | 发送者槽位 | 游客态可能缺失 | 待实测校准（A9） |
-| 去重标识 | SC 自身的标识槽位 | 供会话内重复推送判别（不落库） | 待实测校准（A9） |
+| 去重标识 | SC 自身的标识槽位 | 供会话内重复推送判别 | 待实测校准（A9） |
 | `ts` | SC 起始时间槽位 | 归一化为 UTC 毫秒 | 待实测校准（A9） |
 | `medal_level` / `medal_name` / `guard_level` | 发送者粉丝牌槽位 | 无则零值 | 待实测校准（A4） |
 
 噪声过滤建议：
 
 - 变体命令 `_JP` 与主命令语义等价，归一化到同一 `kind`，不做双份展示。
-- SC 的时长 / 背景色等展示属性本期不进入归一化字段；如需渲染，读取载荷内的展示槽位（不落库）。
-- SC 撤回 / 被删除的通知不属于本命令，命中未知 `cmd`，按 §10.0 规则丢弃并计数。
 
 ### 10.4 `INTERACT_WORD` / `INTERACT_WORD_V2` / `ENTRY_EFFECT`（`kind=interact`）
 
@@ -479,7 +385,6 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 - 大批量进入会形成洪峰：UI 侧按类型合并与限流（见 [`ui.md`](ui.md)），协议层不丢弃（会话缓冲仍有价值）。
 - `ENTRY_EFFECT` 仅对高价值用户触发，属于低频事件；与 `INTERACT_WORD` 不重复计数。
-- 互动类型的枚举值在实测确认前，`content` 一律使用「互动」+ 原始枚举数值。
 
 ### 10.5 `DANMU_MSG_MIRROR`（非本房间镜像弹幕，默认丢弃）
 
@@ -506,9 +411,8 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 噪声过滤建议：
 
-- 同一笔购买可能同时触发 `GUARD_BUY` 与 `USER_TOAST_MSG`：在会话缓冲写入前按时间窗合并，避免双条播报（不落库，见 §12.3）。
+- 同一笔购买可能同时触发 `GUARD_BUY` 与 `USER_TOAST_MSG`：在会话缓冲写入前按时间窗合并，避免双条播报（见 §12.3）。
 - 续费 / 自动续费与首购不做区分，统一落 `guard`。
-- 等级数值未在实测确认前，不得写入 `guard_level` 之外的推断字段。
 
 ### 10.7 系统类命令（`kind=system`）
 
@@ -526,8 +430,6 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `ONLINE_RANK_V2` | 高能榜 / 在线榜更新 | 榜单摘要 | 只更新内存态并驱动 UI 侧栏，不入缓冲 |
 | `NOTICE_MSG` | 平台公告 / 房间公告 | 公告文本 | 去重后写入缓冲；与 `LIVE` / `PREPARING` 同房间同秒时合并展示 |
 | `STOP_LIVE_ROOM_LIST` | 停播房间列表（全站广播） | 固定文案 + 房间数 | 与当前订阅房间无关的条目直接丢弃 |
-
-> 「计数类」命令（`ROOM_REAL_TIME_MESSAGE_UPDATE` / `WATCHED_CHANGE` / `LIKE_INFO_V3_CLICK` / `ONLINE_RANK_V2`）**不得**写入会话缓冲：它们频率高、只保留最新值，写入会挤占 5000 条缓冲额度（见 §12.2）。
 
 ### 10.8 未知 `cmd` 与载荷形态异常
 
@@ -566,16 +468,11 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 被吞时，**原内容会回显**在响应的 `data.mode_info.extra` 字段里，该字段是 **JSON 字符串**，解析后取其中的 `content`。据此可在 UI 上把「我发的这条被吞了」与被吞原因一起提示给用户。
 
 ```text
-判定伪代码：
-    resp = POST msg/send(...)
-    if resp.code != 0:            -> 按 §11.3 错误码归一化
-    marker = resp.msg or resp.message
-    if marker == "f":             -> blocked_platform
-    if marker == "k":             -> blocked_room
-    else:                         -> ok
-    // 被吞时：
-    extra_json = JSON.parse(resp.data.mode_info.extra)
-    content    = extra_json.content
+resp.code != 0                     → 按 §11.3 错误码归一化
+resp.msg / resp.message == "f"     → blocked_platform
+resp.msg / resp.message == "k"     → blocked_room
+其余（code == 0 且无被吞标记）      → ok
+被吞时：JSON.parse(resp.data.mode_info.extra).content 为被吞原文
 ```
 
 ### 11.3 归一化到 `SendOutcome`（规范性）
@@ -600,23 +497,13 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 ### 12.1 分发链路
 
-```mermaid
-flowchart LR
-    WS[op=5 帧] --> SPLIT[递归拆子包 / 解压]
-    SPLIT --> PARSE[JSON → cmd（V2 protobuf 先解码）]
-    PARSE --> MAP{cmd 在映射表?}
-    MAP -- 否 --> DROP[debug 日志 + 计数丢弃]
-    MAP -- 是 --> NORM[归一化为 Message]
-    NORM --> BUS[core::bus 广播]
-    NORM --> BUF[当前会话环形缓冲]
-    BUS --> IPC[Tauri IPC 事件 danmubox://message]
-```
+`op=5` 帧 → 递归拆子包 / 解压（§9）→ JSON 解析（`INTERACT_WORD_V2` 先 protobuf 解码）→ 按 `cmd` 查 §10.0 映射表 → 归一化为 `Message` → `core::bus` 广播 + 当前会话环形缓冲 → Tauri IPC 事件 `danmubox://message`。
 
-### 12.2 会话内环形缓冲（无任何落库）
+### 12.2 会话内环形缓冲
 
 | 项 | 约定 |
 |---|---|
-| 存储形态 | **纯内存**环形缓冲；不建数据库、不落盘、不做回看、不做导出（`contract.md` §4.3） |
+| 存储形态 | **纯内存**环形缓冲，随房内会话销毁（`contract.md` §4.3） |
 | 生命周期 | = **一次房内会话**：进入某个直播间开始，离开该房间（返回房间列表、关闭房间或切走）即**销毁并清空**；再次进入同一房间是全新会话 |
 | 容量 | 上限 5000 条（键 `history.buffer_rows`），超出丢最旧 |
 | 进程退出 | 全部丢失，不做恢复 |
@@ -624,13 +511,11 @@ flowchart LR
 | 计数类命令 | 永不写入缓冲（见 §10.7），仅更新房间内存态 |
 | 序号 | 每条 `Message.local_id` 为会话内自增，仅供 UI key 与本地引用，进程重启重置 |
 
-> 协议层只有两个去向：`core::bus` 广播与当前会话的内存环形缓冲。保留语义的唯一来源是 `contract.md` §4.3。
-
-### 12.3 会话内聚合（不落库）
+### 12.3 会话内聚合
 
 | 场景 | 处理 |
 |---|---|
-| 上游重复推送同一条弹幕 | 本期不落库，不做跨会话去重；相同内容由 UI 相似合并处理 |
+| 上游重复推送同一条弹幕 | 不做跨会话去重；相同内容由 UI 相似合并处理 |
 | 礼物连击 | 按「礼物标识 + 连击序号」在会话缓冲内聚合展示，避免刷屏 |
 | `GUARD_BUY` 与 `USER_TOAST_MSG` 同笔 | 按时间窗合并为一条播报 |
 | 重连 | 不清空已收缓冲（同一次会话），重连后继续追加 |
@@ -656,27 +541,21 @@ stateDiagram-v2
     AuthFailed --> Backoff: 未达失败上限
     AuthFailed --> Failed: 连续失败达上限
     Live --> Backoff: 主动断开 / 网络错误 / 90 秒无入站帧
-    Live --> Live: 每 30 秒发送 op=2；每 60 秒 HTTP 心跳
     Live --> Resolving: rooms_reconnect（手动，见 §14）
     Backoff --> Resolving: 退避到期（重新解析与取连接参数）
     Failed --> Resolving: 人工 rooms_connect
-    Live --> Idle: rooms_disconnect
-    Backoff --> Idle: rooms_disconnect
-    Failed --> Idle: rooms_disconnect
+    Live / Backoff / Failed --> Idle: rooms_disconnect
 ```
 
 ### 13.2 参数（规范性）
 
 | 参数 | 值 | 说明 |
 |---|---|---|
-| WS 心跳间隔 | 30 s | `op=2`，认证成功后起算；收到 `op=3` 后重置 |
-| WS 心跳首包 | 认证成功后 60 s 内 | 见 §8.1 |
-| HTTP 心跳间隔 | 60 s | `webHeartBeat`，见 §8.2 |
+| 心跳参数 | 见 §8.1 / §8.2 | WS `op=2` 30 s（首包 60 s 内）、HTTP 心跳 60 s；僵死判定 90 s 无入站帧 |
 | 退避序列 | 5s / 10s / 20s / 40s / 60s（封顶） | 指数退避，超出后保持 60s |
 | 抖动 | ±20% | 实际等待 = 基准 ×(1 ± 0.2)，随机取值 |
 | 重连前动作 | **必须**重新调用 `getDanmuInfo` | 不重用旧 `token` / 旧节点；房间信息若可能变化则一并重取 |
 | 连接成功后退避复位 | 是 | 进入 `Live` 即把退避计数清零 |
-| 僵死判定 | 90 s 无入站帧 | 主动断开并进入退避 |
 | 认证失败上限 | 连续 3 次 | 达上限进入 `Failed`，停止自动重连 |
 | 重连期间的心跳 | 取消定时器 | 断开即停，不在退避期发送；HTTP 心跳同样暂停 |
 
@@ -700,7 +579,6 @@ stateDiagram-v2
 | 断线期间的弹幕 | 无法补收（协议不提供断点续传）；重连后重新开始接收 |
 | 会话缓冲 | 自动重连**不清空**缓冲；重连后继续在**同一次会话**内追加（见 §12.2） |
 | `LIVE` / `PREPARING` 状态 | 重连成功后以首帧或重取的房间信息重新校准 `live_status` |
-| 重复收到的消息 | 本期不落库、不做跨会话去重；由 UI 相似合并处理 |
 | 观测 | 通过 `danmubox://status` 暴露重连次数与最近错误，供排障（见 [`ipc.md`](ipc.md)） |
 
 ---
@@ -741,7 +619,6 @@ stateDiagram-v2
 |---|---|
 | 不臆造语义 | 未在真实流量中确认的 `code`，只记录数值与原始 body，禁止在代码或文档中写「= 未登录」「= 被禁言」之类的解释 |
 | 只做粗分类 | 分类依据必须是实测得到的证据；分类未知时归入「其他」，按「不可重试的一次性错误」处理 |
-| 不静默降级 | 见 §13.3 |
 | 不绕过限流 | 不得通过多连接、多账号、缩短退避、并发重试等方式规避上游限流 |
 | 记录证据 | 每个未确认 `code` 首次出现时，写出 `warn` 日志并保留脱敏后 body 片段，作为附录 A 校准输入 |
 
@@ -771,7 +648,6 @@ stateDiagram-v2
 | 允许 | 说明 |
 |---|---|
 | `debug` 日志记录 `buvid3` | 匿名设备标识，可轮换；仍不得与 Cookie 一并成组导出 |
-| 记录 `code` 数值与脱敏 body | 用于附录 A 校准 |
 
 ---
 
@@ -785,7 +661,7 @@ stateDiagram-v2
 | `info` 级别内容 | 连接状态迁移、认证结果（仅 `code` 数值）、重连次数、异常计数汇总 |
 | `debug` 级别内容 | 每帧方向、`op`、`protover`、`packetLen`、`seq`、解析出的 `cmd` 列表；解析失败原因 |
 | 帧日志脱敏 | `key` 掩码；Cookie 永不出现；样本片段先剥离敏感键 |
-| 输出 | 经 `danmubox://log` 事件与标准输出呈现（见 [`ipc.md`](ipc.md)）；协议层不依赖任何 HTTP 端点 |
+| 输出 | 经 `danmubox://log` 事件与标准输出呈现（见 [`ipc.md`](ipc.md)）。协议帧日志与上游 `GET` / `POST` 请求互不复用该通道 |
 
 ### 17.2 计数
 
@@ -809,21 +685,6 @@ stateDiagram-v2
 |---|---|
 | 录制 | `debug` 日志中的脱敏帧字节可导出为 fixture（单一 JSON 或二进制序列），用于离线回放 |
 | 用途 | 协议层单元测试与回归（构造单包 / 嵌套包 / 截断包 / 坏 brotli / 坏 zlib），见 [`testing.md`](testing.md) |
-| 限制 | fixture 必须脱敏且不含凭据；真实用户 UID / 昵称如需保留，取哈希或替换为固定假值 |
-
----
-
-## 18. 与其他文档的边界
-
-| 文档 | 本文负责 | 对方负责 |
-|---|---|---|
-| [`contract.md`](contract.md) | —（本文一切取值以契约为准） | 共享常量、领域模型、端口、IPC、偏好键的唯一权威 |
-| [`auth.md`](auth.md) | 认证包体、`op=8` 处理、认证失败分支 | 登录三模式、`buvid3`、WBI 签名、`getDanmuInfo` / `getRoomPlayInfo` 请求与响应字段、扫码状态机、凭据文件读写 |
-| [`architecture.md`](architecture.md) | 帧处理流程与状态机语义 | supervisor task、事件总线、背压、模块划分 |
-| [`ipc.md`](ipc.md) | 协议错误如何归一化为 `SendOutcome`、`rooms_reconnect` 的协议侧语义 | 命令签名、事件名与载荷形状、前端适配层 |
-| [`ui.md`](ui.md) | 命令的语义与噪声来源、会话缓冲的容量与生命周期 | 渲染、过滤、合并、虚拟列表与性能预算、手动刷新按钮交互 |
-| [`testing.md`](testing.md) | 需要构造的 fixture 类型 | 测试金字塔、回放测试、三端冒烟清单 |
-| [`../a.md`](../REQUIREMENTS.md) | —（需求来源） | 需求基线的唯一出处 |
 
 ---
 
@@ -850,7 +711,7 @@ stateDiagram-v2
 | A15 | `op=8` 认证回应 | body 字段名、`code` 的实际取值集合与各分类归属 | 同上，另加「未登录 / 登录失效」两种状态各一次 | 记录全部出现过的 `code` 与对应状态，建立粗分类表 | §13.3、§15.2 |
 | A16 | `msg/send` 被吞判定 | `msg` / `message` == `"f"` / `"k"` 的可复现性；`data.mode_info.extra` 的 `content` 回显形态 | 同上，用会触发风控的内容与在关闭公开弹幕的直播间各发一次 | 复核 `"f"` / `"k"` 判定后写死规则，记录 `extra` 的 JSON 形状 | §11.2、`SendOutcome` |
 | A17 | `SendOutcome` 各错误码 | `rate_limited` / `medal_required` / `muted` / `failed` 各自对应的上游 `code` 与 message 文案 | 同上；需构造频率限制、粉丝牌不足、被禁言三类场景各一次 | 记录 `code` + message + 场景，建立归一化映射表 | §11.3、UI 失败提示 |
-| A18 | `msg/send` 请求参数 | `color` / `mode` 的合法取值域与默认值（IP​C 侧初值 0–16777215 / {1,4,5}） | 同上，用边界值与疑似模式值各发一次 | 确认合法域后回填本节与 [`ipc.md`](ipc.md) | 发送侧校验 |
+| A18 | `msg/send` 请求参数 | `color` / `mode` 的合法取值域与默认值（IPC 侧初值 0–16777215 / {1,4,5}） | 同上，用边界值与疑似模式值各发一次 | 确认合法域后回填本节与 [`ipc.md`](ipc.md) | 发送侧校验 |
 | A19 | `host_list` 元素 | 节点字段名（主机、`wss_port` / `ws_port`）与地址拼接规则、节点顺序是否即优先级 | 同上，打印 `getDanmuInfo` 响应（脱敏） | 对每个节点实际建立一次连接验证可达性 | §2.1、§15.3 |
 | A20 | 僵死判定与 HTTP 心跳必要性 | 上游在心跳停发 / 网络中断时是否主动关闭；90 秒阈值是否合适；缺失 HTTP 心跳时的判死时间 | 同上，做一次「只发 WS 心跳、不发 HTTP 心跳」与一次断网实验 | 观察断开行为，必要时调整阈值并更新 §8.2 / §13.2 | §8、§13.2 |
 | A21 | 游客模式字段覆盖 | 游客态下具体哪些命令 / 字段缺失或被掩码 | 游客连接 + 同一房间登录连接对照 | 对同一时间窗的两份数据做字段差集 | §7.2、§10 各命令 |
@@ -885,25 +746,3 @@ stateDiagram-v2
 | 为未核对的下标 / 枚举值 / `code` 编造确定语义 | 包括代码常量、文档表格与注释 |
 | 用「参考第三方实现」代替实测 | 第三方实现可作为解析容错设计的参考，但结论必须由本项目真实流量确认 |
 | 保留未脱敏样本 | 任何采集产物入库或进 fixture 前必须移除凭据类字段（§16） |
-
----
-
-## 附录 C：实现检查清单（协议层完成判据）
-
-| 检查项 | 判据 |
-|---|---|
-| 房间解析 | 短号 / URL / 房间号三种输入都能经 `getRoomPlayInfo` 得到真实 `room_id`、主播 `uid`、`live_status` |
-| 头部解析 | 大端读取五个字段；`headerLen` 非法、截断包、尾部残留均有告警且不断连 |
-| `op` / `protover` 区分 | 认证包与心跳包的帧头 `protover=1`，认证包 body 内 `protover=3`；`op` 决定用途、`protover` 决定解码器，两者互不混用 |
-| 压缩 | 认证请求 `protover=3`（brotli）；解码同时支持 0 / 1 / 2 / 3；解压上限 16 MiB 生效 |
-| 嵌套拆分 | 两层及以上嵌套子包可被完整展开为零条或若干条命令 |
-| 认证 | 游客与登录两种形态参数正确；`op=8` 非 0 走失败分支且不臆造 code 含义 |
-| WS 心跳 | 认证成功后 60 s 内发出首包，之后每 30 s 一次，body 为字面量 `[object Object]`；收到 `op=3` 后重置周期；重连后重建定时器 |
-| HTTP 心跳 | 认证成功后每 60 s 调用 `webHeartBeat`，`hb=base64("60|<真实room_id>|1|0")`，缺它连接会被判死 |
-| 命令覆盖 | §10.0 表中全部 `cmd` 有明确归宿：`DANMU_MSG_MIRROR` 丢弃并计数；`INTERACT_WORD_V2` 经 `prost` 解码 |
-| 发送归一化 | `msg`/`message` == `"f"` / `"k"` 分别归一化为 `blocked_platform` / `blocked_room`，`extra.content` 回显被吞内容 |
-| 缓冲 | 弹幕只进内存环形缓冲，上限 5000，离开房间即清空；无任何落库行为 |
-| 手动重连 | `rooms_reconnect` 跳过退避立即重建，不清空已收缓冲 |
-| 重连 | 退避序列 5/10/20/40/60 封顶、抖动 ±20%、重连前重取 `getDanmuInfo` 均可从日志观察 |
-| 节流 | 2 s 间隔与 5 s 内容去重在发送前生效，违反返回 `rate_limited` |
-| 安全 | 抽检日志与 IPC 载荷，确认无凭据字段 |

@@ -6,8 +6,8 @@
 
 > 本文件是唯一事实源。文中标注「规范性」的内容只能原样引用，不得改名、不得改语义；
 > 其它文档中出现的「基线契约 §x」均指本文件。
-> **需求基线是 [`../a.md`](../REQUIREMENTS.md)**（用户手写，随时可能修改）；本文负责把 REQUIREMENTS.md 翻译成工程约定。
-> 选型背景见 `docs/selection.md`（选型讨论原文，其中 AI 接口与数据库设计本期均未采纳）。
+> **需求基线是 [`REQUIREMENTS.md`](../REQUIREMENTS.md)**（用户手写，随时可能修改）；本文负责把 REQUIREMENTS.md 翻译成工程约定。
+> 选型背景与技术决策见 `docs/decisions/`；历史讨论已归档到 `docs/.archive/`（不进 git，不参与实现）。
 
 ---
 
@@ -30,7 +30,7 @@
 
 | 项 | 说明 |
 |---|---|
-| iOS 端、Fold8 / 折叠屏 | 后期 enhancement，见 `selection.md` §11 |
+| iOS 端、Fold8 / 折叠屏 | 后期 enhancement，本期不做 |
 | **本地数据库** | 不建库、不落盘，见 §4.3 |
 | **弹幕回看与导出** | 不做，见 §4.3 |
 | **词云** | 非核心功能，列入下期 |
@@ -53,7 +53,6 @@ danmubox/
     desktop/                # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
   docs/
     contract.md             # 本文件
-    selection.md            # 选型讨论原文
     decisions/              # ADR
   REQUIREMENTS.md           # 需求基线（用户手写）
   README.md
@@ -103,7 +102,9 @@ danmubox/
 需求直接来源：REQUIREMENTS.md「cookie 弄个配置文件存进去，默认扫码登录，如果本地有 cookie 则直接读取」。
 
 ```toml
-[bilibili]
+active_profile = "default"
+
+[profiles.default]
 sessdata = ""
 bili_jct = ""
 dede_user_id = ""
@@ -111,10 +112,15 @@ dede_user_id_ck_md5 = ""
 buvid3 = ""
 buvid4 = ""
 sid = ""
+
+[profiles.work]
+# 同上七个字段，用于多账号
+sessdata = ""
 ```
 
 - 形态：**明文 TOML**。自用场景不加密，靠文件权限（0600）与"只在本机数据目录"约束。
-- 启动顺序（规范性）：读文件 → `sessdata` / `bili_jct` / `dede_user_id` 齐全且非空则直接进入登录态；否则走扫码（默认入口）→ 成功后原子写回（临时文件 + rename）。
+- 启动顺序（规范性）：读文件 → 取 `active_profile` 指向的 profile，其 `sessdata` / `bili_jct` / `dede_user_id` 齐全且非空则直接进入登录态；否则走扫码（默认入口）→ 成功后原子写回该 profile（临时文件 + rename）。
+- **多账号（规范性）**：同一文件用 `[profiles.<name>]` 承载多份凭据，`active_profile` 指定当前生效者。切换账号 = 改 `active_profile` + 以新凭据重建连接，**不复制多份文件**。
 - 「手填 Cookie」在本设计中即**直接编辑该文件**，不另做导入界面。
 - **不得**在该文件中存放任何非凭据内容：界面偏好走 `prefs.json`。原因是 TOML 往返会丢注释与排版，程序每次改偏好都重写凭据文件是事故面。
 - 安全红线（规范性，所有文档必须原样复述）：`SESSDATA`、`bili_jct`、`DedeUserID` **不得**进日志、不得进前端明文、不得进仓库、不得进崩溃上报。文档与脚本中的示例一律用占位值。
@@ -134,6 +140,7 @@ sid = ""
 - B 站本身不提供弹幕历史回放接口，因此"历史"只能是**本地本次会话内**的缓冲，这是一个已接受的产品取舍。
 - 唯一允许的用途是当前会话内在界面上向上回滚查看（`history_query` 只查当前会话缓冲）。
 - 长连接卡住或推流中断时，用房间内的「刷新」按钮触发**手动重连**（`rooms_reconnect`）；重连不恢复旧缓冲，仍属同一次会话，已收到的消息保留。
+- 输入草稿与「最近发送记录」同样只存在**会话内内存**中：不落盘、不写 `prefs.json`（REQUIREMENTS.md §2.2）。
 - 若将来需要跨会话历史，方案是**追加式 JSONL 文件**（按天分片），不引入数据库；届时另立 ADR。
 - 落库概念相关的字段与机制（`dedup_key`、`raw` 保留、`user_version` 迁移、索引、WAL、单写者 actor、保留天数、行数上限清理）**全部不存在**，文档与代码中不得出现。
 
@@ -214,9 +221,10 @@ Frontend → Rust 命令（`invoke`）：
 
 | 命令 | 用途 |
 |---|---|
-| `session_status` | 登录态（不含 Cookie 值） |
+| `session_status` | 登录态（不含 Cookie 值），含当前 `active_profile` |
 | `session_qr_start` / `session_qr_poll` | 扫码登录 |
-| `session_logout` | 登出并清空 `config.toml` 中的凭据 |
+| `session_logout` | 登出并清空 `config.toml` 中当前 profile 的凭据 |
+| `profiles_list` / `profiles_switch` | 列出配置文件中的 profiles、切换当前 profile 并以新凭据重连 |
 | `rooms_list` / `rooms_add` / `rooms_remove` | 房间增删查 |
 | `rooms_connect` / `rooms_disconnect` | 连接控制 |
 | `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |
@@ -261,7 +269,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 
 ## 9. 需求溯源（规范性）
 
-每条 REQUIREMENTS.md 需求必须能找到承载它的规范章节；反过来，本文新增的约定必须能追到 REQUIREMENTS.md 或 `selection.md`。无法追溯的条款不得留在本文。
+每条 REQUIREMENTS.md 需求必须能找到承载它的规范章节；反过来，本文新增的约定必须能追到 REQUIREMENTS.md。无法追溯的条款不得留在本文。
 
 | REQUIREMENTS.md 需求 | 承载位置 |
 |---|---|
@@ -282,7 +290,9 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 词云 | 下期非核心条目，见 `roadmap.md` |
 | 深色模式 / 字号 / 透明度 | §8 `ui.theme` / `ui.font_scale` / `ui.opacity` |
 | 过滤与合并相似 | §8 `filter.*` / `ui.merge_*` |
-| 多房间标签页 | `ui.md`（来自 `selection.md` §1.1） |
+| 多房间标签页 | `ui.md` |
+| 多账号（单文件多 profiles） | §4.1、§7 `profiles_list` / `profiles_switch` |
+| 草稿与最近发送记录（会话内） | §4.3 |
 | bundle id 变更 | §1 |
 | **已从需求中移除** | 本地数据库、跨会话历史、弹幕回看、导出、AI 原生接口、AI 日报、免打扰时段、提示音、快捷键、多房间未读静音、断线补齐、开播提示、按 uid 只看某人、谢谢礼物模板 |
 
@@ -297,14 +307,18 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 6. 只写自己负责的文件，不得修改他人文件。
 7. 不执行 git 操作，不运行构建、测试、格式化、lint。
 8. 引用其他文档用相对路径。
+9. **收敛优先**：文档只保留四类内容——① 当前需求与规范性契约；② 技术决策（ADR）；③ 为构建、验证、交付所必需的流程；④ B 站侧的待实测校准项。已撤销的方案、未被要求的增强、为尚不存在的代码写的实现细节，一律移出仓库：有历史价值的进 `docs/.archive/`（不进 git），其余直接删除。
 
 ## 11. 文档清单
 
 | 文件 | 状态 |
 |---|---|
+| `REQUIREMENTS.md` | 需求基线（用户手写） |
 | `README.md` / `AGENT.md` / `CHANGELOG.md` | 本期 |
+| `docs/contract.md` | 本文件（规范性契约） |
 | `docs/protocol.md` / `auth.md` / `architecture.md` / `ipc.md` / `ui.md` | 本期 |
 | `docs/roadmap.md` / `testing.md` / `distribution.md` / `operations.md` | 本期 |
 | `docs/decisions/*` | 本期 |
-| `docs/data-model.md` | **已移除**（无数据库） |
-| `docs/api.md` | **已移除**（无 HTTP API） |
+| `docs/.archive/` | **不进 git**；仅存放已撤销方案与历史讨论，不参与实现，引用它一律视为无效 |
+
+已从仓库移除（不归档、不重建）：`docs/data-model.md`（无数据库）、`docs/api.md`（无 HTTP API）。

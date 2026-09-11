@@ -8,9 +8,9 @@
 
 | 项 | 约定 |
 |---|---|
-| 分发范围 | **自用，不发布**：不上 App Store / Microsoft Store / Google Play / 任何应用市场 |
+| 分发范围 | **自用，不对外分发**：产物只装自己的设备 |
 | 目标平台 | macOS / Windows / Android |
-| 不做 | iOS 端（后期 enhancement）、Fold8 / 折叠屏适配、自动更新服务端、后台保活 |
+| 不做 | iOS 端（后期 enhancement）、Fold8 / 折叠屏适配、自动更新、后台保活 |
 | 包标识 bundle id | `dev.kksk.danmubox`（全平台统一，不得改动语义） |
 | 前端产物 | `apps/desktop/ui/` 由 Vite 构建，嵌入 Tauri 应用（React + TS，见 `architecture.md`） |
 | 引擎 | `danmubox-core`（Rust），薄封装见 `architecture.md` |
@@ -51,7 +51,7 @@ Tauri 官方把依赖分为「系统依赖 + Rust + 移动端附加依赖」三�
 
 要点：
 
-- **macOS 桌面只需 Xcode CLT**。若将来补 iOS 端，才需要完整 Xcode + Homebrew + CocoaPods + 三个 iOS rustup target（见选型文档 §11，本期不做）。
+- **macOS 桌面只需 Xcode CLT**（本期不做 iOS 端）。
 - **Windows 目标机需要 WebView2 运行时**。Windows 10/11 较新版本通常已预装；缺失时按 §5 处理。
 - **Android 的四个 ABI target 与 NDK 缺一不可**；`--split-per-abi` 只影响打包粒度，不影响编译目标是否已安装。
 
@@ -115,83 +115,47 @@ npm run tauri dev -- --device <serial>       # 规划：真机热重载调试
 |---|---|
 | 通用 APK | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
 | 分 ABI APK | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/app-<abi>-release.apk` |
-| AAB（本期不使用） | `apps/desktop/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab` |
 
-- 自用装机只装 APK；AAB 仅供上架用，本项目不发布，**不生成**。
+- 自用装机只装 APK（不生成 AAB）。
 - 默认构建包含官方支持的四个 ABI；自用设备通常只需 `arm64`，可用 `--target aarch64` 缩短构建时间。
 - 最低 Android 版本由 Tauri 决定（官方当前为 Android 7.0 / SDK 24），需要提高时在 `bundle.android.minSdkVersion` 配置。
 
 ## 4. macOS 本地运行与签名策略
 
-自用场景下**不购买 Apple Developer 账号、不做公证（notarization）**，因此分三档处理：
+自用不发布，因此**不购买 Apple Developer 账号、不做公证（notarization）**：公证需要 Apple 账号凭据（`APPLE_ID` / `APPLE_API_KEY` 等），自用场景不引入该依赖。
 
-| 档位 | 做法 | 适用场景 | 结果 |
-|---|---|---|---|
-| A. 本机构建本机运行 | 不配置 `signingIdentity`；Tauri 会做 ad-hoc 签名（等价 `codesign -s -`） | 日常开发（`tauri dev` 或直接跑构建产物） | 可直接启动；Apple Silicon 上 ad-hoc 签名是二进制可执行的前提 |
-| B. ad-hoc 签名 + 去隔离属性 | 显式 `"signingIdentity": "-"`；拷贝到其他机器后用 `xattr -dr com.apple.quarantine /path/danmubox.app`，或用「右键 → 打开」、系统设置 → 隐私与安全性 → 仍要打开 | 换机自用、打包给另一台自己的 Mac | Gatekeeper 首次拦截后可正常运行；**ad-hoc 签名不建立可信身份**，换机仍会被拦 |
-| C. 自签名证书 | 在「钥匙串访问 → 证书助理」创建代码签名证书，或在 Apple Developer 免费团队下用 Apple Development 证书签名（`APPLE_SIGNING_IDENTITY`），目标机导入并信任该证书 | 希望减少反复解锁的长期自用 | 本机与已信任的机器上更省事；证书丢了要重签，项目不依赖它 |
+| 场景 | 做法 | 结果 |
+|---|---|---|
+| 本机构建本机运行 | 不配置 `signingIdentity`，Tauri 做 ad-hoc 签名（等价 `codesign -s -`） | 可直接启动；Apple Silicon 上 ad-hoc 签名是二进制可执行的前提 |
+| 拷到另一台自己的 Mac | 用「右键 → 打开」或系统设置 → 隐私与安全性 → 仍要打开；也可 `xattr -dr com.apple.quarantine /path/danmubox.app` | Gatekeeper 首次拦截后可正常运行 |
 
 验证命令：
 
 ```bash
-codesign -dv --verbose=4 /path/danmubox.app   # 查看签名身份与类型
+codesign -dv --verbose=4 /path/danmubox.app   # 确认为 adhoc 签名
 spctl -a -vv /path/danmubox.app               # 查看 Gatekeeper 评估结果
 xattr -l /path/danmubox.app                   # 查看隔离属性
 ```
 
-规则：
-
-- **不做公证**：官方文档指出公证需要 Apple 账号凭据（`APPLE_ID` / `APPLE_API_KEY` 等），自用不发布，不引入该依赖。
 - **证书与密钥不进仓库**：签名材料一律留在本机钥匙串，禁止写入仓库或文档。
-- 若将来要为他人分发，必须回到「Developer ID Application 证书 + 公证」，届时本文 §4 整体重写。
 
 ## 5. Windows SmartScreen 处理
 
-未签名的安装器从浏览器下载后被打上 Mark-of-the-Web，首次运行触发 SmartScreen「Windows 已保护你的电脑」。
+未签名的安装器从浏览器下载后被打上 Mark-of-the-Web，首次运行触发 SmartScreen「Windows 已保护你的电脑」。自用不发布，**不购买 OV / EV 证书**（都需付费与身份材料，EV 另有硬件令牌要求），产物保持未签名。
 
 | 场景 | 处理方式 |
 |---|---|
 | 自用本机构建、本机运行 | 从本机构建目录直接运行，**不经过浏览器下载**，通常不触发；若触发，走下一行 |
 | 已经出现警告 | 点「更多信息」→「仍要运行」 |
-| 想彻底去掉拦截 | 解除文件锁定：文件属性 → 勾选「解除锁定」，或 PowerShell `Unblock-File .\danmubox_0.1.0_x64-setup.exe` |
-| 拷贝到另一台自用机器 | 同样先 `Unblock-File`，再运行安装器 |
-| 长期自用想减少警告 | 可选：自签代码签名证书（`New-SelfSignedCertificate`，用途 Code Signing）→ 导入目标机「受信任的根证书颁发机构」→ 用 `signtool sign /fd sha256` 签名，或按 Tauri 官方方式在 `bundle.windows.certificateThumbprint` / `digestAlgorithm` / `timestampUrl` 配置后由 `tauri build` 自动调用 `signtool` |
+| 拷贝到另一台自用机器 | 先解除文件锁定：文件属性 → 勾选「解除锁定」，或 PowerShell `Unblock-File .\danmubox_0.1.0_x64-setup.exe`，再运行安装器 |
 
-说明：
-
-- **不购买 OV / EV 证书**：两者都需付费与身份材料，EV 另有硬件令牌要求；本项目自用不发布，投入无收益。
-- **自签名证书不建立公开信誉**：只在导入了该根证书的机器上生效，换机需重新导入；这是自用的可接受折衷。
-- 签名只是减少警告的手段，**不是运行的必要条件**——官方明确：只要用户愿意忽略 SmartScreen 警告，未签名也可运行。
+- 官方明确：签名只是减少警告的手段，**不是运行的必要条件**——只要愿意忽略 SmartScreen 警告，未签名也可运行。
 - 安装器默认在缺少 WebView2 时下载 WebView2 Bootstrapper（需要联网）。若目标机常年离线，可改为随包内嵌安装器，代价是安装器体积按官方给出的量级显著增大（见 §9）。
 - 打包 MSI 报 `failed to run light.exe` 时，检查 §2 表中的 VBSCRIPT 可选功能。
 
-## 6. Android keystore 与 APK 安装
+## 6. Android APK 安装
 
-### 6.1 生成 keystore（一次性，规划）
-
-```bash
-keytool -genkey -v -keystore ~/danmubox-upload.jks \
-  -keyalg RSA -keysize 2048 -validity 10000 -alias upload
-```
-
-- keystore 与密码**只存本机**，不进仓库、不进日志、不进文档（安全红线见 `operations.md` §3）。
-- 记下口令与别名；**同一 `dev.kksk.danmubox` 的后续安装必须使用同一 keystore**，否则无法覆盖安装、只能先卸载（卸载会清数据，且 `config.toml` 凭据一并丢失，见 `operations.md` §4）。
-
-### 6.2 配置签名（规划）
-
-`apps/desktop/src-tauri/gen/android/keystore.properties`（此文件不进仓库）：
-
-```properties
-password=<生成时设置的口令>
-keyAlias=upload
-storeFile=<keystore 绝对路径>
-```
-
-并在 `apps/desktop/src-tauri/gen/android/app/build.gradle.kts` 中新增 `release` signingConfig 并在 `buildTypes.release` 引用（官方给出的 Gradle 配置方式）。
-
-> 注意：`gen/android` 是 Tauri 生成的工程目录，`tauri android init` 重新生成时可能被覆盖。上述两处修改需在重生成后重新应用；建议在实现阶段把「重生成后需要恢复的文件」记录到 `AGENT.md`（规划）。
-
-### 6.3 安装到设备（USB，规划）
+签名材料（keystore 与口令）**只存本机**，不进仓库、不进日志、不进文档（安全红线见 `operations.md` §3）。**同一 `dev.kksk.danmubox` 的后续安装必须使用同一签名**，否则无法覆盖安装、只能先卸载（卸载会清数据，且 `config.toml` 凭据一并丢失，见 `operations.md` §4）。
 
 ```bash
 adb devices                                  # 确认设备已授权
@@ -200,7 +164,7 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 | 情况 | 处置 |
 |---|---|
-| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名与已装版本不一致 → 用同一 keystore 重签，或先 `adb uninstall dev.kksk.danmubox`（会清数据） |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名与已装版本不一致 → 先 `adb uninstall dev.kksk.danmubox`（会清数据）再安装 |
 | `INSTALL_FAILED_OLDER_SDK` | 设备 Android 版本低于最低支持版本 → 提高设备系统或调整 `minSdkVersion` 后重建 |
 | 手机上提示「不允许安装未知应用」 | 在「安装未知应用」权限中允许 USB 安装来源 |
 | 不想用 USB | 把 APK 传到手机后用文件管理器安装（同样需要未知来源权限） |
@@ -216,11 +180,11 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 | Android versionCode | 采用官方派生规则 `major*1000000 + minor*1000 + patch`；需要连续递增时在 `bundle.android.versionCode` 显式指定 |
 | 预发布 | 自用不做预发布通道；`0.x` 期间 minor 变更允许破坏兼容 |
 | 文档同步 | 每次发版更新 `../CHANGELOG.md`；影响安装 / 数据目录 / 命令的改动同时更新本文与 `operations.md` |
-| 本地文件兼容 | 不建数据库、无迁移；升级不影响 `config.toml` 与 `prefs.json`，弹幕缓冲是内存态、退出即丢（契约 §4.3） |
+| 本地文件兼容 | 无迁移；升级不影响 `config.toml` 与 `prefs.json`，弹幕缓冲是内存态、退出即丢（契约 §4.3） |
 
 ## 8. 自用更新方式
 
-不做自动更新（不引入 updater 插件、不搭更新服务器），理由：自用、单机、不需要后台保活，且后端发布通道本身是额外维护面。
+不做自动更新：不引入 updater 插件、不搭更新服务器——自用单机，后端发布通道本身是额外维护面。升级即用新产物覆盖安装。
 
 | 平台 | 更新步骤 | 数据是否保留 |
 |---|---|---|
@@ -228,7 +192,7 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 | Windows | 退出应用 → 运行新安装器覆盖安装 | 保留（数据在 `%APPDATA%\danmubox\`） |
 | Android | `adb install -r <新 APK>` | 保留（同包名 + 同签名）；换签名或降 versionCode 会失败 |
 
-回滚方式：保留上一版产物（安装器 / APK / .app），直接覆盖回去。本地无数据库、无迁移，因此回滚不涉及数据格式转换；但若升级时应用重写过 `config.toml` / `prefs.json`，回滚后以当前文件为准。
+回滚方式：保留上一版产物（安装器 / APK / .app），直接覆盖回去。无迁移，回滚不涉及数据格式转换；但若升级时应用重写过 `config.toml` / `prefs.json`，回滚后以当前文件为准。
 
 ## 9. 产物体积与内存目标（量级，非精确值）
 
@@ -236,10 +200,9 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 | 指标 | 预期量级 | 依据与来源 | 校准方式（见下表） |
 |---|---|---|---|
-| 应用本体（不含内嵌 WebView2 安装器） | 10¹ MB | Tauri 的定位是「小包体」；选型原文明确否决 sidecar 方案，理由正是 sidecar 会把包体推回 40MB+，抵消 Tauri 的体积优势 | 见校准表第 1~3 行 |
+| 应用本体（不含内嵌 WebView2 安装器） | 10¹ MB | Tauri 的定位是「小包体」；sidecar 方案已在 `decisions/0001-tauri-over-flutter.md` 否决——它会把包体推回 40MB+，抵消 Tauri 的体积优势 | 见校准表第 1~3 行 |
 | Windows 安装器额外体积 | 0 / ~1.8MB / ~127MB / ~180MB 四档 | Tauri 官方 `webviewInstallMode` 对照表给出的增量：`downloadBootstrapper` 0MB、`embedBootstrapper` ~1.8MB、`offlineInstaller` ~127MB、`fixedVersion` ~180MB | 见校准表第 2 行 |
 | 常驻内存 | 10² MB | 结构上由「WebView 渲染进程 + Rust 引擎」构成，其中 WebView 通常是大头；弹幕仅在内存环形缓冲内保存（单房间上限 5000 条），不是主要占用；无实测数据，不做精确断言 | 见校准表第 4 行 |
-| 前端渲染预算 | 见 `ui.md` 性能预算 | 峰值 100 msg/s 不掉帧属于 `ui.md` 的验收项，本文不重复定义 | 见 `ui.md` |
 
 ### 待实测校准表
 
@@ -254,7 +217,7 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 规则：**校准表里的数字必须来自实测**。表格空着是允许的（表示尚未测量），但不得填入推测值、不得编造精确数字。
 
-## 10. 发布前检查清单（自用，一次性）
+## 10. 出包前检查清单（自用，一次性）
 
 | # | 检查项 | 通过标准 |
 |---|---|---|
@@ -263,19 +226,18 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 | 3 | 三端均可启动 | macOS 双击 / Windows 安装后启动 / Android 安装后启动 |
 | 4 | 核心链路可用 | 按 `testing.md` 的三端手工冒烟清单逐条执行 |
 | 5 | 本地文件就位 | 数据目录出现 `config.toml`（权限 `0600`）与 `prefs.json`；应用为纯客户端形态，不启动任何本地服务（见 `operations.md` §1） |
-| 6 | 无敏感信息外泄 | 产物目录、日志、崩溃输出中不含 `SESSDATA` / `bili_jct` / `DedeUserID` 明文（安全红线） |
-| 7 | 凭据未入库 | 仓库中无 keystore、`.p12`、Cookie、`config.toml` |
-| 8 | 卸载可用 | 按 `operations.md` §4 能清干净残留 |
+| 6 | 无敏感信息外泄 | 产物目录、日志、崩溃输出中不含 `SESSDATA` / `bili_jct` / `DedeUserID` 明文（安全红线）；仓库中无签名材料、`.p12`、Cookie、`config.toml` |
+| 7 | 卸载可用 | 按 `operations.md` §4 能清干净残留 |
 
 ## 11. 相关文档
 
 | 文档 | 关联点 |
 |---|---|
 | [`../README.md`](../README.md) | 项目定位、三端目标、文档索引 |
-| [`../AGENT.md`](../AGENT.md) | 构建 / 测试 / lint 命令的规划值、`gen/android` 重生成后的恢复清单 |
+| [`../AGENT.md`](../AGENT.md) | 构建 / 测试 / lint 命令的规划值 |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | 版本号与发版记录的唯一事实源 |
 | [`architecture.md`](architecture.md) | 进程拓扑、core 复用方式、可观测性 |
 | [`testing.md`](testing.md) | 三端手工冒烟清单 |
 | [`operations.md`](operations.md) | 日常操作、排障、数据文件位置与卸载清理 |
 
-参考来源（官方文档，核对日期 2026-09-11）：Tauri 2 Prerequisites、Android Code Signing、Windows Code Signing、Windows Installer、macOS Code Signing、macOS Application Bundle、Google Play（versionCode 派生规则与产物路径）。
+参考来源（官方文档，核对日期 2026-09-11）：Tauri 2 Prerequisites、macOS Application Bundle、Windows Installer（WebView2 安装模式与体积对照）、Android 打包（versionCode 派生规则与产物路径）。

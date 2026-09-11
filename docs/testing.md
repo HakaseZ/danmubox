@@ -1,8 +1,8 @@
 # 测试方案（Testing）
 
-> 定位：定义 danmubox 的测试策略——测试金字塔各层范围、协议 fixture、会话缓冲语义、发送结果判定、本地文件、端口层契约、回放、前端与三端手工冒烟，以及覆盖率目标与明确不测的边界。
+> 定位：定义 danmubox 的测试策略——测试金字塔各层范围、协议 fixture、会话缓冲语义、发送结果判定、本地文件、端口层契约、回放、前端与三端手工冒烟，以及明确不测的边界。
 > 读者：编写与修改代码的 AI 编码 agent、执行验收的项目所有者、以及排查回归的人。
-> 更新时机：新增协议 `cmd`、会话缓冲或发送结果语义变化、偏好键或 IPC 命令变化、冒烟清单步骤变化、CI 门禁调整时必须同步修改本文。
+> 更新时机：新增协议 `cmd`、会话缓冲或发送结果语义变化、偏好键或 IPC 命令变化、冒烟清单步骤变化时必须同步修改本文。
 
 ## 1. 总体原则
 
@@ -27,9 +27,9 @@ graph TD
 
 | 层 | 范围 | 工具（规划） | 运行时机 |
 |---|---|---|---|
-| 单元测试 | 协议编解码、`cmd` → `kind` 映射、退避与节流计算、偏好合并、Zustand store、UI 组件 | `cargo test`；前端 `vitest` + React Testing Library | 每次改动，CI 必跑 |
-| 集成测试 | 会话状态机与缓冲生命周期、`SendOutcome` 归一化（经假适配器）、`config.toml` / `prefs.json` 读写 | `cargo test`（Rust 集成测试目录） | CI 必跑 |
-| 回放 / 契约测试 | 真实流量 fixture 重放、端口层契约、IPC 契约 | `cargo test` + fixture 目录 | CI 必跑（不使用真实凭证） |
+| 单元测试 | 协议编解码、`cmd` → `kind` 映射、退避与节流计算、偏好合并、Zustand store、UI 组件 | `cargo test`；前端 `vitest` + React Testing Library | 每次改动后必跑 |
+| 集成测试 | 会话状态机与缓冲生命周期、`SendOutcome` 归一化（经假适配器）、`config.toml` / `prefs.json` 读写 | `cargo test`（Rust 集成测试目录） | 每次改动后必跑 |
+| 回放 / 契约测试 | 真实流量 fixture 重放、端口层契约、IPC 契约 | `cargo test` + fixture 目录 | 每次改动后必跑（不使用真实凭证） |
 | 手工冒烟 | 三端真机安装运行、登录、扫码、发弹幕、刷新、表情、举报、关注列表 | 人工按清单执行 | 每个阶段退出前，以及分发产物变更后 |
 
 目录约定（规划路径，本期为文档阶段不创建）：协议与适配器测试放 `crates/danmubox-bili/tests/`，二进制 fixture 放同级 `tests/fixtures/`；会话、本地文件与端口契约测试放 `crates/danmubox-core/tests/`；前端测试与被测文件同目录，命名 `*.test.ts` / `*.test.tsx`。
@@ -40,7 +40,7 @@ graph TD
 
 所有协议用例都基于同一套字节构造器：给「头字段 + body 字节」产出完整包，再交给解包器。断言对象是解包产出的事件序列与错误计数，而不是内部缓冲区状态。
 
-包头字段：`packetLen:u32 | headerLen:u16(=16) | protover:u16 | op:u32 | seq:u32`，全部大端。`protover` 是**载荷编码版本**（0 裸 JSON / 1 帧头版本 / 2 zlib / 3 brotli），`op` 才是包类型（2 心跳 / 3 心跳回应 / 5 业务消息 / 7 认证 / 8 认证成功）。
+包头字段布局、`protover`（载荷编码版本）与 `op`（包类型）的取值口径以 `docs/protocol.md` 为准，本文不重复；用例只按该口径构造字节并断言产出。
 
 ### 3.2 必须构造的 fixture 清单
 
@@ -127,12 +127,12 @@ graph TD
 
 | 编号 | 用例 | 做法 | 期望 |
 |---|---|---|---|
-| F-01 | 读写往返 | 写入契约 §4.1 的七项凭据后读回 | 值逐一相等，键名不变 |
+| F-01 | 读写往返 | 按契约 §4.1 写入两个 profile（`[profiles.<name>]`）的七项凭据、改写 `active_profile` 后读回 | 各 profile 的值逐一相等，键名不变；`active_profile` 原样保留 |
 | F-02 | 权限 | 新建与原子替换后检查属性 | 权限为 0600 |
 | F-03 | 原子替换 | 写入过程中并发读 | 读到的要么是旧完整内容，要么是新完整内容，不出现半写文件 |
-| F-04 | 启动顺序 | 缺少 `sessdata` / `bili_jct` / `dede_user_id` 之一，或值为空 | 判为未登录，走扫码默认入口 |
-| F-05 | 登出清空 | 调用 `session_logout` | 七项变为空串；文件仍存在且仍为 0600 |
-| F-06 | 不写非凭据内容 | 修改界面偏好 | 偏好转入 `prefs.json`；`config.toml` 的键集合与契约 §4.1 保持一致 |
+| F-04 | 启动顺序 | `active_profile` 指向的 profile 缺少 `sessdata` / `bili_jct` / `dede_user_id` 之一，或值为空 | 判为未登录，走扫码默认入口；另一 profile 有值也不改变结论 |
+| F-05 | 登出清空 | 调用 `session_logout` | `active_profile` 所指 profile 的七项变为空串，其他 profile 不受影响；文件仍存在且仍为 0600 |
+| F-06 | 不写非凭据内容 | 修改界面偏好 | 偏好转入 `prefs.json`；`config.toml` 的键集合仍只有 `active_profile` 与 `profiles.*` 下的七项凭据 |
 | F-07 | 凭据不进日志 | 以 debug 级别运行并记录 | 日志中不出现任何凭据值；断言用关键词检索而非打印凭据本身 |
 
 ### 6.2 偏好文件 `prefs.json`
@@ -203,7 +203,7 @@ graph TD
 |---|---|---|---|
 | F-01 | store 行为 | 直接驱动 Zustand store 的 action | 消息按 `local_id` 插入、过滤条件生效、多房间标签页切换后各自的列表与过滤状态独立 |
 | F-02 | 六种 `kind` 渲染 | 分别渲染 `danmaku` / `gift` / `superchat` / `interact` / `guard` / `system` 样本 | 各自的结构化断言：普通弹幕含昵称/勋章/颜色；`superchat` 为醒目卡片；`guard` 体现舰长等级；`interact` / `system` 为弱提示样式 |
-| F-03 | 虚拟列表窗口 | 注入大量历史行 | 常驻 DOM 行数不超过 `docs/ui.md` 的性能预算；窗口滚动后节点被回收 |
+| F-03 | 虚拟列表窗口 | 注入大量历史行 | 常驻 DOM 行数不随注入总数线性增长；窗口滚动后离开视口的节点被回收 |
 | F-04 | 自动滚动与暂停 | 位于底部、上滑暂停、点击「回到最新」 | 底部时新消息自动跟随；暂停后不跳回底部；按钮恢复跟随 |
 | F-05 | 偏好往返 | 修改字号 / 透明度 / 过滤条件 | 经 `prefs_get` / `prefs_set` 读写并在重启后读回（用 mock IPC 断言往返） |
 | F-06 | 发弹幕乐观更新与结果提示 | 模拟 `chat_send` 返回七种 `SendOutcome` | 成功时本地行转正；`blocked_platform` / `blocked_room` / `rate_limited` / `medal_required` / `muted` / `failed` 给出**可区分**的失败提示并可重试，不留下永久「发送中」状态 |
@@ -263,35 +263,6 @@ graph TD
 | A-5 | 切到后台再回前台 | 连接按重连策略恢复并继续收弹幕（本期不做后台保活） |
 | A-6 | 扫码登录 | 相机权限被正确申请；扫码后登录成功；失败时给出可操作提示 |
 
-## 11. CI 计划
-
-| 项 | 内容 |
-|---|---|
-| 触发 | 每次 push 与合并请求；三端打包任务可手动触发（自用不发布，不必每次跑） |
-| 任务 1 | Rust 格式化与静态检查：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` |
-| 任务 2 | Rust 测试：`cargo test --workspace`（含单测、集成测试、回放测试、端口层契约测试） |
-| 任务 3 | 前端：类型检查、`vitest run`、组件测试 |
-| 任务 4 | 契约一致性：断言契约 §7 的 IPC 命令集合与 §8 的偏好键集合与文档一致；断言不存在已撤销的命令、键与路径 |
-| 任务 5 | 敏感信息扫描：对全仓库检索 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`，命中文档字段名说明之外的内容即失败 |
-| 任务 6 | 三端打包（手动）：macOS 与 Windows 各用对应 runner 构建，Android 用 NDK 构建四 ABI 产物 |
-| 缓存 | Rust 构建缓存与前端依赖缓存；缓存键包含 `Cargo.lock` 与前端 lock 文件 |
-| 门禁 | clippy 警告即失败；任务 5 命中即失败；golden fixture 变更而无对应说明即失败 |
-| 不跑 | 真机冒烟、真实网络回放、需要真实 Cookie 的用例（凭据不入 CI） |
-
-## 12. 覆盖率目标
-
-| 范围 | 目标（行覆盖） | 说明 |
-|---|---|---|
-| `danmubox-bili` 协议编解码（帧 / 子包 / protobuf） | ≥ 90% | 边界包型密集，是最大风险面 |
-| `danmubox-bili` 发送结果归一化（`SendOutcome`） | ≥ 85% | 七态判定与被吞回显提取必须覆盖 |
-| `danmubox-core` 会话与缓冲 | ≥ 85% | 创建 / 追加 / 上限淘汰 / 销毁 / 重连保留 |
-| `danmubox-core` 本地文件（`config.toml` / `prefs.json`） | ≥ 80% | 权限、原子替换、默认值合并、损坏回落 |
-| `danmubox-core` 端口层契约 | ≥ 80% | 假适配器覆盖端口方法与失败路径 |
-| 前端组件与 store | ≥ 60% | 以行为断言为主，不追求像素级覆盖 |
-| workspace 合计 | ≥ 75% | 目标值而非逐 PR 硬门禁；低于目标时记录缺口与补测计划 |
-
-覆盖率用工具产出报告，但**覆盖率不是验收标准**：协议边界、会话语义、`SendOutcome` 判定与本地文件正确性优先于数字。
-
 ## 13. 明确不测的边界
 
 | 不测对象 | 原因 | 替代手段 |
@@ -310,7 +281,7 @@ graph TD
 
 | 规则 | 内容 |
 |---|---|
-| 凭证 | 测试与 fixture 中不得出现真实 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`；CI 不注入真实凭证 |
+| 凭证 | 测试与 fixture 中不得出现真实 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`；自动化测试不注入真实凭证 |
 | 日志断言 | 断言日志**不含**凭证时，用关键词检索而非打印凭证本身 |
 | 脱敏 | 回放 fixture 按 §8.3 处理；同一用户在多条样本中保持同一映射 |
 | 提交前检查 | 对新增 fixture 与快照做一次敏感关键词检索，命中即修复 |

@@ -10,7 +10,7 @@
 | 日期 | 2026-09-11 |
 | 决策者 | 项目作者 |
 | 影响面 | `crates/danmubox-bili/`（协议与解包）、`crates/danmubox-core/`（常量）、`docs/protocol.md`、测试 fixture 集合 |
-| 相关文档 | [`../contract.md`](../contract.md) §4、§6、[`../protocol.md`](../protocol.md)、[`../testing.md`](../testing.md)、[`0004-upstream-isolation.md`](0004-upstream-isolation.md)、[`../selection.md`](../selection.md) §3.3 |
+| 相关文档 | [`../contract.md`](../contract.md) §4、§6、[`../protocol.md`](../protocol.md)、[`../testing.md`](../testing.md)、[`0004-upstream-isolation.md`](0004-upstream-isolation.md) |
 
 ## Context
 

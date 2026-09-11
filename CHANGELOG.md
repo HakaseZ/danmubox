@@ -40,7 +40,7 @@
 
 ### Changed
 
-- 需求来源变更：基线由选型讨论原文改为 [`REQUIREMENTS.md`](REQUIREMENTS.md)；`docs/selection.md` 仅作选型背景，
+- 需求来源变更：基线由选型讨论原文改为 [`REQUIREMENTS.md`](REQUIREMENTS.md)；选型讨论原文已归档到 `docs/.archive/`（不进 git），
   其中的数据库设计、HTTP API、SSE 与 MCP 章节本期均未采纳。
 - 撤销本地数据库与落库：不建库、不落盘，无去重键、无迁移、无索引、无保留策略；
   弹幕改为**单次房内会话的内存环形缓冲**（上限 5000 条），离开房间即销毁，重进是新会话。

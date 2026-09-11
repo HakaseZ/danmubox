@@ -10,11 +10,11 @@
 | 日期 | 2026-09-11 |
 | 决策者 | 项目作者 |
 | 影响面 | `apps/desktop/`、`crates/danmubox-core/`、`crates/danmubox-bili/`、`crates/danmubox-cli/`、三端构建流程 |
-| 相关文档 | [`../selection.md`](../selection.md)、[`../contract.md`](../contract.md) §3、[`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)、[`0004-upstream-isolation.md`](0004-upstream-isolation.md)、[`0008-frontend-stack.md`](0008-frontend-stack.md)、[`../distribution.md`](../distribution.md) |
+| 相关文档 | [`../contract.md`](../contract.md) §3、[`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)、[`0004-upstream-isolation.md`](0004-upstream-isolation.md)、[`0008-frontend-stack.md`](0008-frontend-stack.md)、[`../distribution.md`](../distribution.md) |
 
 ## Context
 
-选型不是一次拍板，而是随需求边界变化逐步收敛（原文见 [`../selection.md`](../selection.md) §2.2）：
+选型不是一次拍板，而是随需求边界变化逐步收敛（原始讨论已归档，不参与实现）：
 
 | 阶段 | 需求变化 | 当时的倾向 |
 |---|---|---|

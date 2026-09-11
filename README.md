@@ -41,7 +41,7 @@
 | 排除项 | 说明 |
 |---|---|
 | 本地数据库 | 不建库、不落盘 |
-| 弹幕回看与导出 | 不做回看、不做 CSV / JSON / Markdown 导出 |
+| 弹幕回看与导出 | 不做回看、不做导出 |
 | AI 原生接口 | 需求置空，本期不实现；只保留「后期接入 MCP」的架构兼容能力（`core` 的端口与事件总线不得假设消费方是 UI） |
 | 词云 | 非核心功能，列入下期 |
 | 视频流解码 | 不拉流、不解码、不播放视频，只消费弹幕协议 |
@@ -54,13 +54,10 @@
 
 | 阶段 | 状态 |
 |---|---|
-| 技术选型 | 已完成（结论见 `docs/selection.md` 与 `docs/decisions/`） |
+| 技术选型 | 已完成（结论见 `docs/decisions/`） |
 | 文档基线 | 已按需求基线 [`REQUIREMENTS.md`](REQUIREMENTS.md) 重写，契约见 [`docs/contract.md`](docs/contract.md) |
 | 代码 | **尚未开始**，仓库中不存在源码与构建文件 |
 | 构建 / 测试 / 运行 | 尚无可用命令，本文所有命令均为规划值 |
-
-本仓库当前**只有 Markdown 文档**。任何声称「已经能跑」的说法都不成立：
-`crates/`、`apps/` 目录尚未创建，规划中的 crate 与前端工程都还没有落地。
 
 ## 4. 目标平台
 
@@ -108,10 +105,7 @@ danmubox/
     danmubox-cli/           # 调试与校验入口（阶段 1 用于脱离 UI 验证协议与适配器）
   apps/
     desktop/                # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
-  docs/
-    contract.md             # 规范性契约（唯一权威来源）
-    selection.md            # 选型讨论原文
-    decisions/              # ADR
+  docs/                     # 文档（索引见 §7）
   REQUIREMENTS.md           # 需求基线（用户手写）
   README.md
   AGENT.md
@@ -124,15 +118,14 @@ danmubox/
 |---|---|---|
 | [`docs/contract.md`](docs/contract.md) | **规范性契约（唯一事实源）**：命名、共享常量、领域模型、端口边界、IPC 与本地文件契约、偏好键、写作要求 | 全体；写代码前必读 |
 | [`REQUIREMENTS.md`](REQUIREMENTS.md) | 需求基线（用户手写），契约由它翻译而来 | 全体 |
-| [`docs/selection.md`](docs/selection.md) | 选型讨论原文；其中数据库设计、AI 接口等章节本期均未采纳 | 作者、agent |
 | [`docs/architecture.md`](docs/architecture.md) | 分层、crate 依赖图、core 模块划分、并发模型、会话编排 | 实现者 |
 | [`docs/protocol.md`](docs/protocol.md) | B 站弹幕协议：包头、op、protover、认证与心跳包（WS + HTTP）、子包拆分、重连状态机 | 实现者 |
 | [`docs/auth.md`](docs/auth.md) | 三种登录模式、buvid3、WBI 签名、扫码状态机、`config.toml` 凭据读写 | 实现者 |
-| [`docs/ipc.md`](docs/ipc.md) | Tauri IPC 命令与事件、前端 store、浏览器 dev 模式适配层 | 前端实现者 |
-| [`docs/ui.md`](docs/ui.md) | 信息架构、布局线框、虚拟列表、滚动与过滤规则、六种 kind 渲染、礼物栏与徽标、性能预算 | 前端实现者 |
-| [`docs/testing.md`](docs/testing.md) | 测试金字塔、协议 fixture、回放、端口契约、三端冒烟、CI 计划 | 实现者 |
+| [`docs/ipc.md`](docs/ipc.md) | Tauri IPC 命令与事件、载荷类型、前端 store、订阅生命周期 | 前端实现者 |
+| [`docs/ui.md`](docs/ui.md) | 信息架构、布局线框、虚拟列表、滚动与过滤规则、六种 kind 渲染、礼物栏与徽标 | 前端实现者 |
+| [`docs/testing.md`](docs/testing.md) | 测试金字塔、协议 fixture、回放、端口契约、三端冒烟 | 实现者 |
 | [`docs/distribution.md`](docs/distribution.md) | 三端构建步骤与产物、签名策略、工具链前置条件 | 作者 |
-| [`docs/operations.md`](docs/operations.md) | 日常操作、故障排查决策树、脱敏规则、备份与卸载 | 作者 |
+| [`docs/operations.md`](docs/operations.md) | 日常操作、故障排查决策树、脱敏规则、卸载与残留清理 | 作者 |
 | [`docs/roadmap.md`](docs/roadmap.md) | 阶段里程碑、验收标准、风险与 enhancement 排期 | 作者、agent |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR 索引与模板 | 作者、agent |
 | [`docs/decisions/0001-tauri-over-flutter.md`](docs/decisions/0001-tauri-over-flutter.md) | 选型：范围收敛到三端后 Tauri 胜出 | 作者 |
@@ -146,8 +139,8 @@ danmubox/
 
 ## 8. 规划中的开发命令
 
-以下命令均为**规划值**：`Cargo.toml`、`rust-toolchain.toml`、`apps/desktop` 尚未创建，
-包管理器也将在前端脚手架落地时确定。执行前请以 `AGENT.md` 与 `docs/distribution.md` 的最新版本为准。
+以下命令均为**规划值**（`Cargo.toml` 与前端工程尚未创建，包管理器将在脚手架落地时确定）；
+执行前以 `AGENT.md` 与 `docs/distribution.md` 的最新版本为准。
 
 | 用途 | 命令（规划） | 说明 |
 |---|---|---|
@@ -174,8 +167,7 @@ danmubox/
 | 遥测 | 无。不上报崩溃、不埋点、不回传任何使用数据 |
 
 安全红线：`SESSDATA`、`bili_jct`、`DedeUserID` **不得**出现在日志、前端明文、仓库、崩溃上报中；
-凭据在本机以明文存储，使用者需自行保护数据目录。该红线在 `docs/contract.md`、`docs/auth.md`、
-`docs/operations.md`、`AGENT.md` 中同样复述并强制执行。
+凭据在本机以明文存储，使用者需自行保护数据目录。
 
 ## 10. 非官方声明与免责
 

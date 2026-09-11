@@ -43,11 +43,9 @@
 | 数据目录下的 `logs/` | 桌面端（GUI 启动时 stdout 不可见）；实际路径以 `app_info` 返回的数据目录为准 |
 | `danmubox://log` | Tauri IPC 事件，供前端调试面板订阅（契约 §7） |
 
-若不支持按模块过滤则只认单一级别；若采用 `tracing` 的 EnvFilter 语法，则支持 `DANMUBOX_LOG=info,danmubox_core::ws=debug` 这类按 target 覆盖。
-
 ### 1.3 数据目录与文件位置（三端）
 
-本地不建数据库、不落盘弹幕（契约 §4.3），数据目录下只有凭据文件、偏好文件与桌面端日志。
+数据目录下只有凭据文件、偏好文件与桌面端日志；弹幕只在内存，不落盘（契约 §4.3）。
 
 | 平台 | 数据目录 | 典型内容 |
 |---|---|---|
@@ -55,7 +53,7 @@
 | Windows | `%APPDATA%\danmubox\` | 同上 |
 | Android | 应用私有目录（绝对路径随系统与用户而异，以 `app_info` 返回值为准） | `config.toml`、`prefs.json`、`prefs.json.bak` |
 
-- 数据目录本身**不含**弹幕内容：弹幕只在内存环形缓冲中保留，见 §1.6。
+- 数据目录本身**不含**弹幕内容：弹幕只在内存环形缓冲中保留（契约 §4.3）。
 - 查看实际数据目录：调用 `app_info`（返回版本、数据目录、构建信息；不含任何凭据值）。
 - Android 上定位数据目录：
 
@@ -70,10 +68,12 @@ adb shell dumpsys package dev.kksk.danmubox | grep -i dataDir   # 辅助确认
 
 需求直接来源：REQUIREMENTS.md「cookie 弄个配置文件存进去，默认扫码登录，如果本地有 cookie 则直接读取」。凭据以**明文 TOML** 存放，靠文件权限（`0600`）与「只在本机数据目录」约束，不加密（契约 §4.1）。
 
-文件形态（示例值全部为空串）：
+文件形态（示例值全部为空串；多账号用 `[profiles.<name>]` 承载，`active_profile` 指定当前生效者，契约 §4.1）：
 
 ```toml
-[bilibili]
+active_profile = "default"
+
+[profiles.default]
 sessdata = ""
 bili_jct = ""
 dede_user_id = ""
@@ -83,7 +83,7 @@ buvid4 = ""
 sid = ""
 ```
 
-启动顺序：读文件 → `sessdata` / `bili_jct` / `dede_user_id` 三者齐全且非空则直接进入登录态；否则走扫码（默认入口），扫码成功后原子写回该文件。
+启动顺序：读文件 → 取 `active_profile` 指向的 profile，其 `sessdata` / `bili_jct` / `dede_user_id` 三者齐全且非空则直接进入登录态；否则走扫码（默认入口），扫码成功后原子写回该 profile。
 
 #### 查看与权限确认
 
@@ -101,11 +101,11 @@ sid = ""
 
 1. 退出应用（避免写入竞争）。
 2. 备份现有文件（复制为 `config.toml.bak`）。
-3. 从浏览器 DevTools 的 Application → Cookies → `bilibili.com` 复制 `SESSDATA`、`bili_jct`、`DedeUserID`，分别填入 `sessdata` / `bili_jct` / `dede_user_id` 三项；其余字段可留空。
+3. 从浏览器 DevTools 的 Application → Cookies → `bilibili.com` 复制 `SESSDATA`、`bili_jct`、`DedeUserID`，填入 `active_profile` 指向的 `[profiles.<name>]` 的 `sessdata` / `bili_jct` / `dede_user_id`；其余字段可留空。
 4. 确认文件权限为 `0600`（见上表）。
 5. 重新启动应用：三项齐全即直接进入登录态，无需扫码。
 
-登出（界面登出，对应 `session_logout`）会清空该文件中的凭据并回到游客态；`buvid3` 为设备标识，可从文件保留或重新获取。
+登出（界面登出，对应 `session_logout`）会清空当前 profile 的凭据并回到游客态；`buvid3` 为设备标识，可从文件保留或重新获取。
 
 ### 1.5 偏好文件 `prefs.json`
 
@@ -125,35 +125,13 @@ sid = ""
 | JSON 解析失败（损坏） | 按默认值启动，并把损坏副本保留为 `prefs.json.bak` |
 | 正常写入 | 原子替换（临时文件 + rename），不会出现写一半的半成品文件 |
 
-### 1.6 弹幕缓冲的生命周期
-
-- 弹幕**只在内存环形缓冲**中保留，不建库、不落盘、不支持回看与导出（契约 §4.3）。
-- 生命周期 = **一次房内会话**：进入某直播间开始，离开该房间（返回房间列表、关闭房间或切走）即销毁清空；重进同一房间是全新会话。
-- 会话内上限 5000 条，超出丢最旧；容量由偏好 `history.buffer_rows` 覆盖。进程退出即丢。
-- 房间内「刷新」按钮触发的 `rooms_reconnect` **不清空**已收缓冲，仍属同一次会话。
-- 界面向上回滚只查当前会话缓冲（`history_query`），不存在跨会话历史。
-
 ---
 
 ## 2. 故障排查决策树
 
 ### 2.1 总览
 
-```mermaid
-flowchart TD
-  A[现象] --> B{登录态正常吗}
-  B -- 否 --> C[见 2.2 认证失败 / 2.7 扫码不刷新]
-  B -- 是 --> D{房间能连上吗}
-  D -- 连不上 --> E[见 2.3 连不上 WS]
-  D -- 连上但卡住 / 收不到新弹幕 --> F[见 2.5 连接卡住或推流中断]
-  D -- 连上且持续收弹幕 --> G{问题在发送吗}
-  G -- 发弹幕失败 --> H[见 2.4 弹幕发送失败]
-  G -- 其他表现 --> I[按小节逐一排查]
-  A --> J{Android 白屏吗}
-  J -- 是 --> K[见 2.6 Android WebView 白屏]
-```
-
-排障顺序固定为：**登录状态 → 连接状态 → 业务行为**。先确认界面上的登录态与房间连接状态，再进对应小节；需要细节时开启 `DANMUBOX_LOG=debug` 复现一次，读日志与 `danmubox://log` 事件。
+排障顺序固定为：**登录状态 → 连接状态 → 业务行为**。先确认界面上的登录态与房间连接状态，再进对应小节（认证与扫码见 2.2 / 2.7，连接见 2.3 / 2.5，发送见 2.4，Android 白屏见 2.6）；需要细节时开启 `DANMUBOX_LOG=debug` 复现一次，读日志与 `danmubox://log` 事件。
 
 ### 2.2 认证失败
 
@@ -213,23 +191,11 @@ flowchart TD
 
 ### 2.6 Android WebView 白屏
 
-```mermaid
-flowchart TD
-  A[白屏] --> B{有启动日志吗}
-  B -- 没有 --> C[应用没起来: 检查是否闪退, adb logcat 看 stack]
-  B -- 有 --> D{引擎日志正常吗}
-  D -- 异常 --> E[引擎侧问题: 看日志目录与 adb logcat]
-  D -- 正常 --> F{渲染层问题}
-  F -- 怀疑前端资源 --> G[重建前端产物并重新打包]
-  F -- 怀疑 WebView 内核 --> H[更新 Android System WebView 组件]
-  F -- 全部排除 --> I[用 adb 抓页面错误: logcat 过滤 console 与 chromium 关键字]
-```
-
 | 判定顺序 | 观察点 | 结论与动作 |
 |---|---|---|
 | 1 | `adb logcat` 是否有进程启动输出 | 无输出 → 应用闪退，先解决崩溃 |
 | 2 | 启动日志与 `danmubox://log` 事件是否正常 | 正常 → 问题在前端渲染，不在引擎 |
-| 3 | Android System WebView 组件版本 | 过旧或已禁用 → 在应用商店更新 / 启用「Android System WebView」 |
+| 3 | Android System WebView 组件版本 | 过旧或已禁用 → 在系统应用管理中更新 / 启用「Android System WebView」 |
 | 4 | 前端资源是否随包 | 打包遗漏或路径错误 → 重新构建前端后重新打 APK |
 | 5 | 是否只在特定页面白屏 | 定位到具体组件；核心逻辑在 Rust，UI 属渐进增强（见 `architecture.md`） |
 | 6 | 换设备是否复现 | 单设备复现 → 设备侧 WebView 环境问题 |
@@ -304,7 +270,7 @@ grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或 lo
 | 1 | 应用本体 | 长按图标卸载，或 `adb uninstall dev.kksk.danmubox` |
 | 2 | 应用私有数据 | 随卸载自动清除（含 `config.toml`、`prefs.json`）；只想清数据不卸载 → 「设置 → 应用 → danmubox → 存储 → 清除数据」 |
 | 3 | 外部存储残留 | 本项目不写共享存储；若发现相关目录，手工删除 |
-| 4 | 开发机 keystore | **不要删除**（保留以便日后覆盖安装）；它不在手机上，属开发机资产 |
+| 4 | 开发机上的签名材料 | **不要删除**（保留以便日后覆盖安装）；它不在手机上，属开发机资产 |
 | 5 | 设备上的安装包 | 手工删除此前 `adb push` / 传输的 APK |
 
 ### 4.4 卸载检查清单

@@ -27,7 +27,6 @@ danmubox/
     desktop/                # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
   docs/
     contract.md
-    selection.md
     decisions/
   REQUIREMENTS.md
   README.md
@@ -147,7 +146,8 @@ graph LR
 1. 先在 `danmubox-core` 中定义领域能力与端口，`danmubox-bili` 实现；IPC 层只做参数校验与转发。
 2. 在 `src-tauri` 中注册命令，函数名用 snake_case，与命令名一致。
 3. 参数与返回值用契约 §5 的领域模型结构，JSON 侧 `snake_case`；前端 store 内部再转 camelCase。
-4. 在 `docs/contract.md` §7 命令表与 `docs/ipc.md` 补命令签名：参数、返回、可能的错误。
+4. **必经一步**：在 `docs/contract.md` §7 命令表与 `docs/ipc.md` 补命令签名（参数、返回、可能的错误）。
+   命令只在这两处登记，AGENT 不另立清单；`profiles_list` / `profiles_switch` / `rooms_reconnect` 等既有命令同样只在此维护。
 5. 检查事件方向是否需要配对事件，需要时同步契约 §7 与 `docs/ipc.md` 的事件清单。
 6. 不得把 B 站 URL、字段下标或签名细节带进命令参数或返回值；上游差异由 `bili` 归一化。
 
@@ -169,14 +169,14 @@ graph LR
 | 3 | 把 B 站细节写进 `core`：URL、字段下标、签名算法、protobuf 定义、二维码流程 |
 | 4 | 跨层依赖：`core` 依赖 `tauri`、依赖 `bili` 或任何上层 crate；上层 crate 之间互相依赖 |
 | 5 | 在 `core` 中引入 UI 类型、窗口句柄、前端框架相关代码 |
-| 6 | 重新引入本地数据库、落库、迁移、弹幕回看或导出；重建已删除的数据库设计与本地 HTTP API 专项文档 |
-| 7 | 实现本地监听服务、SSE 或进程外接口，或引入本地监听端口与进程级访问令牌 |
-| 8 | 把凭据写进 `prefs.json`，或把界面偏好写进 `config.toml` |
-| 9 | 为未实测的 B 站行为编造具体数值；只能以「待实测校准」表格承载并写明核对方法 |
-| 10 | 提交未完成的空壳实现 / 空实现 / 假 fallback / 被注释掉的死代码 |
-| 11 | 在未知认证回应 `code` 上臆造含义；非 0 一律按认证失败处理 |
-| 12 | 私自扩大范围：加遥测、加保活、加视频解码、加应用商店配置 |
-| 13 | 执行 git 历史改写、删除非本人产出的代码或文档 |
+| 6 | 把凭据写进 `prefs.json`，或把界面偏好写进 `config.toml` |
+| 7 | 为未实测的 B 站行为编造具体数值；只能以「待实测校准」表格承载并写明核对方法 |
+| 8 | 提交未完成的空壳实现 / 空实现 / 假 fallback / 被注释掉的死代码 |
+| 9 | 在未知认证回应 `code` 上臆造含义；非 0 一律按认证失败处理 |
+| 10 | 私自扩大范围：加遥测、加保活、加视频解码、加应用商店配置 |
+| 11 | 执行 git 历史改写、删除非本人产出的代码或文档 |
+| 12 | 重新引入本地数据库、弹幕落盘、回看或导出（见 `docs/decisions/0005-no-local-database.md`） |
+| 13 | 启动任何本地监听服务（HTTP / SSE / 进程外接口） |
 
 ## 9. DoD 验收清单
 
@@ -186,7 +186,7 @@ graph LR
 - [ ] `cargo fmt --all -- --check` 通过。
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` 零告警。
 - [ ] `cargo test --workspace` 通过；新增行为有对应验证。
-- [ ] 前端改动通过类型检查，且在实际界面（Tauri 或浏览器 dev 模式）中目视确认。
+- [ ] 前端改动通过类型检查，且在 Tauri 应用内目视确认实际界面。
 - [ ] 端口边界未被破坏：`core` 仍可独立编译，不依赖 `bili` / `tauri` / 任何上层 crate，且 core 中无 B 站 URL、字段下标、签名或 protobuf。
 - [ ] `config.toml` 以 0600 权限写入且只含凭据；界面偏好只落 `prefs.json`；凭据未进日志 / 前端 / 仓库。
 - [ ] 弹幕缓冲遵守会话语义：只保留当前房内会话、上限 `history.buffer_rows`、离开房间即销毁。
@@ -208,5 +208,5 @@ graph LR
 | 登录与凭据 | `docs/auth.md` |
 | IPC 契约 | `docs/ipc.md` |
 | 界面规范 | `docs/ui.md` |
-| 为什么这样选 | `docs/selection.md`、`docs/decisions/README.md` |
+| 为什么这样选 | `docs/decisions/` |
 | 排期与验收 | `docs/roadmap.md` |

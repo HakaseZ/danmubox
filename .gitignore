@@ -23,3 +23,6 @@ apps/desktop/src-tauri/gen/
 .DS_Store
 .idea/
 .vscode/
+
+# 归档：不进 git（见 docs/contract.md §11）
+docs/.archive/

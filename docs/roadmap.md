@@ -1,6 +1,6 @@
 # 开发路线图（Roadmap）
 
-> 定位：把需求基线（`../a.md`）与基线契约（`docs/contract.md`）落成五个可验收阶段，明确每阶段的交付物、可观察验收标准、前置依赖、退出条件，并登记下期 backlog 与风险。
+> 定位：把需求基线（`REQUIREMENTS.md`）与基线契约（`docs/contract.md`）落成五个可验收阶段，明确每阶段的交付物、可观察验收标准、前置依赖、退出条件，并登记下期 backlog 与风险。
 > 读者：项目所有者、参与实现的 AI 编码 agent、以及负责验收的任何人。
 > 更新时机：阶段范围变化、验收标准被调整、某阶段实际退出、下期 backlog 或风险表变化时，必须同步修改本文。
 
@@ -104,10 +104,10 @@ graph LR
 
 | 交付物 | 说明 | 对应文档 |
 |---|---|---|
-| 凭据文件读写 | 明文 `config.toml`、权限 0600、临时文件 + rename 原子替换；「手填 Cookie」即直接编辑该文件 | `docs/contract.md` §4.1、`docs/auth.md` |
-| 启动顺序 | 读文件 → `sessdata` / `bili_jct` / `dede_user_id` 齐全且非空则直接进入登录态；否则走扫码（默认入口） | `docs/contract.md` §4.1 |
+| 凭据文件读写 | 明文 `config.toml`、权限 0600、临时文件 + rename 原子替换；多账号用 `[profiles.<name>]` 承载、`active_profile` 指定生效者；「手填 Cookie」即直接编辑该文件 | `docs/contract.md` §4.1、`docs/auth.md` |
+| 启动顺序 | 读文件 → `active_profile` 所指 profile 的 `sessdata` / `bili_jct` / `dede_user_id` 齐全且非空则直接进入登录态；否则走扫码（默认入口） | `docs/contract.md` §4.1 |
 | 扫码登录 | 二维码生成 + 状态轮询 + 成功后原子写回凭据；IPC `session_qr_start` / `session_qr_poll` | `docs/auth.md`、`docs/ipc.md` |
-| 游客与登出 | `session_status`（不含 Cookie 值）、`session_logout` 清空凭据 | `docs/contract.md` §7 |
+| 游客与登出 | `session_status`（不含 Cookie 值）、`session_logout` 清空凭据；多账号用 `profiles_list` / `profiles_switch`（改 `active_profile` 并以新凭据重建连接） | `docs/contract.md` §7、`docs/ipc.md` |
 | `buvid3` 与 WBI 签名 | 供 `getDanmuInfo` 使用 | `docs/auth.md` |
 | `getDanmuInfo` | 换取弹幕长连接地址与认证 token | `docs/auth.md` |
 | 偏好文件读写 | `prefs.json`：显式改过的键、默认值合并、原子替换、损坏回落并保留 `prefs.json.bak` | `docs/contract.md` §4.2、§8 |
@@ -118,11 +118,11 @@ graph LR
 |---|---|---|---|
 | S2-AC1 | 无凭据首次启动，读取 `session_status` | 进入游客态；不阻塞阶段 1 的接收链路 | 响应 JSON |
 | S2-AC2 | 走扫码流程完成登录 | 状态机按序演进至成功；`session_status` 显示已登录；响应中**不含**任何 Cookie 值 | 轮询响应序列 |
-| S2-AC3 | 手工编辑 `config.toml` 填入有效凭据后重启 | 直接进入登录态、不弹扫码；完全退出进程后重启仍保持登录态 | 重启后的 `session_status` |
+| S2-AC3 | 手工编辑 `config.toml` 中 `active_profile` 所指 profile 填入有效凭据后重启 | 直接进入登录态、不弹扫码；完全退出进程后重启仍保持登录态 | 重启后的 `session_status` |
 | S2-AC4 | 检查凭据文件属性与写入方式 | 权限为 0600；写入为临时文件 + rename，替换过程中并发读不出现半写文件 | `stat` 输出 + 并发读结果 |
 | S2-AC5 | 使凭据失效后调用需要登录的操作 | 回到游客态并给出可操作的重登提示；进程不崩溃；不发起需要凭据的上游请求 | 响应 + 日志 |
-| S2-AC6 | 调用 `session_logout` | `config.toml` 中凭据被清空；`session_status` 回到游客态 | 文件内容 + 响应 |
-| S2-AC7 | 修改界面偏好 | 偏好只写入 `prefs.json`；`config.toml` 的键集合始终保持契约 §4.1 的七项；未知键或非法值报 `BAD_REQUEST` | 两文件内容 + 响应 |
+| S2-AC6 | 调用 `session_logout`，然后调用 `profiles_switch` 切到另一 profile | 登出后 `active_profile` 所指 profile 的凭据被清空、回到游客态；切换后 `active_profile` 改写、以新 profile 凭据重建连接，`session_status` 反映新 profile | 文件内容 + 响应 |
+| S2-AC7 | 修改界面偏好 | 偏好只写入 `prefs.json`；`config.toml` 的键集合始终只有 `active_profile` 与 `profiles.*` 下的七项凭据；未知键或非法值报 `BAD_REQUEST` | 两文件内容 + 响应 |
 | S2-AC8 | 对仓库、日志、前端载荷、fixture 检索凭据值 | 不出现真实 `SESSDATA` / `bili_jct` / `DedeUserID`，只命中字段名说明与脱敏规则文本 | 检索输出 |
 
 ### 4.3 前置依赖与退出条件
@@ -253,7 +253,6 @@ graph LR
 | 项 | 说明 | 触发 / 前置 |
 |---|---|---|
 | 词云 | 基于当前会话缓冲的关键词云；需求基线列为下期非核心 | 阶段 3 之后，按需另立条目 |
-| 跨会话历史 | 追加式 **JSONL 文件**（按天分片），不引入数据库；跨会话回看与检索 | 另立 ADR 后再实施；本期只保留单会话内存缓冲 |
 | AI 接入 MCP（想法记录） | 后期想法：接入 MCP，让 Agent 直接消费弹幕数据；**本期不实现**。架构上保持兼容——`core` 的端口与事件总线不得假设消费方是 UI，新能力一律经端口暴露，不写进 Tauri 命令层 | 本期不排期；不定义任何工具、协议或端点 |
 | iOS 端 | 复用同一 `core` 与 IPC 契约，只新增外壳与构建目标 | 阶段 5 退出且桌面 / 安卓主流程无阻塞性缺陷 |
 | Fold8 / 折叠屏 | 展开 / 折叠态布局、双栏（房间列表 + 聊天）、铰链区域避让 | 拿到折叠屏真机且 Android 主流程已跑通 |
@@ -280,9 +279,8 @@ backlog 各项均**不阻塞**阶段 1–5 的退出条件；一旦启动，各�
 | 文档 | 关系 |
 |---|---|
 | `../README.md` | 项目定位、边界与文档索引的入口 |
-| `../a.md` | 需求基线（用户手写） |
+| `REQUIREMENTS.md` | 需求基线（用户手写） |
 | `docs/contract.md` | 本文的唯一事实源：阶段划分必须落在其 §2 范围内，常量与模型不得另立 |
-| `docs/selection.md` | 选型讨论原文；其中本期未采纳的章节以 `docs/contract.md` §2 为准 |
 | `docs/protocol.md` | 阶段 1 协议实现依据与「待实测校准」结论的登记处 |
 | `docs/auth.md` | 阶段 2 三种登录模式的详细设计 |
 | `docs/ipc.md` / `docs/ui.md` | 阶段 3–4 的 IPC 命令与交互依据 |

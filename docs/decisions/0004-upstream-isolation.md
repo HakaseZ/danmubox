@@ -10,7 +10,7 @@
 | 日期 | 2026-09-11 |
 | 决策者 | 项目作者 |
 | 影响面 | `crates/danmubox-core/`、`crates/danmubox-bili/`、`crates/danmubox-cli/`、`apps/desktop/src-tauri/`、`../.gitignore` 覆盖范围 |
-| 相关文档 | [`../contract.md`](../contract.md) §3、[`../../a.md`](../../REQUIREMENTS.md)、[`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)、[`0003-protover3.md`](0003-protover3.md)、[`../auth.md`](../auth.md)、[`../protocol.md`](../protocol.md)、[`../architecture.md`](../architecture.md) |
+| 相关文档 | [`../contract.md`](../contract.md) §3、[`REQUIREMENTS.md`](../../REQUIREMENTS.md)、[`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)、[`0003-protover3.md`](0003-protover3.md)、[`../auth.md`](../auth.md)、[`../protocol.md`](../protocol.md)、[`../architecture.md`](../architecture.md) |
 
 ## Context
 

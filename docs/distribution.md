@@ -241,3 +241,18 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 | [`operations.md`](operations.md) | 日常操作、排障、数据文件位置与卸载清理 |
 
 参考来源（官方文档，核对日期 2026-09-11）：Tauri 2 Prerequisites、macOS Application Bundle、Windows Installer（WebView2 安装模式与体积对照）、Android 打包（versionCode 派生规则与产物路径）。
+
+### Android 前置条件（2026-09-12 实际核查）
+
+要在本机构建 Android 端，当前**缺**以下东西（已装的只有 `adb` 与 `java`）：
+
+| 需要 | 现状 |
+|---|---|
+| Android SDK（`sdkmanager`） | **缺**；`ANDROID_HOME` 未设置 |
+| Android NDK | **缺**；`ANDROID_NDK_HOME` 未设置 |
+| Gradle | **缺** |
+| Rust 的 Android target（`aarch64-linux-android` 等） | **缺**（当前只装了 `aarch64-apple-darwin`）|
+| `adb`、`java`/`javac` | 已有 |
+
+Windows 端同理需要先加 `x86_64-pc-windows-msvc`（或 `-gnu`）target 与对应的链接器/工具链。
+两端都属于独立工程，开工前先补齐这些前置条件。

@@ -14,7 +14,7 @@ pub mod prefs;
 pub mod session;
 
 pub use bus::{Cancel, ConnState, Counters, Event, EventBus, MessageSink, RoomStats, StatusEvent};
-pub use config::{AppConfig, ConfigStore, Profile};
+pub use config::{account_name_from, validate_account_name, AppConfig, ConfigStore, Profile};
 pub use error::{Error, Result};
 pub use model::{
     sort_followed, BlacklistedUser, Emote, EmotePackage, EmoteRef, FollowedRoom, Message,

@@ -21,7 +21,7 @@
 
 > **后期想法（本期不实现）**：接入 MCP；为此刻意保持架构兼容——core 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层，本期不定义任何 MCP 工具、协议或端点。
 
-消费面共享 core 的三条硬性规则：**只有 `danmubox-bili` 能触达 B 站**（上层不得自行访问 B 站 REST，也不得自建 WS）；**上层不得再定义第二套 `kind` / 错误码 / 偏好键**（分别取自契约 §5 / §7 / §8）；**凭据只在 `AuthProvider` 实现内解引用使用**，上层拿到的只有会话状态位（模式 / uid / uname / 是否登录 / 失效时间），永远不含 Cookie 值。
+消费面共享 core 的三条硬性规则：**只有 `danmubox-bili` 能触达 B 站**（上层不得自行访问 B 站 REST，也不得自建 WS）；**上层不得再定义第二套 `kind` / 错误码 / 偏好键**（分别取自契约 §5 / §7 / §8）；**凭据只在 `AuthProvider` 实现内解引用使用**，上层拿到的只有会话状态位与脱敏后的账号身份（`Account` 的 `name` / `nickname` / `uid` / `face` / `logged_in` / `active`），永远不含 Cookie 值。
 
 ## 2. crate 依赖图
 
@@ -113,7 +113,7 @@ graph LR
 
 | 端口（契约 §3） | 职责（契约原文） | 输入 → 输出领域模型 | 实现落点 |
 |---|---|---|---|
-| `AuthProvider` | 登录态、凭据读写、扫码流程、`buvid3` | 无输入 → `SessionStatus`；`QrStart` / `QrPoll`；`config.toml` 中当前 profile 的凭据字段 | `bili::auth` |
+| `AuthProvider` | 登录态、凭据读写、扫码流程、`buvid3` | 无输入 → `SessionStatus`；`account_qr_start` / `account_qr_poll` 的 `QrChallenge` / `QrPoll`；`accounts_list` → `Account[]`；`config.toml` 中某个具名账号的凭据字段 | `bili::auth` |
 | `LiveSource` | 房间解析、建立/断开连接、事件流 | `room_id` + 连接参数 → `Room`；连接期间持续产出 `Message` 与房间状态变化 | `bili::ws`（解析经 `bili::room`） |
 | `DanmakuSender` | 发送弹幕（含被吞状态归一化） | `room_id` + 内容/颜色/模式 → `SendOutcome`（被吞时附上游回显内容与原始 code/message） | `bili::chat` |
 | `DanmakuReporter` | 举报弹幕 | `room_id` + `upstream_id` + 举报类型 → 成功/失败与上游 code | `bili::chat` |
@@ -125,7 +125,7 @@ graph LR
 
 | 端口 | core 侧只允许知道 | 全部留在 `danmubox-bili` 的东西 |
 |---|---|---|
-| `AuthProvider` | 会话状态位、二维码的 `key` / `url` / 过期时间、扫码归一化状态（`pending` / `confirmed` / `expired`） | 扫码接口地址与轮询间隔、Cookie 字段名映射、`buvid3` 获取方式、WBI 签名算法、失效判定 |
+| `AuthProvider` | 会话状态位、账号的 `name` / `nickname` / `uid` / `face` / `logged_in` / `active`、二维码的 `key` / `url` / SVG、扫码归一化状态（`pending` / `scanned` / `confirmed` / `expired`） | 扫码接口地址与轮询间隔、Cookie 字段名映射、`nav` 求证、账号命名规则、`buvid3` 获取方式、WBI 签名算法、失效判定 |
 | `LiveSource` | `Room` 元信息、`Message` 流、连接状态枚举与断开原因 | wss 地址获取、认证包 body 构造、心跳 body、`protover` 协商、子包拆分、`cmd → kind` 映射、退避实现 |
 | `DanmakuSender` | `SendOutcome` 七种取值、被吞时上游回显的文本 | 请求参数拼装、`msg`/`message` 为 `"f"` / `"k"` 的判定、错误码到 `SendOutcome` 的映射表 |
 | `DanmakuReporter` | `room_id` + `upstream_id` + 举报类型 | 举报接口路径、类型码取值、CSRF 参数 |

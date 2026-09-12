@@ -1,7 +1,7 @@
 # 登录与鉴权
 
 > 定位：danmubox 与 B 站之间的身份、凭据、签名与失效处理规范，是 `core` 的 `AuthProvider` 端口、`danmubox-bili` 的鉴权实现及所有上层消费面的唯一权威说明。
-> 读者：实现 `danmubox-bili` 鉴权/协议适配的 Rust 工程师、接 `session_*` IPC 的前端作者、审阅凭据落盘方式与安全红线的评审者。
+> 读者：实现 `danmubox-bili` 鉴权/协议适配的 Rust 工程师、接 `account_*` 与 `session_status` IPC 的前端作者、审阅凭据落盘方式与安全红线的评审者。
 > 更新时机：B 站登录接口或扫码状态码变更、WBI 签名算法或置换表变更、Cookie 字段集合变更、`config.toml` 字段或权限约定变更、安全红线调整时。
 
 ---
@@ -26,16 +26,16 @@
 
 ```
 前端 / CLI
-      │  invoke session_qr_start
+      │  invoke account_qr_start(target?)
       ▼
 core::AuthProvider（端口）──► danmubox-bili 的实现
       │                          └─ passport 扫码接口（generate）
       │                            返回 { qrcode_key, url }
-      │  invoke session_qr_poll
+      │  invoke account_qr_poll(key)
       ▼
 danmubox-bili::auth ──► passport 扫码接口（poll）
       │                    └─ 成功时响应 Set-Cookie 带回凭据集
-      │  凭据 ──► 原子写回 config.toml 中 active_profile 指向的 profile（§8.3）
+      │  凭据 ──► 原子写回目标账号：带 target = 覆盖它；不带 = 按昵称起名后新建（§8.3）
       ▼
 danmubox-bili::auth ──► nav（取 img_key / sub_key）──► WBI 签名（§4）
       │
@@ -52,13 +52,13 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 
 ## 2. 三种登录模式
 
-三种模式互斥，任一时刻只有一套生效凭据，落盘位置是 `config.toml` 中 `active_profile` 指向的那份 profile（契约 §4.1）；切换模式等于覆盖写回该 profile。**扫码是默认入口**（契约 §2、§4.1）。
+三种模式互斥，任一时刻只有一套生效凭据，落盘位置是 `config.toml` 中 `active_profile` 指向的那一份（契约 §4.1）——对外把这一份具名凭据叫**账号**（存储表键仍叫 `[profiles.<name>]`）；切换模式等于覆盖写回该账号。**扫码是默认入口**（契约 §2、§4.1）。
 
 | 维度 | 游客 `anonymous` | 手填 Cookie `cookie` | 扫码 `qrcode` |
 |---|---|---|---|
 | 默认性 | 未登录时的回退态 | 备选（排障与快速恢复） | **默认入口** |
-| 用户动作 | 无 | 直接编辑 `config.toml`（§8.4） | 手机 B 站 App 扫一次码并确认 |
-| 本地凭据 | 仅 `buvid3` / `buvid4`（非账号凭据） | 当前 profile 的全套字段 | 当前 profile 的全套字段 |
+| 用户动作 | 无 | 粘贴 Cookie（`account_login_cookie`）或直接编辑 `config.toml`（§8.4） | 手机 B 站 App 扫一次码并确认 |
+| 本地凭据 | 仅 `buvid3` / `buvid4`（非账号凭据） | 该账号的全套字段 | 该账号的全套字段 |
 | 收弹幕 | 可收大部分 `danmaku` / `gift` / `superchat` / `interact` / `guard` / `system` | 完整 | 完整 |
 | 昵称与 UID | 部分被掩码，`uid` 常为 0，`uname` 可能为掩码串 | 完整 | 完整 |
 | 粉丝牌字段 | 可能缺失（`medal_level` / `medal_name` 为空值） | 完整 | 完整 |
@@ -71,12 +71,13 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 
 ### 2.1 模式选择的实现规则（规范性）
 
-1. 启动时 `config.toml` 缺失、或 `active_profile` 指向的 profile 凭据不全 → `mode = "anonymous"`、`logged_in = false`，用已有的 `buvid3` 走游客链路（§8.2）。
-2. 用户点击登录 → 默认进入扫码流程；`cookie` 模式只能由用户直接编辑文件产生，**不提供**导入界面或导入命令。
+1. 启动时 `config.toml` 缺失、或 `active_profile` 指向的账号凭据不全 → `mode = "anonymous"`、`logged_in = false`，用已有的 `buvid3` 走游客链路（§8.2）。
+2. 用户点击登录 → 默认进入扫码流程；扫码有两个用法：**不带目标 = 新增账号**（账号名在确认后按昵称生成，用户不必先起名），**带目标 = 给该账号重新登录**。手填 Cookie 走 `account_login_cookie`（§8.4）。
 3. 扫码成功后 `mode = "qrcode"`；启动时读到齐全凭据则 `mode = "cookie"`。
-4. 登出（`session_logout`）只清空 `active_profile` 指向 profile 的账号凭据并回到 `anonymous`，其它 profile 不受影响；`buvid3` / `buvid4` 是否一并清除见 §3.3。
-5. 切换账号（`profiles_switch`）= 改 `active_profile` + 以新凭据重建连接，**不复制多份文件**（契约 §4.1）；切换后按新 profile 的凭据重新判定 `mode` 与 `logged_in`。
-6. `mode` 是**来源标记**，不是能力开关：能力判定只看当前 profile 的凭据是否齐全（`SESSDATA` + `bili_jct` 同时存在才允许发弹幕，§7）。
+4. 登出（`account_logout`，缺省 = 当前账号）只清空该账号的**账号级**凭据并回到 `anonymous`，**保留账号条目**（它在 `accounts_list` 里继续以 `logged_in = false` 出现，可再登录回来），其它账号不受影响；`buvid3` / `buvid4` 一并保留，见 §3.3。
+5. 切换账号（`account_switch`）= 改 `active_profile` + 以新凭据重建连接，**不复制多份文件**（契约 §4.1）；切换后按新账号的凭据重新判定 `mode` 与 `logged_in`。删除账号（`account_remove`）保留两条护栏：不许删掉最后一个、删当前项自动切到剩下的第一个。
+6. `mode` 是**来源标记**，不是能力开关：能力判定只看当前账号的凭据是否齐全（`SESSDATA` + `bili_jct` 同时存在才允许发弹幕，§7）。
+7. **账号名与登录状态是两件事**：`accounts_list` 里每个账号都带 `logged_in`（以 `nav` 求证为准）与身份（`nickname` / `uid` / `face`）。界面不需要（也不该）自己去探登录态。
 
 ---
 
@@ -100,14 +101,14 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 |---|---|---|
 | 上游 REST 请求头 | `Cookie: buvid3=<值>; buvid4=<值>` | 作用于 `live.bilibili.com` 等接口，供风控识别设备 |
 | WS 认证包 body | `"buvid": "<buvid3 值>"` | 契约 §6 认证包的 `buvid` 字段，游客与登录态都必须填 |
-| 本地持久化 | `config.toml` 当前 profile 的 `buvid3` / `buvid4` 字段 | 见 §3.3；不使用偏好文件 |
+| 本地持久化 | `config.toml` 当前账号的 `buvid3` / `buvid4` 字段 | 见 §3.3；不使用偏好文件 |
 
 注意：`buvid3` **不是** WBI 签名的输入，也不进入 `w_rid` 计算（签名输入见 §4.1）。它只在请求头与认证包里出现。
 
 ### 3.3 持久化与生命周期
 
-- `buvid3` / `buvid4` 首次获取后写入 `active_profile` 指向 profile 的对应字段（契约 §4.1 字段表），后续进程复用，避免每次启动都换设备指纹（频繁变更会触发风控重新评估）。
-- 登出**不清除** `buvid3` / `buvid4`：它们不绑定账号，清除反而使设备指纹抖动。
+- `buvid3` / `buvid4` 首次获取后写入当前账号的对应字段（契约 §4.1 字段表），后续进程复用，避免每次启动都换设备指纹（频繁变更会触发风控重新评估）。
+- 登出**不清除** `buvid3` / `buvid4`：它们不绑定账号，清除反而使设备指纹抖动（实现口径见 §8.3）。
 - 敏感级别：低（无账号绑定），但与 `SESSDATA` 同时出现时二者可被关联到同一设备，因此仍不得进入日志。
 
 ---
@@ -259,33 +260,34 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 
 ## 6. 扫码登录状态机
 
-扫码是默认入口（§2）：本地生成二维码 → 前端渲染 → 按固定间隔轮询 → 成功时由响应 `Set-Cookie` 下发凭据并回写当前 profile。
+扫码是默认入口（§2）：本地生成二维码 → 前端渲染 → 按固定间隔轮询 → 成功时由响应 `Set-Cookie` 下发凭据并回写目标账号。
 
 ### 6.1 状态机
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> Generating: session_qr_start
+    Idle --> Generating: account_qr_start(target?)
     Generating --> Waiting: 拿到 qrcode_key + url，开始轮询
     Generating --> Failed: 生成失败（UPSTREAM_ERROR）
     Waiting --> Waiting: data.code 未识别 / 86101 未扫码 / 86090 已扫码待确认
     Waiting --> Confirmed: 响应 Set-Cookie 同时含 SESSDATA 与 bili_jct
     Waiting --> Expired: data.code = 86038
-    Waiting --> Expired: 本地轮询超时（超过本地看门狗上限）
-    Confirmed --> [*]: 凭据原子写回 config.toml 的当前 profile，mode = qrcode
-    Expired --> Idle: 用户点击刷新，重新生成
+    Confirmed --> [*]: 凭据原子写回目标账号（§8.3），mode = qrcode，返回该 Account
+    Expired --> Idle: 用户点击刷新，重新生成（旧 key 已消费，再轮询得 NOT_FOUND）
     Failed --> Idle: 展示错误并可重试
 ```
+
+`target` 决定写回哪儿：**不带** = 新增账号，确认后按昵称派生账号名（中文昵称会被清成 `uid<uid>`，重名加 `-2` 后缀，见 §8.4）；**带** = 给该账号重新登录，覆盖它的凭据。两种情形落盘后都会把它设为当前账号，`account_qr_poll` 一并返回该 `Account`（`logged_in = true`、`active = true`）。
 
 ### 6.2 步骤与端点
 
 | 步骤 | IPC | 上游 | 说明 |
 |---|---|---|---|
-| 生成 | `session_qr_start` | `GET https://passport.bilibili.com/x/passport-login/web/qrcode/generate` | 实测返回 `code = 0`，`data.qrcode_key`、`data.url`（二维码内容为 `account.bilibili.com` 域名下的链接） |
-| 渲染 | 无 | 无 | 前端把 `url` 字符串渲染为二维码图形，**本地渲染**，不得上传到第三方二维码服务 |
-| 轮询 | `session_qr_poll(key)` | `GET https://passport.bilibili.com/x/passport-login/web/qrcode/poll` | 上游响应有两层 code：外层 `code = 0` 表示请求本身成功，`data.code` 才是扫码状态 |
-| 完成 | 同上 | 同上 | 成功响应通过 `Set-Cookie` 下发凭据集，同时 `data.url` 携带跨域登录链接 |
+| 生成 | `account_qr_start(target?)` | `GET https://passport.bilibili.com/x/passport-login/web/qrcode/generate` | 实测返回 `code = 0`，`data.qrcode_key`、`data.url`（二维码内容为 `account.bilibili.com` 域名下的链接）。`target` 指向不存在的账号 → `NOT_FOUND`；新一轮扫码作废上一轮未消费的 `key` |
+| 渲染 | 无 | 无 | 后端把 `url` 编成 SVG 返回（本地渲染），也可能返回原始 `url` 供界面自行渲染，**不得**上传到第三方二维码服务 |
+| 轮询 | `account_qr_poll(key)` | `GET https://passport.bilibili.com/x/passport-login/web/qrcode/poll` | 上游响应有两层 code：外层 `code = 0` 表示请求本身成功，`data.code` 才是扫码状态；`key` 未开始或已消费 → `NOT_FOUND` |
+| 完成 | 同上 | 同上 | 成功响应通过 `Set-Cookie` 下发凭据集；**先向 `nav` 求证**再落盘（求证同时得到昵称 / uid / 头像），然后原子写回目标账号并返回该 `Account` |
 
 轮询间隔建议 2 秒（不得低于 1 秒）；前端持续展示「等待扫码 / 已扫码，请在手机上确认」的提示。
 
@@ -299,20 +301,22 @@ stateDiagram-v2
 | `0` | 成功（契约采用） | 不作为主判据，见下 | 待实测校准，见 §13 |
 | 其他任意值 | 未确认 | **视为未确认，继续轮询**，记 `debug` 日志（只记数值与 `message`，不记 Cookie），不改语义 | 本规范 |
 
-**成功判定的设计取舍**：成功的主判据是「轮询响应的 `Set-Cookie` 中同时出现 `SESSDATA` 与 `bili_jct`」，`data.code == 0` 仅作副判据。理由有两条：(1) 主判据直接对应用户可见结果——能拿到凭据才算登录成功；(2) 未知或变更后的数字码不会导致登录卡死在 `pending`——只要凭据真的下发了，状态机必然推进。仅当两判据都缺席时才停留在轮询态。
+**成功判定的设计取舍**：`data.code == 0` 是推进到 `confirmed` 的触发条件，但真正算成功还要 `Set-Cookie` 里带回 `SESSDATA` + `bili_jct`——两者缺一即报 `UPSTREAM_ERROR`，**不写半套凭据、也不把未确认说成成功**。代价是上游若换掉成功码，登录会停在 `pending`（未知码一律按未确认，§6.3），因此 `data.code` 属于待实测校准项（§13），换码时按 §6.3 的表重新核对。
 
-**看门狗**：`qrcode_key` 有服务端生命周期，且长度未知（见 §13）。因此除 `86038` 这一显式失效信号外，本地再加一道看门狗：自生成起超过本地上限仍未成功或未失效，则主动作废本次会话、置 `expired`、提示刷新，不继续空转轮询。上限为本地策略值而非上游常量。
+**看门狗**：`qrcode_key` 有服务端生命周期，且长度未知（见 §13）。`86038` 是上游给出的显式失效信号；**本地不另做看门狗**——`account_qr_poll` 只反映上游状态，轮询多久、什么时候放弃由调用方决定（前端按自己的超时停轮询，CLI 用 `--timeout`）。这样「什么时候算过期」只有一个权威来源，不会出现本地判死而上游仍可扫的分裂。
 
 ### 6.4 与本地接口的状态映射
 
-| 状态机状态 | `session_qr_poll` 归一化 `status` | `danmubox://session` 事件 |
+| 状态机状态 | `account_qr_poll` 归一化 `state` | 返回的 `account` |
 |---|---|---|
-| Waiting（含 86101 / 86090 / 未知码） | `pending` | 不推送（避免轮询期刷屏） |
-| Confirmed | `confirmed` | 推送一次，载荷为 §8.6 的脱敏对象，绝不含 Cookie 值 |
-| Expired（86038 或看门狗） | `expired` | 推送一次，载荷同上 |
-| Generating 失败 | 由 IPC 错误模型返回 `UPSTREAM_ERROR` | 推送 `danmubox://log` |
+| Waiting（含 86101 / 86090 / 未知码） | `pending` / `scanned` | `null` |
+| Confirmed | `confirmed` | 落盘后的 `Account`（`logged_in = true`、`active = true`） |
+| Expired（86038） | `expired` | `null` |
+| Generating 失败 | 由 IPC 错误模型返回 `UPSTREAM_ERROR` | — |
 
-`status` 的 `confirmed` 只由 §6.3 的主判据产生；`expired` 只由 `86038` 或看门狗产生。命令签名与载荷形状见 `ipc.md`。
+`state` 的 `confirmed` 只由 §6.3 的判定产生；`expired` 只由 `86038` 产生。确认与失效都会**消费掉 `key`**（终态），再轮询同一个 `key` 得 `NOT_FOUND`。命令签名与载荷形状见 `ipc.md`。
+
+登录态的变化同时经 `danmubox://session` 事件推送（载荷为 §8.6 的脱敏对象，绝不含 Cookie 值）；`Account` 列表则由 `accounts_list` 现取。
 
 ---
 
@@ -375,8 +379,8 @@ sid = ""
 
 ### 8.2 启动顺序（规范性）
 
-1. 读取 `config.toml`（契约 §4.1），取 `active_profile` 指向的 profile。文件缺失、`active_profile` 缺失或解析失败 → 以空值继续，不报错，按游客链路启动；解析失败时保留损坏副本 `config.toml.bak` 供排查（不得在日志中输出其内容）。
-2. 校验该 profile 的 `sessdata` / `bili_jct` / `dede_user_id` 三者是否**齐全且非空白**。
+1. 读取 `config.toml`（契约 §4.1），取 `active_profile` 指向的账号。文件缺失、`active_profile` 缺失或解析失败 → 以空值继续，不报错，按游客链路启动；解析失败时保留损坏副本 `config.toml.bak` 供排查（不得在日志中输出其内容）。
+2. 校验该账号的 `sessdata` / `bili_jct` / `dede_user_id` 三者是否**齐全且非空白**。
 3. 齐全 → 直接进入登录态，`mode = "cookie"`，不触发扫码；启动后异步调用 `nav` 复核（`code = -101` 则按 §10 失效处理）。
 4. 不齐全 → `mode = "anonymous"`，登录入口为扫码（默认）。
 5. 扫码成功后原子写回，进入 `mode = "qrcode"`（§8.3）。
@@ -386,14 +390,26 @@ sid = ""
 
 - 写入 MUST 原子：在同目录写临时文件 → `fsync` → `rename` 覆盖目标，避免半套凭据或损坏文件。
 - 写入 MUST 同时设置/校正权限（§8.1）。
-- 写回的目标恒为 `active_profile` 指向的 profile；字段集为本次登录获得的完整凭据集，`buvid3` / `buvid4` 若已存在则保留（§3.3）。
-- 登出清空该 profile 的账号凭据字段（`sessdata` / `bili_jct` / `dede_user_id` / `dede_user_id_ck_md5` / `sid`），保留 `buvid3` / `buvid4`，其它 profile 不动；清空同样走原子写回。
+- 写回的目标是本次登录的**目标账号**：重新登录（`account_qr_start` 带 target）写它；新增账号先按昵称派生账号名（§8.4 的命名规则）再写出新条目。字段集为本次登录获得的完整凭据集，`buvid3` / `buvid4` 若该账号已有则保留（§3.3）；新增账号时设备级 `buvid` 从当前账号继承一份（`buvid` 不绑定账号）。
+- 登出清空该账号的**账号级**凭据字段（`sessdata` / `bili_jct` / `dede_user_id` / `dede_user_id_ck_md5` / `sid`），保留 `buvid3` / `buvid4`，其它账号不动；清空同样走原子写回。**账号条目本身保留**——退游客态不等于把账号删掉。
 
 ### 8.4 手填 Cookie
 
-「手填 Cookie」在本设计中**即直接编辑 `config.toml` 文件**：用户从浏览器导出 `SESSDATA` / `bili_jct` / `DedeUserID` 等值填进对应键，保存后重启应用。danmubox **不提供** Cookie 导入界面，也**不提供**导入命令——不存在一条把用户粘贴的字符串经前端传给 Rust 的链路，从结构上消除了粘贴内容进入前端缓冲、剪贴板历史与输入法缓存的风险。
+有两条路，落点相同（都是 `config.toml` 里那一份凭据）：
 
-校验走 §8.2 的 `nav` 复核：`code = -101` 说明凭据无效或已过期，退回 `anonymous` 并提示重新登录，不得留下半套凭据的「已登录」假象。
+1. **程序入口** `account_login_cookie(cookie, name?)`（需求 §2.5 的三种方式之一）：用户把
+   `SESSDATA=…; bili_jct=…; DedeUserID=…` 粘进界面（或 CLI 的 `--cookie -` 从 stdin 读）。
+   - 解析宽容：`;` 或换行分隔、每段两侧空白、整串带 `Cookie:` 前缀都接受；值不做二次编解码。
+   - 校验必填三要素，缺一即 `BAD_REQUEST` 并点名缺了哪个（用户贴错键名时要能自己看出来）。
+   - **先向 `nav` 求证再落盘**：`code != 0` 说明凭据无效，直接 `BAD_REQUEST`，不写进文件——
+     否则界面会出现一个「已登录」却连不上的账号（S2-AC5 的同一类坑）。
+   - `name` 缺省时按昵称自动生成账号名（命名规则见下）；给了名字就写进那个账号，已存在即覆盖（= 用 Cookie 重新登录）。
+   - 凭据只在 Rust 侧接收与落盘：**不进日志**、不进 `prefs.json`、不回传前端（返回值是 §8.6 的脱敏 `Account`）。
+2. **直接编辑文件**：从浏览器 DevTools 复制值填进对应键，保存后重启应用（§8.2 的启动顺序会复核）。
+
+**账号命名规则（规范性，新增账号时用）**：账号名只允许 `[A-Za-z0-9_-]{1,32}`（它同时是 TOML 表键与界面标识）。
+昵称常常是中文，而这里**不做转写**：只保留 ASCII 字母数字与 `-` / `_`，其余字符（含全部中文）直接丢掉；
+清空后用 `uid<uid>` 兜底，重名再加 `-2` / `-3` 后缀。判据是「自动命名一定有结果，且两个不同账号不会因为昵称被清空而撞名」。
 
 ### 8.5 与 `prefs.json` 分家的理由
 
@@ -401,16 +417,29 @@ sid = ""
 
 ### 8.6 前端可见的脱敏对象（规范性）
 
-`session_status` / `danmubox://session` 返回的对象形状如下，其中**没有任何 Cookie 字段**，也不含长度、前缀、哈希等可用于侧信道推断的衍生信息：
+**会话对象**（`session_status` / `danmubox://session`）——**没有任何 Cookie 字段**，也不含长度、前缀、哈希等可用于侧信道推断的衍生信息：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `active_profile` | string | 当前生效的 profile 名（契约 §4.1、§7） |
-| `mode` | string | `anonymous` / `cookie` / `qrcode` |
-| `logged_in` | bool | 是否持有可用凭据 |
-| `uid` | i64 | 未登录为 0 |
-| `uname` | string | 未登录为空串 |
-| `expires_at` | i64 \| null | 凭据的**本地预估**失效时刻（UTC 毫秒）；上游不下发权威有效期，`null` 表示未知，由失效信号驱动 |
+| `logged_in` | bool | 当前账号是否持**有效**凭据（以 `nav` 求证为准；网络错误沿用文件里的结论） |
+| `uid` | i64 | 当前账号的 uid；未登录为 0 |
+| `nickname` | string | 当前账号的昵称；未登录或求证失败为空串 |
+| `active_profile` | string | 当前生效的账号名（存储上就是 `active_profile` 指向的 profile） |
+
+**账号对象**（`accounts_list` 的 `Account[]`；扫码确认那一次是 `account_qr_poll.account`，同一形状）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 账号名（`[A-Za-z0-9_-]{1,32}`） |
+| `nickname` | string | 该账号的昵称；未登录或求证失败为空串 |
+| `uid` | i64 | 该账号的 uid；未登录时退回凭据里记着的 `DedeUserID`（可能为 0） |
+| `face` | string | 头像地址；未登录或求证失败为空串（界面据此决定是否渲染头像） |
+| `logged_in` | bool | 该账号的凭据是否有效（逐个向 `nav` 求证，**并发发起**；网络错误不改登录态） |
+| `active` | bool | 是否是当前账号 |
+
+身份三格取自 `nav` 的 `data.mid` / `data.uname` / `data.face`（2026-09-12 实测确认：本机两个账号都返回了非空头像地址）。网络不通时身份留空、登录态沿用文件里的结论——**不拿上一次的结果冒充这一次**；单个账号求证失败也不影响其余账号列出来。
+
+`mode`（`anonymous` / `cookie` / `qrcode`）是文档层的**来源标记**，由凭据来源推导，不在载荷里；界面不要依赖它判断能力。
 
 该对象由 `AuthProvider` 端口产出，所有上层（IPC / CLI / 未来的 Agent 通道）只能拿到这一形状。
 
@@ -490,11 +519,11 @@ sid = ""
 
 | 信号 | 来源 | 上游表现（实测/契约） | 处置 |
 |---|---|---|---|
-| 账号未登录 | `nav` | `code = -101`、`message = "账号未登录"`（实测） | 判定凭据失效，清空 `config.toml` 当前 profile 的账号字段，`mode → anonymous` |
+| 账号未登录 | `nav` | `code = -101`、`message = "账号未登录"`（实测） | 判定凭据失效，清空当前账号的账号级字段（**保留账号条目与 `buvid3` / `buvid4`**），`logged_in → false` |
 | 发弹幕被拒 | 发送接口 | `code = -101`（实测，未带凭据时） | 判定失效；若本地凭据仍在，触发一次 `nav` 复核后再决定 |
 | WBI 风控失败 | 任意受保护接口 | `code = -352` | **不是**登录失效：先刷新 WBI key 重试一次（§4.3），仍失败才按上游故障处理 |
 | WS 认证回应非 0 | 认证回应包 | 契约 §6：非 0 一律视为认证失败 | 按重连退避处理；重连前重取 `getDanmuInfo`；连续多轮失败后做一次 `nav` 复核以区分「token 问题」与「账号失效」 |
-| 本地凭据缺失但 `mode != anonymous` | 本地一致性检查（启动复核或 `nav` 复核时） | 当前 profile 被外部清空或改写 | 置 `anonymous`，推送 `danmubox://session` |
+| 本地凭据缺失（文件被外部清空或改写） | 本地一致性检查（启动复核或 `nav` 复核时） | 当前账号取不到完整凭据 | 判为未登录（`accounts_list` 里该账号 `logged_in = false`），推送 `danmubox://session` |
 | 发弹幕被限流 | 发送接口 | 频次类错误 | 按 `rate_limited` 处理，**不**触发重新登录，见 §11 |
 | 启动时文件解析失败 | 本地文件层 | `config.toml` 损坏 | 以游客态启动并保留 `config.toml.bak`，提示用户手工修复；不清除原文件 |
 
@@ -502,15 +531,15 @@ sid = ""
 
 ### 10.2 失效后的行为
 
-1. 清空 `config.toml` 当前 profile 的账号凭据字段（保留 `buvid3` / `buvid4`），走原子写回（§8.3）。
-2. 本地状态置 `mode = "anonymous"`、`logged_in = false`；保留弹幕连接可继续以游客身份接收（能收且字段降级），**不**强制断开 WS。
-3. 推送 `danmubox://session`，前端展示「登录已失效，请重新登录」并提供一键回到扫码入口。
+1. 清空当前账号的**账号级**凭据字段（保留 `buvid3` / `buvid4` 与账号条目），走原子写回（§8.3）。
+2. 本地状态置 `logged_in = false`；保留弹幕连接可继续以游客身份接收（能收且字段降级），**不**强制断开 WS。
+3. 推送 `danmubox://session`，前端展示「登录已失效，请重新登录」并提供一键回到扫码入口（扫码时带 `target` = 给这个账号重新登录，账号名和槽位都还在）。
 4. 正在发送的弹幕：失败并向用户显示原因；不做自动重发（避免用户不可见的重复发言）。
 5. 失效事件记入结构化日志时只记「哪个信号触发的」（如 `session_invalidated reason=nav_-101`），不记任何凭据内容。
 
-### 10.3 `expires_at` 的处理
+### 10.3 凭据有效期的处理
 
-上游不下发权威的凭据有效期，因此本地不做过期倒计时驱动登出。`expires_at` 若为 `null` 即表示未知；若实现选择在上次成功校验时刻加一个保守窗口作为提示值，该值只能用于 UI 提示（如「很久没校验过了」），MUST NOT 用于主动清除凭据或阻断请求。
+上游不下发权威的凭据有效期，因此本地不做「到期即登出」——判定有效性的唯一来源是 `nav` 求证（§10.1）。若实现选择在上次成功校验时刻加一个保守窗口作为提示值，该值只能用于 UI 提示（如「很久没校验过了」），MUST NOT 用于主动清除凭据或阻断请求。
 
 ---
 
@@ -518,7 +547,7 @@ sid = ""
 
 ### 11.1 `csrf` 来源
 
-`csrf` 字段取自当前 profile 的 `bili_jct`（§7、§8.1）。发送请求在表单体中同时填 `csrf` 与 `csrf_token` 为同一值（上游两种字段名并存，同时填以兼容）。**严禁**把 `bili_jct` 写到请求 URL 的 query 中——query 会进日志、进浏览器历史、进代理记录。
+`csrf` 字段取自当前账号的 `bili_jct`（§7、§8.1）。发送请求在表单体中同时填 `csrf` 与 `csrf_token` 为同一值（上游两种字段名并存，同时填以兼容）。**严禁**把 `bili_jct` 写到请求 URL 的 query 中——query 会进日志、进浏览器历史、进代理记录。
 
 ### 11.2 节流参数（契约 §4，规范性）
 
@@ -570,8 +599,8 @@ sid = ""
 6. `config.toml` 只存在于本机应用数据目录，权限 MUST 为 0600（Windows 为等价的用户私有 ACL）；不得把该文件路径或内容交给任何远程服务。
 7. 凭据只经 HTTPS / WSS 传输；本项目不提供任何供外部读取凭据的本地服务（无本地监听端口、无 token 文件），凭据只在本进程内使用。
 8. 二维码内容（`data.url`）只做本地渲染，不得提交给任何第三方二维码生成服务，否则等同于把登录凭证转发给第三方。
-9. 手填 Cookie 即用户直接编辑 `config.toml`（§8.4）：danmubox 不接收粘贴内容，因此不存在前端输入框、剪贴板或输入法缓存路径；文档与截图中的示例一律用明显的伪造值，禁止贴出真实值。
-10. 提供「登出」时，必须真正清空 `config.toml` 当前 profile 的账号凭据字段（§8.3），而不是仅把内存状态置为未登录。
+9. 手填 Cookie 走 `account_login_cookie`（§8.4）：凭据从界面直达 Rust 侧，**只在进程内与磁盘之间移动**——不写日志、不进 `prefs.json`、不回传前端、不落任何中间文件；返回值只有 §8.6 的脱敏 `Account`。CLI 的对应入口只允许从 stdin 读（`--cookie -`），不得把凭据放进命令行参数（进程表与 shell 历史会泄漏）。文档与截图中的示例一律用明显的伪造值，禁止贴出真实值。
+10. 提供「登出」时，必须真正清空当前账号的**账号级**凭据字段（§8.3），而不是仅把内存状态置为未登录；账号条目与 `buvid3` / `buvid4` 保留。
 11. 凭据相关代码的任何改动都必须在变更说明中显式声明是否影响上述任一条；不影响也需说明。
 
 ---
@@ -582,10 +611,11 @@ sid = ""
 
 | 项 | 现状 | 核对方法 |
 |---|---|---|
-| 扫码成功时 `data.code` 的具体数值 | 契约采用 `0`，未经真实扫码确认；因此实现以 `Set-Cookie` 为主判据（§6.3） | 本人用手机 B 站 App 扫描一次并确认，记录轮询响应中 `data.code` 与外层 `code`，回填本表 |
+| 扫码成功时 `data.code` 的具体数值 | 契约采用 `0`，未经真实扫码确认；因此实现要求 `0` 与 `Set-Cookie` 同时成立才落盘（§6.3） | 本人用手机 B 站 App 扫描一次并确认，记录轮询响应中 `data.code` 与外层 `code`，回填本表 |
 | 「已扫码待确认」状态码 `86090` | 契约采用，未经确认真实扫码路径 | 同上流程，在扫码后、确认前观察一次响应 |
 | `data.code = 86101` / `86038` | **已实测确认**（2026-09-11） | 无需再核；如上游调整则复核 |
-| `qrcode_key` 的服务端有效期 | 未知；本地看门狗上限为自定策略值（§6.3） | 生成二维码后不扫码，持续轮询直到出现 `86038`，记录耗时 |
+| `nav` 的身份字段 `data.mid` / `data.uname` / `data.face` | **已实测确认**（2026-09-12）：登录态下三者都有值（`face` 是 `i0.hdslb.com/bfs/face/….jpg`）；未登录时 `code = -101` | 无需再核；`accounts_list` 的身份三格就取这三处（§8.6） |
+| `qrcode_key` 的服务端有效期 | 未知；本地不做看门狗，轮询时长由调用方决定（§6.3） | 生成二维码后不扫码，持续轮询直到出现 `86038`，记录耗时 |
 | 完整 `Set-Cookie` 字段集合 | 已知核心 7 个字段（§7），是否还有额外字段未知 | 真实扫码成功后记录响应 `Set-Cookie` 的全部字段名（**只记字段名，不记值**），回填本表 |
 | `img_key` / `sub_key` 的轮换周期 | 按自然日缓存（§4.3），未经跨越两日的实测确认 | 连续两天在固定时刻记录 `nav` 的 `img_url` / `sub_url`，比对是否变化，确认轮换时刻 |
 | WBI 值清洗字符集 `! ' ( ) *` | 按现有算法实现；本地用含这些字符的关键词做对照请求未能产生差异（`code` 均为 `0`），故未独立确认 | 构造一个值中确含这些字符的**受保护**接口请求，对比清洗与不清洗的 `code`，确认清洗是否为服务端必需 |
@@ -603,7 +633,7 @@ sid = ""
 
 - `contract.md`：唯一事实源；`config.toml`（§4.1）、`prefs.json`（§4.2）、`SendOutcome`（§5）、协议要点（§6）、IPC 命令（§7）、安全红线的总纲。
 - `protocol.md`：WS 帧格式、认证包 / 心跳包精确格式、命令目录、重连状态机、发送与风控（含 `upstream_id` 与举报相关字段的实测记录）。
-- `ipc.md`：`session_status` / `session_qr_start` / `session_qr_poll` / `session_logout` / `profiles_list` / `profiles_switch` / `chat_send` / `chat_report` / `emotes_list` / `follow_list` / `wallet_balance` 的签名与 `danmubox://session` 载荷。
+- `ipc.md`：`session_status` / `accounts_list` / `account_qr_start` / `account_qr_poll` / `account_login_cookie` / `account_switch` / `account_logout` / `account_remove` / `chat_send` / `chat_report` / `emotes_list` / `follow_list` / `wallet_balance` 的签名与 `danmubox://session` 载荷。
 - `architecture.md`：`AuthProvider` 端口的实现位置、`core` / `bili` 的依赖方向与并发模型。
 - `ui.md`：登录界面、扫码状态展示、关注列表与礼物栏的身份徽标渲染。
 - `operations.md`：凭据相关故障的排查决策树与日志脱敏规则。

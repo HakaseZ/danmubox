@@ -131,7 +131,7 @@ graph TD
 | F-02 | 权限 | 新建与原子替换后检查属性 | 权限为 0600 |
 | F-03 | 原子替换 | 写入过程中并发读 | 读到的要么是旧完整内容，要么是新完整内容，不出现半写文件 |
 | F-04 | 启动顺序 | `active_profile` 指向的 profile 缺少 `sessdata` / `bili_jct` / `dede_user_id` 之一，或值为空 | 判为未登录，走扫码默认入口；另一 profile 有值也不改变结论 |
-| F-05 | 登出清空 | 调用 `session_logout` | `active_profile` 所指 profile 的七项变为空串，其他 profile 不受影响；文件仍存在且仍为 0600 |
+| F-05 | 登出清空 | 调用 `account_logout`（缺省 = 当前账号） | 当前账号的**账号级**凭据五项（`sessdata` / `bili_jct` / `dede_user_id` / `dede_user_id_ck_md5` / `sid`）变为空串，`buvid3` / `buvid4` 保留；账号条目保留（`accounts_list` 里该账号 `logged_in=false`）；其他账号不受影响；文件仍存在且仍为 0600 |
 | F-06 | 不写非凭据内容 | 修改界面偏好 | 偏好转入 `prefs.json`；`config.toml` 的键集合仍只有 `active_profile` 与 `profiles.*` 下的七项凭据 |
 | F-07 | 凭据不进日志 | 以 debug 级别运行并记录 | 日志中不出现任何凭据值；断言用关键词检索而非打印凭据本身 |
 

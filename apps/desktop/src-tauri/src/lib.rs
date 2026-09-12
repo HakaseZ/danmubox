@@ -11,9 +11,8 @@ use danmubox_bili::{
     BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
-    QrState,
-    AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource, RoomAdmin,
-    RoomCatalog, SessionState, WalletProvider,
+    Account, AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource, QrPoll,
+    QrState, RoomAdmin, RoomCatalog, SessionState, WalletProvider,
 };
 use danmubox_core::{
     config_path, data_dir, prefs_path, BlacklistedUser, ConfigStore, Counters, Emote, Event,
@@ -54,6 +53,10 @@ struct Rooms {
 
 pub struct AppState {
     store: Arc<ConfigStore>,
+    /// 长驻的鉴权实现。扫码的「这一轮要写进哪个账号」必须活过命令边界
+    /// （`account_qr_start` 与 `account_qr_poll` 是两次独立调用），
+    /// 所以不能像别的能力那样每条命令新建一个。
+    auth: Arc<BiliAuth>,
     bus: EventBus,
     counters: Arc<Counters>,
     prefs: Mutex<Prefs>,
@@ -61,15 +64,15 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(store: Arc<ConfigStore>) -> Self {
-        let prefs = Prefs::load(&prefs_path());
-        Self {
+    pub fn new(store: Arc<ConfigStore>) -> danmubox_core::Result<Self> {
+        Ok(Self {
+            auth: Arc::new(BiliAuth::new(Arc::clone(&store))?),
             store,
             bus: EventBus::new(BUS_CAPACITY),
             counters: Arc::new(Counters::default()),
-            prefs: Mutex::new(prefs),
+            prefs: Mutex::new(Prefs::load(&prefs_path())),
             rooms: Mutex::new(Rooms::default()),
-        }
+        })
     }
 }
 
@@ -198,8 +201,7 @@ fn app_info(state: State<'_, AppState>) -> AppInfo {
 
 #[tauri::command]
 async fn session_status(state: State<'_, AppState>) -> ApiResult<SessionState> {
-    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    auth.session().await.map_err(ApiError::from)
+    state.auth.session().await.map_err(ApiError::from)
 }
 
 #[tauri::command]
@@ -572,78 +574,97 @@ async fn chat_report(
         .map_err(ApiError::from)
 }
 
-/// 列出凭据文件里的 profiles（契约 §7）。
+/// 列出全部账号：每个账号都带登录状态与身份（昵称 / uid / 头像）。
+///
+/// 有凭据的账号由 `danmubox-bili` 逐个并发向 `nav` 求证——串行等 N 次的上游往返
+/// 会让账号多的人肉眼可见地等，且单个账号求证失败只影响它自己那一行。
 #[tauri::command]
-async fn profiles_list(state: State<'_, AppState>) -> ApiResult<Vec<String>> {
-    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    auth.profiles().await.map_err(ApiError::from)
+async fn accounts_list(state: State<'_, AppState>) -> ApiResult<Vec<Account>> {
+    state.auth.accounts().await.map_err(ApiError::from)
 }
 
-/// 切换当前 profile（契约 §7：切换后**以新凭据重连**）。
+/// 切换当前账号（契约 §7：切换后**以新凭据重连**）。
 ///
-/// 重连是必须的：WS 认证包里的 uid 取自连接建立时的 profile，
-/// 已有连接不会因为文件换了 profile 而自动换身份——不重连就会出现
+/// 重连是必须的：WS 认证包里的 uid 取自连接建立时的账号，
+/// 已有连接不会因为文件换了账号而自动换身份——不重连就会出现
 /// 「界面显示新账号、连接其实还是旧账号」。
 #[tauri::command]
-async fn profiles_switch(
-    state: State<'_, AppState>,
-    name: String,
-) -> ApiResult<SessionState> {
-    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let session = auth.switch_profile(&name).await.map_err(ApiError::from)?;
+async fn account_switch(state: State<'_, AppState>, name: String) -> ApiResult<SessionState> {
+    let session = state
+        .auth
+        .switch_account(&name)
+        .await
+        .map_err(ApiError::from)?;
     reconnect_all(&state);
     Ok(session)
 }
 
-/// 新建一个 profile 并设为当前（契约 §7）。
-///
-/// 新 profile 的凭据为空，因此返回的是游客态；随后由扫码 / 手填写入。
-/// 名字非法或重复返回 `BAD_REQUEST`（**不覆盖**已有 profile）。
-/// 当前身份变了，已连接房间必须按新身份重连——理由同 `profiles_switch`。
-#[tauri::command]
-async fn profiles_create(state: State<'_, AppState>, name: String) -> ApiResult<SessionState> {
-    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let before = state.store.active_name();
-    let session = auth.create_profile(&name).await.map_err(ApiError::from)?;
-    if state.store.active_name() != before {
-        reconnect_all(&state);
-    }
-    Ok(session)
-}
-
-/// 删除一个 profile（契约 §7）。不许删掉最后一个；删的若是当前 profile，
+/// 删除一个账号（契约 §7）。不许删掉最后一个；删的若是当前账号，
 /// 当前指向会切到剩下的第一个，因此同样需要重连。
 #[tauri::command]
-async fn profiles_remove(state: State<'_, AppState>, name: String) -> ApiResult<SessionState> {
-    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+async fn account_remove(state: State<'_, AppState>, name: String) -> ApiResult<SessionState> {
     let before = state.store.active_name();
-    let session = auth.remove_profile(&name).await.map_err(ApiError::from)?;
+    let session = state
+        .auth
+        .remove_account(&name)
+        .await
+        .map_err(ApiError::from)?;
     if state.store.active_name() != before {
         reconnect_all(&state);
     }
     Ok(session)
 }
 
-/// 登出：清空当前 profile 的凭据（契约 §7）。
+/// 登出：清空该账号的凭据（缺省 = 当前账号），**保留账号条目**（契约 §7）。
+///
+/// 清空后那个账号仍列在 `accounts_list` 里，只是 `logged_in = false`——
+/// 既能退回游客态，又留住这个账号的位置，之后可以再登录回来。
 #[tauri::command]
-async fn session_logout(state: State<'_, AppState>) -> ApiResult<SessionState> {
-    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    auth.logout().await.map_err(ApiError::from)?;
-    reconnect_all(&state);
-    auth.session().await.map_err(ApiError::from)
+async fn account_logout(
+    state: State<'_, AppState>,
+    name: Option<String>,
+) -> ApiResult<SessionState> {
+    let explicit_other = name
+        .as_deref()
+        .is_some_and(|name| name != state.store.active_name());
+    let session = state
+        .auth
+        .logout(name.as_deref())
+        .await
+        .map_err(ApiError::from)?;
+    // 登出的是别的账号时，当前连接没变，不需要重连。
+    if !explicit_other {
+        reconnect_all(&state);
+    }
+    Ok(session)
 }
 
-/// 让所有已连接房间用当前凭据重连（切号 / 登出后调用）。
-fn reconnect_all(state: &State<'_, AppState>) {
-    let rooms = state.rooms.lock().expect("rooms poisoned");
-    for runtime in rooms.runtimes.values() {
-        runtime.reconnect();
+/// 手填 Cookie 建成一个账号（需求 §2.5 的三种登录方式之一）。
+///
+/// 必填 `SESSDATA` / `bili_jct` / `DedeUserID`，缺一即 `BAD_REQUEST`；落盘前先向
+/// `nav` 求证，确认凭据真的能用（否则界面会出现一个「已登录」却连不上的账号）。
+/// `name` 缺省时按昵称自动生成；给了名字就写进那个账号（已存在 = 重新登录）。
+#[tauri::command]
+async fn account_login_cookie(
+    state: State<'_, AppState>,
+    cookie: String,
+    name: Option<String>,
+) -> ApiResult<Account> {
+    let before = state.store.active_name();
+    let account = state
+        .auth
+        .login_cookie(&cookie, name.as_deref())
+        .await
+        .map_err(ApiError::from)?;
+    if state.store.active_name() != before {
+        reconnect_all(&state);
     }
+    Ok(account)
 }
 
 /// 扫码登录的第一步：取回二维码内容并在本地编成 SVG（离线，不联网渲染）。
 #[derive(serde::Serialize)]
-struct QrLogin {
+struct QrStart {
     /// 轮询用的票据。
     key: String,
     /// 二维码里实际编码的 URL（也一并返回，便于给用户一个「在浏览器打开」的退路）。
@@ -652,38 +673,56 @@ struct QrLogin {
     svg: String,
 }
 
+/// 生成二维码：不带 `target` = 新增账号，带 = 给该账号重新登录。
+///
+/// 新增时**不需要用户先起名**——账号名在确认后按扫码得到的昵称生成（重名加后缀），
+/// 这是这次账号管理重写的核心顺序调整。
 #[tauri::command]
-async fn session_qr_start(state: State<'_, AppState>) -> ApiResult<QrLogin> {
-    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let challenge = auth.begin_qr().await.map_err(ApiError::from)?;
-    let code = qrcode::QrCode::new(challenge.url.as_bytes())
-        .map_err(|error| ApiError::from(danmubox_core::Error::Upstream(format!("二维码编码失败：{error}"))))?;
+async fn account_qr_start(
+    state: State<'_, AppState>,
+    target: Option<String>,
+) -> ApiResult<QrStart> {
+    let challenge = state
+        .auth
+        .begin_qr(target.as_deref())
+        .await
+        .map_err(ApiError::from)?;
+    let code = qrcode::QrCode::new(challenge.url.as_bytes()).map_err(|error| {
+        ApiError::from(danmubox_core::Error::Upstream(format!(
+            "二维码编码失败：{error}"
+        )))
+    })?;
     let svg = code
         .render::<qrcode::render::svg::Color>()
         .min_dimensions(240, 240)
         .build();
-    Ok(QrLogin { key: challenge.key, url: challenge.url, svg })
+    Ok(QrStart {
+        key: challenge.key,
+        url: challenge.url,
+        svg,
+    })
 }
 
-#[derive(serde::Serialize)]
-struct QrPoll {
-    /// 归一化后的扫码状态，界面据此提示用户。
-    state: QrState,
-    /// 每次轮询一并带上会话，确认那一次界面就能直接切过去。
-    session: SessionState,
-}
-
-/// 扫码登录的轮询：状态 + 当前会话。确认后按契约让各房间以新凭据重连。
+/// 扫码登录的轮询：状态 + **确认时**落盘后的那个账号。
+///
+/// 确认那一次凭据已经写进文件、账号已经存在，界面直接拿到账号即可；
+/// 当前账号因此变了，各房间要以新凭据重连。
 #[tauri::command]
-async fn session_qr_poll(state: State<'_, AppState>, key: String) -> ApiResult<QrPoll> {
-    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let qr_state = auth.poll_qr(&key).await.map_err(ApiError::from)?;
-    if qr_state == QrState::Confirmed {
-        // 登录态在这一步才写盘，房间连接还是旧的，必须重连。
+async fn account_qr_poll(state: State<'_, AppState>, key: String) -> ApiResult<QrPoll> {
+    let before = state.store.active_name();
+    let poll = state.auth.poll_qr(&key).await.map_err(ApiError::from)?;
+    if poll.state == QrState::Confirmed || state.store.active_name() != before {
         reconnect_all(&state);
     }
-    let session = auth.session().await.map_err(ApiError::from)?;
-    Ok(QrPoll { state: qr_state, session })
+    Ok(poll)
+}
+
+/// 让所有已连接房间用当前凭据重连（切号 / 登出后调用）。
+fn reconnect_all(state: &State<'_, AppState>) {
+    let rooms = state.rooms.lock().expect("rooms poisoned");
+    for runtime in rooms.runtimes.values() {
+        runtime.reconnect();
+    }
 }
 
 /// 举报理由清单：上游固定 7 条，官方客户端按文案反查 `reason_id` 后一并上报。
@@ -885,8 +924,16 @@ pub fn run() {
         }
     };
 
+    let state = match AppState::new(store) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("初始化鉴权失败：{err}");
+            std::process::exit(1);
+        }
+    };
+
     tauri::Builder::default()
-        .manage(AppState::new(store))
+        .manage(state)
         // 白屏排查的入口：这里没有输出就说明 webview 根本没导航成功。
         .on_page_load(|webview, payload| {
             tracing::debug!(url = %payload.url(), "webview 页面加载");
@@ -910,13 +957,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             session_status,
-            profiles_list,
-            profiles_switch,
-            profiles_create,
-            profiles_remove,
-            session_logout,
-            session_qr_start,
-            session_qr_poll,
+            accounts_list,
+            account_switch,
+            account_remove,
+            account_logout,
+            account_login_cookie,
+            account_qr_start,
+            account_qr_poll,
             rooms_list,
             rooms_add,
             rooms_remove,

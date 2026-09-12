@@ -72,8 +72,9 @@ Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desk
 | 解析房间（CLI） | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` |
 | 看弹幕（CLI） | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` |
 | 登录态（CLI） | `cargo run -p danmubox-cli -- session` |
-| 扫码登录（CLI） | `cargo run -p danmubox-cli -- login` |
-| 登出 / 切号（CLI） | `cargo run -p danmubox-cli -- logout`、`-- profiles --use <名字>` |
+| 扫码登录/新增账号（CLI） | `cargo run -p danmubox-cli -- login [账号名]`（不带 = 新增账号；带 = 给该账号重新登录） |
+| 账号列表 / 切号 / 增删（CLI） | `cargo run -p danmubox-cli -- accounts [--use <名字>] [--create] [--remove <名字>]` |
+| 登出（CLI） | `cargo run -p danmubox-cli -- logout [账号名]`（缺省 = 当前账号；账号条目保留） |
 | 发弹幕（CLI） | `cargo run -p danmubox-cli -- send <房间> "内容"`（需登录） |
 | 前端依赖安装 | `npm --prefix apps/desktop/ui install` |
 | 前端类型检查 + 构建 | `npm --prefix apps/desktop/ui run build`（= `tsc -b && vite build`） |
@@ -153,7 +154,7 @@ Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desk
 2. 在 `src-tauri` 中注册命令，函数名用 snake_case，与命令名一致。
 3. 参数与返回值用契约 §5 的领域模型结构，JSON 侧 `snake_case`；前端 store 内部再转 camelCase。
 4. **必经一步**：在 `docs/contract.md` §7 命令表与 `docs/ipc.md` 补命令签名（参数、返回、可能的错误）。
-   命令只在这两处登记，AGENT 不另立清单；`profiles_list` / `profiles_switch` / `rooms_reconnect` 等既有命令同样只在此维护。
+   命令只在这两处登记，AGENT 不另立清单；`accounts_list` / `account_switch` / `rooms_reconnect` 等既有命令同样只在此维护。
 5. 检查事件方向是否需要配对事件，需要时同步契约 §7 与 `docs/ipc.md` 的事件清单。
 6. 不得把 B 站 URL、字段下标或签名细节带进命令参数或返回值；上游差异由 `bili` 归一化。
 

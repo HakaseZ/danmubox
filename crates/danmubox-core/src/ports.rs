@@ -53,24 +53,78 @@ pub enum QrState {
     Expired,
 }
 
+/// 一个**账号**：一份具名凭据，外加它的登录状态与身份（`docs/contract.md` §5）。
+///
+/// 「账号」在存储上就是 `config.toml` 里的一份 `[profiles.<name>]`（契约 §4.1），
+/// 但对外一律叫账号。游客态**不是**账号：没有具名凭据就没有条目。
+/// `logged_in = false` 的账号仍然存在——它是「登出后留下的槽位」，
+/// 可以再登录回来，也可以删掉。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Account {
+    /// 账号名：`config.toml` 的表键，也是界面用来切换 / 删除的标识。
+    pub name: String,
+    /// 已登录时的昵称；未登录或求证失败时为空串。
+    pub nickname: String,
+    /// 已登录时的 uid；未登录时退回凭据里记着的 `DedeUserID`（可能为 0）。
+    pub uid: i64,
+    /// 已登录时的头像地址；未登录或求证失败时为空串（界面据此决定是否渲染头像）。
+    pub face: String,
+    /// 凭据是否有效。以 `nav` 求证为准，不只是「字段齐不齐」。
+    pub logged_in: bool,
+    /// 是否是当前生效的账号。
+    pub active: bool,
+}
+
+/// 扫码轮询结果：归一化状态 + **确认时**落盘的那个账号。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QrPoll {
+    pub state: QrState,
+    /// 只有 `state == Confirmed` 时是 `Some`——那一次凭据已经落盘、账号已经存在。
+    pub account: Option<Account>,
+}
+
 #[async_trait]
 pub trait AuthProvider: Send + Sync {
+    /// 当前登录态（不含任何 Cookie 值）。
     async fn session(&self) -> Result<SessionState>;
-    async fn begin_qr(&self) -> Result<QrChallenge>;
-    async fn poll_qr(&self, key: &str) -> Result<QrState>;
-    async fn logout(&self) -> Result<()>;
-    async fn profiles(&self) -> Result<Vec<String>>;
-    async fn switch_profile(&self, name: &str) -> Result<SessionState>;
 
-    /// 新建一个空 profile 并把它设为当前 profile；凭据随后由扫码 / 手填入。
+    /// 列出全部账号，**每个账号都带登录状态与身份**（昵称 / uid / 头像）。
     ///
-    /// 名字非法或重复返回 `BAD_REQUEST`——**绝不覆盖**已有 profile。
-    /// 新 profile 没有凭据，因此返回的会话是游客态。
-    async fn create_profile(&self, name: &str) -> Result<SessionState>;
+    /// 有凭据的账号逐个向 `nav` 求证——字段齐全不等于凭据有效（契约 §7 的
+    /// 判定口径与 `session` 一致）：凭据失效才算未登录，网络错误**不改**登录态。
+    /// 各账号的求证必须并发发起，且单个账号失败不影响其余账号照常列出。
+    async fn accounts(&self) -> Result<Vec<Account>>;
 
-    /// 删除一个 profile。不许删掉最后一个（配置里始终留一个身份）；
-    /// 删的若是当前 profile，则把当前指向切到剩下的第一个。
-    async fn remove_profile(&self, name: &str) -> Result<SessionState>;
+    /// 取回二维码内容。
+    ///
+    /// `target` 为 `None` = **新增一个账号**（账号名在确认后按昵称自动生成，
+    /// 用户不需要先起名）；`Some(name)` = 给该账号重新登录，目标不存在报 `NOT_FOUND`。
+    /// 新一轮扫码作废上一轮尚未消费的 `key`。
+    async fn begin_qr(&self, target: Option<&str>) -> Result<QrChallenge>;
+
+    /// 轮询扫码状态；`Confirmed` 时由实现**完成落盘**并返回该账号。
+    ///
+    /// `key` 从未开始或已被消费 → `NOT_FOUND`（终态：确认与失效都会消费掉 `key`）。
+    async fn poll_qr(&self, key: &str) -> Result<QrPoll>;
+
+    /// 手填 Cookie 建成一个账号。
+    ///
+    /// `SESSDATA` / `bili_jct` / `DedeUserID` 缺一即 `BAD_REQUEST`；`name` 缺省时
+    /// 按昵称自动生成，给了名字就写进那个账号（已存在 = 重新登录，覆盖其凭据）。
+    /// 返回的账号即当前账号。
+    async fn login_cookie(&self, cookie: &str, name: Option<&str>) -> Result<Account>;
+
+    /// 切换当前账号，返回切换后的会话。
+    async fn switch_account(&self, name: &str) -> Result<SessionState>;
+
+    /// 登出：清空凭据但**保留账号条目**（`None` = 当前账号）。
+    ///
+    /// 清空后那个账号仍在列表里，只是 `logged_in = false`——这样既能退回游客态，
+    /// 又留住了这个账号的槽位。返回登出之后的会话。
+    async fn logout(&self, name: Option<&str>) -> Result<SessionState>;
+
+    /// 删除账号：不许删掉最后一个；删的是当前账号则自动切到剩下的第一个。
+    async fn remove_account(&self, name: &str) -> Result<SessionState>;
 }
 
 #[async_trait]

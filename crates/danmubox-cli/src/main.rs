@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use danmubox_bili::{BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliSender, BiliWallet};
+use danmubox_bili::{
+    BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliSender, BiliWallet,
+};
 use danmubox_core::ports::{
     AuthProvider, DanmakuSender, EmoteProvider, LiveSource, QrState, RoomAdmin, RoomCatalog,
     WalletProvider,
@@ -45,14 +47,19 @@ enum Command {
     },
     /// 打印当前登录态（不含任何 Cookie 值）
     Session,
-    /// 扫码登录：终端渲染二维码，轮询直至确认或超时
+    /// 扫码登录：不带账号名 = 新增账号（确认后按昵称自动起名）；带 = 给该账号重新登录
     Login {
+        /// 要重新登录的账号名；缺省则新增一个账号
+        target: Option<String>,
         /// 超时时间（秒）
         #[arg(long, default_value_t = 180)]
         timeout: u64,
     },
-    /// 登出：清空当前 profile 的凭据字段
-    Logout,
+    /// 登出：清空账号的凭据字段（账号条目保留，之后还能再登录回来）
+    Logout {
+        /// 账号名；缺省 = 当前账号
+        target: Option<String>,
+    },
     /// 发送一条弹幕（需登录）
     Send {
         /// 房间号 / 短号 / URL
@@ -69,16 +76,26 @@ enum Command {
         #[arg(long)]
         emote: Option<String>,
     },
-    /// 列出凭据文件中的 profiles；`--use` 切换、`--create` 新建、`--remove` 删除
-    Profiles {
+    /// 列出账号（含登录状态与身份）；`--use` 切换、`--create` 扫码新增、`--remove` 删除
+    Accounts {
         #[arg(long = "use")]
-        use_profile: Option<String>,
-        /// 新建一个空 profile 并设为当前（凭据随后靠扫码或手填）
+        use_account: Option<String>,
+        /// 新增账号：发起扫码，确认后按昵称自动起名（不必先起名再扫码）
         #[arg(long)]
-        create: Option<String>,
-        /// 删除一个 profile（不许删掉最后一个）
+        create: bool,
+        /// 扫码新增的等待时长（秒）
+        #[arg(long, default_value_t = 180)]
+        timeout: u64,
+        /// 删除一个账号（不许删掉最后一个）
         #[arg(long)]
         remove: Option<String>,
+        /// 手填 Cookie 建成账号；只接受 `-`（从标准输入读 `k=v; k=v`），
+        /// 需要含 SESSDATA / bili_jct / DedeUserID
+        #[arg(long, value_name = "-")]
+        cookie: Option<String>,
+        /// 与 `--cookie` 搭配：写进这个账号（缺省按昵称自动起名）
+        #[arg(long)]
+        name: Option<String>,
     },
     /// 打印电池余额（需登录）
     Wallet,
@@ -115,21 +132,29 @@ async fn main() -> Result<()> {
             quiet,
         } => watch(&store, input, seconds, quiet).await?,
         Command::Session => print_session(&store).await?,
-        Command::Login { timeout } => login(&store, timeout).await?,
-        Command::Logout => {
-            let auth = BiliAuth::new(Arc::clone(&store))?;
-            auth.logout().await?;
-            println!(
-                "# 已登出，{} 中当前 profile 的凭据已清空",
-                store.active_name()
-            );
-            print_session(&store).await?;
-        }
-        Command::Profiles {
-            use_profile,
+        Command::Login { target, timeout } => qr_login(&store, target.as_deref(), timeout).await?,
+        Command::Logout { target } => logout(&store, target.as_deref()).await?,
+        Command::Accounts {
+            use_account,
             create,
+            timeout,
             remove,
-        } => profiles(&store, use_profile, create, remove).await?,
+            cookie,
+            name,
+        } => {
+            accounts(
+                &store,
+                AccountsArgs {
+                    use_account,
+                    create,
+                    timeout,
+                    remove,
+                    cookie,
+                    name,
+                },
+            )
+            .await?
+        }
         Command::Send {
             room,
             text,
@@ -148,7 +173,10 @@ async fn main() -> Result<()> {
 
 async fn wallet(store: &Arc<ConfigStore>) -> Result<()> {
     let wallet = BiliWallet::new(Arc::clone(store))?;
-    println!("# 电池余额：{}", wallet.balance().await.context("查询余额失败")?);
+    println!(
+        "# 电池余额：{}",
+        wallet.balance().await.context("查询余额失败")?
+    );
     Ok(())
 }
 
@@ -194,7 +222,10 @@ async fn emotes(store: &Arc<ConfigStore>, room: &str) -> Result<()> {
     for (kind, items) in &by_kind {
         println!("  [{kind}] {} 个", items.len());
         for emote in items.iter().take(8) {
-            println!("      {:<12} unique={:<22} {}", emote.text, emote.emoticon_unique, emote.url);
+            println!(
+                "      {:<12} unique={:<22} {}",
+                emote.text, emote.emoticon_unique, emote.url
+            );
         }
     }
     Ok(())
@@ -447,18 +478,14 @@ async fn print_session(store: &Arc<ConfigStore>) -> Result<()> {
     let auth = BiliAuth::new(Arc::clone(store))?;
     let state = auth.session().await?;
     println!("{}", session_json(&state)?);
-    println!("# 凭据文件：{}", config_path().display());
+    println!("# 凭据文件：{}", store.path().display());
     Ok(())
 }
 
-async fn login(store: &Arc<ConfigStore>, timeout_secs: u64) -> Result<()> {
+/// 扫码登录：`target` 缺省 = 新增账号（先扫码后起名），给名字 = 给该账号重新登录。
+async fn qr_login(store: &Arc<ConfigStore>, target: Option<&str>, timeout_secs: u64) -> Result<()> {
     let auth = BiliAuth::new(Arc::clone(store))?;
-    if auth.session().await?.logged_in {
-        println!("# 已是登录态，无需扫码；如需换号请先 `logout`");
-        return print_session(store).await;
-    }
-
-    let challenge = auth.begin_qr().await.context("获取登录二维码失败")?;
+    let challenge = auth.begin_qr(target).await.context("获取登录二维码失败")?;
     let code = qrcode::QrCode::new(challenge.url.as_bytes()).context("二维码编码失败")?;
     println!(
         "{}",
@@ -466,7 +493,11 @@ async fn login(store: &Arc<ConfigStore>, timeout_secs: u64) -> Result<()> {
             .quiet_zone(true)
             .build()
     );
-    println!("# 用 B 站客户端扫码；qrcode_key={}", challenge.key);
+    match target {
+        Some(name) => println!("# 给账号 `{name}` 重新登录：用 B 站客户端扫码"),
+        None => println!("# 新增账号：用 B 站客户端扫码，确认后按昵称自动起名"),
+    }
+    println!("# qrcode_key={}", challenge.key);
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
     let mut last: Option<QrState> = None;
@@ -476,14 +507,24 @@ async fn login(store: &Arc<ConfigStore>, timeout_secs: u64) -> Result<()> {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let state = auth.poll_qr(&challenge.key).await?;
-        if Some(state) != last {
-            println!("# 扫码状态：{state:?}");
-            last = Some(state);
+        let poll = auth.poll_qr(&challenge.key).await?;
+        if Some(poll.state) != last {
+            println!("# 扫码状态：{:?}", poll.state);
+            last = Some(poll.state);
         }
-        match state {
+        match poll.state {
             QrState::Confirmed => {
-                println!("# 登录成功，凭据已写入 {}", config_path().display());
+                match poll.account {
+                    Some(account) => println!(
+                        "# 登录成功：账号 `{}`（昵称 {}，uid {}）已写入 {}",
+                        account.name,
+                        account.nickname,
+                        account.uid,
+                        store.path().display()
+                    ),
+                    // 确认却不带账号是契约外的情形：照实说，不假装成功。
+                    None => println!("# 已确认，但后端没有返回账号"),
+                }
                 return print_session(store).await;
             }
             QrState::Expired => {
@@ -495,37 +536,107 @@ async fn login(store: &Arc<ConfigStore>, timeout_secs: u64) -> Result<()> {
     }
 }
 
-async fn profiles(
-    store: &Arc<ConfigStore>,
-    use_profile: Option<String>,
-    create: Option<String>,
-    remove: Option<String>,
-) -> Result<()> {
+async fn logout(store: &Arc<ConfigStore>, target: Option<&str>) -> Result<()> {
     let auth = BiliAuth::new(Arc::clone(store))?;
-    if let Some(name) = create {
-        let state = auth.create_profile(&name).await?;
-        println!("# 已新建 profile `{name}` 并设为当前（凭据为空，请扫码或手填）");
-        println!("{}", session_json(&state)?);
+    let state = auth.logout(target).await?;
+    let name = target.unwrap_or(&state.active_profile);
+    println!("# 已登出账号 `{name}`（条目保留，凭据已清空，可再扫码登回来）");
+    print_session(store).await
+}
+
+/// 账号表的打印：当前账号打星，逐行给出登录状态与身份。
+async fn print_accounts(auth: &BiliAuth) -> Result<()> {
+    let list = auth.accounts().await?;
+    if list.is_empty() {
+        println!("# 还没有任何账号：`accounts --create` 或 `login` 扫码新增一个");
         return Ok(());
     }
-    if let Some(name) = remove {
-        let state = auth.remove_profile(&name).await?;
-        println!("# 已删除 profile `{name}`");
+    println!("# 账号 {} 个（* = 当前）", list.len());
+    for account in list {
+        println!(
+            "{} {:<16} {:<7} uid={:<12} {}",
+            if account.active { "*" } else { " " },
+            account.name,
+            if account.logged_in {
+                "已登录"
+            } else {
+                "未登录"
+            },
+            account.uid,
+            account.nickname
+        );
+    }
+    Ok(())
+}
+
+/// `accounts` 的参数：Action 之间互斥，因此先收成一个结构体再分发。
+struct AccountsArgs {
+    use_account: Option<String>,
+    create: bool,
+    timeout: u64,
+    remove: Option<String>,
+    cookie: Option<String>,
+    name: Option<String>,
+}
+
+async fn accounts(store: &Arc<ConfigStore>, args: AccountsArgs) -> Result<()> {
+    let auth = BiliAuth::new(Arc::clone(store))?;
+    let actions = [
+        args.create,
+        args.remove.is_some(),
+        args.use_account.is_some(),
+        args.cookie.is_some(),
+    ]
+    .iter()
+    .filter(|flag| **flag)
+    .count();
+    if actions > 1 {
+        anyhow::bail!("`--create` / `--remove` / `--use` / `--cookie` 只能给一个");
+    }
+    if args.name.is_some() && args.cookie.is_none() {
+        // 扫码新增与删除 / 切换都不需要名字：名字由昵称派生，或数据里已有。
+        anyhow::bail!("`--name` 只与 `--cookie` 搭配使用（扫码新增的名字按昵称自动生成）");
+    }
+
+    // 新增账号没有「先起名」这一步：直接走扫码，名字在确认后由昵称派生。
+    if args.create {
+        return qr_login(store, None, args.timeout).await;
+    }
+    if let Some(name) = args.remove {
+        let state = auth.remove_account(&name).await?;
+        println!("# 已删除账号 `{name}`");
         println!("{}", session_json(&state)?);
+        print_accounts(&auth).await?;
         return Ok(());
     }
-    if let Some(name) = use_profile {
-        let state = auth.switch_profile(&name).await?;
-        println!("# 已切换到 profile `{name}`");
+    if let Some(name) = args.use_account {
+        let state = auth.switch_account(&name).await?;
+        println!("# 已切换到账号 `{name}`");
         println!("{}", session_json(&state)?);
+        print_accounts(&auth).await?;
         return Ok(());
     }
-    let names = auth.profiles().await?;
-    let active = store.active_name();
-    for name in names {
-        println!("{}{}", if name == active { "* " } else { "  " }, name);
+    if let Some(cookie) = args.cookie {
+        // 只收 `-`：把凭据写进命令行会让它进进程表与 shell 历史（`docs/auth.md` §12 红线 9）。
+        if cookie != "-" {
+            anyhow::bail!(
+                "`--cookie` 只接受 `-`（从标准输入读）：凭据写进命令行会进进程表与 shell 历史"
+            );
+        }
+        let mut raw = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw)
+            .context("从标准输入读取 Cookie 失败")?;
+        let account = auth.login_cookie(&raw, args.name.as_deref()).await?;
+        println!(
+            "# 已用 Cookie 建成账号 `{}`（昵称 {}，uid {}）并设为当前",
+            account.name, account.nickname, account.uid
+        );
+        print_session(store).await?;
+        print_accounts(&auth).await?;
+        return Ok(());
     }
-    println!("# 凭据文件：{}", config_path().display());
+    print_accounts(&auth).await?;
+    println!("# 凭据文件：{}", store.path().display());
     Ok(())
 }
 

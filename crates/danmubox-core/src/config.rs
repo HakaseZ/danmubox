@@ -2,11 +2,13 @@
 //!
 //! 形态：**明文 TOML**，权限 `0600`，写入走临时文件 + rename。
 //! 多账号用 `[profiles.<name>]` 承载，`active_profile` 指定当前生效者。
+//! 存储层仍叫 profile（表键就是 `[profiles.<name>]`，见契约 §4.1），
+//! 但对外（IPC / 文档 / 界面）一律叫「账号」——一个账号 = 一份具名凭据。
 //!
 //! 本模块只负责「存与取」，不做任何网络请求；登录流程在 `danmubox-bili`。
 //! 凭据值**绝不**出现在日志里——`Debug` 实现已手写作遮蔽处理。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -87,9 +89,16 @@ impl Profile {
         }
     }
 
-    /// 清空全部字段（登出）。
-    pub fn clear(&mut self) {
-        *self = Self::default();
+    /// 清空**账号级**凭据字段（登出）。
+    ///
+    /// `buvid3` / `buvid4` 是**设备级**标识、不绑定账号，刻意保留：清掉它们会让
+    /// 每次登出都换一次设备指纹，反而触发上游风控重新评估（`docs/auth.md` §3.3）。
+    pub fn clear_credentials(&mut self) {
+        self.sessdata.clear();
+        self.bili_jct.clear();
+        self.dede_user_id.clear();
+        self.dede_user_id_ck_md5.clear();
+        self.sid.clear();
     }
 }
 
@@ -126,22 +135,22 @@ impl std::fmt::Debug for AppConfig {
 
 pub const DEFAULT_PROFILE: &str = "default";
 
-/// profile 名允许的最大长度。
-const PROFILE_NAME_MAX: usize = 32;
+/// 账号名允许的最大长度。
+const ACCOUNT_NAME_MAX: usize = 32;
 
-/// 校验 profile 名。
+/// 校验**显式给出**的账号名。
 ///
 /// 只用 `[A-Za-z0-9_-]`：名字既是 `config.toml` 里的表键（`[profiles.<name>]`），
 /// 也是界面上可输入、可对比的标识。放行空白与引号等字符会让 TOML 往返需要转义，
 /// 也让「同名 / 名字里只有空格」这类输入无法给出清晰结论，因此在入口收敛。
-fn validate_profile_name(name: &str) -> Result<String> {
+pub fn validate_account_name(name: &str) -> Result<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(Error::BadRequest("profile 名不能为空".into()));
+        return Err(Error::BadRequest("账号名不能为空".into()));
     }
-    if trimmed.len() > PROFILE_NAME_MAX {
+    if trimmed.len() > ACCOUNT_NAME_MAX {
         return Err(Error::BadRequest(format!(
-            "profile 名不能超过 {PROFILE_NAME_MAX} 个字符"
+            "账号名不能超过 {ACCOUNT_NAME_MAX} 个字符"
         )));
     }
     if !trimmed
@@ -149,11 +158,32 @@ fn validate_profile_name(name: &str) -> Result<String> {
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         return Err(Error::BadRequest(
-            "profile 名只能包含字母、数字、下划线与连字符".into(),
+            "账号名只能包含字母、数字、下划线与连字符".into(),
         ));
     }
     // 收敛两端的空白：`"  work  "` 与 `"work"` 视为同一个名字，避免造出看不见的重名。
     Ok(trimmed.to_string())
+}
+
+/// 按昵称派生一个合法账号名；昵称里没有可用字符时退回 `uid<数字>`。
+///
+/// 这条规则是给**扫码新增**用的：用户不该先给账号起名再扫码，所以名字由扫码得到的
+/// 昵称自动生成。昵称常常是中文，而账号名只允许 `[A-Za-z0-9_-]`
+/// （见 `validate_account_name`），因此这里**不做转写**——只保留 ASCII 字母数字与
+/// `-`/`_`，其余字符（含全部中文）直接丢掉；一个字符都不剩时用 uid 兜底，
+/// 保证自动命名一定有结果，也不会因为「中文昵称被清空」而让两个账号撞同一个名字。
+pub fn account_name_from(nickname: &str, uid: i64) -> String {
+    let cleaned: String = nickname
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    let cleaned = cleaned.trim_matches(|c| c == '_' || c == '-');
+    let base = if cleaned.is_empty() {
+        format!("uid{uid}")
+    } else {
+        cleaned.to_string()
+    };
+    base.chars().take(ACCOUNT_NAME_MAX).collect()
 }
 
 /// 凭据文件的内存态 + 落盘点。适配器通过它读取当前 Cookie，
@@ -230,43 +260,69 @@ impl ConfigStore {
             .collect()
     }
 
-    /// 切换当前 profile；目标不存在时报 `NOT_FOUND`。
+    /// 全部账号（名字 + 凭据），按名字字典序。`accounts_list` 一次取够，
+    /// 免得每个账号都再抢一次读锁。
+    pub fn accounts(&self) -> Vec<(String, Profile)> {
+        self.config
+            .read()
+            .expect("config poisoned")
+            .profiles
+            .iter()
+            .map(|(name, profile)| (name.clone(), profile.clone()))
+            .collect()
+    }
+
+    /// 某个账号的凭据；不存在返回 `None`。
+    pub fn profile(&self, name: &str) -> Option<Profile> {
+        self.config
+            .read()
+            .expect("config poisoned")
+            .profiles
+            .get(name)
+            .cloned()
+    }
+
+    /// 给一个按昵称派生的名字找一个没被占用的版本：先试它本身，
+    /// 被占用则依次试 `<base>-2`、`<base>-3`…（加后缀时保持总长不超上限）。
+    pub fn unique_account_name(&self, base: &str) -> String {
+        let taken: BTreeSet<String> = self.names().into_iter().collect();
+        if !taken.contains(base) {
+            return base.to_string();
+        }
+        for n in 2..=taken.len() + 2 {
+            let suffix = format!("-{n}");
+            let keep = ACCOUNT_NAME_MAX.saturating_sub(suffix.len());
+            let candidate = format!("{}{suffix}", base.chars().take(keep).collect::<String>());
+            if !taken.contains(&candidate) {
+                return candidate;
+            }
+        }
+        // 候选数与已占用的名字数相同，不可能全被占；这里只是让编译器满意。
+        unreachable!("候选名数量多于已占用名字数，必然存在空位")
+    }
+
+    /// 切换当前账号；目标不存在时报 `NOT_FOUND`。
     pub fn set_active(&self, name: &str) -> Result<()> {
         let mut config = self.snapshot();
         if !config.profiles.contains_key(name) {
-            return Err(Error::NotFound(format!("profile `{name}` 不存在")));
+            return Err(Error::NotFound(format!("账号 `{name}` 不存在")));
         }
         config.active_profile = name.to_string();
         self.persist(&config)
     }
 
-    /// 新建一个空 profile 并把它设为当前 profile（凭据随后由扫码或手填入）。
+    /// 删除一个账号。
     ///
-    /// 名字重复、非法时返回 `BAD_REQUEST`——**绝不覆盖**已有 profile 的凭据。
-    /// 新 profile 的凭据字段全空，因此调用后即为游客态，直到登录流程写回凭据。
-    pub fn create_profile(&self, name: &str) -> Result<()> {
-        let name = validate_profile_name(name)?;
-        let mut config = self.snapshot();
-        if config.profiles.contains_key(&name) {
-            return Err(Error::BadRequest(format!("profile `{name}` 已存在")));
-        }
-        config.profiles.insert(name.clone(), Profile::default());
-        config.active_profile = name;
-        self.persist(&config)
-    }
-
-    /// 删除一个 profile。
-    ///
-    /// 两条护栏：不能删掉最后一个 profile（配置里至少要留一个有效身份）；
-    /// 删的若是当前 profile，则把当前指向切到剩下的第一个，保证
+    /// 两条护栏：不能删掉最后一个账号（配置里至少要留一个身份）；
+    /// 删的若是当前账号，则把当前指向切到剩下的第一个，保证
     /// `active_profile` 始终指向一个存在的条目。
-    pub fn remove_profile(&self, name: &str) -> Result<()> {
+    pub fn remove_account(&self, name: &str) -> Result<()> {
         let mut config = self.snapshot();
         if !config.profiles.contains_key(name) {
-            return Err(Error::NotFound(format!("profile `{name}` 不存在")));
+            return Err(Error::NotFound(format!("账号 `{name}` 不存在")));
         }
         if config.profiles.len() <= 1 {
-            return Err(Error::BadRequest("不能删除最后一个 profile".into()));
+            return Err(Error::BadRequest("不能删除最后一个账号".into()));
         }
         config.profiles.remove(name);
         if config.active_profile == name {
@@ -276,29 +332,42 @@ impl ConfigStore {
                 .keys()
                 .next()
                 .cloned()
-                .expect("至少剩一个 profile");
+                .expect("至少剩一个账号");
             config.active_profile = next;
         }
         self.persist(&config)
     }
 
-    /// 写入当前 profile（登录成功后调用）；profile 不存在则创建。
-    pub fn upsert_active(&self, profile: Profile) -> Result<()> {
+    /// 写入某个账号的凭据：不存在则新建，已存在则**覆盖**（重新登录同一个账号）。
+    ///
+    /// `make_active` 决定写入后是否把它设为当前账号。调用方负责「重名怎么办」：
+    /// 扫码新增用 `unique_account_name` 避开已占用的名字，手填 Cookie 时显式给名字
+    /// 就是要覆盖那个账号的凭据。
+    pub fn save_profile(&self, name: &str, profile: Profile, make_active: bool) -> Result<()> {
+        let name = validate_account_name(name)?;
         let mut config = self.snapshot();
-        let name = config.active_profile.clone();
-        config.profiles.insert(name, profile);
+        config.profiles.insert(name.clone(), profile);
+        if make_active {
+            config.active_profile = name;
+        }
         self.persist(&config)
     }
 
-    /// 清空当前 profile 的凭据字段，保留 profile 条目（登出）。
-    pub fn clear_active_credentials(&self) -> Result<()> {
+    /// 清空一个账号的凭据字段，**保留账号条目**（登出）。`None` = 当前账号。
+    ///
+    /// 保留条目是刻意的：退回游客态之后这个账号的槽位还在，界面能继续显示
+    /// 「已登出的账号」而不是让它凭空消失（`REQUIREMENTS.md` §2.5）。
+    pub fn clear_credentials(&self, name: Option<&str>) -> Result<()> {
+        let explicit = name.is_some();
         let mut config = self.snapshot();
-        let name = config.active_profile.clone();
-        match config.profiles.get_mut(&name) {
-            Some(profile) => profile.clear(),
-            None => {
-                config.profiles.insert(name, Profile::default());
-            }
+        let target = name
+            .map(str::to_string)
+            .unwrap_or_else(|| config.active_profile.clone());
+        match config.profiles.get_mut(&target) {
+            Some(profile) => profile.clear_credentials(),
+            // 全新安装（零账号）下的登出：没有条目可清，不是错误。
+            None if !explicit => return Ok(()),
+            None => return Err(Error::NotFound(format!("账号 `{target}` 不存在"))),
         }
         self.persist(&config)
     }
@@ -439,11 +508,15 @@ mod tests {
         let path = dir.join("config.toml");
         let store = ConfigStore::load(path.clone()).unwrap();
         store
-            .upsert_active(profile(&[
-                ("sessdata", "S1"),
-                ("bili_jct", "J1"),
-                ("dede_user_id", "1"),
-            ]))
+            .save_profile(
+                DEFAULT_PROFILE,
+                profile(&[
+                    ("sessdata", "S1"),
+                    ("bili_jct", "J1"),
+                    ("dede_user_id", "1"),
+                ]),
+                true,
+            )
             .unwrap();
         assert!(store.is_logged_in());
 
@@ -467,11 +540,11 @@ mod tests {
         let path = dir.join("config.toml");
         let store = ConfigStore::load(path.clone()).unwrap();
         store
-            .upsert_active(profile(&[
-                ("sessdata", "S"),
-                ("bili_jct", "J"),
-                ("dede_user_id", "1"),
-            ]))
+            .save_profile(
+                DEFAULT_PROFILE,
+                profile(&[("sessdata", "S"), ("bili_jct", "J"), ("dede_user_id", "1")]),
+                true,
+            )
             .unwrap();
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
@@ -489,14 +562,14 @@ mod tests {
         let path = dir.join("config.toml");
         let store = ConfigStore::load(path.clone()).unwrap();
         store
-            .upsert_active(profile(&[
-                ("sessdata", "A"),
-                ("bili_jct", "JA"),
-                ("dede_user_id", "1"),
-            ]))
+            .save_profile(
+                DEFAULT_PROFILE,
+                profile(&[("sessdata", "A"), ("bili_jct", "JA"), ("dede_user_id", "1")]),
+                true,
+            )
             .unwrap();
 
-        // 手工再造一个 profile（模拟用户编辑文件）
+        // 手工再造一个账号（模拟用户编辑文件）
         let mut config = store.snapshot();
         config.profiles.insert(
             "work".into(),
@@ -523,47 +596,66 @@ mod tests {
         assert_eq!(
             store.set_active("nope").unwrap_err().code(),
             "NOT_FOUND",
-            "切到不存在的 profile 必须报 NOT_FOUND"
+            "切到不存在的账号必须报 NOT_FOUND"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn creating_a_profile_adds_it_and_makes_it_current() {
-        let dir = temp_dir("create");
+    fn saving_an_account_creates_or_overwrites_it() {
+        let dir = temp_dir("save");
         let path = dir.join("config.toml");
         let store = ConfigStore::load(path.clone()).unwrap();
         store
-            .upsert_active(profile(&[
-                ("sessdata", "S"),
-                ("bili_jct", "J"),
-                ("dede_user_id", "1"),
-            ]))
+            .save_profile(
+                "default",
+                profile(&[("sessdata", "S"), ("bili_jct", "J"), ("dede_user_id", "1")]),
+                true,
+            )
             .unwrap();
         assert!(store.is_logged_in());
 
-        store.create_profile("work").unwrap();
-        assert_eq!(store.active_name(), "work");
-        assert!(
-            store.active().unwrap().sessdata.is_empty(),
-            "新 profile 的凭据必须留空，等登录流程填入"
-        );
-        assert!(!store.is_logged_in(), "空凭据即游客态");
-        assert_eq!(store.names(), vec!["default".to_string(), "work".to_string()]);
+        // 同名再写一次 = 重新登录：覆盖凭据，不是再造一个账号
+        store
+            .save_profile(
+                "default",
+                profile(&[
+                    ("sessdata", "S2"),
+                    ("bili_jct", "J2"),
+                    ("dede_user_id", "2"),
+                ]),
+                true,
+            )
+            .unwrap();
+        assert_eq!(store.names(), vec!["default".to_string()]);
+        assert_eq!(store.active().unwrap().sessdata, "S2");
+
+        // make_active = false：只写凭据，不动当前账号指针
+        store
+            .save_profile(
+                "work",
+                profile(&[("sessdata", "W"), ("bili_jct", "WJ"), ("dede_user_id", "9")]),
+                false,
+            )
+            .unwrap();
+        assert_eq!(store.active_name(), "default");
+        assert_eq!(store.profile("work").unwrap().sessdata, "W");
+        assert!(store.profile("ghost").is_none(), "没写过的账号取不到");
 
         let reloaded = ConfigStore::load(path.clone()).unwrap();
-        assert_eq!(reloaded.active_name(), "work");
-        let raw = std::fs::read_to_string(&path).unwrap();
-        assert!(raw.contains("sessdata = \"S\""), "不得覆盖已有 profile 的凭据");
-
+        assert_eq!(reloaded.active_name(), "default");
         assert_eq!(
-            store.create_profile("work").unwrap_err().code(),
-            "BAD_REQUEST",
-            "重名必须拒绝，不得覆盖"
+            reloaded.names(),
+            vec!["default".to_string(), "work".to_string()]
         );
+        assert_eq!(reloaded.accounts().len(), 2);
+
         for bad in ["", "   ", "a b", "a/b", "中文名", &"x".repeat(33)] {
             assert_eq!(
-                store.create_profile(bad).unwrap_err().code(),
+                store
+                    .save_profile(bad, Profile::default(), true)
+                    .unwrap_err()
+                    .code(),
                 "BAD_REQUEST",
                 "{bad:?} 必须拒绝"
             );
@@ -572,37 +664,65 @@ mod tests {
     }
 
     #[test]
-    fn removing_a_profile_keeps_one_and_repairs_the_pointer() {
+    fn account_name_comes_from_the_nickname_with_a_uid_fallback() {
+        // 中文昵称一个可用字符都不剩 → 用 uid 兜底，绝不能生成空名字
+        assert_eq!(account_name_from("张三", 42), "uid42");
+        assert_eq!(account_name_from("Kirikosama", 7), "Kirikosama");
+        assert_eq!(account_name_from("Zhang San", 7), "ZhangSan");
+        assert_eq!(account_name_from("_-_", 5), "uid5", "只剩分隔符也算空");
+        assert_eq!(account_name_from(&"x".repeat(40), 1).chars().count(), 32);
+
+        // 重名自动加后缀
+        let dir = temp_dir("names");
+        let store = ConfigStore::load(dir.join("config.toml")).unwrap();
+        assert_eq!(store.unique_account_name("Kirikosama"), "Kirikosama");
+        store
+            .save_profile("Kirikosama", Profile::default(), false)
+            .unwrap();
+        assert_eq!(store.unique_account_name("Kirikosama"), "Kirikosama-2");
+        store
+            .save_profile("Kirikosama-2", Profile::default(), false)
+            .unwrap();
+        assert_eq!(store.unique_account_name("Kirikosama"), "Kirikosama-3");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_an_account_keeps_one_and_repairs_the_pointer() {
         let dir = temp_dir("remove");
         let path = dir.join("config.toml");
         let store = ConfigStore::load(path.clone()).unwrap();
         store
-            .upsert_active(profile(&[
-                ("sessdata", "S"),
-                ("bili_jct", "J"),
-                ("dede_user_id", "1"),
-            ]))
+            .save_profile(
+                "default",
+                profile(&[("sessdata", "S"), ("bili_jct", "J"), ("dede_user_id", "1")]),
+                true,
+            )
             .unwrap();
-        store.create_profile("work").unwrap();
+        store
+            .save_profile("work", Profile::default(), true)
+            .unwrap();
         store.set_active("default").unwrap();
 
-        store.remove_profile("work").unwrap();
+        store.remove_account("work").unwrap();
         assert_eq!(store.names(), vec!["default".to_string()]);
         assert_eq!(store.active_name(), "default", "删非当前项不动指针");
 
         assert_eq!(
-            store.remove_profile("default").unwrap_err().code(),
+            store.remove_account("default").unwrap_err().code(),
             "BAD_REQUEST",
-            "不能删掉最后一个 profile"
+            "不能删掉最后一个账号"
         );
         assert_eq!(
-            store.remove_profile("ghost").unwrap_err().code(),
+            store.remove_account("ghost").unwrap_err().code(),
             "NOT_FOUND"
         );
 
-        store.create_profile("work").unwrap();
+        store
+            .save_profile("work", Profile::default(), false)
+            .unwrap();
         store.set_active("default").unwrap();
-        store.remove_profile("default").unwrap();
+        store.remove_account("default").unwrap();
         assert_eq!(store.active_name(), "work", "删当前项要切到剩下的条目");
         assert_eq!(
             ConfigStore::load(path.clone()).unwrap().active_name(),
@@ -613,26 +733,68 @@ mod tests {
     }
 
     #[test]
-    fn logout_clears_credentials_but_keeps_the_profile_entry() {
+    fn logout_clears_credentials_but_keeps_the_account_entry() {
         let dir = temp_dir("logout");
         let path = dir.join("config.toml");
         let store = ConfigStore::load(path.clone()).unwrap();
         store
-            .upsert_active(profile(&[
-                ("sessdata", "S"),
-                ("bili_jct", "J"),
-                ("dede_user_id", "1"),
-            ]))
+            .save_profile(
+                "default",
+                profile(&[
+                    ("sessdata", "S"),
+                    ("bili_jct", "J"),
+                    ("dede_user_id", "1"),
+                    ("buvid3", "BV3"),
+                ]),
+                true,
+            )
+            .unwrap();
+        store
+            .save_profile(
+                "work",
+                profile(&[("sessdata", "W"), ("bili_jct", "WJ"), ("dede_user_id", "2")]),
+                false,
+            )
             .unwrap();
         assert!(store.is_logged_in());
 
-        store.clear_active_credentials().unwrap();
+        // 指名登出只动那一个账号
+        store.clear_credentials(Some("work")).unwrap();
+        assert!(store.is_logged_in(), "清的是 work，当前账号不受影响");
+        assert!(!store.profile("work").unwrap().is_complete());
+
+        // 缺省 = 当前账号
+        store.clear_credentials(None).unwrap();
         assert!(!store.is_logged_in());
-        assert!(store.cookie_header().is_none());
-        assert_eq!(store.names().len(), 1, "profile 条目保留，只清空字段");
+        let header = store.cookie_header().unwrap_or_default();
+        assert!(
+            !header.contains("SESSDATA") && !header.contains("bili_jct"),
+            "账号凭据必须清空，实际 {header}"
+        );
+        assert_eq!(store.names().len(), 2, "账号条目保留，只清空字段");
+        assert_eq!(
+            store.profile("default").unwrap().buvid3,
+            "BV3",
+            "设备标识不绑定账号，登出不得清掉（docs/auth.md §3.3）"
+        );
+
+        assert_eq!(
+            store.clear_credentials(Some("ghost")).unwrap_err().code(),
+            "NOT_FOUND"
+        );
 
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(!raw.contains("SESSDATA") && !raw.contains("sessdata = \"S\""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn logout_without_any_account_is_a_no_op() {
+        // 全新安装是零账号：此时登出没有条目可清，不该报错。
+        let dir = temp_dir("logout-empty");
+        let store = ConfigStore::load(dir.join("config.toml")).unwrap();
+        store.clear_credentials(None).unwrap();
+        assert!(store.accounts().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -659,12 +821,16 @@ mod tests {
         let store = ConfigStore::load(path).unwrap();
         assert!(store.buvid3().is_none());
         store
-            .upsert_active(profile(&[
-                ("sessdata", "S"),
-                ("bili_jct", "J"),
-                ("dede_user_id", "1"),
-                ("buvid3", "BV3"),
-            ]))
+            .save_profile(
+                DEFAULT_PROFILE,
+                profile(&[
+                    ("sessdata", "S"),
+                    ("bili_jct", "J"),
+                    ("dede_user_id", "1"),
+                    ("buvid3", "BV3"),
+                ]),
+                true,
+            )
             .unwrap();
         assert_eq!(store.buvid3().as_deref(), Some("BV3"));
         let _ = std::fs::remove_dir_all(&dir);

@@ -187,13 +187,18 @@ mod tests {
 
     fn store_with_login(tag: &str) -> Arc<ConfigStore> {
         let store = not_logged_in_store(tag);
+        let name = store.active_name();
         store
-            .upsert_active(Profile {
-                sessdata: "SESSDATA".into(),
-                bili_jct: "JCT".into(),
-                dede_user_id: "42".into(),
-                ..Default::default()
-            })
+            .save_profile(
+                &name,
+                Profile {
+                    sessdata: "SESSDATA".into(),
+                    bili_jct: "JCT".into(),
+                    dede_user_id: "42".into(),
+                    ..Default::default()
+                },
+                true,
+            )
             .expect("写入临时配置");
         store
     }

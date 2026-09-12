@@ -21,10 +21,10 @@ pub mod wbi;
 mod ws;
 
 pub use admin::BiliAdmin;
-pub use auth::{profile_from_cookies, qr_state_from_code, BiliAuth};
+pub use auth::{profile_from_cookie_string, profile_from_cookies, qr_state_from_code, BiliAuth};
 pub use emote::BiliEmotes;
 pub use follow::BiliFollow;
-pub use http::{normalize_room_input, BiliHttp, CookieMode, DanmuInfo};
+pub use http::{normalize_room_input, BiliHttp, CookieMode, DanmuInfo, NavIdentity};
 pub use report::BiliReporter;
 pub use send::{failure_detail, outcome_from_response, swallowed_content, BiliSender, Throttle};
 pub use wallet::BiliWallet;

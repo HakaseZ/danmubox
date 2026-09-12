@@ -48,7 +48,18 @@ pub struct DanmuInfo {
     pub hosts: Vec<String>,
 }
 
-/// Cookie 来源。`Store` 让请求实时读取当前 profile，
+/// `nav` 求证出来的账号身份：`data.mid` / `data.uname` / `data.face`。
+///
+/// 这是账号列表与「当前登录的是谁」的唯一身份来源——凭据文件里只有
+/// `DedeUserID`（uid）与 Cookie，昵称和头像必须问上游要。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NavIdentity {
+    pub uid: i64,
+    pub nickname: String,
+    pub face: String,
+}
+
+/// Cookie 来源。`Store` 让请求实时读取当前账号，
 /// 因此切换账号后无需重建客户端。
 #[derive(Clone)]
 pub enum CookieMode {
@@ -103,10 +114,21 @@ impl BiliHttp {
     }
 
     fn get(&self, url: &str) -> reqwest::RequestBuilder {
+        self.get_with_cookie(url, None)
+    }
+
+    /// `cookie` 显式给出时用它，否则用客户端配置的 Cookie 来源。
+    ///
+    /// 列多个账号时必须能给**每个账号**单独传 Cookie：客户端只有一个
+    /// `ConfigStore` 来源（当前账号），拿它去求证别的账号只会得到同一个身份。
+    fn get_with_cookie(&self, url: &str, cookie: Option<String>) -> reqwest::RequestBuilder {
         // 只记 URL，不记请求头与 body：凭据从不进日志。
         tracing::debug!(target: "danmubox_bili::http", method = "GET", url, "上游请求");
         let mut req = self.client.get(url);
-        if let Some(cookie) = self.current_cookie() {
+        if let Some(cookie) = cookie
+            .filter(|value| !value.is_empty())
+            .or_else(|| self.current_cookie())
+        {
             req = req.header(COOKIE, cookie);
         }
         req
@@ -281,11 +303,17 @@ impl BiliHttp {
         require_ok(&value, "webHeartBeat")
     }
 
-    /// 已登录账号的昵称。未登录或上游返回非 0 code 时返回 `None`——
-    /// 查昵称失败不应让整个 `session_status` 失败。
-    pub async fn account_nickname(&self) -> Result<Option<String>> {
+    /// 用指定 Cookie 向 `nav` 求证身份（`data.mid` / `data.uname` / `data.face`）。
+    ///
+    /// `cookie` 为 `None` = 用客户端配置的 Cookie 来源（`ConfigStore` 的当前账号）；
+    /// 显式给出时用它——`accounts_list` 要一个一个账号分别求证。
+    ///
+    /// 上游 `code != 0`（未登录，典型是 `-101`）或取不到昵称 → `None`；
+    /// 传输 / 解析失败 → `Err`。调用方按「未登录」与「没问到」区别对待：
+    /// 前者是凭据失效，后者不该改变本地结论。
+    pub async fn nav_identity(&self, cookie: Option<&str>) -> Result<Option<NavIdentity>> {
         let value = self
-            .get(EP_NAV)
+            .get_with_cookie(EP_NAV, cookie.map(str::to_string))
             .send()
             .await
             .map_err(|e| Error::Upstream(format!("nav: {e}")))?
@@ -295,11 +323,24 @@ impl BiliHttp {
         if value.get("code").and_then(Value::as_i64) != Some(0) {
             return Ok(None);
         }
-        Ok(value
-            .pointer("/data/uname")
+        let data = value.get("data").unwrap_or(&Value::Null);
+        let nickname = data
+            .get("uname")
             .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())
-            .map(str::to_string))
+            .unwrap_or_default();
+        if nickname.is_empty() {
+            // 已登录却连昵称都没有：按未登录处理，不臆造身份。
+            return Ok(None);
+        }
+        Ok(Some(NavIdentity {
+            uid: data.get("mid").and_then(Value::as_i64).unwrap_or(0),
+            nickname: nickname.to_string(),
+            face: data
+                .get("face")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        }))
     }
 
     /// POST 表单。`body` 必须已是签名后的查询串（含 `w_rid`）。

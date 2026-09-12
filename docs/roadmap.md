@@ -120,10 +120,10 @@ graph LR
 
 | 交付物 | 说明 | 对应文档 |
 |---|---|---|
-| 凭据文件读写 | 明文 `config.toml`、权限 0600、临时文件 + rename 原子替换；多账号用 `[profiles.<name>]` 承载、`active_profile` 指定生效者；「手填 Cookie」即直接编辑该文件 | `docs/contract.md` §4.1、`docs/auth.md` |
+| 凭据文件读写 | 明文 `config.toml`、权限 0600、临时文件 + rename 原子替换；多账号用 `[profiles.<name>]` 承载、`active_profile` 指定生效者；「手填 Cookie」走 `account_login_cookie`（或直接编辑该文件） | `docs/contract.md` §4.1、`docs/auth.md` |
 | 启动顺序 | 读文件 → `active_profile` 所指 profile 的 `sessdata` / `bili_jct` / `dede_user_id` 齐全且非空则直接进入登录态；否则走扫码（默认入口） | `docs/contract.md` §4.1 |
-| 扫码登录 | 二维码生成 + 状态轮询 + 成功后原子写回凭据；IPC `session_qr_start` / `session_qr_poll` | `docs/auth.md`、`docs/ipc.md` |
-| 游客与登出 | `session_status`（不含 Cookie 值）、`session_logout` 清空凭据；多账号用 `profiles_list` / `profiles_switch`（改 `active_profile` 并以新凭据重建连接） | `docs/contract.md` §7、`docs/ipc.md` |
+| 扫码登录 | 二维码生成 + 状态轮询 + 成功后原子写回凭据；IPC `account_qr_start(target?)` / `account_qr_poll(key)`（不带 target = 新增账号，先扫码后按昵称起名） | `docs/auth.md`、`docs/ipc.md` |
+| 游客与登出 | `session_status`（不含 Cookie 值）、`account_logout` 清凭据但保留账号条目；多账号用 `accounts_list` / `account_switch` / `account_remove` / `account_login_cookie`（改 `active_profile` 并以新凭据重建连接） | `docs/contract.md` §7、`docs/ipc.md` |
 | `buvid3` 与 WBI 签名 | 供 `getDanmuInfo` 使用 | `docs/auth.md` |
 | `getDanmuInfo` | 换取弹幕长连接地址与认证 token | `docs/auth.md` |
 | 偏好文件读写 | `prefs.json`：显式改过的键、默认值合并、原子替换、损坏回落并保留 `prefs.json.bak` | `docs/contract.md` §4.2、§8 |
@@ -137,7 +137,7 @@ graph LR
 | S2-AC3 | 手工编辑 `config.toml` 中 `active_profile` 所指 profile 填入有效凭据后重启 | 直接进入登录态、不弹扫码；完全退出进程后重启仍保持登录态 | 重启后的 `session_status` |
 | S2-AC4 | 检查凭据文件属性与写入方式 | 权限为 0600；写入为临时文件 + rename，替换过程中并发读不出现半写文件 | `stat` 输出 + 并发读结果 |
 | S2-AC5 | 使凭据失效后调用需要登录的操作 | 回到游客态并给出可操作的重登提示；进程不崩溃；不发起需要凭据的上游请求 | 响应 + 日志 |
-| S2-AC6 | 调用 `session_logout`，然后调用 `profiles_switch` 切到另一 profile | 登出后 `active_profile` 所指 profile 的凭据被清空、回到游客态；切换后 `active_profile` 改写、以新 profile 凭据重建连接，`session_status` 反映新 profile | 文件内容 + 响应 |
+| S2-AC6 | 调用 `account_logout`，然后调用 `account_switch` 切到另一账号 | 登出后该账号凭据被清空、回到游客态，**账号条目仍在**（`logged_in=false`），可再登录回来；切换后 `active_profile` 改写、以新账号凭据重建连接，`session_status` 与 `accounts_list` 反映新账号 | 文件内容 + 响应 |
 | S2-AC7 | 修改界面偏好 | 偏好只写入 `prefs.json`；`config.toml` 的键集合始终只有 `active_profile` 与 `profiles.*` 下的七项凭据；未知键或非法值报 `BAD_REQUEST` | 两文件内容 + 响应 |
 | S2-AC8 | 对仓库、日志、前端载荷、fixture 检索凭据值 | 不出现真实 `SESSDATA` / `bili_jct` / `DedeUserID`，只命中字段名说明与脱敏规则文本 | 检索输出 |
 

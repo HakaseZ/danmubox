@@ -136,7 +136,7 @@ buvid4 = ""
 sid = ""
 ```
 
-启动顺序：读文件 → 取 `active_profile` 指向的 profile，其 `sessdata` / `bili_jct` / `dede_user_id` 三者齐全且非空则直接进入登录态；否则走扫码（默认入口），扫码成功后原子写回该 profile。
+启动顺序：读文件 → 取 `active_profile` 指向的账号，其 `sessdata` / `bili_jct` / `dede_user_id` 三者齐全且非空则直接进入登录态；否则走扫码（默认入口），扫码成功后原子写回目标账号（新增账号先按昵称起名，见 `auth.md` §8.4）。
 
 #### 查看与权限确认
 
@@ -148,9 +148,14 @@ sid = ""
 
 安全提醒：`config.toml` 整文件等同账号控制权，**不要**贴进聊天、issue、日志或截图；排查时只看「哪个字段是否为空」，不要展示取值。
 
-#### 手工填入 Cookie（相当于「手填 Cookie」入口）
+#### 手工填入 Cookie（「手填 Cookie」入口）
 
-本设计不另做导入界面，手填即**直接编辑该文件**：
+两条路都落在同一个文件上：
+
+- **界面 / CLI**（推荐）：界面的「用 Cookie 登录」走 `account_login_cookie`；CLI 用
+  `danmubox accounts --cookie -` 从标准输入收（`--cookie` 直接写命令行会让凭据进进程表与 shell 历史，别那么用）。
+  好处是落盘前会先向 `nav` 求证，凭据无效当场报错，不会留下一个「显示已登录、其实连不上」的账号。
+- **直接编辑文件**（排障兜底）：
 
 1. 退出应用（避免写入竞争）。
 2. 备份现有文件（复制为 `config.toml.bak`）。
@@ -158,7 +163,7 @@ sid = ""
 4. 确认文件权限为 `0600`（见上表）。
 5. 重新启动应用：三项齐全即直接进入登录态，无需扫码。
 
-登出（界面登出，对应 `session_logout`）会清空当前 profile 的凭据并回到游客态；`buvid3` 为设备标识，可从文件保留或重新获取。
+登出（界面登出，对应 `account_logout`）会清空当前账号的**账号级**凭据并回到游客态：**账号条目保留**（列表里显示为未登录，可再登录回来），`buvid3` / `buvid4` 为设备标识一并保留。
 
 #### 命令行入口（阶段 2 起可用）
 
@@ -166,10 +171,11 @@ sid = ""
 
 | 用途 | 命令 |
 |---|---|
-| 查看登录态 | `danmubox session`（只输出状态与 profile 名，**不含任何 Cookie 值**） |
-| 扫码登录 | `danmubox login`（终端直接渲染二维码，轮询至确认；`--timeout` 可调） |
-| 登出 | `danmubox logout`（清空当前 profile 的字段，其余 profile 不动） |
-| 列出 / 切换账号 | `danmubox profiles`、`danmubox profiles --use <名字>` |
+| 查看登录态 | `danmubox session`（只输出状态与当前账号名，**不含任何 Cookie 值**） |
+| 查看账号列表 | `danmubox accounts`（当前账号打星；逐行给登录状态、昵称与 uid） |
+| 扫码登录 / 新增账号 | `danmubox login [账号名]`（终端直接渲染二维码；不带账号名 = 新增账号，确认后按昵称自动起名；`--timeout` 可调） |
+| 登出 | `danmubox logout [账号名]`（缺省 = 当前账号；只清凭据，条目保留） |
+| 切换 / 删除账号 | `danmubox accounts --use <名字>`、`danmubox accounts --remove <名字>` |
 
 数据目录默认取平台路径（`paths::data_dir`）；调试或多环境并存时可用环境变量 `DANMUBOX_HOME` 覆盖，例如 `DANMUBOX_HOME=/tmp/db danmubox session`。
 
@@ -284,8 +290,8 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 
 | 判定顺序 | 观察点 | 结论与动作 |
 |---|---|---|
-| 1 | `session_qr_start` 是否成功拿到二维码 | 失败 → 先解决网络 / 上游问题，读错误信息 |
-| 2 | `session_qr_poll` 是否在持续轮询 | 前端未轮询 → 检查轮询定时器；建议间隔 2 秒，不得低于 1 秒 |
+| 1 | `account_qr_start` 是否成功拿到二维码 | 失败 → 先解决网络 / 上游问题，读错误信息 |
+| 2 | `account_qr_poll` 是否在持续轮询 | 前端未轮询 → 检查轮询定时器；建议间隔 2 秒，不得低于 1 秒 |
 | 3 | 二维码是否过期 | 过期后必须重新生成二维码，不能继续轮询旧 key |
 | 4 | `data.code` 语义 | 已知状态按 `auth.md` 的状态机处理；**未知码归入「其他 → 按未确认处理」**，继续轮询，不要猜含义 |
 | 5 | 扫码成功后会话是否刷新 | 成功后登录态应变为已登录，界面应收到 `danmubox://session` 事件 |

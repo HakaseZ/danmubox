@@ -159,10 +159,10 @@ danmubox/
 | 解析房间 | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` | 打印房间元信息 |
 | 看弹幕 | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` | 有凭据走登录态，否则游客态；`--quiet` 只看汇总 |
 | 抓原始载荷 | `DANMUBOX_LOG=debug cargo run -p danmubox-cli -- watch <房间>` | 字段实测校准的采集入口（`docs/protocol.md` 附录 B） |
-| 登录态 | `cargo run -p danmubox-cli -- session` | 只输出状态与 profile 名，不含 Cookie 值 |
-| 扫码登录 | `cargo run -p danmubox-cli -- login` | 终端渲染二维码，轮询至确认 |
-| 登出 | `cargo run -p danmubox-cli -- logout` | 清空当前 profile 的凭据 |
-| 账号切换 | `cargo run -p danmubox-cli -- profiles --use <名字>` | 改写 `active_profile` |
+| 登录态 | `cargo run -p danmubox-cli -- session` | 只输出状态与当前账号名，不含 Cookie 值 |
+| 扫码登录 / 新增账号 | `cargo run -p danmubox-cli -- login [账号名]` | 终端渲染二维码，轮询至确认；不带账号名 = 新增账号（确认后按昵称自动起名），带 = 给该账号重新登录 |
+| 登出 | `cargo run -p danmubox-cli -- logout [账号名]` | 清空该账号（缺省 = 当前账号）的凭据；账号条目保留 |
+| 账号管理 | `cargo run -p danmubox-cli -- accounts [--use <名字>\|--create\|--remove <名字>\|--cookie -]` | 不带参数列出账号（登录状态 + 昵称 / uid）；`--create` 扫码新增；`--cookie -` 从 stdin 收手填 Cookie |
 | 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败） |
 | 桌面端（独立产物） | `cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` | **推荐**：产出 `target/release/danmubox-desktop`，前端已内嵌，双击即用 |
 | 桌面端（开发热更新） | `npm --prefix apps/desktop/ui run dev` + `cargo run -p danmubox-desktop` | 仅开发时用；须先起 dev server，否则窗口空白（见 `docs/operations.md` §1.1） |

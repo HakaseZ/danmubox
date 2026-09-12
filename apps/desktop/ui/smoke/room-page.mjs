@@ -1,55 +1,413 @@
-// 房间页 UI 冒烟：无头 Chromium + mock IPC，断言四件事（docs/ui.md §3.1 / §4.7 / §4.8）。
+// 房间页 UI 冒烟：无头 Chromium + mock IPC，把整套断言跑在真实的 dist 产物上。
 //
-// 复现：
-//   1. cd apps/desktop/ui && npm run build
-//   2. node smoke/room-page.mjs      # 生成 /tmp/danmubox-ui-smoke.html（零依赖，只读 dist/）
-//   3. 在能跑 Chromium 的环境里打开该 HTML 并派发一次自驱动命令：
-//        const html = readFileSync("/tmp/danmubox-ui-smoke.html", "utf8");
-//        await page.setContent(html, { waitUntil: "load" });            // Puppeteer / omp browser 工具
-//        await page.evaluate(() => document.dispatchEvent(
-//          new CustomEvent("__smoke-cmd", { detail: { type: "run" } })));
-//      场景自己跑完（含两段 8.6s 等待）后把断言快照写进 document.documentElement 的
-//      data-smoke 属性（JSON），外层轮询这个属性即得结果。
-//      坑：page.evaluate 跑在隔离世界，读不到 main world 里挂在 window 上的变量（mock 与 bundle
-//      都在 main world），所以断言只写成 DOM 属性；跨世界派发 DOM CustomEvent 是通的。
+// 复现（一条命令，自己起 Chrome，不依赖 relay 标签页）：
+//   cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs
+// 只要快照（不跑浏览器）：
+//   node smoke/room-page.mjs            # 生成 /tmp/danmubox-ui-smoke.html
 //
-// 断言：① 头部同时显示在线/看过且没有人气值；② 系统消息默认不渲染、开关打开后出现；
-//       ③ 互动行默认 8 秒后被摘除、关掉开关则常驻；④ 历史行与实时行 computed opacity 相等
-//       且页面找不到「以上为进场前的最新弹幕」这类分界文案。
+// 场景自己跑完（含两段 8.6s 等待）后把断言快照写进 document.documentElement 的 data-smoke
+// 属性（JSON）并 console.log 一份。
 //
-// 失败长什么样（data-smoke 里对应字段为 false）：
-//   - 属性根本不出现：App 没 bootstrap 起来——先查 mock 注入顺序与 dist 是否与 src 同步。
-//   - step3_interactRendered / step5_interactGoneAfter8s / step6_interactPersistsWhenOff：
-//     互动消息的渲染、淡出与 store 侧的摘除定时器（曾在这里抓到 updatePrefs 无条件清定时器）。
-//   - step4_systemRenderedAfterToggle：系统通知开关（filtering.passesFilter 的 kind 级门）。
-//   - step3_historyOpacity != step3_liveOpacity 或 dividerTextPresent=true：历史与实时又割裂了。
-//   - step3_headerHasOnline / step3_headerHasWatched / step3_headerHasPopularity：
-//     房间头三个数的展示口径（观众数 vs 已废弃的人气值）。
-//   - step1_followCalls != 1 或 step1_roomListShowsFollowed=false：启动时没自动拉关注列表。
+// 两条维护约定：
+//   1) 断言只依赖对外可观察的行为（DOM 文本 / 几何 / 副作用记录），**不依赖 CSS-module 类名**；
+//      定位一律走 `data-testid`（db-chat-scroll / db-msg-row / db-msg-time / db-context-menu /
+//      db-account / db-panel / db-gift-dock / db-follow-item），那是稳定的对外契约。
+//   2) 快照字段名是契约：`step1_*` … `step6_*` 的语义不得改（Main 按这套闭环），
+//      新增断言另起字段名（layout* / menu* / time* / gift* / follow* / account*）。
 //
-// 维护约定（长期保留的脚本）：
-//   1. 断言只依赖**对外可观察的行为**：DOM 文案、几何尺寸、可见性、computed 样式。不得断言内部实现
-//      或 store 字段名——界面重构不该被迫改测试，测试也不该反过来锁死实现。
-//      已知折中：定位用的 CSS-module 类名前缀（"roomCard"、以 `_row_` 开头的行类名）与两个 label
-//      文案。样式模块改名会让定位失败（相应字段为 false），那是定位问题，不是断言语义依赖；
-//      布局重排时只改 rows() / clickLabel() 的定位，断言逻辑不动。
-//   2. 快照字段名是契约：新增断言一律用新字段，不改老字段的含义（复核者与后续布局验都按这套读）。
-// 本仓库没有前端测试运行器，这是界面行为唯一的运行时证据入口，长期保留。
+// 覆盖：docs/ui.md §2、§3、§4、§6、§8。
+//   step1  关注列表自动加载、列表页展示关注项
+//   step2  进房间、历史回填可见
+//   step3  头部在线/看过且无人气；系统/互动行的渲染与弱化；历史与实时同款
+//   step4  系统通知开关
+//   step5  互动行 8 秒后自动消失
+//   step6  关掉自动消失后互动行常驻
+//   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级
+//   menu   右键出菜单（复制 / ＠TA / 回复 / 屏蔽 / 主页 / 举报）并能关掉
+//   time   时间戳默认不渲染；开关打开后每行一列且等宽（纵向对齐）
+//   gift   礼物栏在输入区下方、全宽、可折叠，展开不改变弹幕宽度
+//   follow 未开播也列出、按最后开播时间排序、>30 条分页
+//   account 新增账号 = profiles_create + 自动扫码；单 profile 时禁止删除
 
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
-const assets = new URL("../dist/assets/", import.meta.url);
-const names = readdirSync(assets);
-const js = readFileSync(new URL(names.find((n) => n.endsWith(".js")), assets), "utf8");
-const css = readFileSync(new URL(names.find((n) => n.endsWith(".css")), assets), "utf8");
+const MOCK = `(function () {
+  var listeners = {};
+  var calls = [];
+  var nextId = 1;
+  var prefs = {
+    "ui.font_scale": 1, "ui.theme": "system", "ui.auto_scroll": true,
+    "ui.pause_on_hover": false, "ui.merge_similar": true, "ui.merge_window_ms": 8000,
+    "ui.gift_panel_mode": "merged", "ui.interact_auto_hide": true, "ui.system_notice": false,
+    "ui.show_timestamp": false,
+    "composer.phrases": ["早上好"], "filter.keywords": [], "filter.keywords_mode": "hide",
+    "filter.keywords_alert": false, "filter.uids": [],
+    "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard", "system"],
+    "filter.medal_level_min": 0, "history.buffer_rows": 5000
+  };
+  var nextLocal = 1;
+  function msg(kind, content, isHistory, extra) {
+    nextLocal += 1;
+    var base = {
+      local_id: nextLocal, room_id: 5440, kind: kind, ts: Date.now(),
+      uid: 500 + nextLocal, uname: kind === "interact" ? "进场观众" + nextLocal : "观众" + nextLocal,
+      content: content, color: 0, medal_level: 0, medal_name: "", guard_level: 0,
+      is_admin: false, face: "", is_history: !!isHistory, amount: 0, combo_id: "",
+      emote: null, upstream_id: "smoke-" + nextLocal
+    };
+    for (var key in (extra || {})) base[key] = extra[key];
+    return base;
+  }
+  // 关注列表：上游顺序刻意打乱，用来看排序是否真按最后开播时间生效；
+  // 再补 28 条凑够 31 条，验证「>30 条才出现分页」。
+  var followed = [
+    { room_id: 300, uname: "离线甲", face: "", live_status: 0, group_name: "", live_start_at: 1700000000, online: 0 },
+    { room_id: 100, uname: "在播主播", face: "", live_status: 1, group_name: "", live_start_at: 1789000000, online: 500 },
+    { room_id: 200, uname: "离线乙", face: "", live_status: 0, group_name: "", live_start_at: 1789500000, online: 0 }
+  ];
+  for (var i = 1; i <= 28; i += 1) {
+    followed.push({
+      room_id: 400 + i, uname: "填充" + (i < 10 ? "0" + i : i), face: "",
+      live_status: 0, group_name: "", live_start_at: 1000000000 + i, online: 0
+    });
+  }
+  var profiles = ["default"];
+  var session = { logged_in: true, uid: 1000, nickname: "本地测试", active_profile: "default" };
+  var history = msg("danmaku", "这是进场回填的历史弹幕", true);
+  window.__smoke_next = function () { return msg; };
+  window.__calls = calls;
+  window.__prefs = prefs;
+  window.__followCalls = 0;
+  window.__mk = msg;
+  window.__history = history;
+  window.__emit = function (event, payload) {
+    (listeners[event] || []).forEach(function (id) {
+      window["_" + id]({ event: event, id: id, payload: payload });
+    });
+  };
+  window.__TAURI_INTERNALS__ = {
+    transformCallback: function (cb, once) {
+      var id = nextId++;
+      Object.defineProperty(window, "_" + id, {
+        value: function (result) { if (once) delete window["_" + id]; cb(result); },
+        writable: false, configurable: true, enumerable: true
+      });
+      return id;
+    },
+    invoke: function (cmd, args) {
+      calls.push(cmd);
+      args = args || {};
+      switch (cmd) {
+        case "app_info": return Promise.resolve({ version: "0.0.0-smoke", data_dir: "/tmp", config_path: "/tmp/config.toml", logged_in: true });
+        case "session_status": return Promise.resolve(session);
+        case "profiles_list": return Promise.resolve(profiles.slice());
+        case "profiles_switch": { session = { logged_in: true, uid: 1000, nickname: args.name, active_profile: args.name }; return Promise.resolve(session); }
+        case "profiles_create": { if (profiles.indexOf(args.name) < 0) profiles.push(args.name); session = { logged_in: false, uid: 0, nickname: "", active_profile: args.name }; return Promise.resolve(session); }
+        case "profiles_remove": { profiles = profiles.filter(function (n) { return n !== args.name; }); session = { logged_in: true, uid: 1000, nickname: "本地测试", active_profile: profiles[0] || "default" }; return Promise.resolve(session); }
+        case "session_qr_start": return Promise.resolve({ key: "k", url: "https://example.invalid/qr", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#fff"/></svg>' });
+        case "session_qr_poll": return Promise.resolve({ state: "pending", session: session });
+        case "rooms_list": return Promise.resolve([{ room_id: 5440, short_id: 0, anchor_uid: 2, title: "测试房间", live_status: 1, connected: true, buffered: 1 }]);
+        case "prefs_get": return Promise.resolve(Object.assign({}, prefs));
+        case "prefs_set": Object.assign(prefs, args.patch); return Promise.resolve(Object.assign({}, prefs));
+        case "follow_list": window.__followCalls += 1; return Promise.resolve(followed.slice());
+        case "history_query": return Promise.resolve([history]);
+        case "emotes_list": return Promise.resolve([
+          { key: "common:1", emoticon_unique: "official_1", width: 20, height: 20, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "common", text: "[大笑]", url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", room_id: 0 },
+          { key: "room:1", emoticon_unique: "room_5440_1", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "room", text: "[房间专属]", url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", room_id: 5440 }
+        ]);
+        case "report_reasons": return Promise.resolve([{ id: 1, reason: "垃圾广告" }]);
+        case "wallet_balance": return Promise.resolve(150);
+        case "rooms_connect": return Promise.resolve(null);
+        case "plugin:event|listen": (listeners[args.event] = listeners[args.event] || []).push(args.handler); return Promise.resolve(nextId);
+        case "plugin:event|unlisten": return Promise.resolve(null);
+        default: return Promise.resolve(null);
+      }
+    }
+  };
 
-/** Tauri IPC 的替身：命令一律返回固定样本，事件由页面内的 __emit 派发。 */
-const MOCK = "(function () {\n  var listeners = {};\n  var calls = [];\n  var nextId = 1;\n  var prefs = {\n    \"ui.font_scale\": 1, \"ui.theme\": \"system\", \"ui.auto_scroll\": true,\n    \"ui.pause_on_hover\": true, \"ui.merge_similar\": true, \"ui.merge_window_ms\": 8000,\n    \"ui.gift_panel_mode\": \"merged\", \"ui.interact_auto_hide\": true, \"ui.system_notice\": false,\n    \"composer.phrases\": [], \"filter.keywords\": [], \"filter.keywords_mode\": \"hide\",\n    \"filter.keywords_alert\": false, \"filter.uids\": [],\n    \"filter.kinds\": [\"danmaku\", \"gift\", \"superchat\", \"interact\", \"guard\", \"system\"],\n    \"filter.medal_level_min\": 0, \"history.buffer_rows\": 5000\n  };\n  var nextLocal = 1;\n  function msg(kind, content, isHistory) {\n    nextLocal += 1;\n    return {\n      local_id: nextLocal, room_id: 5440, kind: kind, ts: Date.now(),\n      uid: 500 + nextLocal, uname: kind === \"interact\" ? \"进场观众\" + nextLocal : \"观众\" + nextLocal,\n      content: content, color: 0, medal_level: 0, medal_name: \"\", guard_level: 0,\n      is_admin: false, is_history: !!isHistory, amount: 0, combo_id: \"\", emote: null,\n      upstream_id: \"smoke-\" + nextLocal\n    };\n  }\n  var history = msg(\"danmaku\", \"这是进场回填的历史弹幕\", true);\n  window.__smoke_next = function () { return msg; };\n  window.__calls = calls;\n  window.__prefs = prefs;\n  window.__followCalls = 0;\n  window.__mk = msg;\n  window.__history = history;\n  window.__emit = function (event, payload) {\n    (listeners[event] || []).forEach(function (id) {\n      window[\"_\" + id]({ event: event, id: id, payload: payload });\n    });\n  };\n  window.__TAURI_INTERNALS__ = {\n    transformCallback: function (cb, once) {\n      var id = nextId++;\n      Object.defineProperty(window, \"_\" + id, {\n        value: function (result) { if (once) delete window[\"_\" + id]; cb(result); },\n        writable: false, configurable: true, enumerable: true\n      });\n      return id;\n    },\n    invoke: function (cmd, args) {\n      calls.push(cmd);\n      args = args || {};\n      switch (cmd) {\n        case \"app_info\": return Promise.resolve({ version: \"0.0.0-smoke\", data_dir: \"/tmp\", config_path: \"/tmp/config.toml\", logged_in: true });\n        case \"session_status\": return Promise.resolve({ logged_in: true, uid: 1000, nickname: \"本地测试\", active_profile: \"default\" });\n        case \"profiles_list\": return Promise.resolve([\"default\"]);\n        case \"rooms_list\": return Promise.resolve([{ room_id: 5440, short_id: 0, anchor_uid: 2, title: \"测试房间\", live_status: 1, connected: true, buffered: 1 }]);\n        case \"prefs_get\": return Promise.resolve(Object.assign({}, prefs));\n        case \"prefs_set\": Object.assign(prefs, args.patch); return Promise.resolve(Object.assign({}, prefs));\n        case \"follow_list\": window.__followCalls += 1; return Promise.resolve([{ room_id: 5440, uname: \"关注的主播\", face: \"\", live_status: 1, group_name: \"\" }]);\n        case \"history_query\": return Promise.resolve([history]);\n        case \"emotes_list\": return Promise.resolve([]);\n        case \"report_reasons\": return Promise.resolve([]);\n        case \"wallet_balance\": return Promise.resolve(0);\n        case \"rooms_connect\": return Promise.resolve(null);\n        case \"plugin:event|listen\": (listeners[args.event] = listeners[args.event] || []).push(args.handler); return Promise.resolve(nextId);\n        case \"plugin:event|unlisten\": return Promise.resolve(null);\n        default: return Promise.resolve(null);\n      }\n    }\n  };\n\n  var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };\n  var out = {};\n  var snap = function () { document.documentElement.setAttribute(\"data-smoke\", JSON.stringify(out)); };\n  var rows = function () {\n    return [].slice.call(document.querySelectorAll(\"div\")).filter(function (el) {\n      return [].slice.call(el.classList).some(function (c) { return c.indexOf(\"_row_\") === 0; });\n    });\n  };\n  var rowWith = function (needle) {\n    return rows().filter(function (r) { return r.innerText.indexOf(needle) >= 0; })[0];\n  };\n  var text = function () { return document.body.innerText; };\n  var clickLabel = function (label) {\n    var l = [].slice.call(document.querySelectorAll(\"label\")).filter(function (x) { return x.innerText.indexOf(label) >= 0; })[0];\n    if (!l) return false;\n    l.querySelector(\"input\").click();\n    return true;\n  };\n\n  window.__smoke_run = async function () {\n    await sleep(900);\n    out.step1_followCalls = window.__followCalls;\n    out.step1_roomListShowsFollowed = text().indexOf(\"关注的主播\") >= 0;\n    snap();\n\n    document.querySelector('[class*=\"roomCard\"]').click();\n    await sleep(800);\n    out.step2_roomPage = text().indexOf(\"发送\") >= 0;\n    out.step2_historyVisible = !!rowWith(\"这是进场回填的历史弹幕\");\n    snap();\n\n    window.__emit(\"danmubox://message\", window.__mk(\"danmaku\", \"这是实时弹幕\"));\n    window.__emit(\"danmubox://message\", window.__mk(\"interact\", \"\"));\n    window.__emit(\"danmubox://message\", window.__mk(\"system\", \"标题或分区变更\"));\n    window.__emit(\"danmubox://room_stats\", { room_id: 5440, online: 12345, watched: 345678 });\n    await sleep(500);\n\n    var hist = rowWith(\"这是进场回填的历史弹幕\");\n    var live = rowWith(\"这是实时弹幕\");\n    var interact = rowWith(\"进入直播间\");\n    out.step3_headerHasOnline = text().indexOf(\"在线 1.2万\") >= 0;\n    out.step3_headerHasWatched = text().indexOf(\"看过 34.6万\") >= 0;\n    out.step3_headerHasPopularity = text().indexOf(\"人气\") >= 0;\n    out.step3_systemRendered = text().indexOf(\"标题或分区变更\") >= 0;\n    out.step3_interactRendered = !!interact;\n    out.step3_historyOpacity = hist ? getComputedStyle(hist).opacity : null;\n    out.step3_liveOpacity = live ? getComputedStyle(live).opacity : null;\n    out.step3_dividerTextPresent = text().indexOf(\"以上为进场前的最新弹幕\") >= 0;\n    out.step3_interactAnimation = interact ? getComputedStyle(interact).animationName : null;\n    snap();\n\n    out.step4_toggledSystem = clickLabel(\"系统通知\");\n    await sleep(400);\n    out.step4_prefSystemNotice = window.__prefs[\"ui.system_notice\"];\n    out.step4_systemRenderedAfterToggle = text().indexOf(\"标题或分区变更\") >= 0;\n    snap();\n\n    await sleep(8600);\n    out.step5_interactGoneAfter8s = text().indexOf(\"进入直播间\") < 0;\n    snap();\n\n    out.step6_toggledAutoHide = clickLabel(\"互动消息自动消失\");\n    await sleep(300);\n    window.__emit(\"danmubox://message\", window.__mk(\"interact\", \"\"));\n    await sleep(8600);\n    out.step6_prefAutoHide = window.__prefs[\"ui.interact_auto_hide\"];\n    out.step6_interactPersistsWhenOff = text().indexOf(\"进入直播间\") >= 0;\n    out.done = true;\n    snap();\n  };\n  document.addEventListener(\"__smoke-cmd\", function (e) {\n    if ((e.detail || {}).type === \"run\") window.__smoke_run();\n  });\n})();";
+  var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  var out = {};
+  var snap = function () { document.documentElement.setAttribute("data-smoke", JSON.stringify(out)); };
+  var byTestId = function (id) { return document.querySelector('[data-testid="' + id + '"]'); };
+  var allByTestId = function (id) { return [].slice.call(document.querySelectorAll('[data-testid="' + id + '"]')); };
+  var rows = function () { return allByTestId("db-msg-row"); };
+  var rect = function (el) { return el ? el.getBoundingClientRect() : null; };
+  var text = function () { return document.body.innerText; };
+  var rowWith = function (needle) {
+    return rows().filter(function (r) { return r.innerText.indexOf(needle) >= 0; })[0];
+  };
+  var buttonWith = function (root, label) {
+    return [].slice.call((root || document).querySelectorAll("button")).filter(function (b) {
+      return b.innerText.trim().indexOf(label) >= 0;
+    })[0];
+  };
+  var clickLabelIn = function (root, label) {
+    var l = [].slice.call((root || document).querySelectorAll("label")).filter(function (x) {
+      return x.innerText.indexOf(label) >= 0;
+    })[0];
+    if (!l) return false;
+    var input = l.querySelector("input");
+    if (!input) return false;
+    input.click();
+    return true;
+  };
+  var clickTool = function (label) {
+    var b = buttonWith(null, label);
+    if (!b) return false;
+    b.click();
+    return true;
+  };
+  // React 在元素上包了取值追踪器：直接改 .value 再派发 input 事件不会触发 onChange，
+  // 必须走原生 setter（否则「新增账号」这类受控输入在冒烟里永远点不动）。
+  var typeInto = function (input, value) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  var pickGiftMode = function () {
+    var panel = byTestId("db-panel");
+    if (!panel) return false;
+    var pick = [].slice.call(panel.querySelectorAll("select")).filter(function (s) {
+      return s.innerText.indexOf("输入框下方独立栏") >= 0;
+    })[0];
+    if (!pick) return false;
+    pick.value = "separate";
+    pick.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  };
 
-const head = '<!doctype html><html lang="zh"><head><meta charset="utf-8" /><style>' + css + "</style></head>";
-const body = '<body><div id="root"></div><script>' + MOCK + '</script><script type="module">' + js + "</script></body></html>";
-const html = head + body;
+  window.__smoke_run = async function () {
+    // ---- step1 关注列表自动加载 + 列表页展示关注项（语义不得改）
+    await sleep(900);
+    out.step1_followCalls = window.__followCalls;
+    out.step1_roomListShowsFollowed = text().indexOf("在播主播") >= 0;
+    // follow：未开播也列出、按最后开播时间排序、分页
+    var followNames = allByTestId("db-follow-item").map(function (el) { return el.innerText.split("\\n")[0]; });
+    out.followOrder = followNames.slice(0, 3);
+    out.followPage1Count = followNames.length;
+    out.followPagerShown = !!document.querySelector('[class*="pager"]');
+    out.followNonLiveListed = followNames.indexOf("离线乙") >= 0 && followNames.indexOf("离线甲") >= 0;
+    out.accountArea = !!byTestId("db-account");
+    snap();
 
-const out = process.env.SMOKE_OUT ?? "/tmp/danmubox-ui-smoke.html";
-writeFileSync(out, html);
-console.log("已生成 " + out + "（" + html.length + " 字节）");
+    // ---- step2 进房间 + 历史回填可见
+    byTestId("db-room-card").click();
+    await sleep(800);
+    window.__emit("danmubox://status", { room_id: 5440, state: "connected", detail: "" });
+    out.step2_roomPage = text().indexOf("发送") >= 0;
+    out.step2_historyVisible = !!rowWith("这是进场回填的历史弹幕");
+    out.chatScroll = !!byTestId("db-chat-scroll");
+    snap();
+
+    // 铺 2 条实时弹幕 + 互动 + 系统（step3 需要历史行与实时行同时在场）
+    window.__emit("danmubox://message", window.__mk("danmaku", "这是实时弹幕"));
+    window.__emit("danmubox://message", window.__mk("interact", ""));
+    window.__emit("danmubox://message", window.__mk("system", "标题或分区变更"));
+    window.__emit("danmubox://room_stats", { room_id: 5440, online: 12345, watched: 345678 });
+    await sleep(600);
+
+    // ---- step3 头部数字 / 渲染与弱化（语义不得改）
+    var hist = rowWith("这是进场回填的历史弹幕");
+    var live = rowWith("这是实时弹幕");
+    var interact = rowWith("进入直播间");
+    out.step3_headerHasOnline = text().indexOf("在线 1.2万") >= 0;
+    out.step3_headerHasWatched = text().indexOf("看过 34.6万") >= 0;
+    out.step3_headerHasPopularity = text().indexOf("人气") >= 0;
+    out.step3_systemRendered = text().indexOf("标题或分区变更") >= 0;
+    out.step3_interactRendered = !!interact;
+    out.step3_historyOpacity = hist ? getComputedStyle(hist).opacity : null;
+    out.step3_liveOpacity = live ? getComputedStyle(live).opacity : null;
+    out.step3_dividerTextPresent = text().indexOf("以上为进场前的最新弹幕") >= 0;
+    out.step3_interactAnimation = interact ? getComputedStyle(interact).animationName : null;
+    snap();
+
+    // 再补 60 条，让列表真的会滚（后面的几何断言才有意义）
+    for (var i = 0; i < 60; i += 1) {
+      window.__emit("danmubox://message", window.__mk("danmaku", "实时弹幕 " + i));
+    }
+    await sleep(700);
+    out.rowCount = rows().length;
+    snap();
+
+    // 头像（Message.face）：有头像画图、没头像不渲染、加载失败退化成首字符占位
+    window.__emit("danmubox://message", window.__mk("danmaku", "带头像的弹幕", false, {
+      face: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><rect width='32' height='32' fill='%2300aeec'/></svg>",
+      uname: "有头像"
+    }));
+    window.__emit("danmubox://message", window.__mk("danmaku", "坏头像的弹幕", false, {
+      face: "data:image/png;base64,AAAA",
+      uname: "坏头像"
+    }));
+    window.__emit("danmubox://message", window.__mk("danmaku", "无头像的弹幕", false, {
+      face: "",
+      uname: "无头像"
+    }));
+    await sleep(600);
+    var withFace = rowWith("带头像的弹幕");
+    var badFace = rowWith("坏头像的弹幕");
+    var noFace = rowWith("无头像的弹幕");
+    var avatarOf = function (row) {
+      return row ? row.querySelector('[data-testid="db-msg-avatar"]') : null;
+    };
+    out.avatarImageRendered = !!avatarOf(withFace) && avatarOf(withFace).tagName === "IMG";
+    out.avatarAbsentWhenNoFace = !avatarOf(noFace);
+    out.avatarFallbackOnError = !!avatarOf(badFace) && avatarOf(badFace).tagName === "SPAN";
+
+    // ---- layout 弹幕列表是唯一生长区；面板向上展开不遮挡最新弹幕
+    var scroller = byTestId("db-chat-scroll");
+    var before = rect(scroller);
+    var newestBefore = rows()[rows().length - 1];
+    out.layoutNewestVisibleBeforePanel =
+      rect(newestBefore).bottom <= before.bottom + 1 && rect(newestBefore).bottom >= before.bottom - 40;
+    clickTool("表情");
+    await sleep(500);
+    var panel = byTestId("db-panel");
+    var after = rect(scroller);
+    var newestAfter = rows()[rows().length - 1];
+    out.layoutPanelShown = !!panel;
+    out.layoutPanelAboveComposer = !!panel && !!document.querySelector("textarea") &&
+      (panel.compareDocumentPosition(document.querySelector("textarea")) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    out.layoutChatShrankPx = Math.round(before.height - after.height);
+    out.layoutNewestNotCovered = !!newestAfter && rect(newestAfter).bottom <= rect(panel).top + 1;
+    // 更硬的两条：视口仍在底部（跟随模式重新贴底），且渲染出的最后一行确实是最后一条消息
+    out.layoutFollowingAtBottom =
+      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;
+    out.layoutLastRowIsNewest = !!newestAfter && newestAfter.innerText.indexOf("无头像的弹幕") >= 0;
+    // 通用表情与非通用表情的尺寸分级（issue #8：非通用放大）
+    out.layoutEmoteSizes = [].slice.call(panel.querySelectorAll("button img")).map(function (img) {
+      return {
+        height: Math.round(img.getBoundingClientRect().height),
+        big: img.parentElement.className.indexOf("pickerItemBig") >= 0
+      };
+    });
+    var commonH = out.layoutEmoteSizes.filter(function (x) { return !x.big; })[0];
+    var bigH = out.layoutEmoteSizes.filter(function (x) { return x.big; })[0];
+    out.layoutNonCommonEmoteBigger = !!commonH && !!bigH && bigH.height >= commonH.height * 1.4;
+    clickTool("表情");
+    // 多停一会儿：跑脚本的进程会在这段时间里抓一张「面板已展开」的截图（视觉证据）
+    await sleep(1500);
+    snap();
+
+    // ---- menu 右键菜单
+    var target = rows()[rows().length - 1];
+    target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
+    await sleep(250);
+    var menu = byTestId("db-context-menu");
+    out.menuShown = !!menu;
+    out.menuItems = menu ? [].slice.call(menu.querySelectorAll("button")).map(function (b) { return b.innerText; }) : [];
+    document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await sleep(200);
+    out.menuClosed = !byTestId("db-context-menu");
+    snap();
+
+    // ---- time 时间戳（默认关 → 打开后等宽对齐）
+    out.timeCellsDefault = allByTestId("db-msg-time").length;
+    clickTool("筛选");
+    await sleep(300);
+    var filterPanel = byTestId("db-panel");
+    out.filterPanelShown = !!filterPanel;
+    clickLabelIn(filterPanel, "时间戳");
+    await sleep(400);
+    var cells = allByTestId("db-msg-time").map(function (el) { return el.getBoundingClientRect(); });
+    out.timeCellsShown = cells.length;
+    out.timeWidthsEqual = cells.length > 0 && cells.every(function (r) { return Math.abs(r.width - cells[0].width) < 0.6; });
+    out.timeRightEdgesEqual = cells.length > 0 && cells.every(function (r) { return Math.abs(r.right - cells[0].right) < 0.6; });
+    snap();
+
+    // ---- step4 系统通知开关（语义不得改）：打开后**新来**的系统行要出现。
+    // 这里不拿很早以前那条（它已滚出虚拟列表的渲染范围），改发一条新的，断言更硬。
+    out.step4_toggledSystem = clickLabelIn(filterPanel, "系统通知");
+    await sleep(400);
+    window.__emit("danmubox://message", window.__mk("system", "分区变更二号"));
+    await sleep(300);
+    out.step4_prefSystemNotice = window.__prefs["ui.system_notice"];
+    out.step4_systemRenderedAfterToggle = text().indexOf("分区变更二号") >= 0;
+    snap();
+
+    // ---- step5 互动行 8 秒后自动消失（语义不得改）
+    await sleep(8600);
+    out.step5_interactGoneAfter8s = text().indexOf("进入直播间") < 0;
+    snap();
+
+    // ---- step6 关掉开关则常驻（语义不得改）
+    out.step6_toggledAutoHide = clickLabelIn(filterPanel, "互动消息自动消失");
+    await sleep(300);
+    window.__emit("danmubox://message", window.__mk("interact", ""));
+    await sleep(8600);
+    out.step6_prefAutoHide = window.__prefs["ui.interact_auto_hide"];
+    out.step6_interactPersistsWhenOff = text().indexOf("进入直播间") >= 0;
+    snap();
+
+    // ---- gift 礼物栏在输入区下方、可折叠、不抢宽度
+    var chatWidthBefore = rect(byTestId("db-chat-scroll")).width;
+    out.giftModePicked = pickGiftMode();
+    await sleep(500);
+    var dock = byTestId("db-gift-dock");
+    var composer = document.querySelector("textarea").closest('[class*="composer"]');
+    out.giftDockAfterComposer = !!dock && !!composer &&
+      (composer.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    out.giftDockCollapsed = !!dock && !byTestId("db-gift-body");
+    out.giftDockFullWidth = !!dock && Math.abs(rect(dock).width - document.body.clientWidth) < 2;
+    buttonWith(dock, "礼物 / SC").click();
+    await sleep(300);
+    out.giftDockExpands = !!byTestId("db-gift-body");
+    out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;
+    snap();
+
+    // ---- account 新增账号 = profiles_create + 自动扫码；单 profile 禁止删除
+    clickTool("筛选"); // 收掉面板，露出账号区（房间列表页在返回后才有）
+    document.querySelector("button").click();
+    await sleep(500);
+    var account = byTestId("db-account");
+    out.accountShown = !!account;
+    if (account) {
+      var removeBtn = buttonWith(account, "删除该账号");
+      out.accountRemoveDisabledWithOneProfile = !!removeBtn && removeBtn.disabled;
+      var nameInput = account.querySelector("input");
+      var createBtn = buttonWith(account, "新建并扫码");
+      typeInto(nameInput, "账号二");
+      await sleep(150);
+      createBtn.click();
+      await sleep(700);
+      out.accountProfilesCreateCalled = calls.indexOf("profiles_create") >= 0;
+      out.accountQrAutoStarted = calls.indexOf("session_qr_start") >= 0;
+      out.accountProfileOptions = account.querySelectorAll("select option").length;
+    }
+    out.done = true;
+    snap();
+  };
+  document.addEventListener("__smoke-cmd", function (e) {
+    if ((e.detail || {}).type === "run") window.__smoke_run();
+  });
+})();`;
+
+export function buildSmokeHtml() {
+  const assets = new URL("../dist/assets/", import.meta.url);
+  const names = readdirSync(assets);
+  const js = readFileSync(
+    new URL(names.find((n) => n.endsWith(".js")), assets),
+    "utf8",
+  );
+  const css = readFileSync(
+    new URL(names.find((n) => n.endsWith(".css")), assets),
+    "utf8",
+  );
+  // 注入顺序要紧：先装 IPC 替身，再跑 type=module 的产物
+  return (
+    '<!doctype html><html lang="zh"><head><meta charset="utf-8" /><style>' +
+    css +
+    '</style></head><body><div id="root"></div><script>' +
+    MOCK +
+    '</script><script type="module">' +
+    js +
+    "</script></body></html>"
+  );
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const out = process.env.SMOKE_OUT ?? "/tmp/danmubox-ui-smoke.html";
+  const html = buildSmokeHtml();
+  writeFileSync(out, html);
+  console.log("已生成 " + out + "（" + html.length + " 字节）");
+}

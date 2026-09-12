@@ -40,6 +40,7 @@ interface Props {
   ownedError?: string;
   /** 从收到的弹幕里学到的表情，补进选择器（见 filtering.collectSeenEmotes）。 */
   seenEmotes: Emote[];
+  recentSends: string[];
   balance?: number;
   onBack: () => void;
   onRefresh: () => void;
@@ -75,7 +76,7 @@ const STATE_TEXT: Record<ConnState, string> = {
  * ```
  * [头部：返回 · ●状态 · 标题 ······ 在线 · 看过 · 电池 · ⋯菜单]
  * [弹幕列表  ← 唯一的 flex-1 生长/滚动区]
- * [弹出面板（表情 / 短语 / 筛选）← 向上展开，列表自动上弹]
+ * [弹出面板（表情 / 短语 / 最近 / 筛选）← 向上展开，列表自动上弹]
  * [输入区：输入框 + 工具行 + 发送]
  * [礼物 / SC 栏 ← 在输入区下方，可折叠]
  * ```
@@ -95,6 +96,7 @@ export function RoomView({
   ownedEmotes,
   ownedError,
   seenEmotes,
+  recentSends,
   balance,
   onBack,
   onRefresh,
@@ -511,6 +513,7 @@ export function RoomView({
         ownedEmotes={ownedEmotes}
         ownedError={ownedError}
         seenEmotes={seenEmotes}
+        recentSends={recentSends}
         pendingAction={pendingAction}
         prefs={prefs}
         onPrefs={onPrefs}

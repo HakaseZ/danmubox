@@ -121,6 +121,8 @@ interface AppStore {
   pollAccountQr: () => Promise<QrState | null>;
   /** 用系统浏览器打开用户主页（需求 §2.3：点昵称跳用户主页）。 */
   openProfile: (uid: number) => Promise<void>;
+  /** 最近发送记录：仅会话内保留（需求 §2.2），不落盘。 */
+  recentSends: string[];
   loadEmotes: (roomId: number) => Promise<void>;
   /**
    * 拉主站「我的表情」。`retryFailedOnly` 为 true 时只在**上次失败**后才重试
@@ -197,6 +199,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
   qr: null,
   qrState: null,
   qrError: null,
+  recentSends: [],
   followed: [],
   roomIdentities: {},
   adminSilent: [],
@@ -401,7 +404,11 @@ export const useApp = create<AppStore>((set, get, store) => ({
   async send(roomId, content, emote, reply) {
     try {
       const result = await api.chatSend(roomId, content, emote, reply);
-      set({ lastSend: result });
+      // 会话内的最近发送记录：发出去才记，失败的草稿仍留在输入框里等重试。
+      set((state) => ({
+        lastSend: result,
+        recentSends: [content, ...state.recentSends.filter((text) => text !== content)].slice(0, 8),
+      }));
       return result.outcome;
     } catch (error) {
       set({ error: describeError(error) });

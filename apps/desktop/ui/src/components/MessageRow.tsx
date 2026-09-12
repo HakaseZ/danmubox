@@ -1,9 +1,12 @@
+import { Avatar } from "./Avatar";
+import type { MenuPoint } from "./ContextMenu";
 import {
   alertsOn,
   badgesFor,
   cssColor,
   formatClock,
   GUARD_TITLE,
+  medalHue,
   type DisplayRow,
 } from "../filtering";
 import type { Message, Prefs } from "../types";
@@ -14,24 +17,15 @@ interface Props {
   row: DisplayRow;
   anchorUid?: number;
   prefs: Prefs;
-  onMention?: (message: Message) => void;
-  onReply?: (message: Message) => void;
-  onOpenProfile?: (uid: number) => void;
-  onReport?: (message: Message) => void;
+  /** 右键（或行尾「⋯」）时把坐标与消息交给上层弹菜单（docs/ui.md §4.5）。 */
+  onMenu: (message: Message, at: MenuPoint) => void;
 }
 
 /** 六种 kind 的渲染规范见 docs/ui.md §4.1；互动与系统行的文案由展示层生成。 */
-export function MessageRow({
-  row,
-  anchorUid,
-  prefs,
-  onMention,
-  onReply,
-  onOpenProfile,
-  onReport,
-}: Props) {
+export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   const { message, count } = row;
   const badges = badgesFor(message, anchorUid);
+  const hue = medalHue(badges.medalName);
   const color = cssColor(message.color);
   const highlight = alertsOn(message, prefs) ? styles.highlight : undefined;
 
@@ -65,9 +59,22 @@ export function MessageRow({
   return (
     <div
       className={`${styles.row} ${variant}`}
+      data-testid="db-msg-row"
       style={autoHide ? { animationDuration: `${INTERACT_AUTO_HIDE_MS}ms` } : undefined}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onMenu(message, { x: event.clientX, y: event.clientY });
+      }}
     >
-      <span className={styles.meta}>{formatClock(message.ts)}</span>
+      {/* 时间戳列：开关见 `ui.show_timestamp`；固定宽度 + tabular-nums，保证逐行纵向对齐 */}
+      {prefs["ui.show_timestamp"] && (
+        <span className={styles.time} data-testid="db-msg-time">
+          {formatClock(message.ts)}
+        </span>
+      )}
+      {message.kind !== "system" && (
+        <Avatar url={message.face} name={message.uname} />
+      )}
       {message.kind !== "system" && (
         <span className={styles.badges}>
           {badges.anchor && (
@@ -77,27 +84,41 @@ export function MessageRow({
             <span className={`${styles.badge} ${styles.badgeAdmin}`}>房管</span>
           )}
           {badges.guardLevel > 0 && (
-            <span className={`${styles.badge} ${styles.badgeGuard}`}>
+            <span
+              className={`${styles.badge} ${
+                styles[`badgeGuard${badges.guardLevel}`] ?? styles.badgeGuard
+              }`}
+            >
               {GUARD_TITLE[badges.guardLevel] ?? `Guard${badges.guardLevel}`}
             </span>
           )}
           {badges.medalLevel > 0 && badges.medalName.length > 0 && (
-            <span className={`${styles.badge} ${styles.badgeMedal}`}>
-              {badges.medalName} {badges.medalLevel}
+            <span
+              className={`${styles.badge} ${styles.badgeMedal}`}
+              style={{
+                // 牌面底色按牌名派生（见 filtering.medalHue）：上游真彩色未进契约
+                backgroundImage: `linear-gradient(45deg, hsl(${hue} 32% 50%), hsl(${hue} 34% 66%))`,
+              }}
+            >
+              <span className={styles.medalName}>{badges.medalName}</span>
+              <span className={styles.medalLevel}>{badges.medalLevel}</span>
             </span>
           )}
         </span>
       )}
       {message.kind !== "system" && message.uname.length > 0 && (
-        <span className={styles.meta} style={color ? { color } : undefined}>
+        <span className={styles.name} style={color ? { color } : undefined}>
           {message.uname}:
         </span>
       )}
       {message.emote ? (
         // 表情弹幕：正文就是表情名，只显示文字会让人以为「表情没渲染」，
         // 因此改画图（标题与 alt 都保留表情名——图加载不出来时浏览器回退显示 alt）。
+        // 尺寸用 em，随 `ui.font_scale` 联动（docs/ui.md §4.1）。
         <img
-          className={`${styles.contentEmote} ${highlight ?? ""}`}
+          className={`${styles.contentEmote} ${
+            message.emote.bulge_display ? styles.contentEmoteBulge : ""
+          } ${highlight ?? ""}`}
           src={message.emote.url}
           alt={message.content}
           title={message.content}
@@ -109,47 +130,18 @@ export function MessageRow({
       {(count > 1 || message.kind === "gift") && (
         <span className={styles.merged}>×{count}</span>
       )}
-      {onMention && message.kind === "danmaku" && message.uname.length > 0 && (
-        <button
-          className={styles.rowAction}
-          title="在输入框里 @ 这位观众"
-          onClick={() => onMention(message)}
-        >
-          @
-        </button>
-      )}
-      {onReply && message.kind === "danmaku" && (
-        <button
-          className={styles.rowAction}
-          title="回复这条弹幕"
-          onClick={() => onReply(message)}
-        >
-          回复
-        </button>
-      )}
-      {onOpenProfile && message.uid !== 0 && (
-        <button
-          className={styles.rowAction}
-          title="在浏览器里打开 TA 的主页"
-          onClick={() => onOpenProfile(message.uid)}
-        >
-          主页
-        </button>
-      )}
-      {onReport && message.kind === "danmaku" && (
-        <button
-          className={styles.rowAction}
-          title={
-            message.upstream_id.length > 0
-              ? "举报这条弹幕"
-              : "缺少上游弹幕标识，无法举报"
-          }
-          disabled={message.upstream_id.length === 0}
-          onClick={() => onReport(message)}
-        >
-          举报
-        </button>
-      )}
+      {/* 行内不再挂一排按钮（issue #8）：动作收进右键菜单，这里只留一个可点的入口 */}
+      <button
+        className={styles.rowMenuTrigger}
+        title="更多操作（复制 / @ / 回复 / 举报）"
+        aria-label="更多操作"
+        onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          onMenu(message, { x: rect.left, y: rect.bottom + 2 });
+        }}
+      >
+        ⋯
+      </button>
     </div>
   );
 }

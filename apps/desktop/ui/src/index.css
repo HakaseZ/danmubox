@@ -12,6 +12,22 @@
   --warn: #f09300;
   --ok: #4ade80;
   color-scheme: dark;
+
+  /* docs/ui.md §4.1 用到的语义色：原先只写在文档里，这里落地成变量 */
+  --fg-muted: #9aa2b1;
+  --fg-subtle: #7c8494;
+  --gold: #c08a2e;
+  --neutral: #6b7280;
+  --guard-1: #c0392b;
+  --guard-2: #8e44ad;
+  --guard-3: #2980b9;
+  --sc-1: #2f6fd0;
+  --sc-2: #1e9e8a;
+  --sc-3: #c9a227;
+  --sc-4: #d1603d;
+  --sc-5: #c0392b;
+  --block-platform: #d93025;
+  --block-room: #f0a020;
 }
 
 :root[data-theme="light"] {
@@ -22,6 +38,9 @@
   --fg: #1c1f26;
   --fg-dim: #667085;
   color-scheme: light;
+
+  --fg-muted: #667085;
+  --fg-subtle: #8a92a3;
 }
 
 * {

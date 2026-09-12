@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
+import { FilterBar } from "./FilterBar";
 import {
   EMOTE_PACKAGE_LABEL,
   SEND_OUTCOME_TEXT,
@@ -12,6 +14,9 @@ import {
   type SendOutcome,
 } from "../types";
 import styles from "../app.module.css";
+
+/** 输入区上方四个弹出面板：同时只开一个，向上展开（issue #8）。 */
+type PanelKind = "emotes" | "phrases" | "recent" | "filter";
 
 interface Props {
   disabled: boolean;
@@ -31,6 +36,7 @@ interface Props {
     reply?: ReplyTarget,
   ) => Promise<SendOutcome | undefined>;
   onOpenEmotes: () => void;
+  onNotice: (text: string) => void;
 }
 
 /** 发送结果 → 文案与样式（docs/ui.md §6.5 的七态）。 */
@@ -47,9 +53,17 @@ const OUTCOME_CLASS: Record<SendOutcome, string | undefined> = {
 /** 表情分组展示顺序。 */
 const PACKAGE_ORDER: EmotePackage[] = ["common", "room", "medal", "guard"];
 
-/// 内置颜文字与快捷短语（需求 §2.2 的「快捷短语 / 颜文字」）。
-/// 它们是固定常量，不进偏好；用户自己加的短语才存 `composer.phrases`。
-const KAOMOJI: string[] = ["233", "awsl", "yyds", "(￣▽￣)", "(・∀・)", "╮(╯▽╰)╭", "→_→", "666"];
+/** 内置颜文字与快捷短语（需求 §2.2 的「快捷短语 / 颜文字」）。 */
+const KAOMOJI: string[] = [
+  "233",
+  "awsl",
+  "yyds",
+  "(￣▽￣)",
+  "(・∀・)",
+  "╮(╯▽╰)╭",
+  "→_→",
+  "666",
+];
 
 export function Composer({
   disabled,
@@ -64,6 +78,7 @@ export function Composer({
   onPrefs,
   onSend,
   onOpenEmotes,
+  onNotice,
 }: Props) {
   const [draft, setDraft] = useState("");
   // 被点选的表情：名字会重名（实测「贴贴」同时存在于通用包与房间包），
@@ -72,7 +87,16 @@ export function Composer({
   // 回复某条弹幕时显示引用条；@ 某人只是把名字插进草稿，另记 uid 供发送时上报。
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [mention, setMention] = useState<{ mid: number; uname: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [panel, setPanel] = useState<PanelKind | null>(null);
+  const [emoteQuery, setEmoteQuery] = useState("");
+  const [newPhrase, setNewPhrase] = useState("");
+  // 短语的「改」：就地变成输入框（右键菜单里点「编辑」进入）。
+  const [editingPhrase, setEditingPhrase] = useState<{ index: number; text: string } | null>(null);
+  const [phraseMenu, setPhraseMenu] = useState<{ at: MenuPoint; index: number } | null>(null);
+  const areaRef = useRef<HTMLTextAreaElement>(null);
 
+  // 行菜单送来的动作：@ 与回复各应用一次（token 每次点击都变，不会自激）。
   useEffect(() => {
     if (!pendingAction) return;
     const { kind, message } = pendingAction;
@@ -85,35 +109,35 @@ export function Composer({
     } else {
       setReplyTo(message);
     }
-    // 只在用户点菜单时应用一次：token 每次点击都变，因此不会自激。
   }, [pendingAction]);
-  const [busy, setBusy] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [phrasesOpen, setPhrasesOpen] = useState(false);
-  const [newPhrase, setNewPhrase] = useState("");
 
-  // 按来源分组展示（通用 / 本房间 / 粉丝牌 / 大航海 / 房管），见 docs/ui.md §6.3。
   const customPhrases = prefs["composer.phrases"] ?? [];
 
+  // 按来源分组展示（通用 / 本房间 / 粉丝牌 / 大航海），见 docs/ui.md §6.3。
   const grouped = useMemo(() => {
     const groups: Record<EmotePackage, Emote[]> = {
       common: [],
       room: [],
       medal: [],
       guard: [],
-        };
+    };
     // 接口给的包 + 从弹幕学到的表情；同一个唯一键只出现一次（接口优先）。
     const known = new Set(emotes.map((emote) => emote.emoticon_unique));
-    const merged = [...emotes, ...seenEmotes.filter((emote) => !known.has(emote.emoticon_unique))];
-    for (const emote of merged) groups[emote.package_kind].push(emote);
+    const merged = [
+      ...emotes,
+      ...seenEmotes.filter((emote) => !known.has(emote.emoticon_unique)),
+    ];
+    const query = emoteQuery.trim().toLowerCase();
+    for (const emote of merged) {
+      if (query.length > 0 && !emote.text.toLowerCase().includes(query)) continue;
+      groups[emote.package_kind].push(emote);
+    }
     return PACKAGE_ORDER.map((kind) => [kind, groups[kind]] as const).filter(
       ([, items]) => items.length > 0,
     );
-  }, [emotes, seenEmotes]);
+  }, [emotes, seenEmotes, emoteQuery]);
 
   // 输入区预览：把草稿里能对上的表情名换成图片，让用户看清「这条发出去长什么样」。
-  // 上游按**内容**识别表情弹幕（收包侧 `info[1]` 就是表情名，是服务端补的 `info[0][13]`），
-  // 所以「插入名字」与「插入表情」在协议上是同一件事——这里只是把它显示出来。
   const preview = useMemo(() => {
     if (draft.length === 0 || emotes.length === 0) return null;
     // 长名优先，避免短名吃掉长名的前缀。
@@ -141,6 +165,74 @@ export function Composer({
     if (buffer.length > 0) parts.push({ text: buffer });
     return matched > 0 ? parts : null;
   }, [draft, emotes]);
+
+  /** 在光标处插入（面板点选与 @ 都走这里），插完把光标放到插入内容之后。 */
+  const insertAtCaret = (text: string) => {
+    const el = areaRef.current;
+    const start = el?.selectionStart ?? draft.length;
+    const end = el?.selectionEnd ?? draft.length;
+    setDraft(draft.slice(0, start) + text + draft.slice(end));
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(start + text.length, start + text.length);
+    });
+  };
+
+  const togglePanel = (kind: PanelKind) => {
+    if (panel === kind) {
+      setPanel(null);
+      return;
+    }
+    if (kind === "emotes") onOpenEmotes();
+    setPanel(kind);
+  };
+
+  const commitPhrase = (text: string) => {
+    const value = text.trim();
+    if (value.length === 0) {
+      onNotice("短语不能为空");
+      return false;
+    }
+    if (customPhrases.includes(value)) {
+      onNotice("这条短语已经有了");
+      return false;
+    }
+    onPrefs({ "composer.phrases": [...customPhrases, value] });
+    return true;
+  };
+
+  const renamePhrase = (index: number, text: string) => {
+    const value = text.trim();
+    if (value.length === 0) {
+      onNotice("短语不能为空");
+      return;
+    }
+    if (customPhrases.some((item, i) => i !== index && item === value)) {
+      onNotice("这条短语已经有了");
+      return;
+    }
+    onPrefs({
+      "composer.phrases": customPhrases.map((item, i) => (i === index ? value : item)),
+    });
+  };
+
+  const removePhrase = (index: number) => {
+    onPrefs({
+      "composer.phrases": customPhrases.filter((_, i) => i !== index),
+    });
+  };
+
+  const phraseMenuItems = (index: number): MenuItem[] => [
+    {
+      label: "编辑",
+      onSelect: () => setEditingPhrase({ index, text: customPhrases[index] }),
+    },
+    {
+      label: "删除",
+      danger: true,
+      onSelect: () => removePhrase(index),
+    },
+  ];
 
   const submit = async () => {
     const content = draft.trim();
@@ -175,15 +267,31 @@ export function Composer({
       setPickedEmote(null);
       setReplyTo(null);
       setMention(null);
+      setPanel(null);
     }
   };
 
+  const panelFont = { fontSize: `${14 * prefs["ui.font_scale"]}px` };
+
   return (
     <>
-      {pickerOpen && (
-        <div className={styles.picker}>
+      {panel === "emotes" && (
+        <div className={styles.picker} data-testid="db-panel" style={panelFont}>
+          <div className={styles.panelHead}>
+            <span className={styles.panelTitle}>表情</span>
+            <input
+              className={styles.panelSearch}
+              value={emoteQuery}
+              placeholder="搜索表情"
+              onChange={(event) => setEmoteQuery(event.target.value)}
+            />
+          </div>
           {grouped.length === 0 ? (
-            <div className={styles.empty}>没有可用表情（或尚未加载）</div>
+            <div className={styles.empty}>
+              {emoteQuery.trim().length > 0
+                ? "没有匹配的表情"
+                : "没有可用表情（或尚未加载）"}
+            </div>
           ) : (
             grouped.map(([kind, items]) => (
               <div key={kind} className={styles.pickerGroup}>
@@ -194,10 +302,15 @@ export function Composer({
                   {items.map((emote) => (
                     <button
                       key={emote.key}
-                      className={styles.pickerItem}
+                      // 通用表情之外（本房间 / 粉丝牌 / 大航海）画大一点：那几族本来就大，
+                      // 缩成通用表情那么大根本看不清（issue #8）。
+                      className={`${styles.pickerItem} ${
+                        kind === "common" ? "" : styles.pickerItemBig
+                      }`}
                       title={emote.text}
+                      onMouseDown={(event) => event.preventDefault()}
                       onClick={() => {
-                        setDraft((value) => value + emote.text);
+                        insertAtCaret(emote.text);
                         setPickedEmote(emote);
                       }}
                     >
@@ -215,15 +328,16 @@ export function Composer({
         </div>
       )}
 
-      {phrasesOpen && (
-        <div className={styles.phrases}>
+      {panel === "phrases" && (
+        <div className={styles.phrases} data-testid="db-panel">
           <div className={styles.phrasesRow}>
             <span className={styles.previewLabel}>颜文字</span>
             {KAOMOJI.map((text) => (
               <button
                 key={text}
                 className={styles.phraseItem}
-                onClick={() => setDraft((value) => value + text)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => insertAtCaret(text)}
               >
                 {text}
               </button>
@@ -232,48 +346,106 @@ export function Composer({
           <div className={styles.phrasesRow}>
             <span className={styles.previewLabel}>自定义</span>
             {customPhrases.length === 0 && (
-              <span className={styles.previewLabel}>（还没有，在右边加一个）</span>
+              <span className={styles.previewLabel}>（还没有，在右边加一条）</span>
             )}
-            {customPhrases.map((text) => (
-              <button
-                key={text}
-                className={styles.phraseItem}
-                title="点一下插入；右键或按下面的 ✕ 删除"
-                onClick={() => setDraft((value) => value + text)}
-              >
-                {text}
-              </button>
-            ))}
+            {customPhrases.map((text, index) =>
+              editingPhrase?.index === index ? (
+                <input
+                  key={`edit-${index}`}
+                  className={styles.phraseInput}
+                  autoFocus
+                  value={editingPhrase.text}
+                  onChange={(event) =>
+                    setEditingPhrase({ index, text: event.target.value })
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      renamePhrase(index, editingPhrase.text);
+                      setEditingPhrase(null);
+                    }
+                    if (event.key === "Escape") setEditingPhrase(null);
+                  }}
+                  onBlur={() => setEditingPhrase(null)}
+                />
+              ) : (
+                <button
+                  key={`${text}-${index}`}
+                  className={styles.phraseItem}
+                  title="点一下插入；右键可改名或删除"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => insertAtCaret(text)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setPhraseMenu({
+                      at: { x: event.clientX, y: event.clientY },
+                      index,
+                    });
+                  }}
+                >
+                  {text}
+                </button>
+              ),
+            )}
             <input
               className={styles.phraseInput}
               value={newPhrase}
-              placeholder="回车添加"
+              placeholder="新短语，回车添加"
               onChange={(event) => setNewPhrase(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key !== "Enter") return;
                 event.preventDefault();
-                const text = newPhrase.trim();
-                if (text.length === 0 || customPhrases.includes(text)) {
-                  setNewPhrase("");
-                  return;
-                }
-                onPrefs({ "composer.phrases": [...customPhrases, text] });
-                setNewPhrase("");
+                if (commitPhrase(newPhrase)) setNewPhrase("");
               }}
             />
-            {customPhrases.length > 0 && (
-              <button
-                className={styles.phraseItem}
-                title="删掉最后一个自定义短语"
-                onClick={() =>
-                  onPrefs({ "composer.phrases": customPhrases.slice(0, -1) })
-                }
-              >
-                ✕
-              </button>
-            )}
+            <button
+              className={styles.phraseItem}
+              disabled={newPhrase.trim().length === 0}
+              title="添加这条短语"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                if (commitPhrase(newPhrase)) setNewPhrase("");
+              }}
+            >
+              添加
+            </button>
           </div>
         </div>
+      )}
+
+      {panel === "recent" && (
+        <div className={styles.recent} data-testid="db-panel">
+          <span className={styles.previewLabel}>最近发言</span>
+          {recentSends.length === 0 ? (
+            <span className={styles.previewLabel}>（本会话还没发过）</span>
+          ) : (
+            recentSends.map((text) => (
+              <button
+                key={text}
+                className={styles.recentItem}
+                title="点击填入输入框"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => insertAtCaret(text)}
+              >
+                {text.length > 16 ? `${text.slice(0, 16)}…` : text}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
+      {panel === "filter" && (
+        <div className={styles.filterPanel} data-testid="db-panel">
+          <FilterBar prefs={prefs} onChange={onPrefs} />
+        </div>
+      )}
+
+      {phraseMenu && (
+        <ContextMenu
+          at={phraseMenu.at}
+          items={phraseMenuItems(phraseMenu.index)}
+          onClose={() => setPhraseMenu(null)}
+        />
       )}
 
       {replyTo && (
@@ -285,24 +457,8 @@ export function Composer({
         </div>
       )}
 
-      {draft.length === 0 && recentSends.length > 0 && (
-        <div className={styles.recent}>
-          <span className={styles.previewLabel}>最近</span>
-          {recentSends.slice(0, 4).map((text) => (
-            <button
-              key={text}
-              className={styles.recentItem}
-              title="点击填入输入框"
-              onClick={() => setDraft(text)}
-            >
-              {text.length > 12 ? `${text.slice(0, 12)}…` : text}
-            </button>
-          ))}
-        </div>
-      )}
-
       {preview && (
-        <div className={styles.preview}>
+        <div className={styles.preview} style={panelFont}>
           <span className={styles.previewLabel}>将发送</span>
           {preview.map((part, index) =>
             part.emote ? (
@@ -321,24 +477,8 @@ export function Composer({
       )}
 
       <div className={styles.composer}>
-        <button
-          disabled={disabled || !loggedIn}
-          title="快捷短语与颜文字"
-          onClick={() => setPhrasesOpen((open) => !open)}
-        >
-          短语
-        </button>
-        <button
-          disabled={disabled || !loggedIn}
-          title="表情包库"
-          onClick={() => {
-            if (!pickerOpen) onOpenEmotes();
-            setPickerOpen((open) => !open);
-          }}
-        >
-          表情
-        </button>
         <textarea
+          ref={areaRef}
           value={draft}
           placeholder={
             loggedIn ? "说点什么…（Enter 发送，Shift+Enter 换行）" : "未登录，只能看弹幕"
@@ -352,12 +492,51 @@ export function Composer({
             }
           }}
         />
-        <button
-          disabled={disabled || !loggedIn || busy || draft.trim().length === 0}
-          onClick={() => void submit()}
-        >
-          {busy ? "发送中" : "发送"}
-        </button>
+        {/* 工具行：四个面板入口在左，发送在右。按钮 mousedown 不抢焦点，草稿与光标都留着 */}
+        <div className={styles.composerTools}>
+          <button
+            className={panel === "emotes" ? styles.toolActive : undefined}
+            disabled={disabled || !loggedIn}
+            title="表情包库（在输入框上方展开）"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => togglePanel("emotes")}
+          >
+            表情
+          </button>
+          <button
+            className={panel === "phrases" ? styles.toolActive : undefined}
+            disabled={disabled || !loggedIn}
+            title="快捷短语与颜文字（右键短语可改名 / 删除）"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => togglePanel("phrases")}
+          >
+            短语
+          </button>
+          <button
+            className={panel === "recent" ? styles.toolActive : undefined}
+            disabled={disabled || !loggedIn}
+            title="本会话最近发过的内容"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => togglePanel("recent")}
+          >
+            最近
+          </button>
+          <button
+            className={panel === "filter" ? styles.toolActive : undefined}
+            title="筛选与显示（关键词 / 类型 / 字号 / 时间戳…）"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => togglePanel("filter")}
+          >
+            筛选
+          </button>
+          <span className={styles.composerSpacer} />
+          <button
+            disabled={disabled || !loggedIn || busy || draft.trim().length === 0}
+            onClick={() => void submit()}
+          >
+            {busy ? "发送中" : "发送"}
+          </button>
+        </div>
       </div>
       <div
         className={`${styles.composerHint} ${
@@ -365,7 +544,7 @@ export function Composer({
         }`}
       >
         {!loggedIn
-          ? "未登录：仅能接收弹幕，发送需要先在凭据文件中登录"
+          ? "未登录：仅能接收弹幕，发送需要先扫码登录"
           : lastOutcome
             ? `上次发送：${SEND_OUTCOME_TEXT[lastOutcome]}${
                 lastDetail ? ` · ${lastDetail}` : ""

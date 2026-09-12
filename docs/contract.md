@@ -174,11 +174,14 @@ sessdata = ""
 | `color` | i64 | 弹幕颜色十进制 RGB |
 | `medal_level` | i64 | 发送者粉丝牌等级，0 无 |
 | `medal_name` | string | 发送者粉丝牌名 |
-| `guard_level` | i64 | 0 无 / 1 总督 / 2 提督 / 3 舰长 |
+| `guard_level` | i64 | 发送者**在本房间**的大航海等级：0 无 / 1 总督 / 2 提督 / 3 舰长（实时取 `info[7]`、历史取顶层 `guard_level`，两者同义）。**本房间的舰长标只认它** |
+| `medal_guard_level` | i64 | 发送者**粉丝牌自身**的舰长标记（上游 `user.medal.guard_level`）——那是**牌子所属房间**的身份，只用于牌面样式，**不得**拿来画本房间的舰长标（`protocol.md` A39：拿它画标就是把别的房间的身份按到本房间头上） |
 | `is_admin` | bool | 发送者是否房管（REQUIREMENTS.md 需求） |
 | `is_history` | bool | 是否来自进场回填（§4.3）；实时推送恒为 `false` |
 | `amount` | i64 | 礼物金瓜子或 SC 金额，非交易类为 0 |
 | `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。存整份而非只存图片地址，是为了让界面能把它**再发出去** |
+| `reply_to_uid` | i64 | 被回复者的 uid；`0` 表示这条不是回复（上游把它塞在 `info[0][15].extra` 这个 JSON 字符串里，历史条目另有其路径） |
+| `reply_to_uname` | string | 被回复者昵称；非回复为空串 |
 | `face` | string | 发言者头像 URL（`info[0][15].user.base.face`，历史条目同层）；取不到为空串，界面自行降级 |
 | `medal_color_start` | string | 粉丝牌起始色（上游 `user.medal.v2_medal_color_start`），带 alpha 的 CSS 十六进制串（如 `#3FB4F699`）；无牌/缺失为空串 |
 | `medal_color_end` | string | 同上（`v2_medal_color_end`） |
@@ -187,6 +190,8 @@ sessdata = ""
 | `upstream_id` | string | **上游弹幕标识，举报必需**（来源待实测，见 `protocol.md` 附录） |
 
 > **徽标（REQUIREMENTS.md 需求）**：主播 = `uid == Room.anchor_uid` 派生；房管 = `Message.is_admin`；大航海 = `Message.guard_level`（`1` 总督 / `2` 提督 / `3` 舰长）。`is_anchor` 不设独立字段——能推导就不存。
+
+> **舰长标的分层（2026-09-12 用户反馈 #12）**：只认 `guard_level`（本房间）。粉丝牌上那个 `medal_guard_level` 属于**牌子所属房间**——它是为牌面样式准备的，用它画舰长标会让「戴着别的房间舰长牌的人」在本房间也亮出舰长标，正是用户报的现象。
 
 `SendOutcome`（发弹幕结果，规范性）：
 

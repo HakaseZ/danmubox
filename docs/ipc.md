@@ -107,6 +107,16 @@ type Message = {
   guard_level: number;   // 0 无 / 1 总督 / 2 提督 / 3 舰长
   is_admin: boolean;     // 发送者是否房管
   amount: number;        // 礼物金瓜子或 SC 金额，非交易类为 0
+  is_history: boolean;  // 是否来自进场回填；实时推送恒为 false
+  emote: EmoteRef | null;  // 表情弹幕的整份表情信息（契约 §5）；非表情为 null
+  medal_guard_level: number;  // 粉丝牌自身所属房间的舰长标记；只用于牌面样式，不画舰长标
+  medal_color_start: string;  // 粉丝牌起始色（带 alpha 的 CSS 十六进制串）；空串不是颜色
+  medal_color_end: string;
+  medal_color_border: string;
+  medal_color_text: string;
+  reply_to_uid: number;   // 被回复者 uid；0 = 不是回复
+  reply_to_uname: string;  // 被回复者昵称；非回复为空串
+  combo_id: string;       // 连击标识（礼物聚合用）
   upstream_id: string;   // 上游弹幕标识，举报必需
 };
 
@@ -171,7 +181,7 @@ type RoomSession = {
 
 type Emote = {
   key: string;
-  package_kind: "common" | "medal" | "guard" | "admin";
+  package_kind: "common" | "owned" | "room" | "medal" | "guard";  // owned = 主站「我的表情」（契约 §5）
   text: string;
   url: string;
   room_id: number;               // 房间专属时非 0
@@ -236,7 +246,7 @@ type AppInfo = {
 |---|---|---|---|
 | `danmubox://message` | `Message` | 每归一化一条消息；同时写入该房间会话缓冲 | 不节流；前端按帧合批渲染 |
 | `danmubox://room` | `RoomEvent` | 房间元信息变化、连接建立/断开、重连退避开始、手动重连 | 同房间 200ms 合并 |
-| `danmubox://session` | `SessionStatus` | 扫码确认、登出、认证失败导致会话失效 | 事件驱动 |
+| `danmubox://session` | `SessionStatus` **或** `RoomSession` | 扫码确认、登出、认证失败导致会话失效；**同一条事件也用于推送房内身份**（`RoomSession`，会话建立时取一次）——前端须按判别字段分派（有 `logged_in` 走登录态、有 `is_admin` 走房内身份），否则身份载荷会把登录态覆盖成 `undefined` | 事件驱动 |
 | `danmubox://status` | `StatusEvent` | 进程状态变化 | 最多 1s 一次（节流） |
 | `danmubox://send` | `ChatSendResult` | 每次发弹幕请求得到结果（**与 `chat_send` 的返回值同构**） | 事件驱动 |
 | `danmubox://room_stats` | `RoomStats` | 房间观众数变化（在线人数 / 累计看过，两侧可缺省；契约 §5） | 事件驱动，不进会话缓冲 |

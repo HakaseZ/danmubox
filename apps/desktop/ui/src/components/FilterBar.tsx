@@ -110,6 +110,20 @@ export function FilterBar({ prefs, onChange }: Props) {
 
       <section className={styles.filterSection}>
         <h3>显示</h3>
+        <label title="跟随系统 = 随操作系统外观自动切换；整应用一套深浅配色">
+          主题
+          <select
+            data-testid="db-pref-theme"
+            value={prefs["ui.theme"]}
+            onChange={(event) =>
+              onChange({ "ui.theme": event.target.value as Prefs["ui.theme"] })
+            }
+          >
+            <option value="system">跟随系统</option>
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select>
+        </label>
         <label>
           字号
           <input

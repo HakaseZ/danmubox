@@ -221,3 +221,4 @@ Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desk
 | 界面规范 | `docs/ui.md` |
 | 为什么这样选 | `docs/decisions/` |
 | 排期与验收 | `docs/roadmap.md` |
+| 需求与 issue 台账（这条做没做、凭什么） | `docs/requests.md` |

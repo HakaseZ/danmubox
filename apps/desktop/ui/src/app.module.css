@@ -16,20 +16,32 @@
    - 字号全部是 em：基准由 body 的 --fs-root 与 .scroller / 面板容器上的
      `ui.font_scale` 一起给出，所以令牌值不能写成 px，否则字号滑杆对它们失效（docs/ui.md §8.2）。 */
 :root {
-  /* 调色板（语义槽）：背景 / 表面 / 下沉面 / 分隔线 / 正文 / 次级文字 / 强调 / 成功 / 警告 / 错误 */
-  --bg: #12141a;
-  --bg-elevated: #1a1d25;
-  --bg-input: #232733;
-  --border: #2c313d;
-  --fg: #e6e8ee;
-  --fg-dim: #9aa2b1;
-  --accent: #00aeec;
-  --danger: #ff6b6b;
-  --warn: #f09300;
-  --ok: #4ade80;
+  /* 调色板（语义槽）：背景 / 表面 / 下沉面 / 分隔线 / 正文 / 次级文字 / 强调 / 成功 / 警告 / 错误。
+
+     整表的取值口径与来源标注（docs/ui.md §9.2）：
+       【A】有出处 —— WhatsApp 公开品牌色（品牌绿 #25D366）。
+       【B】按已知实现未核 —— WhatsApp 客户端（iOS / Android / Web）已知的界面表面色，
+             没有逐条打开实物核验；**拿到实物后要微调的就是这几行**。
+       【B+】按已知实现未核 + 为对比度推算 —— 已知实现里没有直接对应值，或对应值达不到
+             4.5:1，按 WCAG 相对亮度公式推算出来的替代值。
+     `:root` 是**深色基座**（也是 ui.theme = dark 的值）；`:root[data-theme="light"]` 是
+     同一批语义槽的换值块 —— 组件规则一行都不用改，这是本文件的设计口径。 */
+  --bg: #0b141a; /* B：会话画布 */
+  --bg-elevated: #111b21; /* B：面板 / 卡片 / 顶栏 / 输入栏 */
+  --bg-input: #202c33; /* B：输入框与下沉面 */
+  --border: #2a3942; /* B：发丝线（对 --bg-elevated ≈ 1.4:1，只作分隔，不作 3:1 的组件边界） */
+  --fg: #e9edef; /* B：正文（对 --bg 15.8:1 ✓） */
+  --fg-dim: #8696a0; /* B：次级文字（对 --bg 6.1:1 ✓） */
+  --accent: #00a884; /* B：强调（填充 / 边 / 图标；对 --bg 6.1:1 ✓） */
+  /* 强调色**作为文字**时的槽：填充只要 3:1、文字要 4.5:1，深色下两者同值，浅色下必须分叉
+     （浅色 #00a884 压白面只有 3.0:1，见 docs/ui.md §9.2） */
+  --accent-text: #00a884; /* B */
+  --danger: #ff6b6b; /* B+（对 --bg 6.7:1 ✓） */
+  --warn: #e9a038; /* B+（对 --bg 8.5:1 ✓） */
+  --ok: #25d366; /* A：品牌绿（对 --bg 9.4:1 ✓） */
   /* 次级文字的两档（docs/ui.md §4.1 的弱化口径） */
-  --fg-muted: #9aa2b1;
-  --fg-subtle: #7c8494;
+  --fg-muted: #8696a0; /* B */
+  --fg-subtle: #6a7e8a; /* B+：三级弱化，只用于非关键微文案（对 --bg ≈ 4.6:1，勉强过线） */
   /* 徽标底色族：金瓜子 / 中性 / 大航海 / SC 档位 / 被吞标记 */
   --gold: #c08a2e;
   --neutral: #6b7280;
@@ -43,15 +55,20 @@
   --sc-5: #c0392b;
   --block-platform: #d93025;
   --block-room: #f0a020;
-  /* 彩色底上的文字：对比度在令牌这一层定死，使用处不再各写一次 */
-  --on-accent: #001018;
-  --on-ok: #002b12;
-  --on-danger: #1b0000;
+  /* 彩色底上的文字：对比度在令牌这一层定死，使用处不再各写一次。
+     白色压 #00a884 只有 3.0:1（不达标），因此强调色底一律用深字（6.1:1 ✓） */
+  --on-accent: #0b141a; /* B+ */
+  --on-ok: #002b12; /* 现状保留（对 #25d366 7.8:1 ✓） */
+  --on-danger: #1b0000; /* 现状保留 */
   --badge-fg: #fff;
   --badge-lift: #fff;
   --badge-border: color-mix(in srgb, var(--badge-lift) 45%, transparent);
   /* 悬停洗色：同一处定义，行 / 折叠条 / 卡片都用它 */
   --hover-wash: color-mix(in srgb, var(--accent) 8%, transparent);
+  /* 我方弹幕（自己发的那条）的整行底色。**不能复用 --hover-wash**：语义不同
+     （「这是我发的」≠「鼠标在这」），且同一元素上两者会同时命中、互相覆盖。
+     取 WhatsApp 深色「我方气泡」绿 #005c4b 的 45% 透明（B）。 */
+  --own-wash: color-mix(in srgb, #005c4b 45%, transparent);
   --overlay: rgba(0, 0, 0, 0.55);
 
   /* 间距阶：4 / 8 / 12 / 16 / 24 */
@@ -101,10 +118,10 @@
   --avatar: 1.35em;
   --time-col: 8ch;
 
-  /* 阴影与遮罩 */
-  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.45);
-  --shadow-sheet: 0 -8px 28px rgba(0, 0, 0, 0.5);
+  /* 阴影与遮罩：WhatsApp 是平面语言（靠 1px 发丝线与色阶分层），阴影压薄 */
+  --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.4); /* B+ */
+  --shadow-dialog: 0 8px 28px rgba(0, 0, 0, 0.48); /* B+ */
+  --shadow-sheet: 0 -6px 20px rgba(0, 0, 0, 0.45); /* B+ */
 
   /* 触屏与弹出层 */
   --tap-min: 40px; /* 窄屏 sheet / 对话框里的热区下限（触屏） */
@@ -115,17 +132,36 @@
   color-scheme: dark;
 }
 
-/* 浅色不是新主题，只是把同一套语义槽换一组值：组件规则一行都不用改 */
+/* 浅色不是新主题，只是把同一套语义槽换一组值：组件规则一行都不用改。
+   ⚠ 长度令牌（--row-line / --avatar / --badge-h / --emote / --time-col / --tap-min /
+   --panel-max-h* / --sheet-max-h）**不许**出现在这里：@property 注册的 --row-line 若在
+   :root 被显式赋值，1.5em 会按根字号（16px）算成 24px 并向下继承，行内三个尺度就此脱钩
+   （用户 #3 的老 bug）；--avatar 的 :root 默认值也必须永远能解析出值，否则行外共用的头像
+   会按原图 512 渲染、把主页顶爆。这一块**只放颜色与阴影**。 */
 :root[data-theme="light"] {
-  --bg: #f6f7f9;
-  --bg-elevated: #ffffff;
-  --bg-input: #eef0f4;
-  --border: #d8dce4;
-  --fg: #1c1f26;
-  --fg-dim: #667085;
-  --fg-muted: #667085;
-  --fg-subtle: #8a92a3;
-  --overlay: rgba(0, 0, 0, 0.35);
+  --bg: #efeae2; /* B：会话画布（米色壁纸的纯色版，不带涂鸦，图案会伤小字可读性） */
+  --bg-elevated: #ffffff; /* B：白面板浮在米色画布上 */
+  --bg-input: #f0f2f5; /* B：输入框 / 搜索框 / 下沉面 */
+  --border: #e9edef; /* B：发丝线（比深色那套更淡） */
+  --fg: #111b21; /* B（对 --bg 15.5:1 ✓） */
+  --fg-dim: #54656f; /* B（对 --bg 5.4:1 ✓）。不用 #667781：米色画布上只有 4.1:1 ✗ */
+  --fg-muted: #54656f; /* B */
+  --fg-subtle: #667781; /* B：只用于非关键微文案（米色 4.1:1）；要读的三级文字用 --fg-dim */
+  --accent: #00a884; /* B：只做填充与边（对白面 3.0:1 压线，对米色 2.5:1） */
+  --accent-text: #07705a; /* B+：浅色下唯一可做文字的绿（米色 5.1:1 / 白面 5.8:1 ✓） */
+  --ok: #0a7c5f; /* B+：#25d366 当文字在米色上只有 1.8:1 ✗（品牌绿只做填充） */
+  --warn: #8a5200; /* B+（对米色 5.7:1 ✓） */
+  --danger: #c4292f; /* B+（对米色 5.0:1 ✓） */
+  --on-accent: #0b141a; /* B+：绿底深字，不做白字（白字只有 3.0:1） */
+  --on-ok: #ffffff; /* B+（对 #0a7c5f 5.2:1 ✓） */
+  --on-danger: #ffffff; /* B+（对 #c4292f 5.6:1 ✓） */
+  /* 浅色底更亮，洗色比例由 8% 提到 12% 才看得出（同一令牌、两套值，不新增名字） */
+  --hover-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+  --own-wash: #d9fdd3; /* B：WhatsApp 浅色「我方气泡」绿搬到整行底色（对 --fg 14.5:1 ✓） */
+  --overlay: rgba(11, 20, 26, 0.32); /* B：浅色下更轻 */
+  --shadow-menu: 0 2px 10px rgba(11, 20, 26, 0.14); /* B+ */
+  --shadow-dialog: 0 6px 24px rgba(11, 20, 26, 0.18); /* B+ */
+  --shadow-sheet: 0 -4px 16px rgba(11, 20, 26, 0.16); /* B+ */
   color-scheme: light;
 }
 
@@ -162,7 +198,7 @@
   text-overflow: ellipsis;
   border: 1px solid var(--border);
   border-bottom: none;
-  border-radius: var(--r-1) var(--r-1) 0 0;
+  border-radius: var(--r-2) var(--r-2) 0 0;
   background: transparent;
   color: var(--fg-dim);
 }
@@ -170,6 +206,11 @@
 .tabActive {
   background: var(--bg-elevated);
   color: var(--fg);
+}
+
+/* 悬停给一层洗色：WhatsApp 的列表 / 页签悬停是色块，不是描边 */
+.tab:hover {
+  background: var(--hover-wash);
 }
 
 .shell {
@@ -204,7 +245,7 @@
   align-items: center;
   gap: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-2);
+  border-radius: var(--r-3);
   background: var(--bg-elevated);
   padding: var(--sp-3);
   margin-bottom: var(--sp-4);
@@ -261,7 +302,7 @@
   max-width: 680px;
   padding: var(--sp-4);
   border: 1px solid var(--border);
-  border-radius: var(--r-3);
+  border-radius: var(--r-4);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-dialog);
 }
@@ -294,7 +335,7 @@
   gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-2);
+  border-radius: var(--r-3);
 }
 
 /* 当前账号要明显标出：它决定「覆盖的是谁」 */
@@ -345,7 +386,7 @@
   gap: var(--sp-1);
   padding: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-2);
+  border-radius: var(--r-3);
 }
 
 .accountCookie input {
@@ -368,7 +409,7 @@
   gap: var(--sp-3);
   padding: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-2);
+  border-radius: var(--r-3);
   background: var(--bg-elevated);
   margin-bottom: var(--sp-2);
   cursor: pointer;
@@ -376,6 +417,7 @@
 
 .roomCard:hover {
   border-color: var(--accent);
+  background: var(--hover-wash);
 }
 
 .roomCardMain {
@@ -529,6 +571,21 @@
 
 .row:hover {
   background: var(--hover-wash);
+}
+
+/* 我方弹幕（自己发的那条）：整行底色 + 行首 2px 竖条。
+   用户已定口径：**不搬气泡结构**（弹幕是多人流水，没有回合、也没有「这条属于上一句」的语义），
+   因此不做尾巴、不右对齐、不做已读回执。竖条走 box-shadow inset，**零布局位移** ——
+   时间戳列 8ch、头像列、悬挂缩进与上面那一整套对齐口径一格不动。
+   ⚠ 顺序要紧：`.rowOwn` 必须在 `.row:hover` 之后（同一元素上两者都会命中，
+   悬停时用 `.rowOwn:hover` 把自己那层压回去，否则自己的弹幕一悬停就「消失」）。 */
+.rowOwn {
+  background: var(--own-wash);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.rowOwn:hover {
+  background: color-mix(in srgb, var(--own-wash) 55%, var(--accent));
 }
 
 /* 时间戳列：定宽 + 等宽数字，逐行纵向对齐（issue #8） */
@@ -805,7 +862,7 @@
   padding: var(--sp-1);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--r-2);
+  border-radius: var(--r-4);
   box-shadow: var(--shadow-menu);
 }
 
@@ -880,13 +937,14 @@
 
 .giftItem {
   padding: var(--sp-1) 0;
-  border-bottom: 1px dashed var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .bottomAnchor {
   position: absolute;
   right: var(--sp-5);
   bottom: var(--sp-4);
+  border-radius: var(--r-full);
   background: var(--accent);
   color: var(--on-accent);
   border: none;
@@ -923,9 +981,12 @@
   flex: 1;
 }
 
+/* 活动态是**色块**不是描边（WhatsApp 的口径）：洗色底 + 强调色文字。
+   文字用 --accent-text —— 浅色下 --accent 压白面只有 3.0:1，做文字不达标 */
 .toolActive {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--hover-wash);
+  border-color: transparent;
+  color: var(--accent-text);
 }
 
 .composerHint {
@@ -1142,7 +1203,7 @@
 
 /* 选中态挂在 `aria-selected` 上而不是某个类名上：屏幕阅读器读到的与眼睛看到的同一处来源 */
 .emoteTab[aria-selected="true"] {
-  color: var(--fg);
+  color: var(--accent-text);
   font-weight: 600;
   background: var(--bg-input);
   border-left-color: var(--accent);
@@ -1205,12 +1266,17 @@
   align-items: center;
   justify-content: center;
   padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-2);
   font-size: var(--fs-6);
   /* 行高跟表情同档（不是 `var(--row-line)`——那是弹幕行的尺度，在面板里解析成 21px 的固定值，
      字号滑杆改不动它）：没有图、退化成文字的那一格因此与前后的格子等高。 */
   line-height: var(--emote-size);
   overflow-wrap: anywhere;
   min-width: 2em;
+}
+
+.pickerItem:hover {
+  background: var(--hover-wash);
 }
 
 /* 表情图：**宽高一律由 CSS 显式给出 + `object-fit: contain`**（用户 2026-09-12：表情溢出格子边框）。
@@ -1253,7 +1319,7 @@
   padding: var(--sp-1) var(--sp-3);
   font-size: var(--fs-2);
   color: var(--fg-dim);
-  border-top: 1px dashed var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .previewLabel {
@@ -1295,7 +1361,7 @@
   padding: var(--sp-1) var(--sp-3);
   font-size: var(--fs-2);
   color: var(--fg-dim);
-  border-top: 1px dashed var(--border);
+  border-top: 1px solid var(--border);
 }
 
 /* 筛选与显示面板（issue #8：不再常驻占一行） */
@@ -1402,7 +1468,7 @@
   grid-template-areas: "avatar who status time";
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-2);
+  border-radius: var(--r-3);
   margin-bottom: var(--sp-1);
   cursor: pointer;
   background: var(--bg-elevated);
@@ -1410,6 +1476,7 @@
 
 .followItem:hover {
   border-color: var(--accent);
+  background: var(--hover-wash);
 }
 
 /* 固定宽度的头像列：上游没给 face 时 `Avatar` 不渲染 <img>，但列宽要照占，
@@ -1482,7 +1549,7 @@
   margin-top: var(--sp-2);
   padding: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-2);
+  border-radius: var(--r-4);
   width: fit-content;
 }
 
@@ -1532,7 +1599,7 @@
   background: var(--danger);
   color: var(--on-danger);
   padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--r-2);
+  border-radius: var(--r-3);
   display: flex;
   gap: var(--sp-3);
   align-items: center;
@@ -1561,7 +1628,7 @@
   color: var(--fg-dim);
   border-top: 1px solid var(--border);
   padding: var(--sp-2) var(--sp-3);
-  background: var(--bg);
+  background: var(--bg-input);
 }
 
 /* ==========================================================================
@@ -1573,7 +1640,7 @@
    ========================================================================== */
 @media (max-width: 520px) {
   .listPage {
-    padding: var(--sp-3);
+    padding: var(--sp-4);
   }
 
   /* 身份簇的上限在窄屏收到 10em（14px 字号下 140px，约正文块的一半）：正文因此至少拿到

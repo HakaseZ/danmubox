@@ -56,6 +56,19 @@ const VIEWPORTS = [
   { name: "narrow", width: 360, height: 844 },
 ];
 
+/**
+ * 主题维度（本次新增）：同一份场景 × 同一套断言，深浅**各跑一遍**。
+ * 主题由 mock 的 `ui.theme` 驱动（`SMOKE_THEME` 传进 `buildSmokeHtml`），
+ * 场景里另有一条真实交互断言：在筛选面板里切主题 → `<html data-theme>` 跟着变。
+ * 截图命名带主题后缀（`danmubox-ui-dark-*` / `danmubox-ui-narrow-light-*`），
+ * 否则深浅两遍会互相覆盖，验收矩阵里就只剩一套图。
+ * `SMOKE_THEMES=dark` 可以只跑一遍（单档调试用，验收矩阵要求两档都跑）。
+ */
+const THEMES = (process.env.SMOKE_THEMES ?? "dark,light")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+
 /** 单条命令 / 阶段的上限：宁可失败并说清卡在哪，也不要无声地挂着。 */
 const TIMEOUTS = {
   cdp: 20000, // 一条 CDP 命令
@@ -451,14 +464,20 @@ async function openWebKit() {
 
 /* ==================================================================== 场景驱动（两引擎共用） */
 
-const html = buildSmokeHtml();
-const htmlPath = join(mkdtempSync(join(tmpdir(), "danmubox-smoke-")), "room-page.html");
-writeFileSync(htmlPath, html);
+// 每个主题各生成一份 HTML（mock 里的 ui.theme 不同），同一个进程里换页跑，不用重建产物
+const smokeDir = mkdtempSync(join(tmpdir(), "danmubox-smoke-"));
+const htmlPaths = new Map(
+  THEMES.map((theme) => {
+    const file = join(smokeDir, `room-page-${theme}.html`);
+    writeFileSync(file, buildSmokeHtml(theme));
+    return [theme, file];
+  }),
+);
 
 /** 一个视口里跑完整个场景，返回快照。 */
-async function runViewport({ viewPage, shoot, shotDir, name, width, height }) {
-  log(`视口 ${name}（${width}×${height}）`);
-  await viewPage.goto(`file://${htmlPath}`);
+async function runViewport({ viewPage, shoot, shotDir, name, width, height, theme }) {
+  log(`视口 ${name}（${width}×${height}）· 主题 ${theme}`);
+  await viewPage.goto(`file://${htmlPaths.get(theme)}`);
 
   for (let i = 0; i < 60; i += 1) {
     if (await viewPage.evaluate("typeof window.__smoke_run === 'function'")) break;
@@ -478,8 +497,8 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height }) {
   let accountQrShot = false;
   let followShot = false;
   let roomsShot = false;
-  // 宽屏沿用既有文件名（docs/ui.md §15 列了它们），窄屏加 `-narrow` 前缀
-  const prefix = name === "narrow" ? "danmubox-ui-narrow" : "danmubox-ui";
+  // 宽屏沿用既有文件名（docs/ui.md §15 列了它们），窄屏加 `-narrow`；末尾一律带主题后缀
+  const prefix = `${name === "narrow" ? "danmubox-ui-narrow" : "danmubox-ui"}-${theme}`;
   // 300s 上限：正常 35–45s 跑完；环境被拖慢时宁可多等，也不要报一个假的「场景未跑完」
   for (let i = 0; i < 1200; i += 1) {
     const raw = await viewPage.evaluate("document.documentElement.getAttribute('data-smoke')");
@@ -626,6 +645,8 @@ try {
   };
 
   const results = [];
+  // 主题在外层：同一引擎里把一档跑完再跑另一档，截图目录里的文件名自带主题后缀
+  for (const theme of THEMES) {
   for (const viewport of VIEWPORTS) {
     let snapshot = null;
     for (let attempt = 1; attempt <= 2 && snapshot === null; attempt += 1) {
@@ -636,6 +657,7 @@ try {
           shoot: shootFor(viewPage),
           shotDir,
           ...viewport,
+          theme,
         });
       } catch (error) {
         // 渲染进程被打死（`Target crashed`）是**环境**问题：这台机器上并发跑第二轮冒烟时，
@@ -668,7 +690,8 @@ try {
       }
     }
     console.log(JSON.stringify(snapshot, null, 2));
-    results.push({ viewport: viewport.name, snapshot });
+    results.push({ viewport: `${viewport.name}/${theme}`, snapshot });
+  }
   }
 
   const failures = [];

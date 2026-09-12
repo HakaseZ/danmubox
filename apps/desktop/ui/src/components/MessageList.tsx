@@ -10,6 +10,8 @@ import styles from "../app.module.css";
 interface Props {
   rows: DisplayRow[];
   anchorUid?: number;
+  /** 当前登录用户 uid：透传给行，用来标记「自己发的那条」 */
+  myUid?: number;
   prefs: Prefs;
   onMenu: (message: Message, at: MenuPoint) => void;
 }
@@ -32,7 +34,7 @@ function pinToBottom(
 }
 
 /** 聊天流。虚拟滚动 + 自动跟随/暂停规则见 docs/ui.md §2、§3。 */
-export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
+export function MessageList({ rows, anchorUid, myUid, prefs, onMenu }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(prefs["ui.auto_scroll"]);
@@ -146,6 +148,7 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
               <MessageRow
                 row={rows[item.index]}
                 anchorUid={anchorUid}
+                myUid={myUid}
                 prefs={prefs}
                 onMenu={onMenu}
               />

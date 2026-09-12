@@ -30,7 +30,9 @@ button {
   color: inherit;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: var(--r-1);
+  /* 胶囊按钮是 WhatsApp 最显眼的形态特征（圆角阶见 app.module.css 的 --r-*）；
+     个别按钮在组件规则里覆盖它（页签、表情格、菜单项、礼物折叠行） */
+  border-radius: var(--r-full);
   padding: var(--sp-1) var(--sp-3);
   cursor: pointer;
 }
@@ -51,8 +53,15 @@ select {
   color: inherit;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: var(--r-1);
+  border-radius: var(--r-full);
   padding: var(--sp-1) var(--sp-2);
+  /* 原生控件（复选框 / 滑杆 / 进度）跟随主题的强调色，浅色块里的 color-scheme 只管配色方案 */
+  accent-color: var(--accent);
+}
+
+/* 多行输入不套胶囊（圆角半径会吃掉首尾两行的高度），给对话框档圆角 */
+textarea {
+  border-radius: var(--r-4);
 }
 
 input:focus,

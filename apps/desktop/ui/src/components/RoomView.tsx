@@ -387,6 +387,7 @@ export function RoomView({
       <MessageList
         rows={chatRows}
         anchorUid={room.anchor_uid}
+        myUid={session?.uid}
         prefs={prefs}
         onMenu={(message, at) => setMessageMenu({ at, message })}
       />

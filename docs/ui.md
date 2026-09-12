@@ -840,7 +840,18 @@
 > 整表不透明度（原 `ui.opacity` 滑杆）**已删除**：用户 2026-09-12 反馈那条实现方式不是预期，
 > 重新设计前不再提供该设置（见 `docs/roadmap.md`）。上表是每种 `kind` 的固定视觉档位，不是可调项。
 
-主题由 `ui.theme` 决定，取值 `system` / `dark` / `light`，默认 `system`；六种 `kind` 的颜色 token 在明暗两套取值下分别定义，切换主题即换 token，不改变 `kind` 语义。
+主题由 `ui.theme` 决定，取值 `system` / `dark` / `light`，默认 `system`；六种 `kind` 的颜色语义槽在明暗两套取值下分别定义，切换主题即换值，不改变 `kind` 语义。**开关在筛选面板「显示」块**（三选一，写回偏好），由 `App.tsx` 落到 `<html data-theme>`；`system` 档订阅 `matchMedia("(prefers-color-scheme: light)")` **实时跟随**系统外观，`index.html` 另有一行首帧前的内联预设（`prefs` 要等 IPC 回来，否则浅色系统上会先画一帧深色）。
+
+**整体设计语言 = WhatsApp**（用户 2026-09-12：全应用一次换完、深浅两套跟随系统；只取设计语言——色板 / 圆角 / 间距 / 字体层级 / 顶栏与输入栏形态）。以下是**明确不照搬**的部分，写清原因，避免以后有人「顺手」加回来：
+
+| 不搬的东西 | 为什么不搬 | 替代做法 |
+|---|---|---|
+| 气泡尾巴（tail） | 尾巴是「一问一答」的语法标记：它挂在气泡角上、指向说话人。弹幕是**多人流水**，没有回合、没有配对，挂尾巴等于对每条弹幕撒一个「它在回谁」的谎；技术上还要气泡左右分栏，会摧毁 §4.1 的 `[时间戳列][头像][身份簇｜正文]` 单一网格、8ch 时间戳纵向对齐与悬挂缩进 | 「自己发的」用**行级标记**：`.rowOwn` = 整行 `--own-wash` 底 + 行首 2px `inset` 竖条（`box-shadow`，**零布局位移**）。判据 `message.uid === session.uid`（与右键菜单的 `mine` 同源，经 `MessageList` 透传给 `MessageRow`） |
+| 已读回执（双勾） | ①契约 §5 的 `Message` 没有投递 / 已读字段，界面不许新增字段；②语义不存在——直播弹幕没有「对方已读」这回事 | 送达反馈留在输入区：`.sendOk` / `.sendWarn` / `.sendFail` + `lastSend.outcome` |
+| 未读徽章式的会话列表布局 | 房间列表不是会话列表：条目报主播 / 标题 / 直播状态，没有「最后一条消息」「未读数」这两样状态；做它要引入新的运行状态（哪条未读、计数、清零时机），那是行为票据不是换肤 | 列表项继续报「主播名 · 直播间名 + 直播状态 + 最后开播时间」（§2.2） |
+| 涂鸦壁纸（WhatsApp 的背景纹理） | 高密度小字压在有图案的底上，可读性与对比度都受损 | 只取**纯色画布**（浅色米色 `#efeae2` / 深色 `#0b141a`） |
+| 毛玻璃顶栏 / 输入栏 | 全仓库零 `backdrop-filter`；更硬的坑是 `filter` / `backdrop-filter` 会给后代建立 containing block，而 `.contextMenu` 是 `position: fixed`——祖先一带滤镜，菜单的锚点就变了 | 平面化：`--bg-elevated` + 1px `--border` 发丝线 |
+| 按人给用户名上色 | 与用户既定口径冲突：用户名与正文**都不吃**上游自定义颜色（白字人名在浅色下会隐形，是实测过的 bug） | 昵称固定 `--fg-dim`、正文固定 `--fg`；身份靠徽标（§4.2）+ 我方行的底色 |
 
 ### 8.4 合并相似消息
 
@@ -928,14 +939,39 @@
 | 类别 | 令牌 | 取值 | 用法口径 |
 |---|---|---|---|
 | 间距阶 | `--sp-1 … --sp-5` | 4 / 8 / 12 / 16 / 24 px | 间距只从这一档取；**弹幕行内只允许 `--sp-1`（贴）与 `--sp-2`（分）**（§4.1） |
-| 圆角阶 | `--r-1 … --r-4`、`--r-full` | 4 / 8 / 12 / 16 / 999 px | 小控件 `--r-1`、卡片 `--r-2`、对话框 `--r-3`、sheet 顶部 `--r-4`、正圆与胶囊 `--r-full` |
+| 圆角阶 | `--r-1 … --r-4`、`--r-full` | 4 / 8 / 12 / 16 / 999 px | WhatsApp 口径：**控件（按钮 / 单行输入 / 下拉 / 芯片）一律 `--r-full` 胶囊**（写在 `index.css` 的元素默认值里），多行输入 `--r-4`，卡片 / 账号行 / 关注项 `--r-3`，对话框与右键菜单 `--r-4`，sheet 顶部 `--r-4`、正圆 `--r-full`；例外（页签上圆角、表情格、菜单项、礼物折叠行）在各自规则里显式覆盖 |
 | 字号阶 | `--fs-1 … --fs-8` | 0.79 / 0.86 / 0.93 / 1 / 1.07 / 1.15 / 1.3 / 1.43 em | **全部是 em**，不能写成 px：基准字号由 body 的 `--fs-root`（14px）与弹幕区 / 面板上的 `ui.font_scale`（写成 em）共同给出，因此字号滑杆能作用到所有文字（§8.2） |
-| 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是彩色底上的文字色，遮罩 `--overlay`，悬停洗色 `--hover-wash` |
+| 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是**彩色底上**的文字色，`--accent-text` 是「强调色**作为文字**」（与填充分开：填充只要 3:1、文字要 4.5:1，浅色下两者必须分叉），`--own-wash` 是「自己发的」整行底色（不复用 `--hover-wash`：语义不同，且同一元素上会互相覆盖），遮罩 `--overlay`，悬停洗色 `--hover-wash` |
 | 徽标底色 | `--gold`、`--neutral`、`--guard-1…3`、`--sc-1…5`、`--block-platform`、`--block-room`、`--badge-fg`、`--badge-lift`、`--badge-border` | 见 `:root` | 粉丝牌**不吃**这些：它的真彩色来自上游（§4.2），令牌只兜底 |
 | 阴影 / 遮罩 | `--shadow-menu`、`--shadow-dialog`、`--shadow-sheet`、`--overlay` | — | 菜单 / 对话框 / sheet / 遮罩各一处 |
 | 行与触屏的固定尺寸 | `--row-line`、`--avatar` = 0.9×行盒、`--badge-h` = `--avatar`、`--emote` = 1.1×行盒、`--time-col`、`--tap-min`、`--panel-max-h`、`--panel-max-h-narrow`、`--sheet-max-h` | — | 只有这些是「结构尺寸」；其余一次性尺寸（二维码 200px、菜单最小宽 150px 等）仍写在各自规则里，不硬凑进间距阶。`--panel-max-h-narrow` 用视口份额（45vh）而不是固定像素，窄屏才不会被面板吃掉整屏。**弹幕行的那四个是一组**：`--row-line` 是基准（正文行盒高，1.5em，声明在 `.row` 上并用 `@property` 注册成 `<length>`，这样它算成 px 后再往下继承，子元素各写各的字号也不会算错），**而 `--avatar` 有两层**：`.row` 里是行盒的 0.9 倍，`:root` 里另给一个行外默认值（1.35em，随所在字号走）——`.avatar` 是跨页面复用的组件（关注列表 / 账号区 / 账号对话框都在弹幕行之外），令牌只活在 `.row` 里会让那些地方 `var(--avatar)` 解析失败、`<img>` 退回原图尺寸（2026-09-12 的返工，见 §15），头像 / 徽标 / 表情三个尺寸都从它按比例派生（§4.1） |
 
-浅色主题（`ui.theme`）**不是第二套样式**：只在 `:root[data-theme="light"]` 里给这些槽位换一组值，组件规则一行都不用改。新增样式时不得再写字面颜色 / 间距 / 圆角 / 字号——要新值就先加令牌。
+浅色主题（`ui.theme`）**不是第二套样式**：只在 `:root[data-theme="light"]` 里给这些槽位换一组值，组件规则一行都不用改。`:root` 是**深色基座**（不另开 `:root[data-theme="dark"]`，同一份值只有一个来源）。新增样式时不得再写字面颜色 / 间距 / 圆角 / 字号——要新值就先加令牌。**长度令牌（`--row-line` / `--avatar` / `--badge-h` / `--emote` / `--time-col` / `--tap-min` / `--panel-max-h*` / `--sheet-max-h`）不许出现在主题块里**：`--row-line` 被 `@property` 注册后若在 `:root` 显式赋值，`1.5em` 会按根字号（16px）算成 24px 再继承下去，行内三个尺度就此脱钩；`--avatar` 的 `:root` 默认值也必须永远能解析出值，否则行外共用的头像会按原图 512 渲染（§15 的那个事故）。
+
+**两套取值、来源标注与对比度**（`app.module.css` 令牌段逐行同款标注；日后拿取色器核过实物，把对应行从【B】改成【A】并写明核验方式与日期，**不许**把【B+】的推算值悄悄升级成【A】）：
+
+| 槽 | 深色（`:root`） | 浅色（`[data-theme="light"]`） | 来源 | 对比度（对各自画布） |
+|---|---|---|---|---|
+| `--bg` | `#0b141a` | `#efeae2` | B | 画布 |
+| `--bg-elevated` | `#111b21` | `#ffffff` | B | 面板 / 卡片 / 顶栏 |
+| `--bg-input` | `#202c33` | `#f0f2f5` | B | 输入框 / 下沉面 |
+| `--border` | `#2a3942` | `#e9edef` | B | 只作发丝线，不作 3:1 的组件边界 |
+| `--fg` | `#e9edef` | `#111b21` | B | **15.8:1 / 15.5:1** ✓ |
+| `--fg-dim`、`--fg-muted` | `#8696a0` | `#54656f` | B | **6.1:1 / 5.4:1** ✓（浅色不用 `#667781`：米色上只有 4.1:1） |
+| `--fg-subtle` | `#6a7e8a` | `#667781` | B+ | ≈4.6:1 / 4.1:1，**只用于非关键微文案** |
+| `--accent` | `#00a884` | `#00a884` | B | 6.1:1 / 白面 3.0:1 —— 只做填充与边 |
+| `--accent-text` | `#00a884` | `#07705a` | B / B+ | 6.1:1 / **5.1:1** ✓（文字专用槽） |
+| `--ok` | `#25d366` | `#0a7c5f` | **A**（品牌绿）/ B+ | 9.4:1 / 4.6:1 ✓（品牌绿在浅色下只能做填充：当文字 1.8:1） |
+| `--warn` | `#e9a038` | `#8a5200` | B+ | 8.5:1 / 5.7:1 ✓ |
+| `--danger` | `#ff6b6b` | `#c4292f` | B+ | 6.7:1 / 5.0:1 ✓ |
+| `--on-accent` | `#0b141a` | `#0b141a` | B+ | 6.1:1（白字压 `#00a884` 只有 3.0:1，因此**不做白字**） |
+| `--on-ok` / `--on-danger` | `#002b12` / `#1b0000` | `#ffffff` / `#ffffff` | 现状 / B+ | 7.8:1、— / 5.2:1、5.6:1 ✓ |
+| `--own-wash` | `#005c4b` 45% 透明 | `#d9fdd3` | B | 「自己发的」整行底色（浅色 14.5:1 ✓） |
+| `--hover-wash` | `--accent` 8% | `--accent` 12% | 派生 | 浅色底更亮，比例提高才看得出 |
+| `--overlay` | `rgba(0,0,0,.55)` | `rgba(11,20,26,.32)` | 现状 / B | 遮罩（浅色下更轻） |
+| `--shadow-menu/dialog/sheet` | 压薄一档 | 再压一档 | B+ | 平面语言：靠发丝线与色阶分层，不靠大投影 |
+
+**「正文对背景 ≥ 4.5:1」在两套主题下都是硬纪律**，冒烟里有可判定断言（`themeContrastBodyOk` / `themeContrastDimOk`，用 WCAG 相对亮度公式算，不靠人眼判）。三个已知陷阱：白字压 `#00a884`（3.0:1）、`#25d366` 当浅色文字（1.8:1）、`#667781` 压在米色画布上（4.1:1）。
 
 **关于「挤了怎么办」的一条规矩**（用户 2026-09-12 定案）：弹幕行的行高是 **内容 + `--sp-1`（4px）上下内边距 ≈ 29px**（原来是 23px），这是为了让行与行在触屏上分得开；代价是同样高度少看几行——面板展开时弹幕列表约剩一半（360×844 下约 390px ≈ 13 行 @29px），面板内容超出则走面板**内部滚动**，不靠遮挡换空间。如果将来真觉得挤，**正确的做法是新增一档「紧凑」令牌**（例如 `--sp-0: 2px`，并在令牌表里写清它只用于哪一类场景），**不是**就地把某个 `--sp-1` 改成 `2px`：间距阶的价值就在于「以后不用微调」，破一次例就等于给下一个人留了口子。
 
@@ -1035,6 +1071,8 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"     
 
 它的已知局限（所以它是旁证、不是主闸门）：**没有显示会话时 rAF 没有持续帧** —— 2026-09-12 实测 `requestAnimationFrame` 在 2.2s 里只触发 **1** 次（首帧），而 `setTimeout` 正常。后果是「跟随最新 / 虚拟列表窗口」这类**按帧推进**的断言会假失败：同一份快照交给 `--from-snapshot` 判定，**退出码是 1，213 条里有 24 条不成立**，全部是这类（`row*` / `layoutNewest*` / `layoutFollowing*` / QR 轮询那一条）；而**几何 / 尺寸 / 溢出 / 颜色**那一类（`listAvatarsSized`、`listAvatarBoxes`、`narrow_listNoHorizontalScroll`、`rowScale`…）成立 —— 这正是它存在的意义：**宿主引擎上的尺寸与布局证据**（这次根因 `--avatar` 就是靠它钉死的）。工具自己会把这句局限打在 stderr 上，别把这里的失败读成产品问题。每次只跑一个视口；完整断言一律以 `run-headless.mjs --engine webkit` 为准（Playwright 的 WebKit 有持续帧，516 项全绿）。
 
+**主题是一个独立的运行维度**（2026-09-12 新增）：`SMOKE_THEMES`（默认 `dark,light`）决定跑几档，档位写进 mock 的 `ui.theme` 并传进 `buildSmokeHtml(theme)` —— **同一份场景、同一套断言**深浅各跑一遍（不是两套场景）。新增的断言：主题三档都在（`themeSelectHasThreeModes`）、在筛选面板里切档后 `<html data-theme>` 真的变（`themeSwitchFlipsDom` 且偏好写回 `themeSwitchPreserved`）、画布底色跟着变（`themeSwitchChangesBackground`）、两档下正文与次级文字对背景 ≥ 4.5:1（`themeContrastBodyOk` / `themeContrastDimOk`）、我方弹幕有行级标记且左右对齐与别人一致（`rowOwnMarked` / `rowOwnBackgroundDiffers` / `rowOwnNoBubble`）。`SMOKE_THEMES=dark` 可只跑一档（单档调试用；验收矩阵要求两档都跑）。
+
 **两个引擎**：Chromium 与 WebKit 各跑一遍同一份场景代码、同一套断言（不是两套脚本），视口也一样。为什么要两个：**应用跑在 macOS 的 WKWebView 里，Chromium 的绿只证明「在 Chromium 里成立」**。两边的差别是真实存在的（`@property` 注册自定义属性、网格的 `minmax()`、`em` 的求值时机），但也**不要**把所有问题都归给引擎——见下面 2026-09-12 的第二个反例。跑 WebKit 需要一次性的 `npm i -D playwright && npx playwright install webkit`（后者约 80MB，落在 `~/Library/Caches/ms-playwright`）。
 
 **判据：视口是产品的可达面，不是测试的自由参数。** 凡新增「只在某些视口成立」的行为，必须同时确认**用户能到达那个视口**——
@@ -1062,6 +1100,6 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"     
 | 几何口径 | `layoutShortContentBottomGap` = 滚动容器底边与末行底边之差（贴底时只剩容器 `padding-bottom`，8px）；`layoutNameLefts` = 三行昵称左边缘（头像列占位后完全一致）；`layoutBadgeNameGap` / `layoutNameBodyGap` = 徽标组→昵称 / 昵称→正文两道间距（前者必须更小）；`layoutHangIndentFirstLeft` / `layoutHangIndentLastLeft` / `layoutHangIndentLines` = 折行后首行与末行的文字左边缘（相等）与行数（≥2 才不算空对空）；`layoutAvatarFirstLineDelta` = 头像中心 − 首行行盒中心（首行居中口径，≈0）；`rowEmoteFirstLineTops` = 表情弹幕行里头像列 / 身份簇 / 正文三者的顶边（`rowIdentityOnFirstLineBox` 要求三者差 < 1.5px）；`rowScale` = 行盒 / 头像 / 徽标 / 表情四个实测高度（`rowScaleCoherent` 要求 0.9 / 0.9 / 1.1 的比例关系）；`layoutHeaderOverlapPx` = 滚到顶部时滚动容器顶边 − 第一条行盒顶边（≥0 即没被头部压住）；`panelChildLefts` = 面板直接子元素的左边缘（必须只有一个值）；`layoutPanelScrollStablePx` = 展开面板前后、同一行在视口里的位移 |
 | 覆盖 | 关注列表自动加载与排序分页、**关注项排布（宽屏单排 / 窄屏两排，两档都不出现房间号）、按最近观看降序（"看过"压过"没看过"）、标签条显示主播名而非房间号**、账号区（一行身份 + 对话框：单账号也有添加入口、扫码添加不覆盖、重新登录需确认、删除当前自动切走、退出登录回游客态）、弹幕列表是唯一生长区、面板向上展开不遮挡最新弹幕、行右键菜单、时间戳默认关且打开后等宽对齐、礼物栏在输入区下方且不抢宽度、系统通知与互动自动消失、历史与实时同款、**内容不足视口时整体贴底**、**头像列永远占位（昵称三列纵向对齐）**、**粉丝牌真彩色与兜底色**、**回复关系可见（非回复不画标记）+ 被 @ 名字用 `reply_uname_color` 上色、空串不上色**、**舰长标只认本房间的 `guard_level`**、**主站「我的表情」分组可见且发出去带唯一键**、**@ 目标与文本同源**、**房管权限前置 / 写操作二次确认与请求形状 / 面板三块列表增删 / 无权限时原样展示上游 code + message**、**行排版的整体感（两种间距、徽标贴昵称、悬挂缩进、头像钉首行、身份簇与正文同起点（含大表情那一行）、头像/徽标/表情三条尺度同源）**、**昵称不吃弹幕颜色 + 颜色只落正文 + 默认白按未指定处理（暗色与浅色两套主题各量一遍：`rowLightNameReadable` / `rowLightBodyKeepsDanmakuColor` / `rowLightDefaultWhiteTreatedAsUnset`，因为用户报的「用户名是白色、看不见」正是只在浅色主题下成立的）**、**行内不再有菜单按钮（房间头 `⋯` 保留）**、**工具行只有三个面板入口**、**表情面板：竖向 tab 轨道（语义 / 选中态 / 键盘可达）/ 一屏一组 / 每格图完整落在格内且溢出记账（`panelEmoteFitsCell` / `panelEmoteOverflowPx`）/ 置灰不隐藏 / 置灰仍可选**、**短语：加一条固定行、聊天输入框不被挤占**、**发送成功不再有「上次发送」提示**、**面板：只挤列表 / 不遮最新一条 / 内容对齐一条左边缘 / 展开不弹走滚动位置**、**窄屏：无横向滚动、面板与对话框限高且内部滚动、有关闭入口、热区 ≥ 40px、工具行不溢出、礼物折叠条不挤列表、账号行不叠字**、**真实弹幕夹具派生行（正文列 ≥ 50%、正文不越出列、窄屏折行且悬挂缩进对齐、行内表情图见方 + `contain` 且不随原图尺寸变、200×60 与 162×162 同盒）**、**表情面板三条 UX：面板里没有搜索框、网格区高度 = 两行大表情且超出滚动、点一次表情格立刻发出 `chat_send`（带唯一键、不动草稿、面板不关，置灰的那批同样能发）** |
 | 两个视口 | 同一份场景代码在两个视口各跑一遍，**断言集合相同、没有例外名单**：面板在窄屏也是文档流里的一块（§9.1），所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真。视口专属的补充断言按 `narrow_*` / `wide_*` 前缀分开存放 |
-| 产物 | 快照 JSON + **二十张**截图（每个视口各十张）：`danmubox-ui-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`danmubox-ui-rooms.png` 连接中的房间列表（卡片报「主播名 · 直播间名」，用户 #17）、`danmubox-ui-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-final.png` 结束时；窄屏那十张带 `-narrow` 前缀（如 `danmubox-ui-narrow-follow.png`）。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
+| 产物 | 快照 JSON + **八十张**截图（2 引擎 × 2 视口 × 2 主题，每次运行十张）：`-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`-rooms.png` 连接中的房间列表（卡片报「主播名 · 直播间名」，用户 #17）、`-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-final.png` 结束时。命名 = `danmubox-ui[-narrow]-<theme>-<场景>.png`（如 `danmubox-ui-dark-follow.png`、`danmubox-ui-narrow-light-follow.png`）——**主题后缀是必须的**，否则深浅两遍互相覆盖、验收矩阵里只剩一套图。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
 | 维护约定 | 场景代码整段是一个模板字符串：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩（踩过两次） |
 | 失败判读 | 退出码非 0 时打印不成立的布尔字段名（带 `wide:` / `narrow:` 前缀）；`EXPECTED_FALSE` 里列的是「本来就该是 false」的字段（如人气值不展示、系统通知默认关） |

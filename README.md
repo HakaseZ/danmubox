@@ -134,6 +134,7 @@ danmubox/
 | [`docs/distribution.md`](docs/distribution.md) | 三端构建步骤与产物、签名策略、工具链前置条件 | 作者 |
 | [`docs/operations.md`](docs/operations.md) | 日常操作、故障排查决策树、脱敏规则、卸载与残留清理 | 作者 |
 | [`docs/roadmap.md`](docs/roadmap.md) | 阶段里程碑、验收标准、风险与 enhancement 排期 | 作者、agent |
+| [`docs/requests.md`](docs/requests.md) | 需求与 issue 归档台账：对话中提出的需求 + 仓库根 `issue` 的逐条对照（状态 / 证据 / 落点） | 作者、agent |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR 索引与模板 | 作者、agent |
 | [`docs/decisions/0001-tauri-over-flutter.md`](docs/decisions/0001-tauri-over-flutter.md) | 选型：范围收敛到三端后 Tauri 胜出 | 作者 |
 | [`docs/decisions/0002-rust-core-shared-surfaces.md`](docs/decisions/0002-rust-core-shared-surfaces.md) | core 无 UI 依赖，端口化后由各消费面共享 | 实现者 |

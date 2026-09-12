@@ -12,6 +12,19 @@
     -->
     <meta name="referrer" content="no-referrer" />
     <title>弹幕框</title>
+    <!--
+      首帧之前的主题默认值：真正的主题偏好要等 IPC（bootstrap）回来才知道，
+      而 :root 的基座是深色 —— 浅色系统上会先画一帧深色再翻白。这里用系统外观给一个
+      同口径的默认值（system 那一档的解析规则与 App.tsx 的主题 effect 逐字相同），
+      App 挂载后立刻用真实 prefs 覆盖它。
+      必须早于下面的 module bundle：module 是 defer 的，等它执行就已经画过一帧了。
+    -->
+    <script>
+      document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: light)")
+        .matches
+        ? "light"
+        : "dark";
+    </script>
   </head>
   <body>
     <div id="root"></div>

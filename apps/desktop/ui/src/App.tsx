@@ -64,16 +64,21 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [notice, setNotice]);
 
-  // 主题来自偏好；system 时跟随系统。
+  // 主题来自偏好；system 时跟随系统（并在系统外观变化时**实时**跟随）。
   useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: light)");
     const theme = prefs?.["ui.theme"] ?? "system";
-    const resolved =
-      theme === "system"
-        ? window.matchMedia("(prefers-color-scheme: light)").matches
-          ? "light"
-          : "dark"
-        : theme;
-    document.documentElement.dataset.theme = resolved;
+    const apply = () => {
+      const resolved = theme === "system" ? (media.matches ? "light" : "dark") : theme;
+      document.documentElement.dataset.theme = resolved;
+    };
+    apply();
+    // 只有 system 才订阅：显式浅色 / 深色时系统怎么变都与界面无关。
+    // 首次绘制前的默认值由 index.html 的内联脚本给 —— prefs 要等 IPC 回来，
+    // 否则浅色系统上会先画一帧深色再翻白。
+    if (theme !== "system") return;
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
   }, [prefs]);
 
 

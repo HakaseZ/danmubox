@@ -322,7 +322,13 @@ const ROW_FIXTURES = {
 function embed(value) {
   return JSON.stringify(value).replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
 }
-const MOCK = `(function () {
+/**
+ * 本次运行的档位：`SMOKE_THEME`（dark / light / system，默认 dark）。
+ * 它写进 mock 的 `ui.theme`，由 App 的主题 effect 落到 <html data-theme> —— 也就是说
+ * 深浅两套的截图与断言是**同一份场景**跑两遍，不是两套场景（docs/ui.md §15）。
+ */
+const THEME = process.env.SMOKE_THEME ?? "dark";
+const MOCK = (theme) => `(function () {
   var EMOTES = ${embed(FIXTURE_EMOTES)};
   var ROW_EMOTES = ${embed(ROW_EMOTE_SAMPLES)};
   var ROW_FIXTURES = ${embed(ROW_FIXTURES)};
@@ -332,7 +338,7 @@ const MOCK = `(function () {
   var callsWithArgs = [];
   var nextId = 1;
   var prefs = {
-    "ui.font_scale": 1, "ui.theme": "system", "ui.auto_scroll": true,
+    "ui.font_scale": 1, "ui.theme": "${theme}", "ui.auto_scroll": true,
     "ui.pause_on_hover": false, "ui.merge_similar": true, "ui.merge_window_ms": 8000,
     "ui.gift_panel_mode": "merged", "ui.interact_auto_hide": true, "ui.system_notice": false,
     "ui.show_timestamp": false,
@@ -617,6 +623,34 @@ const MOCK = `(function () {
     pick.value = "separate";
     pick.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
+  };
+  // 受控 <select> 与输入框同理：直接改 .value 不会触发 React 的 onChange，要走原型 setter + change
+  var pickSelect = function (select, value) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value").set;
+    setter.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  // WCAG 相对亮度：把「正文 / 次级文字对背景 ≥ 4.5:1」这条纪律写成可判定的数字，
+  // 不靠人眼判（两套主题各判一次，浅色尤其容易在绿 / 灰上翻车）。
+  var luminance = function (css) {
+    var open = css.indexOf("(");
+    var close = css.indexOf(")");
+    if (open < 0 || close < 0) return null;
+    var parts = css.slice(open + 1, close).split(",");
+    if (parts.length < 3) return null;
+    var lin = parts.slice(0, 3).map(function (v) {
+      var c = parseFloat(v) / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  };
+  var contrastRatio = function (fg, bg) {
+    var a = luminance(fg);
+    var b = luminance(bg);
+    if (a === null || b === null) return 0;
+    var hi = Math.max(a, b);
+    var lo = Math.min(a, b);
+    return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
   };
 
   window.__smoke_run = async function () {
@@ -925,6 +959,12 @@ const MOCK = `(function () {
       face: "",
       uname: "无头像"
     }));
+    // 自己发的那条：uid 必须等于 session.uid（mock 的账号表里 default = 1000），
+    // 用来验「我方弹幕」的行级标记（整行底色 + 行首 2px 竖条，不做气泡）
+    window.__emit("danmubox://message", window.__mk("danmaku", "我自己发的弹幕", false, {
+      uid: 1000,
+      uname: "本地测试"
+    }));
     // 真实夹具的两行（用户 2026-09-12 报的那条正文行 + 一条真实表情包弹幕）：
     // 消息对象由 Node 侧从 smoke/fixtures/danmaku-rows.json 按 cmd.rs 的口径派生，这里只负责发。
     // local_id 必须由本地计数器分配 —— store 只接受比末尾更大的 local_id（契约 §5），
@@ -1219,6 +1259,23 @@ const MOCK = `(function () {
       Math.abs(out.rowScale.avatar - out.rowScale.badge) < 0.6 &&
       Math.abs(out.rowScale.avatar / lineBoxPx - 0.9) < 0.06 &&
       Math.abs(out.rowScale.emote / lineBoxPx - 1.1) < 0.06;
+
+    // ---- 我方弹幕（用户已定：只做**行级标记**，不搬气泡结构）
+    // 三个可观察面：① 行上有 inset 竖条；② 底色与别人的行不同（透明）；
+    // ③ 时间戳 / 头像 / 悬挂缩进那套对齐**没有位移**（竖条走 box-shadow，零布局影响）。
+    var ownRow = rowWith("我自己发的弹幕");
+    var otherRow = rowWith("带头像的弹幕");
+    var ownStyle = ownRow ? getComputedStyle(ownRow) : null;
+    var otherStyle = otherRow ? getComputedStyle(otherRow) : null;
+    out.rowOwnMarked = Boolean(ownStyle) && ownStyle.boxShadow.indexOf("inset") >= 0;
+    out.rowOwnBackground = ownStyle ? ownStyle.backgroundColor : null;
+    out.rowOwnBackgroundDiffers = Boolean(ownStyle) && Boolean(otherStyle) &&
+      ownStyle.backgroundColor !== otherStyle.backgroundColor;
+    var ownName = ownRow ? ownRow.querySelector('[data-testid="db-msg-name"]') : null;
+    var otherName = otherRow ? otherRow.querySelector('[data-testid="db-msg-name"]') : null;
+    out.rowOwnNoBubble = Boolean(ownStyle) && Boolean(otherStyle) &&
+      ownStyle.textAlign === otherStyle.textAlign &&
+      rect(ownRow).left === rect(otherRow).left;
 
     // ---- 昵称不吃弹幕颜色，颜色只落正文（用户 #2）
     var redRow = rowWith("红字弹幕正文");
@@ -1805,6 +1862,41 @@ const MOCK = `(function () {
     await sleep(300);
     var filterPanel = byTestId("db-panel");
     out.filterPanelShown = !!filterPanel;
+    // ---- theme 主题开关（本次新增）：三档都在，切到另一档后 <html data-theme> 真的变了、
+    //      画布底色跟着变、两档下的对比度都达标；再切回本次运行的档位。
+    var themeSelect = byTestId("db-pref-theme");
+    out.themeSelectShown = Boolean(themeSelect);
+    out.themeSelectOptions = themeSelect
+      ? [].slice.call(themeSelect.options).map(function (o) { return o.value; })
+      : [];
+    out.themeSelectHasThreeModes = out.themeSelectOptions.join(",") === "system,light,dark";
+    var themeApplied = document.documentElement.getAttribute("data-theme");
+    out.themeApplied = themeApplied;
+    out.themeMatchesPref = themeApplied === window.__prefs["ui.theme"] ||
+      window.__prefs["ui.theme"] === "system";
+    var themeBodyBg = getComputedStyle(document.body).backgroundColor;
+    var themeNameEl = document.querySelector('[data-testid="db-msg-name"]');
+    var themeBodyColor = getComputedStyle(document.body).color;
+    if (themeSelect) {
+      var otherTheme = themeApplied === "light" ? "dark" : "light";
+      pickSelect(themeSelect, otherTheme);
+      await sleep(350);
+      out.themeSwitchFlipsDom = document.documentElement.getAttribute("data-theme") === otherTheme;
+      out.themeSwitchPreserved = window.__prefs["ui.theme"] === otherTheme;
+      var switchedBg = getComputedStyle(document.body).backgroundColor;
+      out.themeSwitchChangesBackground = switchedBg !== themeBodyBg;
+      var switchedFg = getComputedStyle(document.body).color;
+      var switchedName = themeNameEl ? getComputedStyle(themeNameEl).color : "";
+      out.themeSwitchedContrastBody = contrastRatio(switchedFg, switchedBg);
+      out.themeSwitchedContrastDim = contrastRatio(switchedName, switchedBg);
+      out.themeContrastBodyOk = out.themeSwitchedContrastBody >= 4.5;
+      out.themeContrastDimOk = out.themeSwitchedContrastDim >= 4.5;
+      // 切回本次运行的档位：后面的步骤与截图仍按这一档走
+      pickSelect(themeSelect, themeApplied);
+      await sleep(350);
+      out.themeRestored = document.documentElement.getAttribute("data-theme") === themeApplied;
+    }
+    out.themeBaseContrastBody = contrastRatio(themeBodyColor, themeBodyBg);
     clickLabelIn(filterPanel, "时间戳");
     await sleep(400);
     var cells = allByTestId("db-msg-time").map(function (el) { return el.getBoundingClientRect(); });
@@ -2288,7 +2380,7 @@ const MOCK = `(function () {
   });
 })();`;
 
-export function buildSmokeHtml() {
+export function buildSmokeHtml(theme = THEME) {
   const assets = new URL("../dist/assets/", import.meta.url);
   const names = readdirSync(assets);
   const js = readFileSync(
@@ -2304,7 +2396,7 @@ export function buildSmokeHtml() {
     '<!doctype html><html lang="zh"><head><meta charset="utf-8" /><style>' +
     css +
     '</style></head><body><div id="root"></div><script>' +
-    MOCK +
+    MOCK(theme) +
     '</script><script type="module">' +
     js +
     "</script></body></html>"

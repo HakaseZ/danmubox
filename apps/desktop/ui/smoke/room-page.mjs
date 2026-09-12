@@ -37,7 +37,11 @@
 //   admin  房管权限前置（是房管才可用 / 不是则置灰并说明）、写操作二次确认与请求形状、
 //          面板三块列表增删、无权限时只读面板仍可打开且原样展示上游 code + message
 //   follow 未开播也列出、按最后开播时间排序、>30 条分页
-//   account 新增账号 = profiles_create + 自动扫码；单 profile 时禁止删除
+//   account 账号区只留一行身份 + 「账号」按钮（不再有下拉——单条目下拉会被读成功能坏了）；
+//          对话框里一行一个账号（昵称 + uid + 状态 + 操作）；单账号也能看到「＋ 添加账号」；
+//          添加 = account_qr_start（不带 target，永不覆盖）+ 2 秒轮询到 confirmed 后多一行且标为当前；
+//          「重新登录」要二次确认且文案写明会覆盖谁；删除当前账号后自动切走、只剩一个时禁止删除；
+//          退出登录后退回游客态；手填 Cookie 入口可达
 
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -85,14 +89,48 @@ const MOCK = `(function () {
       live_status: 0, group_name: "", live_start_at: 1000000000 + i, online: 0
     });
   }
-  var profiles = ["default"];
+  // 账号（契约 §7 accounts_list）：条目自带登录状态与身份。
+  var accounts = [
+    {
+      name: "default", nickname: "本地测试", uid: 1000, logged_in: true, active: true,
+      face: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><rect width='32' height='32' fill='%2300aeec'/></svg>"
+    }
+  ];
+  // 假二维码（21×21 图案）：真二维码由后端离线渲染，这里只要截图里**看得到图案**，
+  // 免得「二维码是空白」被误读成界面 bug。
+  var qrSvg = (function () {
+    var cells = "";
+    for (var y = 0; y < 21; y += 1) {
+      for (var x = 0; x < 21; x += 1) {
+        var finder = (x < 7 && y < 7) || (x > 13 && y < 7) || (x < 7 && y > 13);
+        if (finder || ((x * 7 + y * 13) % 5) < 2) {
+          cells += '<rect x="' + x + '" y="' + y + '" width="1" height="1"/>';
+        }
+      }
+    }
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21" width="21" height="21" shape-rendering="crispEdges"><rect width="21" height="21" fill="#fff"/><g fill="#000">' + cells + '</g></svg>';
+  })();
   var session = { logged_in: true, uid: 1000, nickname: "本地测试", active_profile: "default" };
+  // 会话由账号表派生：谁 active 且 logged_in 就是当前会话，切换/登出/删除后都靠它同步。
+  var syncSession = function () {
+    var active = accounts.filter(function (a) { return a.active; })[0];
+    var who = active && active.logged_in ? active : null;
+    session = {
+      logged_in: !!who, uid: who ? who.uid : 0, nickname: who ? who.nickname : "",
+      active_profile: active ? active.name : ""
+    };
+    return session;
+  };
   var history = msg("danmaku", "这是进场回填的历史弹幕", true);
   window.__smoke_next = function () { return msg; };
   window.__calls = calls;
   window.__callsWithArgs = callsWithArgs;
   window.__prefs = prefs;
   window.__followCalls = 0;
+  window.__qrPolls = 0;
+  window.__qrTarget = null;
+  // 轮询失败开关：验证「失败要能重试」（面板留在原地 + 重新获取按钮）
+  window.__qrFail = false;
   window.__mk = msg;
   window.__history = history;
   // 房管身份开关：默认是房管；冒烟中途翻成 false 验证「无权限时置灰 + 说明原因」。
@@ -121,12 +159,62 @@ const MOCK = `(function () {
       switch (cmd) {
         case "app_info": return Promise.resolve({ version: "0.0.0-smoke", data_dir: "/tmp", config_path: "/tmp/config.toml", logged_in: true });
         case "session_status": return Promise.resolve(session);
-        case "profiles_list": return Promise.resolve(profiles.slice());
-        case "profiles_switch": { session = { logged_in: true, uid: 1000, nickname: args.name, active_profile: args.name }; return Promise.resolve(session); }
-        case "profiles_create": { if (profiles.indexOf(args.name) < 0) profiles.push(args.name); session = { logged_in: false, uid: 0, nickname: "", active_profile: args.name }; return Promise.resolve(session); }
-        case "profiles_remove": { profiles = profiles.filter(function (n) { return n !== args.name; }); session = { logged_in: true, uid: 1000, nickname: "本地测试", active_profile: profiles[0] || "default" }; return Promise.resolve(session); }
-        case "session_qr_start": return Promise.resolve({ key: "k", url: "https://example.invalid/qr", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#fff"/></svg>' });
-        case "session_qr_poll": return Promise.resolve({ state: "pending", session: session });
+        case "accounts_list": return Promise.resolve(accounts.map(function (a) {
+          return { name: a.name, nickname: a.nickname, uid: a.uid, face: a.face, logged_in: a.logged_in, active: a.active };
+        }));
+        case "account_switch": {
+          accounts.forEach(function (a) { a.active = a.name === args.name; });
+          return Promise.resolve(syncSession());
+        }
+        case "account_qr_start": {
+          window.__qrTarget = args.target === undefined ? null : args.target;
+          window.__qrPolls = 0;
+          return Promise.resolve({ key: "k1", url: "https://example.invalid/qr", svg: qrSvg });
+        }
+        // 第 1 次问 = 已扫待确认，第 2 次 = 确认：两条状态文案都要能在界面上看到。
+        case "account_qr_poll": {
+          if (window.__qrFail) {
+            return Promise.reject({ code: "INTERNAL", message: "轮询扫码状态失败（冒烟替身）" });
+          }
+          window.__qrPolls += 1;
+          if (window.__qrPolls < 2) return Promise.resolve({ state: "scanned", account: null });
+          var name = window.__qrTarget || "扫码新用户";
+          var existing = accounts.filter(function (a) { return a.name === name; })[0];
+          accounts.forEach(function (a) { a.active = false; });
+          if (existing) {
+            existing.logged_in = true;
+            existing.active = true;
+          } else {
+            existing = {
+              name: name, nickname: "扫码新用户", uid: 2000, face: "", logged_in: true, active: true
+            };
+            accounts.push(existing);
+          }
+          syncSession();
+          return Promise.resolve({ state: "confirmed", account: existing });
+        }
+        case "account_login_cookie": {
+          var cname = args.name || "cookie账号";
+          accounts.forEach(function (a) { a.active = false; });
+          accounts.push({ name: cname, nickname: args.name || "Cookie用户", uid: 3000, face: "", logged_in: true, active: true });
+          syncSession();
+          return Promise.resolve(accounts[accounts.length - 1]);
+        }
+        case "account_logout": {
+          var lname = args.name;
+          if (lname === undefined) {
+            var act = accounts.filter(function (a) { return a.active; })[0];
+            lname = act ? act.name : "";
+          }
+          accounts.forEach(function (a) { if (a.name === lname) a.logged_in = false; });
+          return Promise.resolve(syncSession());
+        }
+        case "account_remove": {
+          var wasActive = accounts.filter(function (a) { return a.name === args.name && a.active; }).length > 0;
+          accounts = accounts.filter(function (a) { return a.name !== args.name; });
+          if (wasActive && accounts.length > 0) accounts[0].active = true;
+          return Promise.resolve(syncSession());
+        }
         case "rooms_list": return Promise.resolve([{ room_id: 5440, short_id: 0, anchor_uid: 2, title: "测试房间", live_status: 1, connected: true, buffered: 1 }]);
         case "prefs_get": return Promise.resolve(Object.assign({}, prefs));
         case "prefs_set": Object.assign(prefs, args.patch); return Promise.resolve(Object.assign({}, prefs));
@@ -714,24 +802,165 @@ const MOCK = `(function () {
     out.adminReadOnlyPanelStillOpen = !!byTestId("db-admin-panel");
     snap();
 
-    // ---- account 新增账号 = profiles_create + 自动扫码；单 profile 禁止删除
-    document.querySelector("button").click();
+    // ---- account 账号区一行身份 + 账号管理对话框（契约 §7 accounts_*）
+    buttonWith(null, "返回").click();
     await sleep(500);
     var account = byTestId("db-account");
     out.accountShown = !!account;
-    if (account) {
-      var removeBtn = buttonWith(account, "删除该账号");
-      out.accountRemoveDisabledWithOneProfile = !!removeBtn && removeBtn.disabled;
-      var nameInput = account.querySelector("input");
-      var createBtn = buttonWith(account, "新建并扫码");
-      typeInto(nameInput, "账号二");
-      await sleep(150);
-      createBtn.click();
-      await sleep(700);
-      out.accountProfilesCreateCalled = calls.indexOf("profiles_create") >= 0;
-      out.accountQrAutoStarted = calls.indexOf("session_qr_start") >= 0;
-      out.accountProfileOptions = account.querySelectorAll("select option").length;
-    }
+    // 下拉整块删掉了：单条目下拉会被读成「切换功能坏了」（用户原话「好像没法选」）
+    out.accountNoDropdown = !!account && account.querySelector("select") === null;
+    out.accountShowsIdentity = !!byTestId("db-account-name") &&
+      byTestId("db-account-name").innerText.indexOf("本地测试") >= 0 &&
+      byTestId("db-account-uid").innerText.indexOf("1000") >= 0;
+    out.accountOpenButtonShown = !!byTestId("db-account-open");
+    var followBefore = window.__followCalls;
+    // 停一下让跑脚本的进程抓一张「账号区只留一行」的截图
+    out.accountAreaReady = out.accountShown;
+    snap();
+    await sleep(900);
+
+    byTestId("db-account-open").click();
+    await sleep(400);
+    out.accountDialogShown = !!byTestId("db-account-dialog");
+    var rowsBefore = allByTestId("db-account-row");
+    out.accountDialogRowsBefore = rowsBefore.length;
+    out.accountRowShowsWho = rowsBefore.length === 1 &&
+      rowsBefore[0].innerText.indexOf("本地测试") >= 0 &&
+      rowsBefore[0].innerText.indexOf("uid 1000") >= 0;
+    out.accountRowAvatarShown = rowsBefore.length === 1 &&
+      !!rowsBefore[0].querySelector("img");
+    out.accountCurrentMarked = rowsBefore.length === 1 &&
+      byTestId("db-account-row-status").innerText.trim() === "已登录 · 当前";
+    // 单账号时也必须看得到添加入口（用户卡住的就是这一步）
+    out.accountAddShownWithOneAccount = !!byTestId("db-account-add");
+    var onlyRemoveBtn = rowsBefore.length === 1 ? buttonWith(rowsBefore[0], "删除") : null;
+    out.accountRemoveDisabledWithOneAccount = !!onlyRemoveBtn && onlyRemoveBtn.disabled &&
+      (onlyRemoveBtn.title || "").indexOf("至少保留") >= 0;
+    // 手填 Cookie（需求 §2.5 三种方式之一）：折叠着，但可达；输入框必须是密码型
+    byTestId("db-account-cookie-toggle").click();
+    await sleep(200);
+    var cookieInput = byTestId("db-account-cookie-input");
+    out.accountCookieEntryReachable = !!cookieInput && cookieInput.type === "password" &&
+      !!byTestId("db-account-cookie-submit");
+    byTestId("db-account-cookie-toggle").click();
+    await sleep(150);
+    snap();
+    await sleep(800);
+
+    // 添加账号 = 默认入口：account_qr_start 不带 target，永不覆盖任何凭据
+    byTestId("db-account-add").click();
+    await sleep(400);
+    var startCalls = callsWithArgs.filter(function (c) { return c.cmd === "account_qr_start"; });
+    var lastStart = startCalls[startCalls.length - 1];
+    out.accountAddCallsQrStart = startCalls.length === 1;
+    out.accountAddStartHasNoTarget = !!lastStart && lastStart.args.target === undefined;
+    var qrImg = byTestId("db-account-qr-img");
+    out.accountQrImgShown = !!qrImg &&
+      String(qrImg.getAttribute("src")).indexOf("data:image/svg+xml") === 0;
+    out.accountQrAddNeverOverwrites = byTestId("db-account-qr-warn") === null;
+    out.accountQrPendingHintSaysScan =
+      (byTestId("db-account-qr-hint") || { innerText: "" }).innerText.indexOf("扫码") >= 0;
+    snap();
+    await sleep(900);
+    await sleep(2300);
+    out.accountQrScannedHintShown =
+      (byTestId("db-account-qr-hint") || { innerText: "" }).innerText.indexOf("确认") >= 0;
+    await sleep(2300);
+    out.accountQrClosedAfterConfirm = !byTestId("db-account-qr");
+    var rowsAfterAdd = allByTestId("db-account-row");
+    out.accountDialogRowsAfterAdd = rowsAfterAdd.length;
+    out.accountNewRowIsCurrent = rowsAfterAdd.length === 2 &&
+      rowsAfterAdd[1].innerText.indexOf("已登录 · 当前") >= 0;
+    out.accountIdentityRefreshedAfterAdd = byTestId("db-account-name").innerText.indexOf("扫码新用户") >= 0;
+    out.accountFollowReloadedAfterAdd = window.__followCalls > followBefore;
+
+    // 轮询失败要能重试：面板留在原地（二维码还在）+ 给出错误原因 + 「重新获取」能再发一次
+    byTestId("db-account-add").click();
+    await sleep(400);
+    window.__qrFail = true;
+    await sleep(2400);
+    out.accountQrFailureShown =
+      (byTestId("db-account-qr-hint") || { innerText: "" }).innerText.indexOf("失败") >= 0;
+    out.accountQrRetryOffered = !!byTestId("db-account-qr-retry");
+    var startsBeforeRetry =
+      callsWithArgs.filter(function (c) { return c.cmd === "account_qr_start"; }).length;
+    byTestId("db-account-qr-retry").click();
+    await sleep(400);
+    out.accountQrRetryRestarts =
+      callsWithArgs.filter(function (c) { return c.cmd === "account_qr_start"; }).length ===
+      startsBeforeRetry + 1;
+    out.accountQrRetryHintBackToScan =
+      (byTestId("db-account-qr-hint") || { innerText: "" }).innerText.indexOf("扫码") >= 0;
+    window.__qrFail = false;
+    byTestId("db-account-qr-cancel").click();
+    await sleep(300);
+    out.accountQrCancelClearsPanel = !byTestId("db-account-qr") && !!byTestId("db-account-add");
+
+    // 切换：走 account_switch，界面重拉会话并把「当前」标记挪过去
+    buttonWith(rowsAfterAdd[0], "切换").click();
+    await sleep(600);
+    var switchCalls = callsWithArgs.filter(function (c) { return c.cmd === "account_switch"; });
+    out.accountSwitchCalled = switchCalls.length === 1 && switchCalls[0].args.name === "default";
+    var rowsAfterSwitch = allByTestId("db-account-row");
+    out.accountCurrentMarkMoved = rowsAfterSwitch[0].innerText.indexOf("已登录 · 当前") >= 0 &&
+      rowsAfterSwitch[1].innerText.indexOf("已登录 · 当前") < 0;
+    out.accountIdentityAfterSwitch = byTestId("db-account-name").innerText.indexOf("本地测试") >= 0;
+    // 切回来，让「删除当前账号」这一步删的确实是当前那一个
+    buttonWith(rowsAfterSwitch[1], "切换").click();
+    await sleep(600);
+
+    // 重新登录 = 覆盖路径：先二次确认，且文案写清覆盖谁的凭据（原账号就是这样被顶掉的）
+    var rowsNow = allByTestId("db-account-row");
+    var startsBefore = callsWithArgs.filter(function (c) { return c.cmd === "account_qr_start"; }).length;
+    buttonWith(rowsNow[0], "重新登录").click();
+    await sleep(250);
+    var overwriteConfirm = byTestId("db-account-confirm");
+    out.accountRescanNeedsConfirm = !!overwriteConfirm &&
+      overwriteConfirm.innerText.indexOf("覆盖") >= 0 &&
+      overwriteConfirm.innerText.indexOf("default") >= 0;
+    out.accountRescanNotStartedBeforeConfirm =
+      callsWithArgs.filter(function (c) { return c.cmd === "account_qr_start"; }).length === startsBefore;
+    buttonWith(overwriteConfirm, "取消").click();
+    await sleep(200);
+    out.accountRescanConfirmDismissed = !byTestId("db-account-confirm");
+
+    // 删除当前账号：二次确认 → 后端删掉后自动切到剩下的那个
+    buttonWith(rowsNow[1], "删除").click();
+    await sleep(250);
+    var delConfirm = byTestId("db-account-confirm");
+    out.accountRemoveConfirmShown = !!delConfirm &&
+      delConfirm.innerText.indexOf("不可恢复") >= 0 &&
+      delConfirm.innerText.indexOf("扫码新用户") >= 0;
+    buttonWith(delConfirm, "确认删除").click();
+    await sleep(700);
+    var delCalls = callsWithArgs.filter(function (c) { return c.cmd === "account_remove"; });
+    out.accountRemoveCalledWithCurrent = delCalls.length === 1 &&
+      delCalls[0].args.name === "扫码新用户";
+    var rowsAfterRemove = allByTestId("db-account-row");
+    out.accountRemoveFallsBackToOther = rowsAfterRemove.length === 1 &&
+      rowsAfterRemove[0].innerText.indexOf("本地测试") >= 0 &&
+      rowsAfterRemove[0].innerText.indexOf("已登录 · 当前") >= 0;
+    var leftRemoveBtn = rowsAfterRemove.length === 1 ? buttonWith(rowsAfterRemove[0], "删除") : null;
+    out.accountRemoveDisabledWithOneLeft = !!leftRemoveBtn && leftRemoveBtn.disabled;
+
+    // 退出登录 = 清凭据、退回游客态（账号条目保留）
+    buttonWith(rowsAfterRemove[0], "退出登录").click();
+    await sleep(250);
+    var logoutConfirm = byTestId("db-account-confirm");
+    out.accountLogoutConfirmExplains = !!logoutConfirm &&
+      logoutConfirm.innerText.indexOf("游客态") >= 0 &&
+      logoutConfirm.innerText.indexOf("本地测试") >= 0;
+    buttonWith(logoutConfirm, "确认退出登录").click();
+    await sleep(700);
+    out.accountLogoutCalled = calls.indexOf("account_logout") >= 0;
+    out.accountRowShowsNotLoggedIn =
+      (byTestId("db-account-row-status") || { innerText: "" }).innerText.trim() === "未登录";
+    byTestId("db-account-close").click();
+    await sleep(400);
+    out.accountBackToGuest = !!byTestId("db-account-guest") && !byTestId("db-account-dialog");
+    out.accountGuestTextShown = (byTestId("db-account-guest") || { innerText: "" })
+      .innerText.indexOf("游客态") >= 0;
+
     out.done = true;
     snap();
   };

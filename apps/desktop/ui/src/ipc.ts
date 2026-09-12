@@ -5,8 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
-  QrLogin,
-  QrPoll,
+  Account,
+  AccountQr,
+  AccountQrPoll,
   AdminUser,
   ApiError,
   AppInfo,
@@ -65,17 +66,33 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const api = {
   appInfo: () => call<AppInfo>("app_info"),
   sessionStatus: () => call<SessionState>("session_status"),
-  profilesList: () => call<string[]>("profiles_list"),
-  profilesSwitch: (name: string) => call<SessionState>("profiles_switch", { name }),
-  /** 新建账号（多账号并存，需求 §2.1）：建好后该 profile 即为当前，接着走既有的扫码登录。 */
-  profilesCreate: (name: string) =>
-    call<SessionState>("profiles_create", { name }),
-  /** 删除账号；当前在用的与最后一个由界面拦住，不发给后端。 */
-  profilesRemove: (name: string) =>
-    call<SessionState>("profiles_remove", { name }),
-  sessionLogout: () => call<SessionState>("session_logout"),
-  sessionQrStart: () => call<QrLogin>("session_qr_start"),
-  sessionQrPoll: (key: string) => call<QrPoll>("session_qr_poll", { key }),
+  /**
+   * 全部账号（契约 §7 `accounts_list`）：每个条目自带登录状态与身份（昵称 / uid / 头像），
+   * 界面靠它渲染账号行，不再靠「自己数 config.toml 里有哪些名字」。
+   */
+  accountsList: () => call<Account[]>("accounts_list"),
+  /** 切换当前账号（后端用新凭据重连各房间）。返回值不吃，切换后统一重拉状态。 */
+  accountSwitch: (name: string) => call<SessionState>("account_switch", { name }),
+  /**
+   * 发起扫码：不带 `target` = 新增一个账号（名称由后端按昵称自动生成，重名加后缀）；
+   * 带 `target` = 给该账号重新登录。
+   */
+  accountQrStart: (target?: string) =>
+    call<AccountQr>("account_qr_start", target === undefined ? {} : { target }),
+  accountQrPoll: (key: string) =>
+    call<AccountQrPoll>("account_qr_poll", { key }),
+  /** 手填 Cookie（需求 §2.5 的三种方式之一）；`name` 缺省时后端按昵称自动生成。 */
+  accountLoginCookie: (cookie: string, name?: string) =>
+    call<Account>(
+      "account_login_cookie",
+      name === undefined ? { cookie } : { cookie, name },
+    ),
+  /** 清掉某个账号的凭据（缺省 = 当前账号）；账号条目保留，`logged_in=false` = 退回游客态。 */
+  accountLogout: (name?: string) =>
+    call<SessionState>("account_logout", name === undefined ? {} : { name }),
+  /** 删除账号条目。最后一个与错误情形由后端拦（`BAD_REQUEST` / `NOT_FOUND`）。 */
+  accountRemove: (name: string) =>
+    call<SessionState>("account_remove", { name }),
 
   roomsList: () => call<RoomView[]>("rooms_list"),
   roomsAdd: (input: string) => call<RoomView>("rooms_add", { input }),

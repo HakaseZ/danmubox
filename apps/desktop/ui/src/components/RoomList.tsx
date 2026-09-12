@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 
 import { Avatar } from "./Avatar";
-import { QrLogin } from "./QrLogin";
 import { FOLLOW_PAGE_SIZE, formatLastLive, paginate, sortFollowedRooms } from "../filtering";
 import type {
+  Account,
   AppInfo,
   FollowedRoom,
   RoomView as RoomViewData,
@@ -15,11 +15,10 @@ interface Props {
   rooms: RoomViewData[];
   info?: AppInfo;
   session?: SessionState;
-  profiles: string[];
-  onSwitchProfile: (name: string) => void;
-  onCreateProfile: (name: string) => void;
-  onRemoveProfile: (name: string) => void;
-  onLogout: () => void;
+  /** 全部账号：用来在账号区显示「当前是谁」。 */
+  accounts: Account[];
+  /** 打开账号管理对话框；切换 / 添加 / 重新登录 / 退出登录都在那里。 */
+  onOpenAccounts: () => void;
   followed: FollowedRoom[];
   onAdd: (input: string) => void;
   onOpen: (roomId: number) => void;
@@ -43,11 +42,8 @@ export function RoomList({
   rooms,
   info,
   session,
-  profiles,
-  onSwitchProfile,
-  onCreateProfile,
-  onRemoveProfile,
-  onLogout,
+  accounts,
+  onOpenAccounts,
   followed,
   onAdd,
   onOpen,
@@ -56,11 +52,7 @@ export function RoomList({
   onOpenFollowed,
 }: Props) {
   const [input, setInput] = useState("");
-  const [newProfile, setNewProfile] = useState("");
-  const [profilePick, setProfilePick] = useState("");
   const [page, setPage] = useState(1);
-  // 新账号建好后自动走一次扫码：新建的 profile 就是当前 profile，扫码即写入它的凭据。
-  const [qrStartToken, setQrStartToken] = useState(0);
 
   const submit = () => {
     const value = input.trim();
@@ -72,101 +64,48 @@ export function RoomList({
   const sortedFollowed = useMemo(() => sortFollowedRooms(followed), [followed]);
   const paged = paginate(sortedFollowed, page);
 
-  const activeProfile = session?.active_profile ?? "";
-  const pickedProfile = profilePick.length > 0 ? profilePick : activeProfile;
-  const canRemoveProfile =
-    profiles.length > 1 && pickedProfile.length > 0 && pickedProfile !== activeProfile;
+  // 当前身份：账号列表里的 `active` 条目为准（它带昵称/uid/头像）；拉不到时退回会话里的两个字段，
+  // 免得账号区整块空着。游客态没有账号条目，直接显示「游客态」。
+  const active = accounts.find((account) => account.active);
+  const loggedIn = session?.logged_in ?? false;
+  const nickname = active?.nickname ?? session?.nickname ?? "";
+  const uid = active?.uid ?? session?.uid ?? 0;
 
   return (
     <div className={styles.listPage}>
       <h1>弹幕框</h1>
 
-      {/* 账号区：登录态 + 多账号并存（issue #1）。新增账号先建 profile，再扫码写入凭据 */}
+      {/*
+        账号区只留一行：当前身份 + 一个「账号」按钮（用户 2026-09-12：「切换身份的功能好像没法选」）。
+        切换**不再做成下拉**——只有一个账号时下拉里就一项，看起来像控件坏了；
+        完整列表与所有操作都在账号管理对话框里（AccountManager）。
+      */}
       <div className={styles.account} data-testid="db-account">
-        <div className={styles.accountWho}>
-          {session?.logged_in
-            ? `已登录：${session.nickname || session.uid}`
-            : "游客态：可接收弹幕，发送需先登录"}
-          {info ? ` · v${info.version}` : ""}
-        </div>
-        <div className={styles.accountRow}>
-          <label>
-            账号
-            <select
-              className={styles.profilePick}
-              title="切换账号（后端会用新凭据重连各房间）"
-              value={pickedProfile}
-              onChange={(event) => {
-                setProfilePick(event.target.value);
-                onSwitchProfile(event.target.value);
-              }}
-            >
-              {(profiles.length > 0 ? profiles : [activeProfile])
-                .filter((name) => name.length > 0)
-                .map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                    {name === activeProfile ? "（当前）" : ""}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <button
-            disabled={!canRemoveProfile}
-            title={
-              profiles.length <= 1
-                ? "至少保留一个账号"
-                : pickedProfile === activeProfile
-                  ? "当前正在用的账号不能删，先切到另一个账号"
-                  : `删除账号 ${pickedProfile}（会清掉它的凭据）`
-            }
-            onClick={() => {
-              onRemoveProfile(pickedProfile);
-              setProfilePick("");
-            }}
-          >
-            删除该账号
-          </button>
-          <label>
-            新增账号
-            <input
-              value={newProfile}
-              size={10}
-              placeholder="账号名"
-              onChange={(event) => setNewProfile(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                const name = newProfile.trim();
-                if (name.length === 0 || profiles.includes(name)) return;
-                onCreateProfile(name);
-                setNewProfile("");
-                setProfilePick(name);
-                setQrStartToken((value) => value + 1);
-              }}
-            />
-          </label>
-          <button
-            disabled={newProfile.trim().length === 0 || profiles.includes(newProfile.trim())}
-            title="新建一个账号并切过去，接着扫码登录"
-            onClick={() => {
-              const name = newProfile.trim();
-              onCreateProfile(name);
-              setNewProfile("");
-              setProfilePick(name);
-              setQrStartToken((value) => value + 1);
-            }}
-          >
-            新建并扫码
-          </button>
-          {/* 扫码入口两种状态都给：登录态下扫码 = 重新登录（覆盖当前 profile 的凭据） */}
-          <QrLogin startToken={qrStartToken} />
-          {session?.logged_in && (
-            <button onClick={onLogout} title="清空当前 profile 的凭据">
-              登出
-            </button>
+        <div className={styles.accountIdentity}>
+          {loggedIn ? (
+            <>
+              <Avatar url={active?.face} name={nickname} />
+              <span className={styles.accountName} data-testid="db-account-name">
+                {nickname.length > 0 ? nickname : `uid ${uid}`}
+              </span>
+              <span className={styles.accountMeta} data-testid="db-account-uid">
+                uid {uid}
+              </span>
+            </>
+          ) : (
+            <span className={styles.accountGuest} data-testid="db-account-guest">
+              游客态：可接收弹幕，发送需先登录
+            </span>
           )}
+          {info && <span className={styles.accountMeta}>v{info.version}</span>}
         </div>
+        <button
+          data-testid="db-account-open"
+          title="管理账号：切换 / 添加 / 重新登录 / 退出登录"
+          onClick={onOpenAccounts}
+        >
+          账号
+        </button>
       </div>
 
       <div className={styles.addRow}>

@@ -82,16 +82,39 @@ export interface EmoteRef {
 /** 扫码状态机的归一化取值（后端 `QrState`，serde 小写）。 */
 export type QrState = "pending" | "scanned" | "confirmed" | "expired";
 
-export interface QrLogin {
+/**
+ * 一个账号（契约 §5）：**一份具名凭据**，底层是 `config.toml` 里的一条 profile，
+ * 界面与文档统一叫「账号」。**游客态不是账号**——没有凭据就没有条目。
+ *
+ * `logged_in` 与身份三件套由后端从凭据读出来：界面不必（也不能）自己从
+ * `config.toml` 推断谁登录了。`active` 是「当前正在用的那一个」。
+ */
+export interface Account {
+  name: string;
+  nickname: string;
+  uid: number;
+  face: string;
+  logged_in: boolean;
+  active: boolean;
+}
+
+/** `account_qr_start` 的返回：二维码 + 本次扫码针对的账号（界面侧补记）。 */
+export interface AccountQr {
   key: string;
   url: string;
   /** 二维码本体：SVG 源码（后端离线生成），界面包成 data URI 显示。 */
   svg: string;
+  /**
+   * 界面侧补记：`null` = 新增账号（后端按昵称自动命名）；字符串 = 给该账号重新登录。
+   * 它只用于面板文案与成功提示，不参与后端协议（后端不认这个字段）。
+   */
+  target: string | null;
 }
 
-export interface QrPoll {
+export interface AccountQrPoll {
   state: QrState;
-  session: SessionState;
+  /** 确认后由后端落盘并返回的那个账号；未确认时为 `null`。 */
+  account: Account | null;
 }
 
 export interface ReplyTarget {

@@ -1,5 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { AccountManager } from "./components/AccountManager";
 import { RoomList } from "./components/RoomList";
 import { DOT, RoomView } from "./components/RoomView";
 import { collectSeenEmotes, toDisplayRows } from "./filtering";
@@ -23,15 +24,22 @@ export function App() {
   const ownedEmotes = useApp((state) => state.ownedEmotes);
   const ownedError = useApp((state) => state.ownedError);
   const recentSends = useApp((state) => state.recentSends);
-  const profiles = useApp((state) => state.profiles);
-  const loadProfiles = useApp((state) => state.loadProfiles);
-  const switchProfile = useApp((state) => state.switchProfile);
-  const createProfile = useApp((state) => state.createProfile);
-  const removeProfile = useApp((state) => state.removeProfile);
-  const logout = useApp((state) => state.logout);
+  const accounts = useApp((state) => state.accounts);
+  const loadAccounts = useApp((state) => state.loadAccounts);
+  const switchAccount = useApp((state) => state.switchAccount);
+  const removeAccount = useApp((state) => state.removeAccount);
+  const logoutAccount = useApp((state) => state.logoutAccount);
+  const loginCookie = useApp((state) => state.loginCookie);
+  const qr = useApp((state) => state.qr);
+  const qrState = useApp((state) => state.qrState);
+  const qrError = useApp((state) => state.qrError);
+  const startAccountQr = useApp((state) => state.startAccountQr);
+  const cancelAccountQr = useApp((state) => state.cancelAccountQr);
+  const pollAccountQr = useApp((state) => state.pollAccountQr);
   const followed = useApp((state) => state.followed);
   const balance = useApp((state) => state.balance);
 
+  const [accountsOpen, setAccountsOpen] = useState(false);
   const bootstrap = useApp((state) => state.bootstrap);
   const addRoom = useApp((state) => state.addRoom);
   const removeRoom = useApp((state) => state.removeRoom);
@@ -69,10 +77,6 @@ export function App() {
     document.documentElement.dataset.theme = resolved;
   }, [prefs]);
 
-  useEffect(() => {
-    // profiles 列表是静态的（除非手改配置文件），进房间列表时取一次即可。
-    if (session?.logged_in && profiles.length === 0) void loadProfiles();
-  }, [session?.logged_in, profiles.length, loadProfiles]);
 
   // 从收到的弹幕里学到的表情（直播接口不给的那一族），补进表情选择器。
   const seenEmotes = useMemo(() => collectSeenEmotes(messages), [messages]);
@@ -143,14 +147,37 @@ export function App() {
           followed={followed}
           onAdd={(input) => void addRoom(input)}
           onOpen={(roomId) => void openRoom(roomId)}
-          profiles={profiles}
-          onSwitchProfile={(name) => void switchProfile(name)}
-          onCreateProfile={(name) => void createProfile(name)}
-          onRemoveProfile={(name) => void removeProfile(name)}
-          onLogout={() => void logout()}
+          accounts={accounts}
+          onOpenAccounts={() => {
+            // 打开就先重拉一次：用户可能刚在别处登过号，列表必须说当下的事实。
+            void loadAccounts();
+            setAccountsOpen(true);
+          }}
           onRemove={(roomId) => void removeRoom(roomId)}
           onRefreshFollowed={() => void loadFollowed()}
           onOpenFollowed={(roomId) => void addRoom(String(roomId))}
+        />
+      )}
+
+      {accountsOpen && (
+        <AccountManager
+          accounts={accounts}
+          session={session}
+          qr={qr}
+          qrState={qrState}
+          qrError={qrError}
+          onClose={() => {
+            // 关掉对话框 = 放弃这次扫码：面板不再留在后台偷偷轮询。
+            cancelAccountQr();
+            setAccountsOpen(false);
+          }}
+          onSwitch={(name) => void switchAccount(name)}
+          onLogout={(name) => void logoutAccount(name)}
+          onRemove={(name) => void removeAccount(name)}
+          onStartQr={(target) => void startAccountQr(target)}
+          onCancelQr={cancelAccountQr}
+          onPollQr={() => void pollAccountQr()}
+          onLoginCookie={loginCookie}
         />
       )}
 

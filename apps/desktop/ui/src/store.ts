@@ -5,6 +5,8 @@ import { create, type StoreApi } from "zustand";
 import { api, describeError, subscribeEvents } from "./ipc";
 import { adminDoneText, INTERACT_AUTO_HIDE_MS } from "./types";
 import type {
+  Account,
+  AccountQr,
   AdminAction,
   AdminUser,
   AppInfo,
@@ -20,7 +22,6 @@ import type {
   RoomSession,
   RoomView,
   SendOutcome,
-  QrLogin,
   QrState,
   SessionState,
 } from "./types";
@@ -81,25 +82,43 @@ interface AppStore {
     reply?: ReplyTarget,
   ) => Promise<SendOutcome | undefined>;
   report: (message: Message, reason: ReportReason) => Promise<boolean>;
-  /** 凭据文件里的 profiles（契约 §7）；切换后后端会用新凭据重连各房间。 */
-  profiles: string[];
-  /** 扫码登录：进行中的二维码（null 表示未在扫码）。 */
-  qr: QrLogin | null;
+  /**
+   * 全部账号（契约 §7 `accounts_list`）：每个条目自带登录状态与身份。
+   * 界面拿它渲染「当前身份」与账号管理对话框，不再自己数 config.toml 里的名字。
+   */
+  accounts: Account[];
+  /**
+   * 进行中的扫码（`account_qr_start` 的返回 + 界面侧记的 `target`）。
+   * `null` = 没在扫；`qrError` 有值而它为 `null` = 上一次发起失败，面板据此给重试。
+   */
+  qr: AccountQr | null;
+  qrState: QrState | null;
   qrError: string | null;
   reportReasons: ReportReason[];
   loadReportReasons: () => Promise<void>;
-  loadProfiles: () => Promise<void>;
-  switchProfile: (name: string) => Promise<void>;
-  /** 新建账号并切过去（需求 §2.1）；建好后用户接着扫码登录即可。 */
-  createProfile: (name: string) => Promise<void>;
-  /** 删除账号；后端改当前 profile 后要按新会话重拉房间与关注。 */
-  removeProfile: (name: string) => Promise<void>;
+  /** 重拉账号列表（登录态事件、扫码确认、增删改之后都要）。 */
+  loadAccounts: () => Promise<void>;
+  /** 切换当前账号；切换后会话、房间与关注都要按新凭据重来。 */
+  switchAccount: (name: string) => Promise<void>;
+  /** 删除账号条目；删当前项时后端会自动切走，界面只负责重新拉状态。 */
+  removeAccount: (name: string) => Promise<void>;
+  /** 清掉某账号的凭据（缺省 = 当前账号）：该账号退回未登录，界面回到游客态。 */
+  logoutAccount: (name?: string) => Promise<void>;
+  /** 手填 Cookie 登录（需求 §2.5）；成功返回 true。凭据值只进这一次调用，不落任何界面状态。 */
+  loginCookie: (cookie: string, name?: string) => Promise<boolean>;
   /** 会话变化后的统一善后（房间列表 / 关注列表跟着账号走）。 */
   applySession: (session: SessionState) => Promise<void>;
-  logout: () => Promise<void>;
-  startQrLogin: () => Promise<void>;
-  cancelQrLogin: () => void;
-  pollQrLogin: () => Promise<QrState | null>;
+  /**
+   * 账号或登录态变化后的统一善后：重拉 `session_status` + `accounts_list`，
+   * 再按新会话重拉房间与关注。**不吃** `account_*` 的返回值——以重拉的结果为准，
+   * 免得把某个命令的返回形状当成事实来源。
+   */
+  refreshIdentity: () => Promise<void>;
+  /** 发起扫码：不带 `target` = 新增账号（后端按昵称自动命名）；带 = 给该账号重新登录。 */
+  startAccountQr: (target?: string) => Promise<void>;
+  cancelAccountQr: () => void;
+  /** 轮询一次扫码状态；返回归一化状态，确认时顺手完成落盘后的界面善后。 */
+  pollAccountQr: () => Promise<QrState | null>;
   /** 用系统浏览器打开用户主页（需求 §2.3：点昵称跳用户主页）。 */
   openProfile: (uid: number) => Promise<void>;
   /** 最近发送记录：仅会话内保留（需求 §2.2），不落盘。 */
@@ -176,8 +195,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
   ownedEmotes: [],
   ownedLoaded: false,
   reportReasons: [],
-  profiles: [],
+  accounts: [],
   qr: null,
+  qrState: null,
   qrError: null,
   recentSends: [],
   followed: [],
@@ -190,13 +210,16 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async bootstrap() {
     try {
-      const [info, session, rooms, prefs] = await Promise.all([
+      const [info, session, rooms, prefs, accounts] = await Promise.all([
         api.appInfo(),
         api.sessionStatus(),
         api.roomsList(),
         api.prefsGet(),
+        // 账号列表与登录态无关地拉一次：游客态也要能看到自己的账号条目
+        // （「这个账号的 Cookie 失效了，重新扫码」就是从这里发现的）。
+        api.accountsList(),
       ]);
-      set({ info, session, rooms, prefs });
+      set({ info, session, rooms, prefs, accounts });
       // 关注列表在会话就绪后自动拉一次（需求 §2.6 / docs/ui.md §2.2）：
       // 进房间列表就该看到关注里在播的房间，不该等用户去点「刷新」。
       // 失败仍走既有的错误条 + 保留「刷新」按钮，不静默。
@@ -248,7 +271,13 @@ export const useApp = create<AppStore>((set, get, store) => ({
               item.room_id === room.room_id ? { ...item, ...room } : item,
             ),
           })),
-        onSession: (session) => set({ session }),
+        // 登录态变了（扫码确认 / Cookie 失效 / 后端切号）就顺手重拉账号列表，
+        // 否则对话框会一直显示过期的「已登录」标记；不递归：只重拉列表，不碰 session。
+        onSession: (session) => {
+          set({ session });
+          if (!session.logged_in) set({ followed: [] });
+          void get().loadAccounts();
+        },
         // 房内身份与登录态共用一个事件名（见 ipc.subscribeEvents 的分派）：
         // 身份只进 `roomIdentities`，绝不覆盖登录态。
         onRoomSession: (identity) =>
@@ -426,38 +455,23 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
-  async startQrLogin() {
+  async refreshIdentity() {
     try {
-      set({ qr: await api.sessionQrStart(), qrError: null });
+      // 以重拉结果为准：`account_*` 的返回形状不是界面的事实来源，重拉一次最省心也最准。
+      const [session, accounts] = await Promise.all([
+        api.sessionStatus(),
+        api.accountsList(),
+      ]);
+      set({ accounts });
+      await get().applySession(session);
     } catch (error) {
-      set({ qrError: describeError(error) });
+      set({ error: describeError(error) });
     }
   },
 
-  cancelQrLogin() {
-    set({ qr: null, qrError: null });
-  },
-
-  async pollQrLogin() {
-    const qr = get().qr;
-    if (!qr) return null;
+  async loadAccounts() {
     try {
-      const { state, session } = await api.sessionQrPoll(qr.key);
-      if (state === "confirmed") {
-        // 后端在这一步已写盘并让房间重连，界面把会话/账号/房间/关注重新拉一遍。
-        set({ qr: null, qrError: null, profiles: await api.profilesList() });
-        await get().applySession(session);
-      }
-      return state;
-    } catch (error) {
-      set({ qrError: describeError(error) });
-      return null;
-    }
-  },
-
-  async loadProfiles() {
-    try {
-      set({ profiles: await api.profilesList() });
+      set({ accounts: await api.accountsList() });
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -471,41 +485,90 @@ export const useApp = create<AppStore>((set, get, store) => ({
     else set({ followed: [] });
   },
 
-  async switchProfile(name) {
+  async switchAccount(name) {
     try {
-      // 后端已让各房间用新凭据重连，这里把会话、房间与关注重新拉一遍。
-      await get().applySession(await api.profilesSwitch(name));
+      await api.accountSwitch(name);
+      await get().refreshIdentity();
     } catch (error) {
       set({ error: describeError(error) });
     }
   },
 
-  async createProfile(name) {
+  async removeAccount(name) {
     try {
-      // 先建后扫：新 profile 建好即成为当前，接着走既有的扫码流程写入凭据（需求 §2.1）。
-      await get().applySession(await api.profilesCreate(name));
-      set({ profiles: await api.profilesList() });
+      await api.accountRemove(name);
+      // 被删的可能正是当前账号（后端会切到别个），进行中的扫码也随之作废。
+      set({ qr: null, qrState: null, qrError: null });
+      await get().refreshIdentity();
     } catch (error) {
       set({ error: describeError(error) });
     }
   },
 
-  async removeProfile(name) {
+  async logoutAccount(name) {
     try {
-      await get().applySession(await api.profilesRemove(name));
-      set({ profiles: await api.profilesList() });
-      // 被删的可能正是当前 profile（后端会切到别个），二维码状态已无意义。
-      set({ qr: null, qrError: null });
+      await api.accountLogout(name);
+      // 清掉凭据后该账号退回未登录：会话变游客、关注列表清空（refreshIdentity 里做）。
+      set({ qr: null, qrState: null, qrError: null });
+      await get().refreshIdentity();
     } catch (error) {
       set({ error: describeError(error) });
     }
   },
 
-  async logout() {
+  async loginCookie(cookie, name) {
     try {
-      await get().applySession(await api.sessionLogout());
+      const account = await api.accountLoginCookie(cookie, name);
+      await get().refreshIdentity();
+      set({ notice: `已登录「${account.nickname || account.name}」` });
+      return true;
     } catch (error) {
+      // 凭据值不回显、不进日志：错误里只可能有后端给的 code + message。
       set({ error: describeError(error) });
+      return false;
+    }
+  },
+
+  async startAccountQr(target) {
+    // 换二维码时先把上一张清掉：面板不显示「上一张已作废的二维码 + 新状态」。
+    set({ qr: null, qrState: null, qrError: null });
+    try {
+      const qr = await api.accountQrStart(target);
+      set({ qr: { ...qr, target: target ?? null }, qrState: "pending" });
+    } catch (error) {
+      // 失败时面板仍要留在原地（qr 为 null 但有 qrError），由它给出「重试」。
+      set({ qrError: describeError(error) });
+    }
+  },
+
+  cancelAccountQr() {
+    set({ qr: null, qrState: null, qrError: null });
+  },
+
+  async pollAccountQr() {
+    const qr = get().qr;
+    if (!qr) return null;
+    try {
+      const { state, account } = await api.accountQrPoll(qr.key);
+      set({ qrState: state, qrError: null });
+      if (state === "confirmed") {
+        // 后端在这一步已落盘并让房间重连；界面把登录态、账号、房间、关注重新拉一遍。
+        // 新增时说清「加了哪个账号」，重新登录时说清「覆盖了谁的凭据」。
+        const who = account ? account.nickname || account.name : "";
+        set({
+          qr: null,
+          qrState: null,
+          notice:
+            qr.target === null
+              ? `已添加账号${who ? `「${who}」` : ""}`
+              : `已重新登录${who ? `「${who}」` : ""}，凭据已更新`,
+        });
+        await get().refreshIdentity();
+      }
+      return state;
+    } catch (error) {
+      set({ qrError: describeError(error) });
+      return null;
     }
   },
 

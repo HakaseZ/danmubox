@@ -156,6 +156,9 @@ try {
   let shortShot = false;
   let adminShot = false;
   let confirmShot = false;
+  let accountAreaShot = false;
+  let accountShot = false;
+  let accountQrShot = false;
   const shoot = async (path) => {
     // SMOKE_SHOT_DIR 指到还不存在的目录时别用 ENOENT 报错（那种失败很难看出是路径问题）
     mkdirSync(dirname(path), { recursive: true });
@@ -188,6 +191,19 @@ try {
       if (!confirmShot && snapshot.adminMuteConfirmShown) {
         confirmShot = true;
         await shoot(join(shotDir, "danmubox-ui-admin-confirm.png"));
+      }
+      // 账号区（一行身份 + 账号按钮）、账号管理对话框、二维码面板各一张
+      if (!accountAreaShot && snapshot.accountAreaReady) {
+        accountAreaShot = true;
+        await shoot(join(shotDir, "danmubox-ui-account-area.png"));
+      }
+      if (!accountShot && snapshot.accountDialogShown) {
+        accountShot = true;
+        await shoot(join(shotDir, "danmubox-ui-account.png"));
+      }
+      if (!accountQrShot && snapshot.accountQrImgShown) {
+        accountQrShot = true;
+        await shoot(join(shotDir, "danmubox-ui-account-qr.png"));
       }
       if (snapshot.done) break;
     }

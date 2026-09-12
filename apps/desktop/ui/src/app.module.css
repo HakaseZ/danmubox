@@ -71,8 +71,11 @@
   margin: 0 0 4px;
 }
 
-/* 账号区（issue #1：多账号并存 + 新增账号入口） */
+/* 账号区（用户 2026-09-12：切换不再做成下拉，只留「当前身份 + 账号按钮」） */
 .account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-elevated);
@@ -80,30 +83,144 @@
   margin-bottom: 14px;
 }
 
-.accountWho {
-  font-size: 13px;
-  color: var(--fg-dim);
-  margin-bottom: 8px;
-}
-
-.accountRow {
+.accountIdentity {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  min-width: 0;
+  flex: 1;
 }
 
-.accountRow label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.accountName {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.accountMeta {
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.accountGuest {
+  font-size: 13px;
   color: var(--fg-dim);
 }
 
-.accountRow input {
+/* ---------------------------------------------------- 账号管理对话框 */
+
+.dialogBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  background: rgba(0, 0, 0, 0.55);
+  overflow-y: auto;
+}
+
+.accountDialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 680px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.dialogHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dialogTitle {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.dialogSub {
   font-size: 12px;
-  padding: 4px 6px;
+  color: var(--fg-dim);
+}
+
+.accountList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.accountItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* 当前账号要明显标出：它决定「覆盖的是谁」 */
+.accountItemActive {
+  border-color: var(--accent);
+  background: rgba(0, 174, 236, 0.08);
+}
+
+.accountWho {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.accountLoggedIn {
+  font-size: 12px;
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.accountOffline {
+  font-size: 12px;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.accountActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.accountAdd {
+  align-self: flex-start;
+}
+
+.accountAdvanced {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: transparent;
+}
+
+.accountCookie {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.accountCookie input {
+  font-size: 12px;
 }
 
 .addRow {
@@ -962,7 +1079,7 @@
   margin-top: 8px;
 }
 
-/* 扫码登录面板（契约 §7）：二维码由后端离线渲染 */
+/* 扫码面板（契约 §7）：二维码由后端离线渲染，状态文案与重试都在这里 */
 .qrPanel {
   display: flex;
   flex-direction: column;
@@ -983,6 +1100,18 @@
   border-radius: 4px;
 }
 
+.qrTitle {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 「重新登录」= 覆盖已有凭据，这行字必须显眼（用户的原账号就是这样被顶掉的） */
+.qrWarn {
+  font-size: 12px;
+  color: var(--warn);
+  text-align: center;
+}
+
 .qrHint {
   font-size: 12px;
   opacity: 0.8;
@@ -991,12 +1120,6 @@
 .qrActions {
   display: flex;
   gap: 6px;
-}
-
-/* 账号切换（契约 §7）：profiles 多于一个时才可切换 */
-.profilePick {
-  font-size: 12px;
-  padding: 1px 4px;
 }
 
 .balance {

@@ -24,6 +24,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **关注列表带出直播间标题**（用户 2026-09-12 反馈：关注项只有头像 / 昵称 / 状态，看不到直播标题）。
+  先取证再改：登录态实测 `GET /xlive/web-ucenter/v1/xfetter/GetWebList` 的原始载荷，条目里**本来就有**
+  `title`（与本场直播标题一致；同条目的 `roomname` 是房间默认名），因此**直接转发，不为每个房间另调接口**。
+  `FollowedRoom` 新增 `title`（契约 §5），经 `follow_list` 一路到界面：关注项在主播名之后显示标题，
+  **空串不渲染**（不留空框、不用占位符）；房间卡片的标题行补 `title="直播间标题（上游）"` 标注，
+  免得上游标题被当成 bug。冒烟新增断言 `step1_followTitleShown` / `step1_followEmptyTitleHidden`。
+
 ### Changed
 
 - **弹幕行 DOM 重做 + 界面按用户实测意见逐条整改**（用户 2026-09-12，实际使用后提的 9 条）。

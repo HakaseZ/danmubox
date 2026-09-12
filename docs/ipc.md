@@ -193,6 +193,7 @@ type FollowedRoom = {
   room_id: number;
   uname: string;
   face: string;
+  title: string;                  // 直播间标题（上游 GetWebList 的 title；空串 = 上游未给）
   live_status: number;           // 0 未开播 / 1 直播中 / 2 轮播
   group_name: string;
 };

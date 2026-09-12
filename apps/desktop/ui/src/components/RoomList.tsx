@@ -133,7 +133,7 @@ export function RoomList({
             onClick={() => onOpen(room.room_id)}
           >
             <div className={styles.roomCardMain}>
-              <div className={styles.roomTitle}>
+              <div className={styles.roomTitle} title="直播间标题（上游）">
                 {room.title.length > 0 ? room.title : `房间 ${room.room_id}`}
               </div>
               <div className={styles.roomMeta}>
@@ -183,6 +183,15 @@ export function RoomList({
                 >
                   <Avatar url={item.face} name={item.uname} />
                   <span className={styles.followName}>{item.uname}</span>
+                  {item.title.length > 0 && (
+                    <span
+                      className={styles.followTitle}
+                      data-testid="db-follow-title"
+                      title={item.title}
+                    >
+                      {item.title}
+                    </span>
+                  )}
                   <span
                     className={item.live_status === 1 ? styles.live : styles.idle}
                   >

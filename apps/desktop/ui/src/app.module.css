@@ -1298,6 +1298,19 @@
   white-space: nowrap;
 }
 
+/* 关注项的直播间标题（上游 `GetWebList` 的 `title`）：跟在主播名之后，
+   能伸展但不超过 45%，超出省略，绝不撑破行（与 `.followName` 同款截断手法）。 */
+.followTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  font-size: var(--fs-2);
+}
+
 .pager {
   display: flex;
   align-items: center;
@@ -1443,6 +1456,11 @@
   }
 
   .followName {
+    max-width: none;
+  }
+
+  /* 标题在窄屏换行后可占满整行，仍带省略号 */
+  .followTitle {
     max-width: none;
   }
 

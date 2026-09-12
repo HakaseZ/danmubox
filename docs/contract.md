@@ -260,10 +260,11 @@ sessdata = ""
 
 `ReportReason`（举报理由，规范性）：`id` / `reason`。取自上游 `dMReport/ForReason`，界面只让用户从清单里选。
 
-`FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
+`FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `title` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
+| `title` | String | **直播间标题**（上游 `GetWebList` 的 `title`，2026-09-12 实测；与房间模型 `Room.title` 同义）。空串 = 上游未给，界面不渲染该元素。 |
 | `live_start_at` | i64 | **最后/本次开播的起始时间**（上游 `liveTime`，Unix 秒；0 = 未知）。命名刻意避开上游另一个字段 `live_time`（那个是**已开播秒数**，与 `liveTime` 相加等于当前时间——靠这个关系确认了 `liveTime` 的语义，见 2026-09-12 实测）。 |
 | `online` | i64 | 人气/在线数（上游 `online`；缺失 = 0） |
 

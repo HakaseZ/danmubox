@@ -304,6 +304,9 @@ pub struct FollowedRoom {
     pub room_id: i64,
     pub uname: String,
     pub face: String,
+    /// 直播间标题（上游 `GetWebList` 的 `title`，实测 2026-09-12）；缺失/为空时不展示。
+    #[serde(default)]
+    pub title: String,
     pub live_status: i32,
     pub group_name: String,
     /// 本场开播时刻（上游 `liveTime`，**Unix 秒**）；`0` 表示未开播或上游未给。
@@ -375,6 +378,7 @@ mod tests {
                 room_id: 3,
                 uname: "c".into(),
                 face: String::new(),
+                title: String::new(),
                 live_status: 0,
                 group_name: String::new(),
                 live_start_at: 0,
@@ -384,6 +388,7 @@ mod tests {
                 room_id: 2,
                 uname: "b".into(),
                 face: String::new(),
+                title: String::new(),
                 live_status: 1,
                 group_name: String::new(),
                 live_start_at: 0,
@@ -393,6 +398,7 @@ mod tests {
                 room_id: 1,
                 uname: "a".into(),
                 face: String::new(),
+                title: String::new(),
                 live_status: 1,
                 group_name: String::new(),
                 live_start_at: 0,

@@ -86,14 +86,14 @@ const MOCK = `(function () {
   // 关注列表：上游顺序刻意打乱，用来看排序是否真按最后开播时间生效；
   // 再补 28 条凑够 31 条，验证「>30 条才出现分页」。
   var followed = [
-    { room_id: 300, uname: "离线甲", face: "", live_status: 0, group_name: "", live_start_at: 1700000000, online: 0 },
-    { room_id: 100, uname: "在播主播", face: FACE_512, live_status: 1, group_name: "", live_start_at: 1789000000, online: 500 },
-    { room_id: 200, uname: "离线乙", face: "", live_status: 0, group_name: "", live_start_at: 1789500000, online: 0 }
+    { room_id: 300, uname: "离线甲", face: "", title: "", live_status: 0, group_name: "", live_start_at: 1700000000, online: 0 },
+    { room_id: 100, uname: "在播主播", face: FACE_512, title: "在播中的直播间标题", live_status: 1, group_name: "", live_start_at: 1789000000, online: 500 },
+    { room_id: 200, uname: "离线乙", face: "", title: "离线乙的直播间标题", live_status: 0, group_name: "", live_start_at: 1789500000, online: 0 }
   ];
   for (var i = 1; i <= 28; i += 1) {
     followed.push({
       room_id: 400 + i, uname: "填充" + (i < 10 ? "0" + i : i), face: "",
-      live_status: 0, group_name: "", live_start_at: 1000000000 + i, online: 0
+      title: "", live_status: 0, group_name: "", live_start_at: 1000000000 + i, online: 0
     });
   }
   // 账号（契约 §7 accounts_list）：条目自带登录状态与身份。
@@ -374,6 +374,22 @@ const MOCK = `(function () {
     out.followPage1Count = followNames.length;
     out.followPagerShown = !!document.querySelector('[class*="pager"]');
     out.followNonLiveListed = followNames.indexOf("离线乙") >= 0 && followNames.indexOf("离线甲") >= 0;
+    // 关注项带出直播间标题（上游 title 字段）：非空的渲染出文本，空串的不渲染该元素
+    // （不留空框、不用占位符）。
+    var followItemNamed = function (name) {
+      return allByTestId("db-follow-item").filter(function (el) {
+        return el.innerText.indexOf(name) >= 0;
+      })[0];
+    };
+    var liveFollowItem = followItemNamed("在播主播");
+    var liveFollowTitle = liveFollowItem
+      ? liveFollowItem.querySelector('[data-testid="db-follow-title"]')
+      : null;
+    out.step1_followTitleShown = !!liveFollowTitle &&
+      liveFollowTitle.innerText.indexOf("在播中的直播间标题") >= 0;
+    var emptyTitleItem = followItemNamed("离线甲");
+    out.step1_followEmptyTitleHidden = !!emptyTitleItem &&
+      !emptyTitleItem.querySelector('[data-testid="db-follow-title"]');
     out.accountArea = !!byTestId("db-account");
     // 列表页的头像（账号区 / 关注项）尺寸必须由 CSS 给，不能落到「原图尺寸」：
     // 夹具是 512×512，一旦 var(--avatar) 解析不出来，头像会按 512 渲染、把主页顶爆

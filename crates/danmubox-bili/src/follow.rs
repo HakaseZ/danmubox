@@ -20,6 +20,8 @@
 //!   - 房间号：`roomid` / `room_id`。
 //!   - 昵称：`uname` / `name` / `nickname`。
 //!   - 头像：`face` / `cover` / `user_cover`。
+//!   - 直播间标题：`title`（实测 2026-09-12：条目里同时有 `title` 与 `roomname`，
+//!     前者是本场直播标题，与 `getRoomPlayInfo` 的房间 `title` 一致）。
 //!   - 直播状态：`live_status` / `liveStatus`。
 //!   - 分组名：`group_name` / `groupName` / `tag_name` / `group`。
 //!   - 本场开播时刻：`liveTime`（Unix 秒，实测 2026-09-12）——注意同响应里
@@ -92,6 +94,9 @@ fn map_item(item: &Value) -> FollowedRoom {
         room_id,
         uname: str_field(item, &["uname", "name", "nickname"]),
         face: str_field(item, &["face", "cover", "user_cover"]),
+        // 直播间标题：`title`（实测 2026-09-12，A28）。同条目里另有 `roomname`
+        // （房间默认名），本字段取的是**本场直播标题**。
+        title: str_field(item, &["title"]),
         live_status: int_field(item, &["live_status", "liveStatus"]) as i32,
         group_name: str_field(item, &["group_name", "groupName", "tag_name", "group"]),
         // 开播时刻取 `liveTime`（Unix 秒）。**不要**误取 `live_time`：后者是
@@ -210,6 +215,7 @@ mod tests {
                         "roomid": 3,
                         "uname": "离线主播",
                         "face": "https://example.invalid/3.jpg",
+                        "title": "离线主播的标题",
                         "live_status": 0,
                         "group_name": "默认分组"
                     },
@@ -217,6 +223,7 @@ mod tests {
                         "roomid": 1,
                         "uname": "在播主播",
                         "face": "https://example.invalid/1.jpg",
+                        "title": "在播主播的标题",
                         "live_status": 1,
                         "group_name": "默认分组"
                     }
@@ -232,8 +239,10 @@ mod tests {
         assert_eq!(ids, vec![1, 3], "直播中置顶");
         assert_eq!(rooms[0].uname, "在播主播");
         assert_eq!(rooms[0].face, "https://example.invalid/1.jpg");
+        assert_eq!(rooms[0].title, "在播主播的标题");
         assert_eq!(rooms[0].live_status, 1);
         assert_eq!(rooms[0].group_name, "默认分组");
+        assert_eq!(rooms[1].title, "离线主播的标题");
         assert_eq!(rooms[1].live_status, 0);
     }
 
@@ -247,6 +256,7 @@ mod tests {
                 room_id: 0,
                 uname: String::new(),
                 face: String::new(),
+                title: String::new(),
                 live_status: 0,
                 group_name: String::new(),
                 live_start_at: 0,

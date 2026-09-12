@@ -345,6 +345,8 @@ export interface FollowedRoom {
   room_id: number;
   uname: string;
   face: string;
+  /** 直播间标题（上游 `GetWebList` 的 `title`）；空串 = 上游未给，界面不渲染该行。 */
+  title: string;
   live_status: number;
   group_name: string;
   /**

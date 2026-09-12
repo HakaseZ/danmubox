@@ -26,6 +26,30 @@
 
 ### Added
 
+- **多账号入口**（需求 §2.2）：IPC 新增 `profiles_create` / `profiles_remove`——新建一个 profile
+  并设为当前（凭据先留空，随后扫码 / 手填），以及删除一个 profile。不许删掉最后一个；
+  删的若是当前项，当前指向自动切到剩下的条目。名字只允许 `[A-Za-z0-9_-]`、长度 ≤ 32，
+  非法或重复一律 `BAD_REQUEST` 且**不覆盖**已有凭据。此前「切换身份」的入口一直不可用，
+  根因是没有新增账号的路径，而不是切换本身。
+- **消息带发言者头像**（契约 §5 `Message.face`）：实时弹幕取 `info[0][15].user.base.face`，
+  进场回填的历史条目取 `user.base.face`，缺失为空串。
+- **主站「我的表情」**（`EmoteProvider::owned`，IPC `emotes_owned`）：取
+  `GET api.bilibili.com/x/emote/user/panel/web?business=reply`，把主站拥有的表情包
+  （`upower_` 家族）补进表情选择器——这一族不在直播表情接口里，只能从这里取。
+  包在 `data.packages[]`、表情在包的 **`emote[]`**（不是直播那套 `emoticons`）；
+  唯一键按 `upower_` + 表情 `text` 拼装；包分类新增 `owned`。未登录时上游退化为免费表情包。
+  协议依据 `docs/protocol.md` 附录 A35 结案。
+- **房管能力**（端口 `RoomAdmin`，IPC `admin_mute` / `admin_unmute` / `admin_blacklist_list` /
+  `admin_blacklist_add` / `admin_blacklist_del` / `admin_keywords_list` / `admin_keywords_add` /
+  `admin_keywords_del`）：禁言 / 解除、黑名单增删查、屏蔽词增删查。
+  **只读三个列表接口已用真实登录态实测**（禁言 `POST …/v1/banned/GetSilentUserList`、
+  屏蔽词 `POST …/v1/banned/GetShieldKeywordList`、黑名单
+  `GET …/xlive/app-ucenter/v2/xbanned/banned/GetBlackList`——注意黑名单在 `app-ucenter`
+  且按主播 uid 寻址）；写操作的参数与响应**未实测**，按官方前端实现核对，见附录 A36。
+- **关注列表新增开播时刻与在线人数**（契约 §5）：`live_start_at`（上游 `liveTime`，Unix 秒）
+  与 `online`；注意上游另有一个 `live_time` 是「已开播秒数」，两者语义不同，实现只取前者。
+- **CLI 新增 `emotes-owned` 与 `admin-lists` 两个核对入口**；`follow` 子命令打印新字段。
+
 - **房间观众数（在线人数 + 累计看过）**：引擎把 `ONLINE_RANK_COUNT` 的 `online_count` 与
   `WATCHED_CHANGE` 的 `num` 冒泡成 `Event::RoomStats`（契约 §5 新增模型、§7 新增事件
   `danmubox://room_stats`），房间头两个都显示。人气值不再展示（用户反馈：那个参数官方客户端也没实现）；

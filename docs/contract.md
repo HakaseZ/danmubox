@@ -175,6 +175,7 @@ sessdata = ""
 | `is_admin` | bool | 发送者是否房管（REQUIREMENTS.md 需求） |
 | `is_history` | bool | 是否来自进场回填（§4.3）；实时推送恒为 `false` |
 | `amount` | i64 | 礼物金瓜子或 SC 金额，非交易类为 0 |
+| `emote_url` | string | 表情弹幕的图片地址（**已规范化为 https**）；非表情弹幕为空串 |
 | `upstream_id` | string | **上游弹幕标识，举报必需**（来源待实测，见 `protocol.md` 附录） |
 
 > **徽标（REQUIREMENTS.md 需求）**：主播 = `uid == Room.anchor_uid` 派生；房管 = `Message.is_admin`；大航海 = `Message.guard_level`（`1` 总督 / `2` 提督 / `3` 舰长）。`is_anchor` 不设独立字段——能推导就不存。

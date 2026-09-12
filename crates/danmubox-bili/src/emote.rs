@@ -131,11 +131,9 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                url: item
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                url: crate::asset::secure_url(
+                    item.get("url").and_then(Value::as_str).unwrap_or_default(),
+                ),
                 room_id: if is_room_scoped || kind == EmotePackage::Room {
                     room_id
                 } else {

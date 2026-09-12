@@ -364,6 +364,12 @@
   vertical-align: middle;
 }
 
+/* 弹幕里的表情图：与文字同高、跟基线对齐（docs/ui.md §4.1）。 */
+.contentEmote {
+  height: 26px;
+  vertical-align: middle;
+}
+
 .rowAction {
   opacity: 0;
   flex: none;

@@ -325,6 +325,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `ts` | `info[0][4]`（毫秒） | 秒级备选在 `info[0][5]` | 已实测 |
 | `room_id` | 连接上下文 | 取真实 `room_id`，不信任载荷内房间字段 | 已确定（契约） |
 | `amount` | — | 弹幕恒为 `0` | 已确定（契约） |
+| `emote_url` | `info[0][13].url`（**是对象时才有**） | 表情弹幕的图片地址；非表情弹幕该槽位是字符串 `"{}"`。上游混用 `http://` 与 `https://`，客户端在安全上下文里会拦掉 http，**必须统一升为 https**（`asset.rs`） | 已实测（房间 21987615，样例 `official_345`） |
 
 ```json
 { "cmd": "DANMU_MSG",

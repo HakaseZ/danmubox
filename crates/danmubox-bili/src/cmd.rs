@@ -151,6 +151,17 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
             .unwrap_or(0);
     }
 
+    // 表情弹幕：`info[0][13]` 是**对象**时才有表情信息（非表情弹幕该槽位是字符串 `"{}"`，
+    // 实测自房间 15122413 / 21987615 的真实弹幕）。此时 `info[1]` 的正文就是表情名，
+    // 只显示文字会让人以为「表情没渲染」，所以把图片地址一并带回。
+    if let Some(emote) = meta.and_then(|m| m.get(13)).and_then(Value::as_object) {
+        if let Some(url) = emote.get("url").and_then(Value::as_str) {
+            if !url.is_empty() {
+                message.emote_url = crate::asset::secure_url(url);
+            }
+        }
+    }
+
     // 房管：经典槽位 `info[2][2]`。尚无正向样本，见 `docs/protocol.md` 附录 A 的校准项。
     message.is_admin = info
         .get(2)
@@ -329,6 +340,63 @@ mod tests {
             "举报标识取自 extra.id_str"
         );
         assert!(!message.is_admin);
+    }
+
+    #[test]
+    fn emote_danmaku_carries_the_image_url_over_https() {
+        // 实测样本（房间 21987615 的真实弹幕）：正文是表情名，表情信息在 info[0][13]，
+        // 且上游给的是 http 地址——客户端在安全上下文里会拦掉，必须升级成 https。
+        let payload = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1_789_176_282_410i64, 1_789_175_842i64, 0, "x", 0, 0, 0, "", 0,
+                 {
+                    "bulge_display": 0, "emoticon_unique": "official_345", "height": 60,
+                    "in_player_area": 1, "is_dynamic": 1, "width": 200,
+                    "url": "http://i0.hdslb.com/bfs/live/2ce08b31618d3ad0d34877bf949ef0089a0438b7.png"
+                 },
+                 "{}",
+                 {"user": {"uid": 7, "base": {"name": "观众乙"}, "medal": {"level": 0}}}],
+                "这个好耶"
+            ]
+        });
+        let message = dispatch(7, &payload, &counters()).expect("必须解出弹幕");
+        assert_eq!(message.content, "这个好耶", "正文仍是表情名");
+        assert_eq!(
+            message.emote_url,
+            "https://i0.hdslb.com/bfs/live/2ce08b31618d3ad0d34877bf949ef0089a0438b7.png",
+            "表情图必须升级到 https，否则在客户端里根本加载不出来"
+        );
+    }
+
+    #[test]
+    fn plain_danmaku_has_no_emote() {
+        // 非表情弹幕的 info[0][13] 是字符串 "{}"（实测），不得被当成表情对象。
+        let payload = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1_789_134_601_006i64, 1_789_134_600i64, 0, "x", 0, 0, 0, "", 0,
+                 "{}", "{}", {"user": {"uid": 7, "base": {"name": "观众乙"}, "medal": {"level": 0}}}],
+                "普通弹幕"
+            ]
+        });
+        let message = dispatch(7, &payload, &counters()).expect("必须解出弹幕");
+        assert!(message.emote_url.is_empty(), "空槽位不得产出表情地址");
+    }
+
+    #[test]
+    fn emote_object_without_url_is_ignored() {
+        let payload = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1_789_134_601_006i64, 1_789_134_600i64, 0, "x", 0, 0, 0, "", 0,
+                 {"emoticon_unique": "official_1", "url": ""},
+                 "{}", {"user": {"uid": 7, "base": {"name": "观众乙"}, "medal": {"level": 0}}}],
+                "表情名"
+            ]
+        });
+        let message = dispatch(7, &payload, &counters()).expect("必须解出弹幕");
+        assert!(message.emote_url.is_empty(), "空 url 不得当成表情");
     }
 
     #[test]

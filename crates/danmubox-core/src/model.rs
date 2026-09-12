@@ -74,6 +74,10 @@ pub struct Message {
     #[serde(default)]
     pub is_history: bool,
     pub amount: i64,
+    /// 表情弹幕的图片地址（已规范化为 https）；非表情弹幕为空串。
+    /// 上游把表情信息放在 `DANMU_MSG` 的 `info[0][13]`，非表情时该槽位是空对象。
+    #[serde(default)]
+    pub emote_url: String,
     pub upstream_id: String,
 }
 
@@ -95,6 +99,7 @@ impl Message {
             is_admin: false,
             is_history: false,
             amount: 0,
+            emote_url: String::new(),
             upstream_id: String::new(),
         }
     }

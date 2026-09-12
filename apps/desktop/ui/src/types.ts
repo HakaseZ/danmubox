@@ -24,6 +24,8 @@ export interface Message {
   /** 进场回填的历史弹幕（上游最近 10+10 条），与实时弹幕区分展示。 */
   is_history: boolean;
   amount: number;
+  /** 表情弹幕的图片地址（已是 https）；非表情弹幕为空串。 */
+  emote_url: string;
   upstream_id: string;
 }
 

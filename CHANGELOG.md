@@ -41,6 +41,42 @@
 
 ### Changed
 
+- **表情面板重做：竖向 tab 轨道 + 表情完整落在格子里**（用户 2026-09-12 #20：「给表情的全是按钮，根本框不住表情图标，
+  我说过可以直接仿照官方实现」）。两件事同源：**验证用的是手写夹具，不是真实数据**——旧夹具里 72 个通用表情全是
+  64×64 的正方形（`data:` 色块），而真站的通用表情是 **200×60 的横条**，尺寸特征完全不同，于是「图比格子宽」
+  这件事在夹具里根本不存在。
+  - **先固化真实载荷再改**：`apps/desktop/ui/smoke/fixtures/emotes.json`（新文件，只读 GET 抓取后提交；账号侧标识
+    已脱敏 —— 主站「我的表情」的 UP 名字与 `vmid` 换成占位、另一个公开房间的房间号不入库，**结构未改**）。
+    内容是三个真实响应：`GetEmoticons`（公开测试房间 5440：通用表情 38 个，实测 200×60 一族，最宽 231×60）、
+    `GetEmoticons`（另一个公开在播房间：粉丝牌 17 个 162×162、本房间 10 个 162×162 —— 公开测试房间不下发这两个包）、
+    主站 `/x/emote/user/panel/web?business=reply`（20 个 162×162）。冒烟替身与断言一律从它派生，
+    **假图只换像素内容、固有尺寸与真实图逐张一致**（这样离线可跑又保留尺寸特征）；弹幕行里的表情样本同样换成真实载荷里的那两条。
+  - **改前先复现**（WebKit，360×844，通用组）：格子（`db-emote-item`）**43.1 × 40.0**，图（`img`，原图 200×60）**80.5 × 24.1**
+    —— 右边越出格子 **18.7px**（左右合计 37.4px）；该组最宽的一条（231×60）图宽 **92.9px**、越出 **24.9px**。
+    根因：`.pickerItem img` 只写了 `height: var(--emote-size)`，宽度按原图比例反推（200∶60 的 `1.5em` 高 → **5em** 宽），
+    3em 的格子当然框不住。**改后同一处：图 47.2 × 24.1，完整落在 65.2 × 40.0 的格子里，溢出 0。**
+    列宽下限同时从 `3em` 提到 `4.5em`：`contain` 之后横条表情的可见高度 = 列宽 ÷ 3.33，3em 时只剩 7px 高 ——
+    字面上「没溢出」但已经认不出是哪个了。
+    这与「512×512 头像撑爆主页」是同一个错误：共用组件的尺寸不许依赖原图尺寸。
+  - **真 tab 轨道**：分组从「一排会换行的按钮」改成面板左侧的**竖向轨道**（`role="tablist"` +
+    `aria-orientation="vertical"`，每格 `role="tab"` + `aria-selected` + `aria-controls` 指向网格，
+    网格是 `role="tabpanel"` + `aria-labelledby`）；选中态**三处同时变**（左侧 2px 强调色条 + 底色抬起 + 字重加粗），
+    挂在 `[aria-selected="true"]` 上；**键盘可达**：roving tabindex（只有选中项可 Tab 到），`↑`/`↓` 循环换组、
+    `Home`/`End` 跳首尾、焦点跟着选中项走。轨道与网格各自滚，面板头与轨道都不动。
+  - **表情图宽高由 CSS 显式给出**：`width: 100%` + `height: var(--emote-size)` + `object-fit: contain`
+    （不再依赖原图尺寸与长宽比）；退化成文字的那一格行高同样跟 `--emote-size`（原来是 `var(--row-line)`，
+    在面板里解析成固定的 21px，字号滑杆改不动它），因此与前后的格子等高。
+  - 冒烟断言：`panelEmoteFitsCell`（每一格的图完整落在格内）/ `panelEmoteImgExplicitBox`（宽高非 `auto` 且 `object-fit: contain`）/
+    `panelEmoteOverflowPx`（溢出量记账，改前 24.9 → 改后 0）/ `panelEmoteMetrics`（格子与图两把尺子的数字）/
+    `panelNoHorizontalOverflow`（360 下面板 / 轨道 / 网格三块都不横向溢出）；tab 侧
+    `panelEmoteRailStacked`（竖向堆叠而不是换行的行）/ `panelEmoteRailLeftOfGrid` / `panelEmoteTabIsRealTab`（语义与 id 关系）/
+    `panelEmoteTabSelectedStyleDistinct`（选中态的计算样式确实不同）/ `panelEmoteTabArrowKeys` / `panelEmoteTabArrowUpReturns`。
+    置灰那组断言改按真实载荷量（locked 的是**粉丝牌**那 17 条，对照组是本房间那 10 条）：
+    `panelLockedEmoteListed` / `panelLockedEmoteDimmed` / `panelLockedEmoteSameSize` / `panelLockedEmoteSelectable` /
+    `panelUnlockedEmoteNotDimmed`；删掉 `panelMissingLockedTreatedAsUsable`（真实载荷里没有缺 `perm` 的样本，
+    那条映射由 `crates/danmubox-bili/src/emote.rs` 的单测覆盖，界面只消费 `locked` 布尔值）。
+  - 口径按新版重写：`docs/ui.md` §6.3（含改前 / 改后的度量表）。
+
 - **弹幕行 DOM 重做 + 界面按用户实测意见逐条整改**（用户 2026-09-12，实际使用后提的 9 条）。
   核心是每条弹幕的 DOM 结构：身份与正文从「两个被 `align-items: baseline` 摆平的 flex 项」改成**同一个网格的两列**，
   头像从「钉在行容器上」改成**钉在首行盒上**。口径与理由写进 `docs/ui.md` §4.1 / §4.2 / §6.2 / §6.3 / §9.1。

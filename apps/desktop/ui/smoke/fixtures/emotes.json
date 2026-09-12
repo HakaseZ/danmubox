@@ -1,0 +1,1905 @@
+{
+  "_note": "表情面板的真实上游载荷（只读 GET 固化，2026-09-12）。结构原样保留；脱敏仅限账号侧标识。冒烟替身与断言一律从这里派生，不得手写表情 JSON —— 手写夹具正是「表情溢出边框」这类 bug 逃过验证的根因。",
+  "sources": [
+    {
+      "key": "live",
+      "endpoint": "https://api.live.bilibili.com/xlive/web-ucenter/v2/emoticon/GetEmoticons",
+      "query": {
+        "room_id": 5440,
+        "platform": "pc"
+      },
+      "room": "仓库公开测试房间（short id 1 / room_id 5440，已在冒烟与文档里公开）",
+      "auth": "本机 config.toml active_profile 的 Cookie（只读 GET，不写、不 csrf）",
+      "captured_at": "2026-09-12"
+    },
+    {
+      "key": "live_rich",
+      "endpoint": "https://api.live.bilibili.com/xlive/web-ucenter/v2/emoticon/GetEmoticons",
+      "query": {
+        "room_id": "<redacted>",
+        "platform": "pc"
+      },
+      "room": "另一个公开在播直播间；按仓库规矩**房间号不入库**，因此 query 里不记",
+      "why": "公开测试房间（room_id 5440）只下发「通用表情」一个包；粉丝牌 / 本房间这两档要有在播房间才有。此处只保留那两个非通用包——通用包与 sources 里的 `live` 逐字相同，不重复入库。",
+      "auth": "同上",
+      "captured_at": "2026-09-12",
+      "sanitized": [
+        "emoticons[].emoticon_unique 里的房间号 → room_redacted_*（房间号不入库）"
+      ]
+    },
+    {
+      "key": "owned",
+      "endpoint": "https://api.bilibili.com/x/emote/user/panel/web",
+      "query": {
+        "business": "reply"
+      },
+      "room": "—（主站表情，与房间无关）",
+      "sanitized": [
+        "packages[].text",
+        "packages[].emote[].text",
+        "packages[].meta.item_url 里的 vmid"
+      ],
+      "auth": "同上",
+      "captured_at": "2026-09-12"
+    }
+  ],
+  "live": {
+    "code": 0,
+    "message": "OK",
+    "ttl": 1,
+    "data": {
+      "fans_brand": 1,
+      "data": [
+        {
+          "emoticons": [
+            {
+              "emoji": "啊",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/cbf2746062242e77bdcb9eb08edbf9b151fe0c2e.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_331",
+              "unlock_show_image": "",
+              "emoticon_id": 331
+            },
+            {
+              "emoji": "冲鸭",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/dea7fbbc1c3d3c80f4c7b27263e13460f21874e4.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_332",
+              "unlock_show_image": "",
+              "emoticon_id": 332
+            },
+            {
+              "emoji": "upup",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/38d84a4cd2f40069202ee13bbdca5b23d29710fb.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_348",
+              "unlock_show_image": "",
+              "emoticon_id": 348
+            },
+            {
+              "emoji": "星星向龙",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/a69423be39b0f2a87dc74f2e44ead70de0eb0d4f.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_343",
+              "unlock_show_image": "",
+              "emoticon_id": 343
+            },
+            {
+              "emoji": "欧皇驾到",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/650399e68d0d93df4b3f9e95e7437e83be7fbb1a.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_335",
+              "unlock_show_image": "",
+              "emoticon_id": 335
+            },
+            {
+              "emoji": "这个好耶",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/2ce08b31618d3ad0d34877bf949ef0089a0438b7.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_345",
+              "unlock_show_image": "",
+              "emoticon_id": 345
+            },
+            {
+              "emoji": "泰裤辣",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/82c38fc930ae764b4c6215f544bf8e1dba73b51c.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_339",
+              "unlock_show_image": "",
+              "emoticon_id": 339
+            },
+            {
+              "emoji": "闪避技能",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/fa3febe6c62f3bcd042953141930d96fb8451e60.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_337",
+              "unlock_show_image": "",
+              "emoticon_id": 337
+            },
+            {
+              "emoji": "稳住能赢",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_342",
+              "unlock_show_image": "",
+              "emoticon_id": 342
+            },
+            {
+              "emoji": "中奖喷雾",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/c3cfa182d16564301d39e4c7e4c186dfb9fabf96.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 200,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_346",
+              "unlock_show_image": "",
+              "emoticon_id": 346
+            },
+            {
+              "emoji": "赞",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/bbd9045570d0c022a984c637e406cb0e1f208aa9.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 150,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_147",
+              "unlock_show_image": "",
+              "emoticon_id": 147
+            },
+            {
+              "emoji": "妙啊",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/7b7a2567ad1520f962ee226df777eaf3ca368fbc.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 138,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_109",
+              "unlock_show_image": "",
+              "emoticon_id": 109
+            },
+            {
+              "emoji": "有点东西",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/39e518474a3673c35245bf6ef8ebfff2c003fdc3.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 186,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_113",
+              "unlock_show_image": "",
+              "emoticon_id": 113
+            },
+            {
+              "emoji": "很有精神",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/e91cbe30b2db1e624bd964ad1f949661501f42f8.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 201,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_150",
+              "unlock_show_image": "",
+              "emoticon_id": 150
+            },
+            {
+              "emoji": "泪目",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/aa93b9af7ba03b50df23b64e9afd0d271955cd71.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 144,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_103",
+              "unlock_show_image": "",
+              "emoticon_id": 103
+            },
+            {
+              "emoji": "赢麻了",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/1d4c71243548a1241f422e90cd8ba2b75c282f6b.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 156,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_128",
+              "unlock_show_image": "",
+              "emoticon_id": 128
+            },
+            {
+              "emoji": "钝角",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/38cf68c25d9ff5d364468a062fc79571db942ff3.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 153,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_133",
+              "unlock_show_image": "",
+              "emoticon_id": 133
+            },
+            {
+              "emoji": "干杯",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/8fedede4028a72e71dae31270eedff5f706f7d18.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_149",
+              "unlock_show_image": "",
+              "emoticon_id": 149
+            },
+            {
+              "emoji": "2333",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/a98e35996545509188fe4d24bd1a56518ea5af48.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 183,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_124",
+              "unlock_show_image": "",
+              "emoticon_id": 124
+            },
+            {
+              "emoji": "打call",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/fa1eb4dce3ad198bb8650499830560886ce1116c.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 195,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_146",
+              "unlock_show_image": "",
+              "emoticon_id": 146
+            },
+            {
+              "emoji": "多谢款待",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/4609dad97c0dfa61f8da0b52ab6fff98e0cf1e58.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 207,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_148",
+              "unlock_show_image": "",
+              "emoticon_id": 148
+            },
+            {
+              "emoji": "awsl",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/328e93ce9304090f4035e3aa7ef031d015bbc915.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_102",
+              "unlock_show_image": "",
+              "emoticon_id": 102
+            },
+            {
+              "emoji": "鸡汤来咯",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/b371151503978177b237afb85185b0f5431d0106.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 198,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_137",
+              "unlock_show_image": "",
+              "emoticon_id": 137
+            },
+            {
+              "emoji": "雀食",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/7251dc7df587388a3933743bf38394d12a922cd7.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 159,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_118",
+              "unlock_show_image": "",
+              "emoticon_id": 118
+            },
+            {
+              "emoji": "禁止套娃",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/6a644577437d0bd8a314990dd8ccbec0f3b30c92.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 204,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_108",
+              "unlock_show_image": "",
+              "emoticon_id": 108
+            },
+            {
+              "emoji": "暗中观察",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/18af5576a4582535a3c828c3ae46a7855d9c6070.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 156,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_104",
+              "unlock_show_image": "",
+              "emoticon_id": 104
+            },
+            {
+              "emoji": "保熟吗",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/0e28444c8e2faef3169e98e1a41c487144d877d4.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_105",
+              "unlock_show_image": "",
+              "emoticon_id": 105
+            },
+            {
+              "emoji": "比心",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/1ba5126b10e5efe3e4e29509d033a37f128beab2.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 132,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_106",
+              "unlock_show_image": "",
+              "emoticon_id": 106
+            },
+            {
+              "emoji": "咸鱼翻身",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/7db4188c050f55ec59a1629fbc5a53661e4ba780.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 180,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_110",
+              "unlock_show_image": "",
+              "emoticon_id": 110
+            },
+            {
+              "emoji": "mua",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/08f1aebaa4d9c170aa79cbafe521ef0891bdf2b5.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 165,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_111",
+              "unlock_show_image": "",
+              "emoticon_id": 111
+            },
+            {
+              "emoji": "来了来了",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/61e790813c51eab55ebe0699df1e9834c90b68ba.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 168,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_115",
+              "unlock_show_image": "",
+              "emoticon_id": 115
+            },
+            {
+              "emoji": "贴贴",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/88b49dac03bfd5d4cb49672956f78beb2ebd0d0b.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_116",
+              "unlock_show_image": "",
+              "emoticon_id": 116
+            },
+            {
+              "emoji": "牛牛牛",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/343f7f7e87fa8a07df63f9cba6b776196d9066f0.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 168,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_117",
+              "unlock_show_image": "",
+              "emoticon_id": 117
+            },
+            {
+              "emoji": "颠个勺",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/625989e78079e3dc38d75cb9ac392fe8c1aa4a75.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 195,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_119",
+              "unlock_show_image": "",
+              "emoticon_id": 119
+            },
+            {
+              "emoji": "好家伙",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/c2650bf9bbc79b682a4b67b24df067fdd3e5e9ca.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 165,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_122",
+              "unlock_show_image": "",
+              "emoticon_id": 122
+            },
+            {
+              "emoji": "下次一定",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/cc2652cef69b22117f1911391567bd2957f27e08.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 177,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_125",
+              "unlock_show_image": "",
+              "emoticon_id": 125
+            },
+            {
+              "emoji": "不上Ban",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/eff44c1fc03311573e8817ca8010aca72404f65c.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 231,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_126",
+              "unlock_show_image": "",
+              "emoticon_id": 126
+            },
+            {
+              "emoji": "上热榜",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/83d5b9cdaaa820c2756c013031d34dac1fd4156b.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 168,
+              "height": 60,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 0,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "official_134",
+              "unlock_show_image": "",
+              "emoticon_id": 134
+            }
+          ],
+          "pkg_id": 1,
+          "pkg_name": "通用表情",
+          "pkg_type": 1,
+          "pkg_descript": "官方表情(系统)",
+          "pkg_perm": 1,
+          "unlock_identity": 0,
+          "unlock_need_gift": 0,
+          "current_cover": "http://i0.hdslb.com/bfs/live/39b7667c2601e4da8019472f5e3df1f2278278b6.png",
+          "recently_used_emoticons": [],
+          "top_show": {
+            "top_left": {
+              "image": "",
+              "text": "通用表情"
+            },
+            "top_right": {
+              "image": "",
+              "text": ""
+            }
+          },
+          "top_show_recent": {
+            "top_left": {
+              "image": "",
+              "text": ""
+            },
+            "top_right": {
+              "image": "",
+              "text": ""
+            }
+          }
+        }
+      ],
+      "purchase_url": null
+    }
+  },
+  "live_rich": {
+    "code": 0,
+    "message": "OK",
+    "ttl": 1,
+    "data": {
+      "fans_brand": 1,
+      "data": [
+        {
+          "emoticons": [
+            {
+              "emoji": "哈哈",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/f1f2cb500de4bd3a5992f85ae2be574dd65a605d.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 4,
+              "unlock_need_gift": 31164,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "粉丝团",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_191",
+              "unlock_show_image": "",
+              "emoticon_id": 191
+            },
+            {
+              "emoji": "哭哭",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/4e787a9d7b963ec69d1fe96e49d984acafd8319b.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 4,
+              "unlock_need_gift": 31164,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "粉丝团",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_192",
+              "unlock_show_image": "",
+              "emoticon_id": 192
+            },
+            {
+              "emoji": "打CALL",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/b011b4796d78677ef1f88dd20357646035175568.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 4,
+              "unlock_need_gift": 31164,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "粉丝团",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_193",
+              "unlock_show_image": "",
+              "emoticon_id": 193
+            },
+            {
+              "emoji": "NICE",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/d59ddd9dd98e0c59042139faa861c163821847ff.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 4,
+              "unlock_need_gift": 31164,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "粉丝团",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_195",
+              "unlock_show_image": "",
+              "emoticon_id": 195
+            },
+            {
+              "emoji": "晚安",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/ced09da615b2b31d8849404334f15985b859c404.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 4,
+              "unlock_need_gift": 31164,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "粉丝团",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_219",
+              "unlock_show_image": "",
+              "emoticon_id": 219
+            },
+            {
+              "emoji": "HAPPY",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/c0bd2ebb4be95b57820ed0c9dcb225fbd12cc56a.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 3,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "舰长",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_198",
+              "unlock_show_image": "",
+              "emoticon_id": 198
+            },
+            {
+              "emoji": "可爱捏",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/c08498193ceff559c1c499b0fd0ee32e86484cd3.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 3,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "舰长",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_199",
+              "unlock_show_image": "",
+              "emoticon_id": 199
+            },
+            {
+              "emoji": "run",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/garb/298c1119be38df2c474a36b8b2cb487296c4a5b5.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 3,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "舰长",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_228",
+              "unlock_show_image": "",
+              "emoticon_id": 228
+            },
+            {
+              "emoji": "GG",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/garb/8923671c0946cdf8ff26e7bb0b5524207e8d4af6.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 3,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "舰长",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_229",
+              "unlock_show_image": "",
+              "emoticon_id": 229
+            },
+            {
+              "emoji": "鼓掌",
+              "descript": "",
+              "url": "https://i0.hdslb.com/bfs/garb/6395b2e1da4d308609bb2fa68e31c40ccf6aafba.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 3,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "舰长",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_68540",
+              "unlock_show_image": "",
+              "emoticon_id": 68540
+            },
+            {
+              "emoji": "感情漩涡",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/b5215d50a75d9d746db08b5f82103e6f2a9c72bd.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 2,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "提督",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_200",
+              "unlock_show_image": "",
+              "emoticon_id": 200
+            },
+            {
+              "emoji": "mua",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/ae5e212c79a17b80aa0756c6468c2699f1394dab.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 2,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "提督",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_201",
+              "unlock_show_image": "",
+              "emoticon_id": 201
+            },
+            {
+              "emoji": "生闷气",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/c159e975fee7e6e5293122266380ae553ce694f5.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 2,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "提督",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_203",
+              "unlock_show_image": "",
+              "emoticon_id": 203
+            },
+            {
+              "emoji": "一打三",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/a8d2690d38cdbc3022cd282188071273f7bb6efb.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 2,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "提督",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_215",
+              "unlock_show_image": "",
+              "emoticon_id": 215
+            },
+            {
+              "emoji": "结婚",
+              "descript": "",
+              "url": "https://i0.hdslb.com/bfs/garb/7ffc56cfe72f179b64d46e3a573c992cb30ad77e.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 2,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "提督",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_68541",
+              "unlock_show_image": "",
+              "emoticon_id": 68541
+            },
+            {
+              "emoji": "猪鼻",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/5e156af15427f4ca997da08f23b6850cacdd7813.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 1,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "总督",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_204",
+              "unlock_show_image": "",
+              "emoticon_id": 204
+            },
+            {
+              "emoji": "小火车",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/af50d3376c5f6112f7f0982225b096cd60e568e1.png",
+              "is_dynamic": 1,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 1,
+              "unlock_need_gift": 0,
+              "perm": 0,
+              "unlock_need_level": 1,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "总督",
+              "unlock_show_color": "#FF6699",
+              "emoticon_unique": "room_redacted_205",
+              "unlock_show_image": "",
+              "emoticon_id": 205
+            }
+          ],
+          "pkg_id": 83,
+          "pkg_name": "UP主大表情",
+          "pkg_type": 2,
+          "pkg_descript": "房间表情(系统)",
+          "pkg_perm": 0,
+          "unlock_identity": 0,
+          "unlock_need_gift": 0,
+          "current_cover": "http://i0.hdslb.com/bfs/live/f1f2cb500de4bd3a5992f85ae2be574dd65a605d.png",
+          "recently_used_emoticons": [],
+          "top_show": {
+            "top_left": {
+              "image": "",
+              "text": "UP主大表情"
+            },
+            "top_right": {
+              "image": "",
+              "text": ""
+            }
+          },
+          "top_show_recent": {
+            "top_left": {
+              "image": "",
+              "text": ""
+            },
+            "top_right": {
+              "image": "",
+              "text": ""
+            }
+          }
+        },
+        {
+          "emoticons": [
+            {
+              "emoji": "喝水",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/9ac7e13957be909074f28c3f273d4da85b88286a.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66467",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "吃彩虹糖",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/9a91fe967b4bd61ec0246d20e88d56fb3ad98310.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66468",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "思考",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/542fdf41e81c193ed4decf15dba37666757da9d4.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66469",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "早安",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/a7145c95ba281b7385efb0ae7e7baf2b8c561177.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66470",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "通宵早安",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/25bf0b24b81941381fc4e66dac97362e5e6298e7.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66471",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "晚安",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/42d625b983610fbadd2421a9a80b903a81bf2eed.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66472",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "让我看看",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/8dea0d598f15ae942c2eeea9bff1ab9ac17a288b.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66473",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "pien",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/bdd51c5866e9b07ad95f1460f2951f0bc9615c75.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66474",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "摸鱼",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/68fb5c31387d36581e0a5173be825a0f02206d00.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66475",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            },
+            {
+              "emoji": "灵魂出窍",
+              "descript": "",
+              "url": "http://i0.hdslb.com/bfs/live/4892bf75d117ae599d4bc3564d63321dc7e63ffe.png",
+              "is_dynamic": 0,
+              "in_player_area": 1,
+              "width": 162,
+              "height": 162,
+              "identity": 99,
+              "unlock_need_gift": 0,
+              "perm": 1,
+              "unlock_need_level": 0,
+              "emoticon_value_type": 0,
+              "bulge_display": 1,
+              "unlock_show_text": "",
+              "unlock_show_color": "",
+              "emoticon_unique": "room_redacted_66476",
+              "unlock_show_image": "",
+              "emoticon_id": 0
+            }
+          ],
+          "pkg_id": 100083,
+          "pkg_name": "房间专属表情",
+          "pkg_type": 2,
+          "pkg_descript": "",
+          "pkg_perm": 1,
+          "unlock_identity": 0,
+          "unlock_need_gift": 0,
+          "current_cover": "http://i0.hdslb.com/bfs/live/9ac7e13957be909074f28c3f273d4da85b88286a.png",
+          "recently_used_emoticons": [],
+          "top_show": {
+            "top_left": {
+              "image": "",
+              "text": "房间专属表情"
+            },
+            "top_right": {
+              "image": "",
+              "text": ""
+            }
+          },
+          "top_show_recent": {
+            "top_left": {
+              "image": "",
+              "text": ""
+            },
+            "top_right": {
+              "image": "",
+              "text": ""
+            }
+          }
+        }
+      ],
+      "purchase_url": null
+    }
+  },
+  "owned": {
+    "code": 0,
+    "message": "0",
+    "ttl": 1,
+    "data": {
+      "setting": {
+        "recent_limit": 150,
+        "attr": -1,
+        "focus_pkg_id": 1,
+        "schema": "https://www.bilibili.com/h5/mall/emoji-package/home?navhide=1"
+      },
+      "packages": [
+        {
+          "id": 4022,
+          "text": "冒烟UP",
+          "url": "https://i0.hdslb.com/bfs/emote/4d2361ff054affea9ae15ac2610bd2e2bb7c46d2.png",
+          "mtime": 1703061700,
+          "type": 3,
+          "attr": 28,
+          "meta": {
+            "size": 2,
+            "item_id": 65392,
+            "item_url": "https://www.bilibili.com/h5/mall/equity-link/collect-home?item_id=65392&isdiy=0&part=emoji_package&from=emoji&f_source=garb&vmid=0&native.theme=1&navhide=1",
+            "asset_id": 472084833
+          },
+          "emote": [
+            {
+              "id": 56808,
+              "package_id": 4022,
+              "text": "[冒烟UP_不要啊]",
+              "url": "https://i0.hdslb.com/bfs/emote/64f289a34ed966fda9a9ab3ed546f49faacc10f1.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "不要啊"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56809,
+              "package_id": 4022,
+              "text": "[冒烟UP_吃瓜]",
+              "url": "https://i0.hdslb.com/bfs/emote/79b8bf90b68ab5f503d358481197b2f26a465e8d.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "吃瓜"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56810,
+              "package_id": 4022,
+              "text": "[冒烟UP_打call]",
+              "url": "https://i0.hdslb.com/bfs/emote/6483431883967b89dbd20b6c548811a7a5eab475.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "打call"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56811,
+              "package_id": 4022,
+              "text": "[冒烟UP_呃呃]",
+              "url": "https://i0.hdslb.com/bfs/emote/2f0746400bd842c12fe873056143753b8e6727c9.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "呃呃"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56812,
+              "package_id": 4022,
+              "text": "[冒烟UP_欧洲人]",
+              "url": "https://i0.hdslb.com/bfs/emote/c97a2a94402b8776814a964271f74b845065061d.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "欧洲人"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56813,
+              "package_id": 4022,
+              "text": "[冒烟UP_生气]",
+              "url": "https://i0.hdslb.com/bfs/emote/fac65c2f47474dda71987fa8bc26fc198a631a1e.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "生气"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56814,
+              "package_id": 4022,
+              "text": "[冒烟UP_思考]",
+              "url": "https://i0.hdslb.com/bfs/emote/a08206340bff5dc728111ec7617c264617ad5379.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "思考"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56815,
+              "package_id": 4022,
+              "text": "[冒烟UP_投降]",
+              "url": "https://i0.hdslb.com/bfs/emote/2b74dda1f913d9dad7b0b4ab1c6f2992cb648c9e.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "投降"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56816,
+              "package_id": 4022,
+              "text": "[冒烟UP_谢谢]",
+              "url": "https://i0.hdslb.com/bfs/emote/5ee211c8453f40f0a26f1df3014deceeefff3c18.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "谢谢"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56817,
+              "package_id": 4022,
+              "text": "[冒烟UP_喜欢]",
+              "url": "https://i0.hdslb.com/bfs/emote/10c327b80a52fd85c7b58dc823c13cfd0d37fa9c.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "喜欢"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56818,
+              "package_id": 4022,
+              "text": "[冒烟UP_虾米？]",
+              "url": "https://i0.hdslb.com/bfs/emote/4887f05972902210768443ea074d9ec7e41554f7.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "虾米？"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56819,
+              "package_id": 4022,
+              "text": "[冒烟UP_震惊]",
+              "url": "https://i0.hdslb.com/bfs/emote/99ec60a77b9559f6dc7eb23cbe43617b4df0c91e.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "震惊"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56820,
+              "package_id": 4022,
+              "text": "[冒烟UP_泰裤辣！]",
+              "url": "https://i0.hdslb.com/bfs/emote/58d0c857f99ffbfadf30c57a5633431c7f3fc2d0.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "泰裤辣！"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56821,
+              "package_id": 4022,
+              "text": "[冒烟UP_干饭人]",
+              "url": "https://i0.hdslb.com/bfs/emote/e0ef418738a5f9b05375013cf32978938837fa96.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "干饭人"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56822,
+              "package_id": 4022,
+              "text": "[冒烟UP_看我的]",
+              "url": "https://i0.hdslb.com/bfs/emote/d0f4aec99b7fece62493aaba3d68298b5c1145ef.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "看我的"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56823,
+              "package_id": 4022,
+              "text": "[冒烟UP_不是吧]",
+              "url": "https://i0.hdslb.com/bfs/emote/862ec2d78222526fe14ba2dc52d3bc89cd72dc1f.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "不是吧"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56824,
+              "package_id": 4022,
+              "text": "[冒烟UP_哎嘿]",
+              "url": "https://i0.hdslb.com/bfs/emote/0d11b1338d1db064208dcce676fc11e5945d202e.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "哎嘿"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56825,
+              "package_id": 4022,
+              "text": "[冒烟UP_peace]",
+              "url": "https://i0.hdslb.com/bfs/emote/5a9d1333b7e4b1b905d718da32d4a95e3d1756b9.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "peace"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 56826,
+              "package_id": 4022,
+              "text": "[冒烟UP_盯]",
+              "url": "https://i0.hdslb.com/bfs/emote/64698945e7c66268b1c33806280ec684b9d03864.png",
+              "mtime": 1702891272,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "盯"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            },
+            {
+              "id": 57060,
+              "package_id": 4022,
+              "text": "[冒烟UP_好吧]",
+              "url": "https://i0.hdslb.com/bfs/emote/dbc8e088043757e19b2de828d52505e882d8fcc4.png",
+              "mtime": 1703061700,
+              "type": 3,
+              "attr": 0,
+              "meta": {
+                "size": 2,
+                "suggest": [
+                  ""
+                ],
+                "alias": "好吧"
+              },
+              "flags": {
+                "unlocked": false
+              },
+              "activity": null
+            }
+          ],
+          "flags": {
+            "added": true
+          },
+          "label": null,
+          "package_sub_title": "",
+          "ref_mid": 0,
+          "resource_type": 0
+        }
+      ]
+    }
+  }
+}

@@ -1068,19 +1068,61 @@
   padding: var(--sp-1);
 }
 
-/* 表情分组 tab：一组一个 tab，只有当前 tab 的格子在场（用户 #6：不再把五组
-   纵向堆进一个滚动区，「我的表情在下面」要靠滚才找得到）。 */
-.emoteTabs {
+/* 表情面板主体：左边一条**竖向 tab 轨道**，右边表情网格（用户 2026-09-12：
+   「给表情的全是按钮，根本框不住表情图标，可以直接仿照官方实现」）。
+   两列各自滚：轨道自己滚、网格自己滚，面板头与轨道因此都不动。 */
+.emoteBody {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
-  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* 轨道：一组一格，竖着排。选中态由**三处同时变**给出（左侧强调色条 + 底色抬起 + 字重加粗），
+   只加一条下划线或只换底色都不够 —— 那正是「看起来还是一排按钮」的原因。 */
+.emoteRail {
+  flex: none;
+  display: flex;
+  flex-direction: column;
   gap: var(--sp-1);
-  margin-bottom: var(--sp-2);
+  min-width: 0;
+  min-height: 0;
+  max-width: 42%;
+  overflow-y: auto;
+  padding-right: var(--sp-2);
+  border-right: 1px solid var(--border);
 }
 
 .emoteTab {
   font-size: var(--fs-2);
   padding: var(--sp-1) var(--sp-2);
+  text-align: left;
   white-space: nowrap;
+  color: var(--fg-dim);
+  background: transparent;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--r-2) var(--r-2) 0;
+  cursor: pointer;
+}
+
+/* 选中态挂在 `aria-selected` 上而不是某个类名上：屏幕阅读器读到的与眼睛看到的同一处来源 */
+.emoteTab[aria-selected="true"] {
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--bg-input);
+  border-left-color: var(--accent);
+}
+
+.emoteTab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 条数不与名字争字重：名字加粗、条数始终次级 */
+.emoteTabCount {
+  color: var(--fg-muted);
+  font-weight: 400;
 }
 
 /* 「我的表情」拉取失败的提示行：不阻塞输入框，只在这里给原因与重试 */
@@ -1100,10 +1142,19 @@
    它是表情面板里**唯一会滚的部分**（面板头与分组 tab 常驻），见上一条注释。 */
 .emoteGrid {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(3em, 1fr));
+  /* 列宽下限 4.5em：**按通用表情的长宽比定的**。通用表情是 200×60 的横条（实测），
+     `contain` 之后它的可见高度 = 列宽 ÷ 3.33 —— 列窄到 3em 时图只剩 7px 高，
+     字面上「没溢出」但已经认不出是哪个表情了。4.5em 下宽屏约 45px 宽 / 13px 高、窄屏约 60×18，
+     与官方面板里那一排横条的观感一致。 */
+  grid-template-columns: repeat(auto-fill, minmax(4.5em, 1fr));
+  /* 格子是固定尺寸的，多出来的高度留在下方，**不许把行拉开**：
+     轨道那一列（4 个分组）往往比表情格的自然高度还高，默认的 `align-content: stretch`
+     会把这一组的行抻到轨道那么高，于是每个格子空出一大截（实测宽屏：格子 60px 高、图只有 24px）。 */
+  align-content: start;
   gap: var(--sp-1);
 }
 
@@ -1116,12 +1167,25 @@
   justify-content: center;
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--fs-6);
-  line-height: var(--row-line);
+  /* 行高跟表情同档（不是 `var(--row-line)`——那是弹幕行的尺度，在面板里解析成 21px 的固定值，
+     字号滑杆改不动它）：没有图、退化成文字的那一格因此与前后的格子等高。 */
+  line-height: var(--emote-size);
+  overflow-wrap: anywhere;
   min-width: 2em;
 }
 
+/* 表情图：**宽高一律由 CSS 显式给出 + `object-fit: contain`**（用户 2026-09-12：表情溢出格子边框）。
+   上游 CDN 的表情是原图直出（实测：通用表情 200×60、粉丝牌 / 本房间 162×162），
+   只写 `height` 的话宽度会按原图比例算出来 —— 200×60 的高度 1.5em 会得到 5em 宽，
+   直接撑出 3em 的格子，横排的通用表情因此整片糊在一起。
+   与「512×512 头像撑爆主页」是同一个错误：**共用组件的尺寸不许依赖原图尺寸**。
+   宽高给死之后图是等比缩放的（`contain`），长宽比任何一档都不会溢出。 */
 .pickerItem img {
+  display: block;
+  width: 100%;
   height: var(--emote-size);
+  min-width: 0;
+  object-fit: contain;
   vertical-align: middle;
 }
 

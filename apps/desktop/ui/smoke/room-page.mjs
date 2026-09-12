@@ -75,7 +75,148 @@ const FIXTURE_ROOM = {
   buffered: 1,
 };
 
+
+/** 真实表情载荷（只读 GET 固化的上游响应），见该文件自己的 `_note`。 */
+const EMOTE_FIXTURE = JSON.parse(
+  readFileSync(new URL("./fixtures/emotes.json", import.meta.url), "utf8"),
+);
+
+/** 表情替身的底色（`#` 必须写成 `%23`，否则 `#` 会被当成 data URI 的片段起始、图直接坏掉）。 */
+const EMOTE_FILL = ["%23f09300", "%2300aeec", "%23e67e22", "%238e44ad", "%232980b9", "%234ade80"];
+
+/**
+ * 真实图的内联替身：**固有尺寸与真实图逐张一致**（`width`/`height` 就是上游给的那两个数），
+ * 只把像素内容换成纯色块。
+ *
+ * 这一条是整份冒烟的关键：真实图在 `i0.hdslb.com`（离线跑不到），但**尺寸特征必须一样** ——
+ * 手写的 64×64 正方形表情永远撞不出「图比格子宽」，而真站的通用表情是 200×60 的横条
+ * （只给 `height` 的话宽度会按 3.33:1 算出 5em，撑出 3em 的格子）。
+ */
+function emoteImage(width, height, seed) {
+  const fill = EMOTE_FILL[seed % EMOTE_FILL.length];
+  return (
+    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='" +
+    width +
+    "' height='" +
+    height +
+    "' viewBox='0 0 " +
+    width +
+    " " +
+    height +
+    "'><rect width='" +
+    width +
+    "' height='" +
+    height +
+    "' fill='" +
+    fill +
+    "'/></svg>"
+  );
+}
+
+/**
+ * 包分类：逐条照搬 `crates/danmubox-bili/src/emote.rs` 的 `classify_package`
+ * （包名关键字 → 表情级解锁字段 → `pkg_type`）。
+ */
+function classifyFixturePackage(pkg) {
+  const name = pkg.pkg_name ?? "";
+  const items = pkg.emoticons ?? [];
+  if (/舰|航海|提督|总督/.test(name)) return "guard";
+  if (/粉丝|勋章/.test(name)) return "medal";
+  const gated = items.some((item) => {
+    const level = item.unlock_need_level ?? 0;
+    const identity = item.identity ?? 99;
+    return level > 0 || (identity >= 1 && identity <= 4);
+  });
+  if (gated) return "medal";
+  return pkg.pkg_type === 2 ? "room" : "common";
+}
+
+/** 一个真实包的 `emoticons[]` → `Emote[]`（照搬 `map_packages` 的字段口径）。 */
+function mapFixturePackage(roomId, pkg, seedBase) {
+  const kind = classifyFixturePackage(pkg);
+  return (pkg.emoticons ?? []).map((item, index) => {
+    const seed = seedBase + index;
+    return {
+      key: `${pkg.pkg_id ?? 0}:${item.emoticon_unique ?? index}`,
+      emoticon_unique: item.emoticon_unique ?? "",
+      width: item.width ?? 0,
+      height: item.height ?? 0,
+      is_dynamic: item.is_dynamic !== 0,
+      in_player_area: item.in_player_area !== 0,
+      bulge_display: item.bulge_display !== 0,
+      package_kind: kind,
+      text: item.emoji ?? item.descript ?? "",
+      url: emoteImage(item.width ?? 0, item.height ?? 0, seed),
+      room_id: kind === "room" ? roomId : 0,
+      locked: item.perm === 0,
+    };
+  });
+}
+
+/** 一份真实响应 → `Emote[]`（展平全部包）。 */
+function mapFixtureResponse(roomId, response, seedBase) {
+  const out = [];
+  for (const pkg of response.data.data) {
+    out.push(...mapFixturePackage(roomId, pkg, seedBase + out.length));
+  }
+  return out;
+}
+
+/** 主站「我的表情」→ `Emote[]`（照搬 `map_owned_packages`：唯一键 `upower_` + 文本）。 */
+function mapFixtureOwned(response, seedBase) {
+  const out = [];
+  for (const pkg of response.data.packages) {
+    for (const item of pkg.emote ?? []) {
+      if (!item.text || !item.url) continue;
+      const seed = seedBase + out.length;
+      // 主站表情不给宽高（实测：`width`/`height` 字段不存在），真实图是 162×162 见方。
+      out.push({
+        key: `${pkg.id}:${item.id}`,
+        emoticon_unique: `upower_${item.text}`,
+        width: 1,
+        height: 1,
+        is_dynamic: false,
+        in_player_area: false,
+        bulge_display: false,
+        package_kind: "owned",
+        text: item.text,
+        url: emoteImage(162, 162, seed),
+        room_id: 0,
+        locked: false,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * 冒烟的 `emotes_list` 替身 = 两份真实载荷并起来：
+ * 公开测试房间（`room_id 5440`）只下发「通用表情」一个包，粉丝牌 / 本房间那两包要有在播房间才有，
+ * 因此把 `live_rich` 的两个包也一并按**替身房间 5440** 呈现（房间号按仓库规矩不入库）。
+ */
+const FIXTURE_EMOTES = {
+  live: [
+    ...mapFixtureResponse(5440, EMOTE_FIXTURE.live, 0),
+    ...mapFixtureResponse(5440, EMOTE_FIXTURE.live_rich, 7),
+  ],
+  owned: mapFixtureOwned(EMOTE_FIXTURE.owned, 3),
+};
+
+/** 弹幕行里的表情样本也取自真实载荷：行内一条通用（200×60）、独占一行一条 `bulge_display`。 */
+const ROW_EMOTE_SAMPLES = {
+  inline: FIXTURE_EMOTES.live.find(
+    (emote) => emote.package_kind === "common" && emote.bulge_display === false,
+  ),
+  bulge: FIXTURE_EMOTES.live.find((emote) => emote.bulge_display === true),
+};
+
+/** 把值嵌进 MOCK 模板字符串：反引号与 `${` 必须先转义，否则场景代码会提前结束。 */
+function embed(value) {
+  return JSON.stringify(value).replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
+}
 const MOCK = `(function () {
+  var EMOTES = ${embed(FIXTURE_EMOTES)};
+  var ROW_EMOTES = ${embed(ROW_EMOTE_SAMPLES)};
   var listeners = {};
   var calls = [];
   // 带参数的调用记录（看请求形状，如 chat_send 的表情唯一键）；calls 只有命令名，保持原样。
@@ -270,30 +411,12 @@ const MOCK = `(function () {
         case "prefs_set": Object.assign(prefs, args.patch); return Promise.resolve(Object.assign({}, prefs));
         case "follow_list": window.__followCalls += 1; return Promise.resolve(followed.slice());
         case "history_query": return Promise.resolve([history]);
-        case "emotes_list": return Promise.resolve(
-          // 通用包给足一屏放不下的量（真站「通用」有几十个）：这样「表情格自己滚、面板头与
-          // 分组 tab 不动」才验得到，否则永远只是「刚好放得下」。
-          (function () {
-            var many = [];
-            for (var ci = 1; ci <= 72; ci += 1) {
-              many.push({ key: "common:" + ci, emoticon_unique: "official_" + ci, width: 20, height: 20, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "common", text: "[通用" + ci + "]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 0 });
-            }
-            return many;
-          })().concat([
-            { key: "room:1", emoticon_unique: "room_5440_1", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "room", text: "[房间专属]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 5440 },
-            // 大航海包：一条 locked（当前身份用不了）一条可用 —— 置灰要**置灰但照常列出**，
-            // 同一屏里能对照出「哪个被灰了」（契约 §5 Emote.locked）。
-            { key: "guard:1", emoticon_unique: "guard_unlocked", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "guard", text: "[舰长可用]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%232980b9'/></svg>", room_id: 5440, locked: false },
-            { key: "guard:2", emoticon_unique: "guard_locked", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "guard", text: "[提督专属]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%238e44ad'/></svg>", room_id: 5440, locked: true },
-            // 字段缺失（老后端）的那条：必须按「可用」显示，不许整面板变灰
-            { key: "guard:3", emoticon_unique: "guard_nofield", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "guard", text: "[字段缺失]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%234ade80'/></svg>", room_id: 5440 }
-          ])
-        );
+        // 表情替身：**全部由 「smoke/fixtures/emotes.json」（真实响应固化）派生**，
+        // 见文件头的 EMOTES 构造。这里不许再出现手写的表情 JSON。
+        case "emotes_list": return Promise.resolve(EMOTES.live);
         case "report_reasons": return Promise.resolve([{ id: 1, reason: "垃圾广告" }]);
         // 主站「我的表情」：用户点名要的那条必须能从面板发回去（issue #8）。
-        case "emotes_owned": return Promise.resolve([
-          { key: "owned:1", emoticon_unique: "upower_[Kirikosama_吃瓜]", width: 1, height: 1, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "owned", text: "[Kirikosama_吃瓜]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23e67e22'/></svg>", room_id: 0 }
-        ]);
+        case "emotes_owned": return Promise.resolve(EMOTES.owned);
         case "chat_send": return Promise.resolve({ room_id: args.roomId, content: args.content, outcome: "ok", detail: null });
         // 房内身份（房管权限前置）+ 房管只读三块 + 写操作（替身只记调用，不动真上游）。
         case "room_session": return Promise.resolve({ room_id: args.roomId, my_medal_level: 0, my_medal_name: "", my_guard_level: 0, is_admin: window.__admin });
@@ -665,14 +788,20 @@ const MOCK = `(function () {
     // 表情弹幕：身份簇 / 头像 / 表情图三者对齐的样本（用户 #1/#2 的「发表情时错开」）。
     // ① 行内表情 ② 独占一行的大表情（bulge）——旧版在 ② 上错开 32px（身份簇被拽到图片底边）。
     var faceUrl = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><rect width='32' height='32' fill='%2300aeec'/></svg>";
-    var emoteUrl = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>";
+    // 这两条表情也**取自真实载荷**（固有尺寸 200×60 的通用表情、162×162 的 bulge 表情），
+    // 不再是手写的 64×64 正方形：尺寸特征与真站一致，行内的缩放关系才量得准。
+    var rowEmote = function (sample) {
+      return {
+        emoticon_unique: sample.emoticon_unique, url: sample.url, width: sample.width,
+        height: sample.height, is_dynamic: sample.is_dynamic,
+        in_player_area: sample.in_player_area, bulge_display: sample.bulge_display
+      };
+    };
     window.__emit("danmubox://message", window.__mk("danmaku", "行内表情样本", false, {
-      face: faceUrl, uname: "表情君",
-      emote: { emoticon_unique: "official_1", url: emoteUrl, width: 20, height: 20, is_dynamic: false, in_player_area: false, bulge_display: false }
+      face: faceUrl, uname: "表情君", emote: rowEmote(ROW_EMOTES.inline)
     }));
     window.__emit("danmubox://message", window.__mk("danmaku", "大表情样本", false, {
-      face: faceUrl, uname: "大表情君",
-      emote: { emoticon_unique: "official_bulge", url: emoteUrl, width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: true }
+      face: faceUrl, uname: "大表情君", emote: rowEmote(ROW_EMOTES.bulge)
     }));
     // 头像（Message.face）：有头像画图、没头像不渲染、加载失败退化成首字符占位
     window.__emit("danmubox://message", window.__mk("danmaku", "带头像的弹幕", false, {
@@ -987,18 +1116,36 @@ const MOCK = `(function () {
     out.layoutFollowingAtBottom =
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;
     out.layoutLastRowIsNewest = !!newestAfter && newestAfter.innerText.indexOf("无头像的弹幕") >= 0;
-    // ---- 表情面板 = 分组 tab（用户 #6：不再把五组纵向堆进一个滚动区）
+    // ---- 表情面板 = **竖向 tab 轨道 + 表情网格**（用户 2026-09-12：「给表情的全是按钮，
+    //      根本框不住表情图标，可以直接仿照官方实现」）。
+    // 表情全部来自固化的真实载荷（「smoke/fixtures/emotes.json」）：通用那 38 条是 200×60 的横条、
+    // 粉丝牌那 17 条是 162×162 的方图 —— 手写的 64×64 正方形永远撞不出下面这条「图比格子宽」。
     var emoteTabsOf = function () {
       return [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-tab"]'));
     };
     var emoteGroupsOf = function () {
       return [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-group"]'));
     };
-    var emoteItemSizes = function () {
-      return [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-item"] img')).map(function (img) {
+    var r1 = function (v) { return Math.round(v * 10) / 10; };
+    /** 每一格：格子（按钮）与里面的图各自的盒子，以及「图有没有跑出格子」。 */
+    var emoteMetrics = function () {
+      return [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-item"]')).map(function (cell) {
+        var box = cell.getBoundingClientRect();
+        var img = cell.querySelector("img");
+        var ib = img ? img.getBoundingClientRect() : null;
+        var cs = img ? getComputedStyle(img) : null;
         return {
-          height: Math.round(img.getBoundingClientRect().height),
-          big: img.parentElement.className.indexOf("pickerItemBig") >= 0
+          // 「height」 一直是**图**的高度（「layoutEmoteSizes」 / 「layoutNonCommonEmoteBigger」 的旧口径），
+          // 尺子换成格子会把「非通用放大档」比成格子高度，比错了东西。
+          height: ib ? Math.round(ib.height) : Math.round(box.height),
+          big: cell.className.indexOf("pickerItemBig") >= 0,
+          cellW: r1(box.width), cellH: r1(box.height),
+          imgW: ib ? r1(ib.width) : null, imgH: ib ? r1(ib.height) : null,
+          // 溢出量：图越过格子四边的最大值（0 = 完整落在格子里）
+          overflow: ib ? r1(Math.max(0, ib.right - box.right, ib.bottom - box.bottom,
+            box.left - ib.left, box.top - ib.top)) : 0,
+          // 宽高必须是 CSS 给的（「auto」 就是按原图尺寸渲染 = 200×60 会算出 5em 宽）
+          explicit: !!cs && cs.width !== "auto" && cs.height !== "auto" && cs.objectFit === "contain"
         };
       });
     };
@@ -1013,7 +1160,54 @@ const MOCK = `(function () {
     out.panelEmoteTabSelectedOne = emoteTabsOf().filter(function (b) {
       return b.getAttribute("aria-selected") === "true";
     }).length === 1;
-    var commonSizes = emoteItemSizes();
+
+    // ---- tab 是**轨道**不是一排按钮：竖向排列、在网格左侧、选中态在视觉上分得出来
+    var rail = byTestId("db-emote-tabs");
+    var railBox = rect(rail);
+    var tabBoxes = emoteTabsOf().map(rect);
+    var gridBox = rect(byTestId("db-emote-group"));
+    out.panelEmoteRailStacked = tabBoxes.length >= 3 && tabBoxes.every(function (b, i) {
+      return i === 0 || b.top >= tabBoxes[i - 1].bottom - 0.5;
+    }) && !!railBox && railBox.height > tabBoxes[0].height * 1.5;
+    out.panelEmoteRailLeftOfGrid = !!railBox && !!gridBox && railBox.right <= gridBox.left + 1;
+    out.panelEmoteTabIsRealTab = !!rail &&
+      rail.getAttribute("role") === "tablist" &&
+      rail.getAttribute("aria-orientation") === "vertical" &&
+      emoteGroupsOf()[0].getAttribute("role") === "tabpanel" &&
+      emoteTabsOf().every(function (b) {
+        return b.getAttribute("role") === "tab" &&
+          b.getAttribute("aria-controls") === emoteGroupsOf()[0].id;
+      }) &&
+      emoteGroupsOf()[0].getAttribute("aria-labelledby") === tabOf("common").id;
+    // 选中态的「明确」= 计算样式真的不一样（不依赖 CSS-module 类名）
+    var styleOf = function (el) {
+      var cs = getComputedStyle(el);
+      return [cs.backgroundColor, cs.color, cs.borderLeftColor, cs.fontWeight].join("|");
+    };
+    out.panelEmoteTabSelectedStyleDistinct =
+      styleOf(tabOf("common")) !== styleOf(tabOf("room"));
+    // 键盘可达：↑↓ 在轨道里换组，焦点跟着走（roving tabindex，WAI-ARIA tabs 口径）
+    var firstTab = emoteTabsOf()[0];
+    firstTab.focus();
+    firstTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await sleep(250);
+    var afterDown = emoteTabsOf().filter(function (b) {
+      return b.getAttribute("aria-selected") === "true";
+    })[0];
+    out.panelEmoteTabArrowKeys = !!afterDown && afterDown.getAttribute("data-kind") === "owned" &&
+      document.activeElement === afterDown &&
+      emoteGroupsOf()[0].getAttribute("data-kind") === "owned" &&
+      firstTab.getAttribute("tabindex") === "-1" && afterDown.getAttribute("tabindex") === "0";
+    afterDown.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    await sleep(250);
+    var afterUp = emoteTabsOf().filter(function (b) {
+      return b.getAttribute("aria-selected") === "true";
+    })[0];
+    out.panelEmoteTabArrowUpReturns = !!afterUp &&
+      afterUp.getAttribute("data-kind") === "common" && document.activeElement === afterUp;
+
+    var commonMetrics = emoteMetrics();
+    var commonSizes = commonMetrics;
     var roomTab = tabOf("room");
     if (roomTab) {
       roomTab.click();
@@ -1021,41 +1215,76 @@ const MOCK = `(function () {
       out.panelEmoteTabSwitchWorks = emoteGroupsOf().length === 1 &&
         emoteGroupsOf()[0].getAttribute("data-kind") === "room";
     }
-    var bigSizes = emoteItemSizes();
-    var commonH = commonSizes.filter(function (x) { return !x.big; })[0];
-    var bigH = bigSizes.filter(function (x) { return x.big; })[0];
+    var bigMetrics = emoteMetrics();
+    var bigSizes = bigMetrics;
+    var allMetrics = commonMetrics.concat(bigMetrics);
+    var commonH = commonMetrics.filter(function (x) { return !x.big; })[0];
+    var bigH = bigMetrics.filter(function (x) { return x.big; })[0];
     out.layoutEmoteSizes = commonSizes;
     out.layoutEmoteSizesBig = bigSizes;
     out.layoutNonCommonEmoteBigger = !!commonH && !!bigH && bigH.height >= commonH.height * 1.4;
+    // ---- 用户报的那条：表情**溢出了格子边框**。改前实测（WebKit，360×844，通用组）：
+    //      格子 47.6 × 32，图 80.7 × 24.2 → 右边越出格子 33.1px。
+    //      改后：图必须完整落在格子里（溢出 0），且宽高由 CSS 显式给出（「object-fit: contain」）。
+    out.panelEmoteMetrics = commonMetrics.slice(0, 3).map(function (m) {
+      return { cellW: m.cellW, cellH: m.cellH, imgW: m.imgW, imgH: m.imgH };
+    });
+    out.panelEmoteOverflowPx = Math.max.apply(null, allMetrics.map(function (m) { return m.overflow; }));
+    out.panelEmoteFitsCell = allMetrics.length > 0 && allMetrics.every(function (m) {
+      return m.overflow === 0;
+    });
+    out.panelEmoteImgExplicitBox = allMetrics.length > 0 && allMetrics.every(function (m) {
+      return m.explicit;
+    });
+    // 窄屏 360 下不许横向溢出：面板 / 轨道 / 网格三块都不许出现横向滚动
+    out.panelNoHorizontalOverflow = (function () {
+      var parts = [byTestId("db-panel"), rail, byTestId("db-emote-group")];
+      return parts.every(function (el) {
+        return !!el && el.scrollWidth <= el.clientWidth + 1;
+      });
+    })();
 
     // ---- 无权限的表情：置灰、但不隐藏、不禁用（用户 #6；契约 §5 Emote.locked）
-    var guardTab = tabOf("guard");
-    if (guardTab) {
-      guardTab.click();
+    // 真实载荷里 locked 的那一组是**粉丝牌**（「UP主大表情」：17 条 「perm」 全为 0），
+    // 对照组用「本房间」那 10 条（「perm = 1」）——两族都是 162×162 的大表情，比尺寸才公平。
+    var medalText = EMOTES.live.filter(function (e) { return e.package_kind === "medal"; })[0].text;
+    var lockedImgH = null;
+    var lockedCount = 0;
+    var medalTab = tabOf("medal");
+    if (medalTab) {
+      medalTab.click();
       await sleep(300);
       var lockedItems = [].slice.call(byTestId("db-panel")
         .querySelectorAll('[data-testid="db-emote-item"][data-locked="true"]'));
-      var freeItems = [].slice.call(byTestId("db-panel")
-        .querySelectorAll('[data-testid="db-emote-item"][data-locked="false"]'));
-      // 替身里：舰长可用 / 提督专属(locked) / 字段缺失(无 locked 字段)
-      out.panelLockedEmoteListed = lockedItems.length === 1;
-      out.panelLockedEmoteDimmed = lockedItems.length === 1 && (function () {
-        var cs = getComputedStyle(lockedItems[0]);
+      lockedCount = lockedItems.length;
+      out.panelLockedEmoteListed = lockedItems.length === 17;
+      out.panelLockedEmoteDimmed = lockedItems.length > 0 && lockedItems.every(function (el) {
+        var cs = getComputedStyle(el);
         return parseFloat(cs.opacity) < 0.8 && cs.filter.indexOf("grayscale") >= 0;
-      })();
-      // 灰归灰，尺寸不许缩——缩了就分不清是哪一个了
-      out.panelLockedEmoteSameSize = lockedItems.length === 1 && freeItems.length >= 1 &&
-        Math.abs(rect(lockedItems[0].querySelector("img")).height -
-          rect(freeItems[0].querySelector("img")).height) < 0.6;
+      });
+      // 尺寸要在**这一组还挂在文档里**的时候量：切走之后 React 会把它们卸载，脱链元素的 rect 全是 0
+      lockedImgH = lockedItems.length > 0 ? rect(lockedItems[0].querySelector("img")).height : null;
       // 置灰是提示不是闸门：照样点得动、照样插进草稿（真正拦的是上游发送侧）
       lockedItems[0].click();
       await sleep(200);
       out.panelLockedEmoteSelectable =
-        document.querySelector("textarea").value.indexOf("[提督专属]") >= 0;
+        document.querySelector("textarea").value.indexOf(medalText) >= 0;
       typeIntoArea(document.querySelector("textarea"), "");
       await sleep(150);
-      // 字段缺失（老后端）那条必须按「可用」处理，不许跟着整面板变灰
-      out.panelMissingLockedTreatedAsUsable = freeItems.length === 2;
+    }
+    // 对照：可用的那一组（本房间 10 条 「perm = 1」）不灰、尺寸与灰的那组一样
+    // （「字段缺失的 perm 视为可用」那一条由 「crates/danmubox-bili/src/emote.rs」 的单测覆盖，
+    //  界面这一侧只消费 「locked」 布尔值）。
+    if (roomTab) {
+      roomTab.click();
+      await sleep(300);
+      var freeItems = [].slice.call(byTestId("db-panel")
+        .querySelectorAll('[data-testid="db-emote-item"][data-locked="false"]'));
+      out.panelUnlockedEmoteNotDimmed = freeItems.length === 10 && freeItems.every(function (el) {
+        return parseFloat(getComputedStyle(el).opacity) >= 0.99;
+      });
+      out.panelLockedEmoteSameSize = lockedCount > 0 && lockedImgH !== null && freeItems.length > 0 &&
+        Math.abs(lockedImgH - rect(freeItems[0].querySelector("img")).height) < 0.6;
       if (tabOf("common")) {
         tabOf("common").click();
         await sleep(200);
@@ -1198,30 +1427,32 @@ const MOCK = `(function () {
       ownedTab.click();
       await sleep(300);
     }
+    // 取哪一条：**从真实载荷里挑**（用户命名的那条自定义表情），不在断言里写死名字
+    var ownedSample = EMOTES.owned.filter(function (e) { return e.text.indexOf("吃瓜") >= 0; })[0];
     var ownedPicker = byTestId("db-panel")
-      ? byTestId("db-panel").querySelector('button[title="[Kirikosama_吃瓜]"]')
+      ? byTestId("db-panel").querySelector('button[title="' + ownedSample.text + '"]')
       : null;
     out.ownedEmoteShown = !!ownedPicker;
     if (ownedPicker) {
       ownedPicker.click();
       await sleep(250);
     }
-    out.ownedEmoteInserted = document.querySelector("textarea").value === "[Kirikosama_吃瓜]";
+    out.ownedEmoteInserted = document.querySelector("textarea").value === ownedSample.text;
     // 预览把表情名换成图片，说明「我的表情」确实在接口那一侧（学到的表情只是补漏）
     var sendPreview = byTestId("db-send-preview");
     out.ownedEmotePreviewImage = !!sendPreview &&
       [].slice.call(sendPreview.querySelectorAll("img")).some(function (img) {
-        return img.alt === "[Kirikosama_吃瓜]";
+        return img.alt === ownedSample.text;
       });
     buttonWith(null, "发送").click();
     await sleep(400);
     var chatSends = callsWithArgs.filter(function (c) { return c.cmd === "chat_send"; });
     var lastChatSend = chatSends[chatSends.length - 1];
     // 表情弹幕上游收到的 msg 就是 emoticon_unique（crates/danmubox-bili/src/send.rs），
-    // 因此这两条断言等于「上游会收到 upower_[Kirikosama_吃瓜]」。
+    // 因此这两条断言等于「上游会收到 upower_<表情名>」。
     out.ownedEmoteSendUnique = !!lastChatSend && !!lastChatSend.args.emote &&
-      lastChatSend.args.emote.emoticon_unique === "upower_[Kirikosama_吃瓜]";
-    out.ownedEmoteSendContent = !!lastChatSend && lastChatSend.args.content === "[Kirikosama_吃瓜]";
+      lastChatSend.args.emote.emoticon_unique === ownedSample.emoticon_unique;
+    out.ownedEmoteSendContent = !!lastChatSend && lastChatSend.args.content === ownedSample.text;
     out.ownedEmoteDraftCleared = document.querySelector("textarea").value === "";
     // 发送成功不再占一行说「上次发送：已发出」（用户 #4：没意义且不协调）——弹幕已经出现在列表里
     out.sendHintAbsentOnSuccess = !byTestId("db-send-hint") &&

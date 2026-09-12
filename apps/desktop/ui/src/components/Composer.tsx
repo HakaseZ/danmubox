@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { FilterBar } from "./FilterBar";
@@ -64,6 +64,12 @@ const PACKAGE_ORDER: EmotePackage[] = [
   "guard",
 ];
 
+/** 表情网格（`role=tabpanel`）的 id：tab 的 `aria-controls` 与它的 `aria-labelledby` 靠它对上。 */
+const EMOTE_PANEL_ID = "db-emote-panel";
+
+/** 一个分组的 tab 的 id（同一个分组在 DOM 里只会有一个 tab）。 */
+const emoteTabId = (kind: EmotePackage) => `db-emote-tab-${kind}`;
+
 export function Composer({
   disabled,
   loggedIn,
@@ -93,7 +99,8 @@ export function Composer({
   const [emoteQuery, setEmoteQuery] = useState("");
   // 表情分组 tab：null = 还没选过，显示第一组（顺序固定，见 PACKAGE_ORDER）。
   const [emoteTab, setEmoteTab] = useState<EmotePackage | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
   const [newPhrase, setNewPhrase] = useState("");
   // 短语的「改」：就地变成输入框（右键菜单里点「编辑」进入）。
   const [editingPhrase, setEditingPhrase] = useState<{ index: number; text: string } | null>(null);
@@ -182,6 +189,43 @@ export function Composer({
     ? emoteTab
     : grouped[0]?.[0];
   const activeItems = grouped.find(([kind]) => kind === activeKind)?.[1] ?? [];
+
+  /** 换分组：把**表情格**滚回顶部（面板头与轨道不滚，否则会停在上一个分组的滚动位置）。 */
+  const selectEmoteTab = (kind: EmotePackage) => {
+    setEmoteTab(kind);
+    if (gridRef.current) gridRef.current.scrollTop = 0;
+  };
+
+  /**
+   * tab 轨道的键盘导航（WAI-ARIA tabs 口径）：roving tabindex —— 只有选中的那个 tab 可 Tab 到，
+   * 进去之后 ↑↓ 换组、Home / End 跳到首尾，焦点跟着选中项走。
+   *
+   * 这套键盘行为是「它是个 tab 而不是一排按钮」的一部分：一排普通按钮要么全都可 Tab 到
+   * （键盘用户要按 N 次才过得了这一排），要么全都不可达。
+   */
+  const onRailKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const kinds = grouped.map(([kind]) => kind);
+    if (kinds.length === 0) return;
+    const current = activeKind === null || activeKind === undefined
+      ? 0
+      : Math.max(0, kinds.indexOf(activeKind));
+    const next =
+      event.key === "ArrowDown"
+        ? (current + 1) % kinds.length
+        : event.key === "ArrowUp"
+          ? (current - 1 + kinds.length) % kinds.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? kinds.length - 1
+              : null;
+    if (next === null) return;
+    event.preventDefault();
+    selectEmoteTab(kinds[next]);
+    railRef.current
+      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      [next]?.focus();
+  };
 
   // 输入区预览：把草稿里能对上的表情名换成图片，让用户看清「这条发出去长什么样」。
   const preview = useMemo(() => {
@@ -340,7 +384,6 @@ export function Composer({
           className={styles.picker}
           data-testid="db-panel"
           style={panelFont}
-          ref={panelRef}
         >
           <div className={styles.panelHead}>
             <span className={styles.panelTitle}>表情</span>
@@ -372,31 +415,42 @@ export function Composer({
                 : "没有可用表情（或尚未加载）"}
             </div>
           ) : (
-            <>
-              {/* 分组 tab：一组一屏，不再纵向堆五个分区（用户 #6）。
+            // 面板主体分两列：左边**竖向 tab 轨道**（分组），右边表情网格。两列各自滚，
+            // 面板头常驻（用户 #6：tab 是切组的唯一入口，不许被格子滚走）。
+            <div className={styles.emoteBody}>
+              {/* 分组 tab 轨道：一组一个 tab，选中那格左侧一条强调色 + 底色抬起 + 字重加粗。
+                  用 `role=tablist/tab` + roving tabindex（WAI-ARIA tabs 口径），↑↓ 换组、焦点跟着走 ——
+                  它得**读起来就是 tab**，不是一排长得像 tab 的普通按钮（用户 2026-09-12：
+                  「给表情的全是按钮，根本框不住表情图标，可以直接仿照官方实现」）。
                   搜索是在**所有组**里搜的，所以 tab 只列「当前有内容的组」——
                   搜完切到有命中的那一组，不必自己挨个点开找。 */}
-              <div className={styles.emoteTabs} data-testid="db-emote-tabs" role="tablist">
+              <div
+                className={styles.emoteRail}
+                data-testid="db-emote-tabs"
+                role="tablist"
+                aria-orientation="vertical"
+                aria-label="表情分组"
+                ref={railRef}
+                onKeyDown={onRailKeyDown}
+              >
                 {grouped.map(([kind, items]) => (
                   <button
                     key={kind}
                     type="button"
+                    id={emoteTabId(kind)}
                     role="tab"
-                    className={`${styles.emoteTab} ${
-                      kind === activeKind ? styles.toolActive : ""
-                    }`}
+                    aria-selected={kind === activeKind}
+                    aria-controls={EMOTE_PANEL_ID}
+                    tabIndex={kind === activeKind ? 0 : -1}
+                    className={styles.emoteTab}
                     data-testid="db-emote-tab"
                     data-kind={kind}
-                    aria-selected={kind === activeKind}
                     title={`${EMOTE_PACKAGE_LABEL[kind]}（${items.length}）`}
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                      setEmoteTab(kind);
-                      // 换 tab 回到格子顶部：否则会停在上一个 tab 的滚动位置
-                      if (panelRef.current) panelRef.current.scrollTop = 0;
-                    }}
+                    onClick={() => selectEmoteTab(kind)}
                   >
-                    {EMOTE_PACKAGE_LABEL[kind]}（{items.length}）
+                    {EMOTE_PACKAGE_LABEL[kind]}
+                    <span className={styles.emoteTabCount}>（{items.length}）</span>
                   </button>
                 ))}
               </div>
@@ -404,7 +458,12 @@ export function Composer({
                 className={styles.emoteGrid}
                 data-testid="db-emote-group"
                 data-kind={activeKind}
+                id={EMOTE_PANEL_ID}
                 role="tabpanel"
+                aria-labelledby={activeKind === null || activeKind === undefined
+                  ? undefined
+                  : emoteTabId(activeKind)}
+                ref={gridRef}
               >
                 {activeItems.map((emote) => (
                   <button
@@ -436,7 +495,7 @@ export function Composer({
                   </button>
                 ))}
               </div>
-            </>
+            </div>
           )}
         </div>
       )}

@@ -44,6 +44,17 @@ export interface RoomView extends Room {
 
 export type ConnState = "connecting" | "connected" | "disconnected" | "error";
 
+export interface ReportReason {
+  id: number;
+  reason: string;
+}
+
+export interface PopularityEvent {
+  room_id: number;
+  /** 人气值；口径见 docs/protocol.md §10.7（`op=3` 心跳回应）。 */
+  value: number;
+}
+
 export interface StatusEvent {
   room_id: number;
   state: ConnState;

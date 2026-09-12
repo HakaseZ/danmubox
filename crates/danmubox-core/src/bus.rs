@@ -33,6 +33,9 @@ pub enum Event {
     RoomClosed(i64),
     Status(StatusEvent),
     Session(RoomSession),
+    /// 人气值（`op=3` 心跳回应携带，协议 §10.7 记录的主要来源）。
+    /// 它变化频繁但与连接状态无关，因此单独一个事件，不挤进 `Status`。
+    Popularity { room_id: i64, value: i64 },
 }
 
 /// 广播总线。慢消费者由 `broadcast` 自行丢弃旧值，不阻塞上游。
@@ -166,6 +169,11 @@ impl MessageSink {
             state,
             detail: detail.into(),
         }));
+    }
+
+    /// 人气值：只影响界面上的一个数字，因此不经过会话缓冲，也不计入流量统计。
+    pub fn publish_popularity(&self, room_id: i64, value: i64) {
+        self.bus.publish(Event::Popularity { room_id, value });
     }
 
     pub fn publish_room(&self, room: Room) {

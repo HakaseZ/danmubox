@@ -264,14 +264,20 @@ impl BiliLive {
                             for item in decoded {
                                 match item {
                                     Decoded::Business(value) => {
-                                        if let Some(message) =
-                                            cmd::dispatch(room_id, &value, &self.counters)
-                                        {
-                                            sink.publish_message(message);
+                                        // 人气值走单独支路：它不进会话缓冲，只更新界面数字。
+                                        match cmd::dispatch(room_id, &value, &self.counters) {
+                                            Some(cmd::Dispatch::Message(message)) => {
+                                                sink.publish_message(message)
+                                            }
+                                            Some(cmd::Dispatch::Popularity(value)) => {
+                                                sink.publish_popularity(room_id, value)
+                                            }
+                                            None => {}
                                         }
                                     }
                                     Decoded::Popularity(value) => {
                                         tracing::debug!(room_id, popularity = value, "人气值");
+                                        sink.publish_popularity(room_id, i64::from(value));
                                     }
                                     Decoded::VerifyReply(value) => {
                                         let code = value

@@ -118,6 +118,13 @@ pub enum SendOutcome {
     Failed,
 }
 
+/// 举报理由（上游 `dMReport/ForReason` 给的固定清单，官方客户端按文案反查 `id` 后一并上报）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportReason {
+    pub id: i64,
+    pub reason: String,
+}
+
 /// 房间元信息。`anchor_uid` 用于派生「主播」徽标，不另设字段。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Room {

@@ -34,8 +34,16 @@ const COUNTER_CMDS: [&str; 6] = [
 /// 已知但与当前订阅房间无关、或纯客户端提示的命令：丢弃且不计为未知。
 const IGNORED_CMDS: [&str; 2] = ["STOP_LIVE_ROOM_LIST", "HOT_ROOM_NOTIFY"];
 
-/// 把一条业务 JSON 载荷映射为领域消息；不产生消息时返回 `None`。
-pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> {
+/// `dispatch` 的产出。多数命令产出一条消息；人气值走单独支路——
+/// 它高频、只影响界面上的一个数字，既不该进会话缓冲，也不该被当成消息。
+pub enum Dispatch {
+    Message(Message),
+    /// `POPULARITY_CHANGE` 携带的人气值（协议 §10.7）。
+    Popularity(i64),
+}
+
+/// 把一条业务 JSON 载荷映射为领域产出；不产生任何产出时返回 `None`。
+pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Dispatch> {
     let cmd = value.get("cmd").and_then(Value::as_str).unwrap_or_default();
     // 形如 `DANMU_MSG:4:0:2:2:2:0` 的带后缀命令取主干。
     let cmd = cmd.split(':').next().unwrap_or(cmd);
@@ -70,6 +78,10 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Mess
                     popularity,
                     "计数类命令：只更新房间计数，不入缓冲"
                 );
+                // 人气值是唯一要冒泡给界面的计数类命令：其余几类只是数字统计。
+                if other == "POPULARITY_CHANGE" {
+                    return Some(Dispatch::Popularity(popularity));
+                }
                 None
             } else if IGNORED_CMDS.contains(&other) {
                 tracing::debug!(cmd = other, "已知但与当前房间无关的命令，丢弃");
@@ -102,7 +114,7 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Mess
             );
         }
     }
-    message
+    message.map(Dispatch::Message)
 }
 
 /// 单条弹幕。取值路径均于 2026-09-11 用真实流量核对（`docs/protocol.md` §10.1）：
@@ -306,6 +318,18 @@ mod tests {
         Counters::default()
     }
 
+    /// 测试里多数场景只关心「有没有产出消息」，用这个包一层；
+    /// 人气值支路由 `popularity_is_reported_separately` 单独覆盖。
+    fn message(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> {
+        match dispatch(room_id, value, counters) {
+            Some(Dispatch::Message(message)) => Some(message),
+            Some(Dispatch::Popularity(value)) => {
+                panic!("期望消息，实际拿到人气值 {value}")
+            }
+            None => None,
+        }
+    }
+
     #[test]
     fn danmaku_uses_confirmed_paths_only() {
         let payload = json!({
@@ -325,7 +349,7 @@ mod tests {
                 [24, "粉丝牌", "主播甲", 7654321, 1725515, "", 0, 1725515, 1725515, 5414290, 0, 1]
             ]
         });
-        let message = dispatch(7654321, &payload, &counters()).expect("必须解出弹幕");
+        let message = message(7654321, &payload, &counters()).expect("必须解出弹幕");
         assert_eq!(message.kind, MessageKind::Danmaku);
         assert_eq!(message.content, "亏爆57米");
         assert_eq!(message.uid, 123456789012345);
@@ -360,7 +384,7 @@ mod tests {
                 "这个好耶"
             ]
         });
-        let message = dispatch(7, &payload, &counters()).expect("必须解出弹幕");
+        let message = message(7, &payload, &counters()).expect("必须解出弹幕");
         assert_eq!(message.content, "这个好耶", "正文仍是表情名");
         assert_eq!(
             message.emote_url,
@@ -380,7 +404,7 @@ mod tests {
                 "普通弹幕"
             ]
         });
-        let message = dispatch(7, &payload, &counters()).expect("必须解出弹幕");
+        let message = message(7, &payload, &counters()).expect("必须解出弹幕");
         assert!(message.emote_url.is_empty(), "空槽位不得产出表情地址");
     }
 
@@ -395,7 +419,7 @@ mod tests {
                 "表情名"
             ]
         });
-        let message = dispatch(7, &payload, &counters()).expect("必须解出弹幕");
+        let message = message(7, &payload, &counters()).expect("必须解出弹幕");
         assert!(message.emote_url.is_empty(), "空 url 不得当成表情");
     }
 
@@ -407,7 +431,7 @@ mod tests {
                       {"extra": "not json", "user": {"uid": 1, "base": {"name": "u"}}}],
                      "hi", [1, "u"], []]
         });
-        let message = dispatch(1, &payload, &counters()).unwrap();
+        let message = message(1, &payload, &counters()).unwrap();
         assert_eq!(message.content, "hi");
         assert!(
             message.upstream_id.is_empty(),
@@ -418,7 +442,7 @@ mod tests {
     #[test]
     fn danmaku_tolerates_missing_user_object() {
         let payload = json!({"cmd": "DANMU_MSG", "info": [[], "只有内容"]});
-        let message = dispatch(9, &payload, &counters()).expect("内容仍在");
+        let message = message(9, &payload, &counters()).expect("内容仍在");
         assert_eq!(message.content, "只有内容");
         assert_eq!(message.uid, 0);
         assert!(message.uname.is_empty());
@@ -429,7 +453,7 @@ mod tests {
     fn mirror_danmaku_is_dropped_and_counted() {
         let c = counters();
         let payload = json!({"cmd": "DANMU_MSG_MIRROR", "info": [[], "x"]});
-        assert!(dispatch(1, &payload, &c).is_none());
+        assert!(message(1, &payload, &c).is_none());
         assert_eq!(c.snapshot().mirrored_dropped, 1);
     }
 
@@ -450,7 +474,7 @@ mod tests {
                 "pb": base64::engine::general_purpose::STANDARD.encode(proto.encode_to_vec()),
             },
         });
-        let message = dispatch(5, &payload, &counters()).expect("protobuf 必须解出");
+        let message = message(5, &payload, &counters()).expect("protobuf 必须解出");
         assert_eq!(message.kind, MessageKind::Interact);
         assert_eq!(message.uid, 777);
         assert_eq!(message.uname, "路人");
@@ -462,7 +486,7 @@ mod tests {
         // 曾把 `data` 本身当载荷，空 base64 会解出全默认值的假消息。
         let c = counters();
         let payload = json!({"cmd": "INTERACT_WORD_V2", "data": {"dmscore": 3}});
-        assert!(dispatch(5, &payload, &c).is_none());
+        assert!(message(5, &payload, &c).is_none());
         assert_eq!(c.snapshot().malformed_dropped, 1);
     }
 
@@ -470,7 +494,7 @@ mod tests {
     fn interact_v2_with_broken_payload_is_counted_not_fatal() {
         let c = counters();
         let payload = json!({"cmd": "INTERACT_WORD_V2", "data": {"pb": "!!!not-base64!!!"}});
-        assert!(dispatch(5, &payload, &c).is_none());
+        assert!(message(5, &payload, &c).is_none());
         assert_eq!(c.snapshot().malformed_dropped, 1);
     }
 
@@ -481,7 +505,7 @@ mod tests {
             "cmd": "ENTRY_EFFECT",
             "data": {"uid": 7757052, "uinfo": {"base": {"name": "包包子的der一个"}}}
         });
-        let message = dispatch(1, &payload, &counters()).unwrap();
+        let message = message(1, &payload, &counters()).unwrap();
         assert_eq!(message.kind, MessageKind::Interact);
         assert_eq!(message.uid, 7757052);
         assert_eq!(message.uname, "包包子的der一个");
@@ -493,18 +517,38 @@ mod tests {
             "cmd": "DANMU_MSG:4:0:2:2:2:0",
             "info": [[], "带后缀", []]
         });
-        let message = dispatch(1, &payload, &counters()).expect("带后缀命令必须识别");
+        let message = message(1, &payload, &counters()).expect("带后缀命令必须识别");
         assert_eq!(message.content, "带后缀");
     }
 
     #[test]
     fn system_cmds_map_to_labels_and_unknown_is_counted() {
         let c = counters();
-        let live = dispatch(1, &json!({"cmd": "LIVE"}), &c).unwrap();
+        let live = message(1, &json!({"cmd": "LIVE"}), &c).unwrap();
         assert_eq!(live.kind, MessageKind::System);
         assert_eq!(live.content, "开播");
-        assert!(dispatch(1, &json!({"cmd": "SOME_NEW_CMD"}), &c).is_none());
+        assert!(message(1, &json!({"cmd": "SOME_NEW_CMD"}), &c).is_none());
         assert_eq!(c.snapshot().unknown_cmd, 1);
+    }
+
+    #[test]
+    fn popularity_is_reported_separately_from_messages() {
+        // 人气值高频且只影响界面上的一个数字：不进会话缓冲，也不能当成消息。
+        let counters = counters();
+        let payload = json!({"cmd": "POPULARITY_CHANGE", "data": {"popularity": 12345}});
+        match dispatch(7, &payload, &counters) {
+            Some(Dispatch::Popularity(value)) => assert_eq!(value, 12345),
+            other => panic!("应产出人气值，实际是 {:?}", other.is_some()),
+        }
+        assert_eq!(
+            counters.snapshot().counter_updates,
+            1,
+            "人气值仍要计入计数类命令统计"
+        );
+
+        // 其余计数类命令不产出人气值。
+        let watched = json!({"cmd": "WATCHED_CHANGE", "data": {"popularity": 9}});
+        assert!(dispatch(7, &watched, &counters).is_none());
     }
 
     #[test]
@@ -518,8 +562,9 @@ mod tests {
             "ONLINE_RANK_V2",
             "ROOM_REAL_TIME_MESSAGE_UPDATE",
         ] {
+            let produced = dispatch(1, &json!({"cmd": cmd, "data": {"popularity": 123}}), &c);
             assert!(
-                dispatch(1, &json!({"cmd": cmd, "data": {"popularity": 123}}), &c).is_none(),
+                !matches!(produced, Some(Dispatch::Message(_))),
                 "{cmd} 按 protocol.md §10.7 不得产生消息"
             );
         }
@@ -531,7 +576,7 @@ mod tests {
     fn irrelevant_known_cmds_are_dropped_silently() {
         let c = counters();
         for cmd in ["STOP_LIVE_ROOM_LIST", "HOT_ROOM_NOTIFY"] {
-            assert!(dispatch(1, &json!({"cmd": cmd}), &c).is_none());
+            assert!(message(1, &json!({"cmd": cmd}), &c).is_none());
         }
         assert_eq!(c.snapshot().unknown_cmd, 0);
         assert_eq!(c.snapshot().counter_updates, 0);
@@ -547,7 +592,7 @@ mod tests {
             json!({"cmd": "GUARD_BUY", "data": {"uid": 1, "username": "u"}}),
         ];
         for payload in payloads {
-            let message = dispatch(1, &payload, &counters()).unwrap();
+            let message = message(1, &payload, &counters()).unwrap();
             assert!(MessageKind::ALL.contains(&message.kind));
         }
     }

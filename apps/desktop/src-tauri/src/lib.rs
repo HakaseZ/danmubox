@@ -16,7 +16,8 @@ use danmubox_core::ports::{
 };
 use danmubox_core::{
     config_path, data_dir, prefs_path, ConfigStore, Counters, Emote, Event, EventBus, FollowedRoom,
-    HistoryQuery, Message, MessageKind, Prefs, Room, RoomRuntime, RoomSession, SendOutcome,
+    HistoryQuery, Message, MessageKind, Prefs, ReportReason, Room, RoomRuntime, RoomSession,
+    SendOutcome,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
@@ -371,13 +372,20 @@ async fn emotes_list(state: State<'_, AppState>, room_id: i64) -> ApiResult<Vec<
 async fn chat_report(
     state: State<'_, AppState>,
     message: Message,
-    reason: String,
+    reason: ReportReason,
 ) -> ApiResult<()> {
     let reporter = BiliReporter::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     reporter
         .report(&message, &reason)
         .await
         .map_err(ApiError::from)
+}
+
+/// 举报理由清单：上游固定 7 条，官方客户端按文案反查 `reason_id` 后一并上报。
+#[tauri::command]
+async fn report_reasons(state: State<'_, AppState>) -> ApiResult<Vec<ReportReason>> {
+    let reporter = BiliReporter::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    reporter.reasons().await.map_err(ApiError::from)
 }
 
 #[tauri::command]
@@ -405,6 +413,12 @@ fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus) {
                 }
                 Ok(Event::Status(status)) => {
                     let _ = app.emit("danmubox://status", &status);
+                }
+                Ok(Event::Popularity { room_id, value }) => {
+                    let _ = app.emit(
+                        "danmubox://popularity",
+                        &serde_json::json!({ "room_id": room_id, "value": value }),
+                    );
                 }
                 Ok(Event::Room(room)) => {
                     let _ = app.emit("danmubox://room", &room);
@@ -603,6 +617,7 @@ pub fn run() {
             history_query,
             chat_send,
             chat_report,
+            report_reasons,
             emotes_list,
             follow_list,
             wallet_balance,

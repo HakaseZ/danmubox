@@ -7,6 +7,7 @@ import type {
   AppInfo,
   ChatSendResult,
   EmoteToken,
+  ReportReason,
   ConnState,
   Emote,
   FollowedRoom,
@@ -28,6 +29,8 @@ interface AppStore {
   activeRoomId?: number;
   messages: Message[];
   status: Record<number, { state: ConnState; detail: string }>;
+  /** 各房间最近一次人气值（协议 §10.7 的 `op=3` 口径）。 */
+  popularity: Record<number, number>;
   prefs?: Prefs;
   logs: string[];
   lastSend?: ChatSendResult;
@@ -48,7 +51,9 @@ interface AppStore {
   disconnect: (roomId: number) => Promise<void>;
   refresh: (roomId: number) => Promise<void>;
   send: (roomId: number, content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
-  report: (message: Message, reason: string) => Promise<boolean>;
+  report: (message: Message, reason: ReportReason) => Promise<boolean>;
+  reportReasons: ReportReason[];
+  loadReportReasons: () => Promise<void>;
   loadEmotes: (roomId: number) => Promise<void>;
   loadFollowed: () => Promise<void>;
   loadBalance: () => Promise<void>;
@@ -63,9 +68,11 @@ export const useApp = create<AppStore>((set, get) => ({
   rooms: [],
   messages: [],
   status: {},
+  popularity: {},
   logs: [],
   seeding: false,
   emotes: [],
+  reportReasons: [],
   followed: [],
 
   async bootstrap() {
@@ -95,6 +102,10 @@ export const useApp = create<AppStore>((set, get) => ({
           }
           set({ messages });
         },
+        onPopularity: (event) =>
+          set((state) => ({
+            popularity: { ...state.popularity, [event.room_id]: event.value },
+          })),
         onStatus: (status) =>
           set((state) => ({
             status: {
@@ -217,6 +228,16 @@ export const useApp = create<AppStore>((set, get) => ({
     } catch (error) {
       set({ error: describeError(error) });
       return false;
+    }
+  },
+
+  async loadReportReasons() {
+    // 上游固定 7 条，取一次就够；失败不覆盖已有清单。
+    if (get().reportReasons.length > 0) return;
+    try {
+      set({ reportReasons: await api.reportReasons() });
+    } catch (error) {
+      set({ error: describeError(error) });
     }
   },
 

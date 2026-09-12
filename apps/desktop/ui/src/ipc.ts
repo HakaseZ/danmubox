@@ -12,6 +12,8 @@ import type {
   EmoteToken,
   FollowedRoom,
   Message,
+  PopularityEvent,
+  ReportReason,
   Prefs,
   Room,
   RoomView,
@@ -77,8 +79,9 @@ export const api = {
     invoke<ChatSendResult>("chat_send", { roomId, content, emote, color }),
 
   /** 举报一条弹幕。理由取值尚未实测，先按不透明字符串传递。 */
-  chatReport: (message: Message, reason: string) =>
+  chatReport: (message: Message, reason: ReportReason) =>
     invoke<void>("chat_report", { message, reason }),
+  reportReasons: () => call<ReportReason[]>("report_reasons"),
 
   emotesList: (roomId: number) => call<Emote[]>("emotes_list", { roomId }),
   followList: () => call<FollowedRoom[]>("follow_list"),
@@ -91,6 +94,7 @@ export const api = {
 export interface EventHandlers {
   onMessage?: (message: Message) => void;
   onStatus?: (status: StatusEvent) => void;
+  onPopularity?: (event: PopularityEvent) => void;
   onRoom?: (room: Room) => void;
   onSession?: (session: SessionState) => void;
   onSend?: (result: ChatSendResult) => void;
@@ -113,6 +117,13 @@ export async function subscribeEvents(
     unlisteners.push(
       await listen<StatusEvent>("danmubox://status", (e) =>
         handlers.onStatus!(e.payload),
+      ),
+    );
+  }
+  if (handlers.onPopularity) {
+    unlisteners.push(
+      await listen<PopularityEvent>("danmubox://popularity", (e) =>
+        handlers.onPopularity!(e.payload),
       ),
     );
   }

@@ -54,6 +54,15 @@ export function alertsOn(message: Message, prefs: Prefs): boolean {
     .some((word) => message.content.includes(word));
 }
 
+/**
+ * 人气值的展示格式：过万折成「x.x万」（官方客户端同款习惯）。
+ * 数值口径见 docs/protocol.md §10.7。
+ */
+export function formatPopularity(value: number): string {
+  if (value >= 10000) return `${(value / 10000).toFixed(1)}万`;
+  return String(value);
+}
+
 export interface DisplayRow {
   message: Message;
   /** 合并了几条（1 表示未合并）。 */

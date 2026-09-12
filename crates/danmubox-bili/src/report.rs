@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use danmubox_core::ports::DanmakuReporter;
-use danmubox_core::{ConfigStore, Error, Message, Result};
+use danmubox_core::{ConfigStore, Error, Message, ReportReason, Result};
 use serde_json::Value;
 
 use crate::http::BiliHttp;
@@ -30,6 +30,31 @@ use crate::wbi;
 pub const EP_DM_REPORT: &str =
     "https://api.live.bilibili.com/xlive/web-ucenter/v1/dMReport/Report";
 
+/// 举报理由清单端点。**已实测**（2026-09-11，登录态 `code=0`，返回 7 条 `{id, reason}`）。
+pub const EP_FOR_REASON: &str =
+    "https://api.live.bilibili.com/xlive/web-ucenter/v1/dMReport/ForReason";
+
+/// 解析理由清单。信封是 `data.data[]`，每项 `{id, reason}`（实测形状）。
+///
+/// 无法解析的条目直接跳过——理由清单只用于给用户选，缺一条不影响其它条目可用。
+pub fn parse_reasons(value: &Value) -> Vec<ReportReason> {
+    value
+        .pointer("/data/data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(ReportReason {
+                        id: item.get("id").and_then(Value::as_i64)?,
+                        reason: item.get("reason").and_then(Value::as_str)?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 组装举报表单参数（不含 `wts` / `w_rid`，签名由调用方补）。
 ///
 /// 纯函数，便于离线覆盖。房间号由参数传入，**不读 `message.room_id`**，
@@ -37,7 +62,7 @@ pub const EP_DM_REPORT: &str =
 /// 理由按不透明字符串原样传递，不做枚举映射。
 pub fn report_params(
     message: &Message,
-    reason: &str,
+    reason: &ReportReason,
     csrf: &str,
     room_id: i64,
 ) -> Vec<(String, String)> {
@@ -48,7 +73,9 @@ pub fn report_params(
         // 被举报弹幕的发送者与原文；参考实现的请求带这两项。
         ("tuid".to_string(), message.uid.to_string()),
         ("msg".to_string(), message.content.clone()),
-        ("reason".to_string(), reason.to_string()),
+        // 官方实现同时上报文案与 id：id 从 ForReason 清单里按文案反查得到。
+        ("reason".to_string(), reason.reason.clone()),
+        ("reason_id".to_string(), reason.id.to_string()),
         // 参考实现对文本弹幕固定发 `dm_type=0`；该取值语义未实测。
         ("dm_type".to_string(), "0".to_string()),
         ("csrf".to_string(), csrf.to_string()),
@@ -91,13 +118,23 @@ impl BiliReporter {
 
 #[async_trait]
 impl DanmakuReporter for BiliReporter {
-    async fn report(&self, message: &Message, reason: &str) -> Result<()> {
+    async fn reasons(&self) -> Result<Vec<ReportReason>> {
+        let (value, _cookies) = self.http.get_with_cookies(EP_FOR_REASON).await?;
+        let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
+        if code != 0 {
+            // 未实测的码集合：保留原始 code，不赋予语义。
+            return Err(Error::Upstream(format!("ForReason code={code}")));
+        }
+        Ok(parse_reasons(&value))
+    }
+
+    async fn report(&self, message: &Message, reason: &ReportReason) -> Result<()> {
         let profile = self
             .store
             .active()
             .filter(|p| p.is_complete())
             .ok_or(Error::NotLoggedIn)?;
-        if reason.trim().is_empty() {
+        if reason.reason.trim().is_empty() {
             return Err(Error::BadRequest("举报理由为空".into()));
         }
         if message.upstream_id.trim().is_empty() {
@@ -164,7 +201,12 @@ mod tests {
     #[test]
     fn report_params_carry_target_reason_csrf_and_the_passed_room() {
         let message = sample_message();
-        let params = report_params(&message, "色情低俗", "CSRF-TOKEN", 9999);
+        let params = report_params(
+            &message,
+            &ReportReason { id: 3, reason: "色情低俗".into() },
+            "CSRF-TOKEN",
+            9999,
+        );
         let value = |key: &str| {
             params
                 .iter()
@@ -219,7 +261,10 @@ mod tests {
     async fn not_logged_in_is_rejected() {
         let reporter = BiliReporter::new(not_logged_in_store("anon")).unwrap();
         let error = reporter
-            .report(&sample_message(), "垃圾广告")
+            .report(
+                &sample_message(),
+                &ReportReason { id: 8, reason: "垃圾广告".into() },
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code(), "NOT_LOGGED_IN");
@@ -228,12 +273,16 @@ mod tests {
     #[tokio::test]
     async fn empty_reason_is_bad_request() {
         let reporter = BiliReporter::new(store_with_login("reason")).unwrap();
-        for reason in ["", "   ", "\t\n"] {
+        for text in ["", "   ", "\t\n"] {
+            let reason = ReportReason {
+                id: 0,
+                reason: text.into(),
+            };
             let error = reporter
-                .report(&sample_message(), reason)
+                .report(&sample_message(), &reason)
                 .await
                 .unwrap_err();
-            assert_eq!(error.code(), "BAD_REQUEST", "reason={reason:?}");
+            assert_eq!(error.code(), "BAD_REQUEST", "reason={text:?}");
         }
     }
 
@@ -243,12 +292,12 @@ mod tests {
 
         let mut message = sample_message();
         message.upstream_id.clear();
-        let error = reporter.report(&message, "垃圾广告").await.unwrap_err();
+        let error = reporter.report(&message, &ReportReason { id: 8, reason: "垃圾广告".into() }).await.unwrap_err();
         assert_eq!(error.code(), "BAD_REQUEST");
 
         // 全空白标识同样拒绝，不得静默放行。
         message.upstream_id = "   ".into();
-        let error = reporter.report(&message, "垃圾广告").await.unwrap_err();
+        let error = reporter.report(&message, &ReportReason { id: 8, reason: "垃圾广告".into() }).await.unwrap_err();
         assert_eq!(error.code(), "BAD_REQUEST");
     }
 }

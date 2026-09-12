@@ -302,6 +302,11 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
                         );
                     }
                 }
+                Ok(Event::Popularity { room_id, value }) => {
+                    if !quiet {
+                        println!("# 人气值 room_id={room_id} value={value}");
+                    }
+                }
                 Ok(Event::Status(status)) => {
                     println!("# 状态 {:?} {}", status.state, status.detail);
                 }

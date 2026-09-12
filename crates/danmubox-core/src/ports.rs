@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bus::{Cancel, MessageSink};
 use crate::error::Result;
-use crate::model::{Emote, FollowedRoom, Message, Room, RoomSession, SendOutcome};
+use crate::model::{Emote, FollowedRoom, Message, ReportReason, Room, RoomSession, SendOutcome};
 
 /// 登录态。**不含**任何 Cookie 值（`docs/contract.md` §7）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,8 +136,11 @@ pub trait DanmakuSender: Send + Sync {
 
 #[async_trait]
 pub trait DanmakuReporter: Send + Sync {
-    /// 举报一条弹幕，行为与官方一致；理由取值待实测校准。
-    async fn report(&self, message: &Message, reason: &str) -> Result<()>;
+    /// 上游固定的举报理由清单（官方客户端用它反查 `reason_id`）。
+    async fn reasons(&self) -> Result<Vec<ReportReason>>;
+
+    /// 举报一条弹幕。理由取自上一步返回的清单——官方客户端同时上报 `reason` 文案与 `reason_id`。
+    async fn report(&self, message: &Message, reason: &ReportReason) -> Result<()>;
 }
 
 #[async_trait]

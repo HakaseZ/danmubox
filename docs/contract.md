@@ -73,7 +73,7 @@ danmubox/
 | `AuthProvider` | 登录态、凭据读写、扫码流程、buvid3 |
 | `LiveSource` | 房间解析、建立/断开连接、事件流 |
 | `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5）。`emote: Option<&EmoteToken>` 非空时发送**表情弹幕** |
-| `DanmakuReporter` | 举报弹幕 |
+| `DanmakuReporter` | 举报弹幕；`reasons()` 取上游固定理由清单（官方客户端按文案反查 `reason_id` 后与文案一起上报） |
 | `EmoteProvider` | 按身份加载表情包库 |
 | `RoomCatalog` | 关注列表、直播状态、房间元信息 |
 | `WalletProvider` | 电池余额 |
@@ -219,6 +219,8 @@ sessdata = ""
 
 `Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `admin`；`room` = UP 主大表情与房间专属表情）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
+`ReportReason`（举报理由，规范性）：`id` / `reason`。取自上游 `dMReport/ForReason`，界面只让用户从清单里选。
+
 `FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name`。**展示排序：`live_status == 1` 置顶**（REQUIREMENTS.md 需求）。
 
 ## 6. B 站协议要点（规范性）
@@ -252,7 +254,8 @@ Frontend → Rust 命令（`invoke`）：
 | `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |
 | `history_query` | 查询**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`） |
 | `chat_send` | 发弹幕（可带 `emote`）——`emote` 非空时按表情弹幕发送（`docs/protocol.md` §11.4），返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现 |
-| `chat_report` | 举报弹幕 |
+| `chat_report` | 举报弹幕，理由取自上一步的清单（`{id, reason}`） |
+| `report_reasons` | 举报理由清单（上游固定 7 条） |
 | `emotes_list` | 按身份加载表情包库 |
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令） |
 | `wallet_balance` | 电池余额 |

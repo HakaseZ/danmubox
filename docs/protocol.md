@@ -590,6 +590,20 @@ resp.msg / resp.message == "k"     → blocked_room
 否则按 `identity` 给出解锁条件（`identity === 4` 时是「加入主播的粉丝团」，其余按大航海档位）。
 即 `perm = 0` 的表情不是不能点，而是**未解锁**。
 
+### 11.5 举报载荷（官方实现）
+
+官方 web 客户端的举报请求（`dMReport/Report`）：
+
+```js
+{ reason, reason_id, roomid, msg, tuid, ts, sign, dm_type, file_id, img_url, id_str }
+```
+
+- `reason` 是**文案**，`reason_id` 由该文案在 `dMReport/ForReason` 返回的清单里反查得到；
+  因此界面不该让用户手输理由，只能从清单里选（本实现已如此）。
+- `ts` 与 `sign` 来自被举报弹幕的 `check_info`（`{ts, ct}`）。**该字段不在 `Message` 模型里**，
+  本实现暂不上报这两项——是否必需、缺失时上游如何拒绝，均未实测（见 A27）。
+- `dm_type` 取被举报弹幕的类型。
+
 ---
 
 ## 12. 分发与内存缓冲边界
@@ -848,7 +862,7 @@ stateDiagram-v2
 | A24 | 上游主动断连的周期与诱因 | 是否为常态轮换、是否与心跳节奏或房间热度相关 | 连续多次 ≥2 小时长连，记录每次断连的时刻与间隔 | **已实测（2 小时 4 分）**：共 4 次断连，**全部由上游发起**（TLS `close_notify` / `Connection reset by peer`），间隔约 1 分钟 / 40 分钟 / 18 分钟，**无固定周期**；退避按 `5s→10s→20s→40s` 升级；期间 **HTTP 心跳失败 0 次**；每次断连后均自动恢复。结论：属上游常态轮换，不应视为故障 | §13.2、S1-AC2 |
 | A25 | `msg/send` 的请求形态 | 参数放 body 还是 query；`rnd` 的取值语义；`csrf` 与 `csrf_token` 是否必须是同一值；`w_rid` 是否必需 | 登录态下各发一条，用抓包或对照官方 web 客户端请求 | **已验证**：`application/x-www-form-urlencoded` body（含 `w_rid`、`csrf` / `csrf_token`）的上报被上游接受且弹幕成功出现；`rnd` 语义仍未知但不影响发送 | §11.1、`send.rs` |
 | A26 | 表情包库接口 | 端点路径、查询参数、是否需 WBI 签名、响应信封与字段名（包 id/名、表情文本/图片地址）、包分类的判定依据 | 登录态下用 `DANMUBOX_LOG=debug` 请求一次并比对原始响应 | **已实测（2026-09-11 端点 / 2026-09-12 分类）**：`GET /xlive/web-ucenter/v2/emoticon/GetEmoticons?platform=pc&room_id=<id>`（**`platform=web` 被上游拒为 `code=500`「参数错误，平台来源错误」**）。信封 `data.{fans_brand, data[], purchase_url}`；表情字段 `emoji`（显示文本）/ `url` / `emoticon_unique`（房间专属形如 `room_<房间号>_<id>`）/ `emoticon_id`——**不存在 `text` 字段**。**分类判据在表情级字段，不在包级**（房间 `某个在播房间（房间号不写入仓库）` 实测 68 个）：通用（`pkg_type=1`、`identity=99`、`unlock_need_level=0`）38 个；**粉丝牌档位包**——包名「UP主大表情」（`pkg_type=2`、`identity=1..4` 各 5 个、全部 `unlock_need_level=1`）20 个；房间专属（`pkg_type=2`、`identity=99`、`unlock_need_level=0`）10 个。包级 `pkg_perm` / `unlock_identity` / `unlock_need_gift` 三个包取值**完全相同**，不能用于分类。**未确认**：表情级 `perm`（0/1）与 `unlock_need_gift` 的确切语义——实测该粉丝牌包中只有 `identity=4` 那 5 个 `perm=1`，且它们同时带 `unlock_need_gift=31164`；因此界面暂不据此置灰，待一次真实发送确认。`fans_brand` 疑为「请求者在该房间是否有粉丝牌」（同账号在房间 `5440` 为 `0`、在 `某个在播房间（房间号不写入仓库）` 为 `1`，与用户实际持牌情况一致） **身份来源**：可用范围完全由上游按 Cookie 判定——实测在 `RoomSession` 全零（未传任何身份参数）的情况下，持牌账号仍收到包含粉丝牌档位包的完整结果；用户手动隐藏自己的粉丝牌也不影响该包下发。因此本端口不需要客户端传身份，`RoomSession` 目前仅用于日志。 |
-| A27 | 举报接口 | 端点路径与表单字段集、理由的合法取值与映射、结果码集合、是否需要 WBI 签名 | 对照官方 web 端一次真实举报的请求（DevTools 抓包）；在公开测试房间 `1` 对**自己刚发的那条**弹幕举报 | **部分实测（2026-09-11）**：端点 `/xlive/web-ucenter/v1/dMReport/Report` 确认存在（与实现一致）；**理由清单端点 `/xlive/web-ucenter/v1/dMReport/ForReason` 实测返回 7 条 `{id, reason}`**（理由可改为下拉，不必让用户自由输入）。**仍未知**：Report 的表单字段集与结果码集合——真实举报未执行，需用户配合（只能在公开测试房间 `1` 举报自己刚发的弹幕） | `report.rs`、`chat_report` |
+| A27 | 举报接口 | 端点路径与表单字段集、理由的合法取值与映射、结果码集合、是否需要 WBI 签名 | 对照官方 web 端一次真实举报的请求（DevTools 抓包）；在公开测试房间 `1` 对**自己刚发的那条**弹幕举报 | **已实测端点与载荷形状（2026-09-12）**：举报端点 `/xlive/web-ucenter/v1/dMReport/Report`；**理由清单 `/xlive/web-ucenter/v1/dMReport/ForReason` 返回 7 条 `{id, reason}`**（已接入界面为下拉）。官方载荷形状见 §11.5，其中 `ts` / `sign` 取自弹幕的 `check_info`——**本实现暂缺**（`Message` 模型里没有这两个值），是否必需未实测。**仍未知**：真实举报的结果码集合与 `check_info` 缺失时上游是否接受 |
 | A28 | 关注列表接口 | 端点路径、分页参数名与页大小上限、响应信封、`room_id`/`uname`/`face`/`live_status`/分组名的真实字段名、`live_status` 口径 | 登录态下拉取并比对原始响应 | **部分实测（2026-09-11）**：端点 `GET /xlive/web-ucenter/v1/xfetter/GetWebList`——**原猜测的 `/xlive/web-interface/v1/relation/getUserFollowList` 不成立**；分页 `page`/`page_size` 实测可用；信封 `data.{rooms, list, count, not_living_num}`，**没有 `has_more`**（终止条件改为「本页条数 == page_size」）。**仍未知**：`rooms` 与 `list` 哪个是房间列表、以及条目字段名——该账号关注数为 0，两者皆空数组；实现取 `data.list`，待有非空关注时复核 | `follow.rs`、`follow_list` |
 | A29 | 电池余额口径 | 端点路径、数值字段名（电池 / 金瓜子 / 银瓜子）、三者之间的关系与单位 | 登录态下请求一次，并与官方「电池」页显示值对照 | **已实测（2026-09-11）**：端点 `GET /xlive/revenue/v1/wallet/myWallet`——**此前四个候选（`revenue/v1|v2`、`app-ucenter`、`pay` 下的 `getUserWallet`）实测全部 404**；返回 `data.gold`（金瓜子）/`silver`/`bp`，**没有独立的「电池」字段**。口径：**电池 = gold / 100**，依据社区文档「金瓜子数量 / 100 = 电池数量」，并用同账号交叉验证（`gold=15000` ↔ 15 元 ↔ 150 电池）。`wallet_balance` 实测返回 **150** | `wallet.rs`、`wallet_balance` |
 | A30 | 进场回填的历史弹幕 | 能否在进房间时取到最近若干条；上限；字段；**调用前提** | 官方页面前端产物里检索 `dM/` 路径，并在在播房间上实测计数 | **已实测并已实现（2026-09-12）**：`GET /xlive/web-room/v1/dM/gethistory?roomid=<真实房间号>&room_type=<0|1>`（官方页面两个取值都观测到过）。`data.room` **恰好 10 条**（普通用户）+ `data.admin` **至多 10 条**（房管）= 最多 20；`limit` / `page_size` / `size` / `ps` / `page` / `offset` / `last_id` 实测均不加量——**不可翻页**。`timeline` 是**北京时间**秒级 `yyyy-MM-dd HH:mm:ss`（实测：UTC 00:49 时返回 08:49）。**调用前提（关键）**：需要完整的会话 Cookie——带完整 cookie 实测 **3/3 稳定**返回 10+10；只带 `buvid3` 时 **3/3 全空**；完全不带头时 2/3 空。**坑**：取不到时是 `code=0` + 空数组，**与「真的没有弹幕」无法区分**，调用方不得当成错误。字段含 `text` / `uid` / `nickname` / `timeline` / `isadmin` / `guard_level` / `id_str` / `user.medal.{name,level}`；**无文字颜色字段**（`color` 取 0）。实现见 `contract.md` §4.3、`ui.md` §4.7 |

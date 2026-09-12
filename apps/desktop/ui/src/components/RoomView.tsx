@@ -4,7 +4,7 @@ import { Composer } from "./Composer";
 import { FilterBar } from "./FilterBar";
 import { MessageList } from "./MessageList";
 import { useApp } from "../store";
-import type { DisplayRow } from "../filtering";
+import { formatPopularity, type DisplayRow } from "../filtering";
 import type {
   ConnState,
   Emote,
@@ -12,6 +12,7 @@ import type {
   Prefs,
   RoomView as RoomViewData,
   EmoteToken,
+  ReportReason,
   SendOutcome,
   SessionState,
 } from "../types";
@@ -32,7 +33,7 @@ interface Props {
   onRefresh: () => void;
   onDisconnect: () => void;
   onSend: (content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
-  onReport: (message: Message, reason: string) => Promise<void>;
+  onReport: (message: Message, reason: ReportReason) => Promise<void>;
   onPrefs: (patch: Partial<Prefs>) => void;
 }
 
@@ -71,7 +72,9 @@ export function RoomView({
 }: Props) {
   const [showLogs, setShowLogs] = useState(false);
   const [reportTarget, setReportTarget] = useState<Message>();
-  const [reason, setReason] = useState("");
+  // 举报理由改用上游固定清单（`dReport/ForReason`，实测 7 条）：
+  // 官方客户端按文案反查 `reason_id` 后与文案一起上报，因此界面不该让用户手输。
+  const [reasonId, setReasonId] = useState("");
   const state = status?.state ?? "disconnected";
   const separateGifts = prefs["ui.gift_panel_mode"] === "separate";
 
@@ -79,6 +82,9 @@ export function RoomView({
   // 所以下面的 effect 只会在登录态变化时触发。经 props 传内联闭包会导致每次渲染都重跑（曾因此死循环）。
   const loadBalance = useApp((store) => store.loadBalance);
   const loadEmotes = useApp((store) => store.loadEmotes);
+  const reportReasons = useApp((store) => store.reportReasons);
+  const loadReportReasons = useApp((store) => store.loadReportReasons);
+  const popularity = useApp((store) => store.popularity[room.room_id]);
   const loggedIn = session?.logged_in ?? false;
 
   useEffect(() => {
@@ -90,6 +96,10 @@ export function RoomView({
   useEffect(() => {
     if (loggedIn) void loadEmotes(room.room_id);
   }, [loggedIn, loadEmotes, room.room_id]);
+
+  useEffect(() => {
+    if (reportTarget) void loadReportReasons();
+  }, [reportTarget, loadReportReasons]);
 
   const giftRows = separateGifts
     ? rows.filter((row) =>
@@ -114,6 +124,11 @@ export function RoomView({
           {STATE_TEXT[state]}
           {status?.detail ? `（${status.detail}）` : ""}
         </span>
+        {popularity !== undefined && (
+          <span className={styles.balance} title="人气值（协议 §10.7 的 op=3 口径）">
+            人气 {formatPopularity(popularity)}
+          </span>
+        )}
         {balance !== undefined && (
           <span className={styles.balance}>电池 {balance}</span>
         )}
@@ -168,18 +183,30 @@ export function RoomView({
           <span className={styles.roomMeta}>
             举报「{reportTarget.content.slice(0, 24)}」
           </span>
-          <input
-            value={reason}
-            placeholder="举报理由（取值尚未实测，按原文提交）"
-            onChange={(event) => setReason(event.target.value)}
-          />
+          <select
+            value={reasonId}
+            onChange={(event) => setReasonId(event.target.value)}
+          >
+            <option value="">
+              {reportReasons.length === 0 ? "理由清单加载中…" : "选择举报理由…"}
+            </option>
+            {reportReasons.map((item) => (
+              <option key={item.id} value={String(item.id)}>
+                {item.reason}
+              </option>
+            ))}
+          </select>
           <button
-            disabled={reason.trim().length === 0}
+            disabled={reasonId === ""}
             onClick={() => {
+              const picked = reportReasons.find(
+                (item) => String(item.id) === reasonId,
+              );
+              if (!picked || !reportTarget) return;
               const target = reportTarget;
               setReportTarget(undefined);
-              setReason("");
-              void onReport(target, reason.trim());
+              setReasonId("");
+              void onReport(target, picked);
             }}
           >
             提交举报
@@ -187,7 +214,7 @@ export function RoomView({
           <button
             onClick={() => {
               setReportTarget(undefined);
-              setReason("");
+              setReasonId("");
             }}
           >
             取消

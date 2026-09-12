@@ -193,6 +193,20 @@ sid = ""
 
 ---
 
+### 1.3 独立产物（不依赖 dev server）
+
+```bash
+# 仅需一次：安装 Tauri CLI（注意绕开 ~/.npm 里 root 所有的缓存目录）
+npm --prefix apps/desktop/ui i -D @tauri-apps/cli --cache /tmp/npm-cache-danmubox
+# 构建（会在 target/release 下产出可执行文件；`beforeBuildCommand` 会自动先构建前端）
+cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
+```
+
+产物是 `target/release/danmubox-desktop`（约 13 MB），**前端已内嵌**：
+日志里页面加载的 URL 是 `tauri://localhost` 而不是 `http://localhost:5173`，
+因此不需要再起 Vite，双击即可运行。加 `--no-bundle` 是因为仓库还没有应用图标，
+带 bundle 会要求图标文件；需要 `.app` 时先补图标再 `tauri build`。
+
 ## 2. 故障排查决策树
 
 ### 2.1 总览

@@ -69,6 +69,9 @@
 
 ### Added
 
+- **独立可运行的 release 产物**（交付形态）：`tauri build --no-bundle` 产出
+  `target/release/danmubox-desktop`（约 13 MB），前端已内嵌——日志里页面加载的是
+  `tauri://localhost`，因此不必再起 Vite dev server。构建步骤记入 `docs/operations.md` §1.3。
 - **礼物连击聚合与金额排行**（需求 §2.7）：`SEND_GIFT_V2` 带来的 `batch_combo_id` 进 `Message.combo_id`，
   同一串连击在界面上折叠成一行（不受「合并相似消息」开关影响），折叠行的金额是整串总额；
   独立礼物栏顶部显示本场礼物总额与前 5 名排行。

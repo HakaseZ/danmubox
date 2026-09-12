@@ -8,12 +8,16 @@
 // 场景自己跑完（含两段 8.6s 等待）后把断言快照写进 document.documentElement 的 data-smoke
 // 属性（JSON）并 console.log 一份。
 //
-// 两条维护约定：
+// 三条维护约定：
 //   1) 断言只依赖对外可观察的行为（DOM 文本 / 几何 / 副作用记录），**不依赖 CSS-module 类名**；
 //      定位一律走 `data-testid`（db-chat-scroll / db-msg-row / db-msg-time / db-context-menu /
 //      db-account / db-panel / db-gift-dock / db-follow-item），那是稳定的对外契约。
 //   2) 快照字段名是契约：`step1_*` … `step6_*` 的语义不得改（Main 按这套闭环），
 //      新增断言另起字段名（layout* / menu* / time* / gift* / follow* / account*）。
+//   3) **断「某个元素在不在」必须定位到那个元素自身**，不要拿整行 / 整块的 innerText 找关键词：
+//      行的正文里恰好出现同样两个字就会让断言说谎（#12 那次的样本正文含「舰长」两字，
+//      于是「不该有舰长标」的断言假失败——它反过来也会让真 bug 混过去）。
+//      例：判徽标看 `span.innerText.trim() === "舰长"`，而不是 `row.innerText.indexOf("舰长")`。
 //
 // 覆盖：docs/ui.md §2、§3、§4、§6、§8。
 //   step1  关注列表自动加载、列表页展示关注项

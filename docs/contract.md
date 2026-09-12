@@ -239,6 +239,8 @@ sessdata = ""
 
 > 与 `Message.medal_level` 区分：后者是**发送者**的牌，前者是**我**在这个房间的牌。表情包库可用范围取决于这套身份。
 
+`Account`（账号，规范性）：`name`（具名凭据标识，即 `config.toml` 的 profile 名）/ `nickname` / `uid` / `face` / `logged_in` / `active`。**游客态不是账号**——没有凭据就没有条目；`logged_in=false` 表示该账号存在但凭据已清（或已失效），它仍是可切回的槽位。
+
 `Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `owned`；`owned` = 主站「我的表情」中用户拥有的包，见 `protocol.md` A35；`room` = UP 主大表情与房间专属表情。**没有 `admin`**——房管没有表情分类，见 `protocol.md` A26）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
 `EmoteRef`（弹幕携带的表情，规范性）：`emoticon_unique` / `url`（已规范化）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display`。
@@ -282,17 +284,19 @@ Frontend → Rust 命令（`invoke`）：
 | 命令 | 用途 |
 |---|---|
 | `session_status` | 登录态（不含 Cookie 值），含当前 `active_profile` |
-| `session_qr_start` / `session_qr_poll` | 扫码登录 |
+| `accounts_list` | 无 | `Account[]` | `INTERNAL` | 列出全部账号（游客态不是账号，没有凭据就没有条目） |
+| `account_qr_start` | `target?: string` | `{ key, url, svg }` | `INTERNAL` | 不带 `target` = **新增账号**（扫完按昵称自动命名、重名加后缀，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面须二次确认）。二维码由后端离线渲染成 SVG |
+| `account_qr_poll` | `key: string` | `{ state: "pending"\|"scanned"\|"confirmed"\|"expired", account: Account \| null }` | `INTERNAL` | 确认后由后端完成落盘并把该账号设为当前（`active=true`）并返回它；未确认时 `account` 为 `null` |
+| `account_login_cookie` | `cookie: string`、`name?: string` | `Account` | `BAD_REQUEST` `INTERNAL` | 手填 Cookie 登录（需求 §2.5 三种方式之一）；`name` 缺省时按昵称自动生成；必填字段缺失 → `BAD_REQUEST` |
+| `account_switch` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换当前账号并以新凭据重建各房间连接；`name` 不存在 → `NOT_FOUND` |
+| `account_logout` | `name?: string` | `SessionStatus` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省 = 当前账号）的凭据；**账号条目保留**、`logged_in=false`，即退回游客态 |
+| `account_remove` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号条目；**不许删最后一个** → `BAD_REQUEST`；删的是当前项时，当前指向自动切到剩下的条目 |
 | `emotes_owned` | 主站「我的表情」（用户拥有的表情包）；`package_kind` 为 `owned`，唯一键 = `"upower_" + 表情 text` |
 | `room_session` | 返回该房间**当前会话**里的本人身份（`RoomSession`）。房间无活跃会话（未连接/已关闭）→ 返回该 room 的全零身份而**不报错**（与 `history_query` 同风格）。身份在会话建立时并发取一次并缓存，同时经既有 `danmubox://session` 事件推送 |
 | `admin_mute` / `admin_unmute` | 禁言 / 解除（`room_id`、`uid`、`hour`：`-1` 永久、`0` 本场） |
 | `admin_blacklist_list` / `_add` / `_del` | 直播间黑名单（列表 / 加入 / 移除） |
 | `admin_keywords_list` / `_add` / `_del` | 直播间屏蔽词（列表 / 添加 / 删除） |
 | `admin_silent_list` | 禁言名单（`SilentUser[]`）——房管功能做完整所需，官方面板也有这一栏 |
-| `session_logout` | 登出并清空 `config.toml` 中当前 profile 的凭据 |
-| `profiles_list` / `profiles_switch` | 列出配置文件中的 profiles、切换当前 profile 并以新凭据重连 |
-| `profiles_create` | 新建 profile 并设为当前（非法/重名 → `BAD_REQUEST`，不覆盖已有） |
-| `profiles_remove` | 删除 profile（不许删最后一个；不存在 → `NOT_FOUND`；删当前项自动切换） |
 | `rooms_list` / `rooms_add` / `rooms_remove` | 房间增删查 |
 | `rooms_connect` / `rooms_disconnect` | 连接控制 |
 | `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |
@@ -374,7 +378,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 房管功能：禁言 / 黑名单 / 屏蔽词（#3） | §7 `admin_*`、`protocol.md` A36 |
 | 过滤与合并相似 | §8 `filter.*` / `ui.merge_*` |
 | 多房间标签页 | `ui.md` |
-| 多账号（单文件多 profiles） | §4.1、§7 `profiles_list` / `profiles_switch` |
+| 多账号（单文件多 profiles，界面统一叫「账号」） | §4.1、§5 `Account`、§7 `accounts_list` / `account_switch` |
 | 草稿与最近发送记录（会话内） | §4.3 |
 | bundle id 变更 | §1 |
 | **已从需求中移除** | 本地数据库、跨会话历史、弹幕回看、导出、AI 原生接口、AI 日报、免打扰时段、提示音、快捷键、多房间未读静音、断线补齐、开播提示、按 uid 只看某人、谢谢礼物模板 |

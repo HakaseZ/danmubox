@@ -51,13 +51,13 @@
 | 命令 | 参数 | 返回 | 错误 | 说明 |
 |---|---|---|---|---|
 | `session_status` | 无 | `SessionStatus` | — | 永不失败；未登录时 `mode="anonymous"`、`uid=0`；含当前 `active_profile` |
-| `session_qr_start` | 无 | `QrStart` | `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | 生成二维码；重复调用会作废上一次的 `key` |
-| `session_qr_poll` | `key: string` | `QrPoll` | `NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 轮询扫码状态；未知上游码一律归入 `pending`，`key` 已被消费时为 `NOT_FOUND` |
-| `session_logout` | 无 | `SessionStatus` | `INTERNAL` | 清空 `config.toml` 中当前 profile 的凭据（原子替换）并断开需登录的连接 |
-| `profiles_list` | 无 | `ProfileList` | `INTERNAL` | 列出 `config.toml` 中的 profile 名与当前 `active_profile` |
-| `profiles_switch` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换 `active_profile` 并以新凭据重建连接；`name` 不在文件中 → `NOT_FOUND`；不复制凭据文件 |
-| `profiles_create` | `name: string` | `SessionStatus` | `BAD_REQUEST` `INTERNAL` | 新建空 profile 并设为当前（随后可扫码或手填凭据）；名字限 `[A-Za-z0-9_-]{1,32}`，重名或非法 → `BAD_REQUEST`，**不覆盖已有** |
-| `profiles_remove` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除 profile；**不许删最后一个** → `BAD_REQUEST`；不存在 → `NOT_FOUND`；删的若是当前项，当前指向切到剩下的条目并落盘 |
+| `accounts_list` | 无 | `Account[]` | `INTERNAL` | 列出全部账号：`Account { name, nickname, uid, face, logged_in, active }`；游客态不是账号，没有凭据就没有条目 |
+| `account_qr_start` | `target?: string` | `{ key, url, svg }` | `INTERNAL` | 不带 `target` = **新增账号**（扫完按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并在文案里写明覆盖哪个账号） |
+| `account_qr_poll` | `key: string` | `{ state, account }` | `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`；确认后后端落盘并设为当前，未确认时 `account` 为 `null` |
+| `account_login_cookie` | `cookie: string`、`name?: string` | `Account` | `BAD_REQUEST` `INTERNAL` | 手填 Cookie（需求 §2.5 三种方式之一）；缺必填字段 → `BAD_REQUEST` |
+| `account_switch` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换当前账号并以新凭据重建各房间连接 |
+| `account_logout` | `name?: string` | `SessionStatus` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省=当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
+| `account_remove` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
 | `rooms_list` | 无 | `RoomView[]` | `INTERNAL` | 已添加房间 + 当前连接状态 + 当前会话缓冲条数 |
 | `rooms_add` | `input: string` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号，解析走 `getRoomPlayInfo`；解析不出即 `BAD_REQUEST` |
 | `rooms_remove` | `roomId: number` | `void` | `ROOM_NOT_FOUND` `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
@@ -314,7 +314,7 @@ type AppState = {
 | `refreshSession()` | `session_status` | 登录态变化入口 |
 | `startQr()` / `pollQr(key)` | `session_qr_start` / `session_qr_poll` | 轮询间隔与超时由 `auth.md` 的状态机决定 |
 | `logout()` | `session_logout` | 清空 `session`，清空 `sessionBuffer` / `emotes` / `follow` / `wallet`，再 `refreshRooms()` |
-| `loadProfiles()` / `switchProfile(name)` | `profiles_list` / `profiles_switch` | 用返回值覆盖 `session`；切换后按「离开房间」规则清空会话缓冲、表情与钱包切片 |
+| `loadAccounts()` / `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `loginCookie(cookie, name?)` / `startAccountQr(target?)` / `pollAccountQr()` | `profiles_list` / `profiles_switch` | 用返回值覆盖 `session`；切换后按「离开房间」规则清空会话缓冲、表情与钱包切片 |
 | `refreshRooms()` | `rooms_list` | 启动时与 `danmubox://room` 事件后调用 |
 | `addRoom(input)` | `rooms_add` | 成功后插入 `rooms.byId` |
 | `removeRoom(roomId)` | `rooms_remove` | 同时删除该房间的 `sessionBuffer.byRoom[roomId]` / `droppedByRoom[roomId]` / `emotes.byRoom[roomId]` |

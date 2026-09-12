@@ -3,8 +3,10 @@
 import { create, type StoreApi } from "zustand";
 
 import { api, describeError, subscribeEvents } from "./ipc";
-import { INTERACT_AUTO_HIDE_MS } from "./types";
+import { adminDoneText, INTERACT_AUTO_HIDE_MS } from "./types";
 import type {
+  AdminAction,
+  AdminUser,
   AppInfo,
   ChatSendResult,
   EmoteToken,
@@ -15,6 +17,7 @@ import type {
   FollowedRoom,
   Message,
   Prefs,
+  RoomSession,
   RoomView,
   SendOutcome,
   QrLogin,
@@ -51,6 +54,17 @@ interface AppStore {
   ownedError?: string;
   followed: FollowedRoom[];
   balance?: number;
+
+  /** 各房间的本人身份（`room_session` 快照，随后由 `danmubox://session` 事件更新）。 */
+  roomIdentities: Record<number, RoomSession>;
+  /** 房管面板三块数据（会话级：离开房间即清空）。 */
+  adminSilent: AdminUser[];
+  adminBlacklist: AdminUser[];
+  adminKeywords: string[];
+  /** 三块列表各自的读取错误：原样 code + message，失败不静默（contract §7）。 */
+  adminErrors: { silent?: string; blacklist?: string; keywords?: string };
+  /** 房管写操作进行中（按钮禁用，避免并发重复提交）。 */
+  adminBusy: boolean;
 
   bootstrap: () => Promise<void>;
   addRoom: (input: string) => Promise<void>;
@@ -98,6 +112,12 @@ interface AppStore {
   loadOwnedEmotes: (retryFailedOnly?: boolean) => Promise<void>;
   loadFollowed: () => Promise<void>;
   loadBalance: () => Promise<void>;
+  /** 读该房间的本人身份（进房时一次；之后靠事件更新）。 */
+  loadRoomIdentity: (roomId: number) => Promise<void>;
+  /** 读房管三块列表：只读，无权限也放行，错误原样展示。 */
+  loadAdmin: (roomId: number) => Promise<void>;
+  /** 执行一次房管写操作；调用方负责二次确认。成功返回 true。 */
+  runAdmin: (roomId: number, action: AdminAction) => Promise<boolean>;
   updatePrefs: (patch: Partial<Prefs>) => Promise<void>;
   dismissError: () => void;
   setNotice: (notice?: string) => void;
@@ -115,6 +135,13 @@ let interactTimers: number[] = [];
 function clearInteractTimers() {
   for (const timer of interactTimers) window.clearTimeout(timer);
   interactTimers = [];
+}
+
+/** 丢掉某个房间的状态键：会话结束（关标签/移除房间）即销毁，不跨会话复用。 */
+function dropRoom<T>(map: Record<number, T>, roomId: number): Record<number, T> {
+  const rest = { ...map };
+  delete rest[roomId];
+  return rest;
 }
 
 /**
@@ -154,6 +181,12 @@ export const useApp = create<AppStore>((set, get, store) => ({
   qrError: null,
   recentSends: [],
   followed: [],
+  roomIdentities: {},
+  adminSilent: [],
+  adminBlacklist: [],
+  adminKeywords: [],
+  adminErrors: {},
+  adminBusy: false,
 
   async bootstrap() {
     try {
@@ -216,6 +249,15 @@ export const useApp = create<AppStore>((set, get, store) => ({
             ),
           })),
         onSession: (session) => set({ session }),
+        // 房内身份与登录态共用一个事件名（见 ipc.subscribeEvents 的分派）：
+        // 身份只进 `roomIdentities`，绝不覆盖登录态。
+        onRoomSession: (identity) =>
+          set((state) => ({
+            roomIdentities: {
+              ...state.roomIdentities,
+              [identity.room_id]: identity,
+            },
+          })),
         onSend: (lastSend) => set({ lastSend }),
         onLog: (line) => {
           const logs = [...get().logs, line];
@@ -244,7 +286,15 @@ export const useApp = create<AppStore>((set, get, store) => ({
       await api.roomsRemove(roomId);
       if (get().activeRoomId === roomId) {
         clearInteractTimers();
-        set({ activeRoomId: undefined, messages: [] });
+        set((state) => ({
+          activeRoomId: undefined,
+          messages: [],
+          roomIdentities: dropRoom(state.roomIdentities, roomId),
+          adminSilent: [],
+          adminBlacklist: [],
+          adminKeywords: [],
+          adminErrors: {},
+        }));
       }
       set({ rooms: await api.roomsList() });
     } catch (error) {
@@ -254,7 +304,17 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async openRoom(roomId) {
     clearInteractTimers();
-    set({ activeRoomId: roomId, messages: [], seeding: true });
+    // 新会话：丢掉上一轮的身份与房管数据，否则关标签再进会拿着旧身份放行房管入口。
+    set((state) => ({
+      activeRoomId: roomId,
+      messages: [],
+      seeding: true,
+      roomIdentities: dropRoom(state.roomIdentities, roomId),
+      adminSilent: [],
+      adminBlacklist: [],
+      adminKeywords: [],
+      adminErrors: {},
+    }));
     try {
       const history = await api.historyQuery(roomId, {
         limit: 0,
@@ -273,7 +333,17 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   closeRoom() {
     clearInteractTimers();
-    set({ activeRoomId: undefined, messages: [] });
+    set((state) => ({
+      activeRoomId: undefined,
+      messages: [],
+      adminSilent: [],
+      adminBlacklist: [],
+      adminKeywords: [],
+      adminErrors: {},
+      roomIdentities: state.activeRoomId === undefined
+        ? state.roomIdentities
+        : dropRoom(state.roomIdentities, state.activeRoomId),
+    }));
   },
 
   async connect(roomId) {
@@ -486,6 +556,79 @@ export const useApp = create<AppStore>((set, get, store) => ({
       set({ balance: await api.walletBalance() });
     } catch (error) {
       set({ error: describeError(error) });
+    }
+  },
+
+  async loadRoomIdentity(roomId) {
+    try {
+      const identity = await api.roomSession(roomId);
+      set((state) => ({
+        roomIdentities: { ...state.roomIdentities, [roomId]: identity },
+      }));
+    } catch (error) {
+      // 身份拿不到就按「无权限」渲染房管入口（绝不放行），原因进全局错误条。
+      set({ error: describeError(error) });
+    }
+  },
+
+  async loadAdmin(roomId) {
+    // 三块各自失败各自留痕：一块挂了不该把另外两块的列表也清空。
+    const errors: AppStore["adminErrors"] = {};
+    const [silent, blacklist, keywords] = await Promise.all([
+      api.adminSilentList(roomId).catch((error: unknown) => {
+        errors.silent = describeError(error);
+        return undefined;
+      }),
+      api.adminBlacklistList(roomId).catch((error: unknown) => {
+        errors.blacklist = describeError(error);
+        return undefined;
+      }),
+      api.adminKeywordsList(roomId).catch((error: unknown) => {
+        errors.keywords = describeError(error);
+        return undefined;
+      }),
+    ]);
+    set((state) => ({
+      adminSilent: silent ?? state.adminSilent,
+      adminBlacklist: blacklist ?? state.adminBlacklist,
+      adminKeywords: keywords ?? state.adminKeywords,
+      adminErrors: errors,
+    }));
+  },
+
+  async runAdmin(roomId, action) {
+    set({ adminBusy: true });
+    try {
+      switch (action.kind) {
+        case "mute":
+          await api.adminMute(roomId, action.uid, action.hour);
+          break;
+        case "unmute":
+          await api.adminUnmute(roomId, action.uid);
+          break;
+        case "blacklist_add":
+          await api.adminBlacklistAdd(roomId, action.uid);
+          break;
+        case "blacklist_del":
+          await api.adminBlacklistDel(roomId, action.uid);
+          break;
+        case "keyword_add":
+          await api.adminKeywordsAdd(roomId, action.word);
+          break;
+        case "keyword_del":
+          await api.adminKeywordsDel(roomId, action.word);
+          break;
+      }
+      set({ notice: adminDoneText(action) });
+      // 写成功后就地重读三块：不猜上游怎么变，以远端为准。
+      await get().loadAdmin(roomId);
+      return true;
+    } catch (error) {
+      // 非 0 code 原样展示、不赋语义（契约 §7）。
+      set({ error: describeError(error) });
+      return false;
+    } finally {
+      set({ adminBusy: false });
     }
   },
 

@@ -7,6 +7,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   QrLogin,
   QrPoll,
+  AdminUser,
   ApiError,
   AppInfo,
   ChatSendResult,
@@ -19,6 +20,7 @@ import type {
   ReplyTarget,
   Prefs,
   Room,
+  RoomSession,
   RoomView,
   SendOutcome,
   SessionState,
@@ -109,6 +111,29 @@ export const api = {
   /** 主站「我的表情」（契约 §7）：与房间无关，`package_kind="owned"`、`room_id=0`。 */
   emotesOwned: () => call<Emote[]>("emotes_owned"),
 
+  /** 本人在该房间的身份（契约 §7）。房间没有活跃会话时返回全零身份而不是错误。 */
+  roomSession: (roomId: number) => call<RoomSession>("room_session", { roomId }),
+
+  // 房管（契约 §7）：只读列表用 call（失败要进日志），写操作用 invoke。
+  // 权限判断走 `room_session` 的 `is_admin`，绝不「先点了再看上游错误码」。
+  adminSilentList: (roomId: number) =>
+    call<AdminUser[]>("admin_silent_list", { roomId }),
+  adminBlacklistList: (roomId: number) =>
+    call<AdminUser[]>("admin_blacklist_list", { roomId }),
+  adminKeywordsList: (roomId: number) =>
+    call<string[]>("admin_keywords_list", { roomId }),
+  adminMute: (roomId: number, uid: number, hour: number, msg?: string) =>
+    invoke<void>("admin_mute", { roomId, uid, hour, msg }),
+  adminUnmute: (roomId: number, uid: number) =>
+    invoke<void>("admin_unmute", { roomId, uid }),
+  adminBlacklistAdd: (roomId: number, uid: number) =>
+    invoke<void>("admin_blacklist_add", { roomId, uid }),
+  adminBlacklistDel: (roomId: number, uid: number) =>
+    invoke<void>("admin_blacklist_del", { roomId, uid }),
+  adminKeywordsAdd: (roomId: number, words: string) =>
+    invoke<void>("admin_keywords_add", { roomId, words }),
+  adminKeywordsDel: (roomId: number, word: string) =>
+    invoke<void>("admin_keywords_del", { roomId, word }),
   followList: () => call<FollowedRoom[]>("follow_list"),
   walletBalance: () => call<number>("wallet_balance"),
 
@@ -122,6 +147,11 @@ export interface EventHandlers {
   onRoomStats?: (event: RoomStatsEvent) => void;
   onRoom?: (room: Room) => void;
   onSession?: (session: SessionState) => void;
+  /**
+   * 房内身份（`RoomSession`）。引擎把它与登录态**共用** `danmubox://session`
+   * 事件名推出来，因此这里按判别字段分派（见下面的订阅实现）。
+   */
+  onRoomSession?: (session: RoomSession) => void;
   onSend?: (result: ChatSendResult) => void;
   onLog?: (line: string) => void;
 }
@@ -157,11 +187,20 @@ export async function subscribeEvents(
       await listen<Room>("danmubox://room", (e) => handlers.onRoom!(e.payload)),
     );
   }
-  if (handlers.onSession) {
+  if (handlers.onSession || handlers.onRoomSession) {
     unlisteners.push(
-      await listen<SessionState>("danmubox://session", (e) =>
-        handlers.onSession!(e.payload),
-      ),
+      await listen<SessionState | RoomSession>("danmubox://session", (e) => {
+        // 同一个事件名上有两种载荷：登录态 `SessionState`（带 `logged_in`）与
+        // 房内身份 `RoomSession`（带 `is_admin`）。契约 §7 目前只登记了前者，
+        // 身份那侧由引擎推、`ipc.md` 未记；这里按判别字段分派，绝不让身份载荷
+        // 覆盖登录态（否则 `logged_in` 变 undefined，界面会误判成游客）。
+        const payload = e.payload as Partial<SessionState & RoomSession>;
+        if (typeof payload.logged_in === "boolean") {
+          handlers.onSession?.(payload as SessionState);
+        } else if (typeof payload.is_admin === "boolean") {
+          handlers.onRoomSession?.(payload as RoomSession);
+        }
+      }),
     );
   }
   if (handlers.onSend) {

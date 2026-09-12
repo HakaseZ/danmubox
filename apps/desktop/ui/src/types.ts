@@ -97,6 +97,102 @@ export interface ReportReason {
   reason: string;
 }
 
+/**
+ * 本人在某个房间的身份（契约 §5 `RoomSession`）：会话级、不落盘。
+ * 与 `Message.medal_level` 区分——那是**发送者**的牌，这是我**自己**在这个房间的牌。
+ * 房间没有活跃会话时后端返回全零身份（不报错），界面按「还没有身份信息」处理。
+ */
+export interface RoomSession {
+  room_id: number;
+  my_medal_level: number;
+  my_medal_name: string;
+  my_guard_level: number;
+  is_admin: boolean;
+}
+
+/** 房管列表条目（契约 §5）：禁言名单与黑名单同形。 */
+export interface AdminUser {
+  uid: number;
+  uname: string;
+  face: string;
+}
+
+/**
+ * 房管写操作的待确认对象（`docs/ui.md` §4.5 / §6.6）。
+ * 这些操作会不可逆地影响他人，因此一律先出确认条，且文案要说清对象与时长。
+ */
+export type AdminAction =
+  | { kind: "mute"; uid: number; uname: string; hour: number }
+  | { kind: "unmute"; uid: number; uname: string }
+  | { kind: "blacklist_add"; uid: number; uname: string }
+  | { kind: "blacklist_del"; uid: number; uname: string }
+  | { kind: "keyword_add"; word: string }
+  | { kind: "keyword_del"; word: string };
+
+/** 禁言时长档（`admin_mute` 的 `hour`，契约 §7：-1 永久 / 0 本场 / 其余小时数）。 */
+export const MUTE_HOURS: { hour: number; label: string }[] = [
+  { hour: 0, label: "本场直播" },
+  { hour: -1, label: "永久" },
+  { hour: 1, label: "1 小时" },
+  { hour: 6, label: "6 小时" },
+  { hour: 24, label: "24 小时" },
+];
+
+export function muteHourLabel(hour: number): string {
+  return MUTE_HOURS.find((item) => item.hour === hour)?.label ?? `${hour} 小时`;
+}
+
+/** 「谁」的统一写法：有昵称就带上，只有 uid 时只说 uid（黑名单加人只输 uid）。 */
+function who(uname: string, uid: number): string {
+  return uname.length > 0 ? `${uname}（uid ${uid}）` : `uid ${uid}`;
+}
+
+/** 二次确认的文案（确认条上原样显示，说清对象与时长）。 */
+export function adminActionText(action: AdminAction): string {
+  switch (action.kind) {
+    case "mute":
+      return `禁言 ${who(action.uname, action.uid)} · 时长：${muteHourLabel(action.hour)}`;
+    case "unmute":
+      return `解除 ${who(action.uname, action.uid)} 的禁言`;
+    case "blacklist_add":
+      return `拉黑 ${who(action.uname, action.uid)}（会解除关系并禁止互动，比禁言重）`;
+    case "blacklist_del":
+      return `把 ${who(action.uname, action.uid)} 移出黑名单`;
+    case "keyword_add":
+      return `添加屏蔽词「${action.word}」`;
+    case "keyword_del":
+      return `删除屏蔽词「${action.word}」`;
+  }
+}
+
+/** 确认按钮的文案（动词开头的短句）。 */
+export const ADMIN_CONFIRM_LABEL: Record<AdminAction["kind"], string> = {
+  mute: "确认禁言",
+  unmute: "确认解除",
+  blacklist_add: "确认拉黑",
+  blacklist_del: "确认移出",
+  keyword_add: "确认添加",
+  keyword_del: "确认删除",
+};
+
+/** 成功后的提示文案。 */
+export function adminDoneText(action: AdminAction): string {
+  switch (action.kind) {
+    case "mute":
+      return `已禁言 ${who(action.uname, action.uid)}（${muteHourLabel(action.hour)}）`;
+    case "unmute":
+      return `已解除 ${who(action.uname, action.uid)} 的禁言`;
+    case "blacklist_add":
+      return `已拉黑 ${who(action.uname, action.uid)}`;
+    case "blacklist_del":
+      return `已把 ${who(action.uname, action.uid)} 移出黑名单`;
+    case "keyword_add":
+      return `已添加屏蔽词「${action.word}」`;
+    case "keyword_del":
+      return `已删除屏蔽词「${action.word}」`;
+  }
+}
+
 export interface RoomStatsEvent {
   room_id: number;
   /** 在线人数（`ONLINE_RANK_COUNT` 的 `online_count`，协议 §10.7）；上游未给过为 null。 */

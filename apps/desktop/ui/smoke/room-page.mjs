@@ -28,6 +28,8 @@
 //   menu   右键出菜单（复制 / ＠TA / 回复 / 屏蔽 / 主页 / 举报）并能关掉
 //   time   时间戳默认不渲染；开关打开后每行一列且等宽（纵向对齐）
 //   gift   礼物栏在输入区下方、全宽、可折叠，展开不改变弹幕宽度
+//   admin  房管权限前置（是房管才可用 / 不是则置灰并说明）、写操作二次确认与请求形状、
+//          面板三块列表增删、无权限时只读面板仍可打开且原样展示上游 code + message
 //   follow 未开播也列出、按最后开播时间排序、>30 条分页
 //   account 新增账号 = profiles_create + 自动扫码；单 profile 时禁止删除
 
@@ -86,6 +88,11 @@ const MOCK = `(function () {
   window.__followCalls = 0;
   window.__mk = msg;
   window.__history = history;
+  // 房管身份开关：默认是房管；冒烟中途翻成 false 验证「无权限时置灰 + 说明原因」。
+  window.__admin = true;
+  window.__adminFail = false;
+  window.__setAdmin = function (value) { window.__admin = value; };
+  window.__setAdminFail = function (value) { window.__adminFail = value; };
   window.__emit = function (event, payload) {
     (listeners[event] || []).forEach(function (id) {
       window["_" + id]({ event: event, id: id, payload: payload });
@@ -508,6 +515,112 @@ const MOCK = `(function () {
     document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     await sleep(200);
     out.headerMenuClosed = !byTestId("db-context-menu");
+    snap();
+
+    // ---- admin 房管（issue #3）：权限前置、写操作二次确认、面板三块与错误原样展示
+    out.adminIdentityFetched = calls.indexOf("room_session") >= 0;
+    var adminTarget = rows()[rows().length - 1];
+    adminTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
+    await sleep(250);
+    var adminMenu = byTestId("db-context-menu");
+    var adminLabels = ["禁言…", "拉黑", "解除禁言"];
+    var adminItemsOf = function (menu) {
+      return menu ? [].slice.call(menu.querySelectorAll("button")).filter(function (b) {
+        return adminLabels.indexOf(b.innerText.trim()) >= 0;
+      }) : [];
+    };
+    var adminItems = adminItemsOf(adminMenu);
+    out.adminMenuItemsShown = adminItems.length === 3;
+    out.adminMenuItemsEnabledAsAdmin = adminItems.length === 3 && adminItems.every(function (b) { return !b.disabled; });
+    // 禁言必须选时长：确认条上给出对象与时长，默认「本场直播」
+    buttonWith(adminMenu, "禁言…").click();
+    await sleep(300);
+    var muteConfirm = byTestId("db-admin-confirm");
+    out.adminMuteConfirmShown = !!muteConfirm;
+    // 确认文案必须说清**对象**：目标行的昵称要出现在确认条里（不能只写「确认禁言？」）。
+    var targetNameEl = adminTarget ? adminTarget.querySelector('[data-testid="db-msg-name"]') : null;
+    var targetNick = targetNameEl ? targetNameEl.innerText.replace(/:$/, "") : "";
+    out.adminMuteTargetNick = targetNick;
+    out.adminMuteConfirmNamesTarget = !!muteConfirm && targetNick.length > 0 &&
+      muteConfirm.innerText.indexOf(targetNick) >= 0;
+    var hourSelect = muteConfirm ? muteConfirm.querySelector("select") : null;
+    // 时长默认「本场直播」（hour = 0），选「1 小时」后选择器与请求都要跟上。
+    // 注意别拿确认条的 innerText 找时长文案——select 的选项文本本来就在 innerText 里，那会平凡成立。
+    out.adminMuteDefaultHour = hourSelect ? hourSelect.value : null;
+    out.adminMuteDefaultHourIsCurrentSession = !!hourSelect && hourSelect.value === "0";
+    // 停一下让跑脚本的进程抓一张「确认条」的截图（对象 + 时长都在上面）
+    snap();
+    await sleep(1200);
+    if (hourSelect) {
+      hourSelect.value = "1";
+      hourSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(200);
+    }
+    out.adminMuteHourSelected = !!byTestId("db-admin-confirm") &&
+      byTestId("db-admin-confirm").querySelector("select").value === "1";
+    buttonWith(byTestId("db-admin-confirm"), "确认禁言").click();
+    await sleep(600);
+    var mutes = callsWithArgs.filter(function (c) { return c.cmd === "admin_mute"; });
+    var lastMute = mutes[mutes.length - 1];
+    // 请求形状：房间号 + 目标 uid + 选中的时长（-1 永久 / 0 本场 / 其余小时）
+    out.adminMuteRequestShape = !!lastMute && lastMute.args.roomId === 5440 &&
+      lastMute.args.hour === 1 && typeof lastMute.args.uid === "number" && lastMute.args.uid > 0;
+    out.adminConfirmClosedAfterWrite = !byTestId("db-admin-confirm");
+
+    // 面板：三块列表；增删同样先二次确认
+    buttonWith(null, "⋯").click();
+    await sleep(250);
+    var headerMenu2 = byTestId("db-context-menu");
+    out.adminPanelMenuItemShown = !!buttonWith(headerMenu2, "房管面板");
+    buttonWith(headerMenu2, "房管面板").click();
+    await sleep(600);
+    var adminPanel = byTestId("db-admin-panel");
+    out.adminPanelShown = !!adminPanel;
+    out.adminPanelSections = adminPanel
+      ? ["禁言名单（1）", "黑名单（1）", "屏蔽词（2）"].filter(function (t) {
+          return adminPanel.innerText.indexOf(t) >= 0;
+        })
+      : [];
+    out.adminPanelListsRendered = out.adminPanelSections.length === 3;
+    out.adminPanelItemCounts = [
+      allByTestId("db-admin-silent-item").length,
+      allByTestId("db-admin-blacklist-item").length,
+      allByTestId("db-admin-keyword-item").length
+    ];
+    // 停一下让跑脚本的进程抓一张「房管面板三块」的截图
+    snap();
+    await sleep(1200);
+    buttonWith(allByTestId("db-admin-keyword-item")[0], "删除").click();
+    await sleep(300);
+    var wordConfirm = byTestId("db-admin-confirm");
+    out.adminKeywordConfirmShown = !!wordConfirm && wordConfirm.innerText.indexOf("刷屏") >= 0;
+    buttonWith(wordConfirm, "确认删除").click();
+    await sleep(600);
+    var wordDels = callsWithArgs.filter(function (c) { return c.cmd === "admin_keywords_del"; });
+    var lastWordDel = wordDels[wordDels.length - 1];
+    out.adminKeywordDelRequestShape = !!lastWordDel &&
+      lastWordDel.args.roomId === 5440 && lastWordDel.args.word === "刷屏";
+
+    // 无权限：菜单三项置灰并说明原因；只读面板照常打开，上游错误原样展示 code + message
+    window.__setAdmin(false);
+    window.__setAdminFail(true);
+    buttonWith(byTestId("db-admin-panel"), "刷新").click();
+    await sleep(700);
+    var panelText = byTestId("db-admin-panel").innerText;
+    out.adminPanelErrorRaw = panelText.indexOf("不是管理员") >= 0 && panelText.indexOf("UPSTREAM_ERROR") >= 0;
+    document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await sleep(200);
+    adminTarget = rows()[rows().length - 1];
+    adminTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
+    await sleep(300);
+    var noPermItems = adminItemsOf(byTestId("db-context-menu"));
+    out.adminMenuItemsDisabledWithoutPermission =
+      noPermItems.length === 3 && noPermItems.every(function (b) { return b.disabled; });
+    out.adminMenuHintExplainsWhy = noPermItems.length === 3 &&
+      noPermItems.every(function (b) { return (b.title || "").indexOf("房管") >= 0; });
+    document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await sleep(200);
+    out.adminReadOnlyPanelStillOpen = !!byTestId("db-admin-panel");
     snap();
 
     // ---- account 新增账号 = profiles_create + 自动扫码；单 profile 禁止删除

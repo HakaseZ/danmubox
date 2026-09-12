@@ -1,21 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { AdminPanel } from "./AdminPanel";
 import { Composer } from "./Composer";
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
 import { useApp } from "../store";
 import { formatCount, type DisplayRow } from "../filtering";
-import type {
-  ConnState,
-  Emote,
-  Message,
-  Prefs,
-  RoomView as RoomViewData,
-  EmoteToken,
-  ReportReason,
-  ReplyTarget,
-  SendOutcome,
-  SessionState,
+import {
+  ADMIN_CONFIRM_LABEL,
+  adminActionText,
+  MUTE_HOURS,
+  type AdminAction,
+  type ConnState,
+  type Emote,
+  type Message,
+  type Prefs,
+  type RoomView as RoomViewData,
+  type EmoteToken,
+  type ReportReason,
+  type ReplyTarget,
+  type SendOutcome,
+  type SessionState,
 } from "../types";
 import styles from "../app.module.css";
 
@@ -106,6 +111,10 @@ export function RoomView({
   const [messageMenu, setMessageMenu] = useState<{ at: MenuPoint; message: Message } | null>(null);
   const [reportTarget, setReportTarget] = useState<Message>();
   const [giftOpen, setGiftOpen] = useState(false);
+  // 房管面板与待确认的写操作（issue #3）。写操作一律先落到 `adminConfirm` 再执行：
+  // 禁言 / 拉黑 / 解除 / 增删词都会不可逆地影响他人。
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminConfirm, setAdminConfirm] = useState<AdminAction | null>(null);
   // 行菜单里点的 @ / 回复：交给 Composer 应用。
   // 带 token 是为了「每点一次应用一次」——同一个对象引用重复触发容易写成死循环。
   const [pendingAction, setPendingAction] = useState<{
@@ -128,6 +137,17 @@ export function RoomView({
   const loadReportReasons = useApp((store) => store.loadReportReasons);
   const openProfile = useApp((store) => store.openProfile);
   const roomStats = useApp((store) => store.roomStats[room.room_id]);
+  // 房管权限前置：身份来自 `room_session`（进房时取一次 + 事件更新）。
+  // 拿不到身份时 `is_admin` 为 undefined → 按**无权限**渲染，而不是先放行再看上游错误码。
+  const isAdmin = useApp((store) => store.roomIdentities[room.room_id]?.is_admin) === true;
+  const adminSilent = useApp((store) => store.adminSilent);
+  const adminBlacklist = useApp((store) => store.adminBlacklist);
+  const adminKeywords = useApp((store) => store.adminKeywords);
+  const adminErrors = useApp((store) => store.adminErrors);
+  const adminBusy = useApp((store) => store.adminBusy);
+  const loadRoomIdentity = useApp((store) => store.loadRoomIdentity);
+  const loadAdmin = useApp((store) => store.loadAdmin);
+  const runAdmin = useApp((store) => store.runAdmin);
   const loggedIn = session?.logged_in ?? false;
 
   useEffect(() => {
@@ -145,6 +165,11 @@ export function RoomView({
   useEffect(() => {
     if (loggedIn) void loadOwnedEmotes();
   }, [loggedIn, loadOwnedEmotes]);
+
+  // 本人在这房间的身份（房管入口的权限前置）。进房取一次即可，之后的更新走事件。
+  useEffect(() => {
+    if (loggedIn) void loadRoomIdentity(room.room_id);
+  }, [loggedIn, loadRoomIdentity, room.room_id]);
 
   useEffect(() => {
     if (reportTarget) void loadReportReasons();
@@ -190,6 +215,15 @@ export function RoomView({
   const messageMenuItems = (message: Message): MenuItem[] => {
     const mine = session !== undefined && message.uid === session.uid;
     const isDanmaku = message.kind === "danmaku";
+    // 房管三项的可用条件：自己是房管 + 目标有 uid + 不是自己。
+    const canModerate = isAdmin && !mine && message.uid !== 0;
+    const moderateHint = !isAdmin
+      ? "你不是本直播间房管"
+      : mine
+        ? "这是你自己"
+        : message.uid === 0
+          ? "游客没有 UID，无法管理"
+          : undefined;
     return [
       {
         label: "复制内容",
@@ -225,6 +259,44 @@ export function RoomView({
             "filter.uids": [...new Set([...prefs["filter.uids"], message.uid])],
           }),
       },
+      // 房管三项（issue #3）：**权限前置**——不是房管就置灰并说明原因，
+      // 绝不做成「点了再看上游错误码」。确认条会带上对象与时长。
+      {
+        label: "禁言…",
+        danger: true,
+        disabled: !canModerate,
+        hint: moderateHint,
+        onSelect: () =>
+          setAdminConfirm({
+            kind: "mute",
+            uid: message.uid,
+            uname: message.uname,
+            hour: 0,
+          }),
+      },
+      {
+        label: "拉黑",
+        danger: true,
+        disabled: !canModerate,
+        hint: moderateHint,
+        onSelect: () =>
+          setAdminConfirm({
+            kind: "blacklist_add",
+            uid: message.uid,
+            uname: message.uname,
+          }),
+      },
+      {
+        label: "解除禁言",
+        disabled: !canModerate,
+        hint: moderateHint,
+        onSelect: () =>
+          setAdminConfirm({
+            kind: "unmute",
+            uid: message.uid,
+            uname: message.uname,
+          }),
+      },
       {
         label: "打开主页",
         disabled: message.uid === 0,
@@ -244,7 +316,24 @@ export function RoomView({
     ];
   };
 
+  /** 执行待确认的房管写操作；成功才收起确认条（失败时的原因由 store 的 error 条原样展示）。 */
+  const commitAdmin = async () => {
+    if (!adminConfirm) return;
+    if (await runAdmin(room.room_id, adminConfirm)) setAdminConfirm(null);
+  };
+
   const headerMenuItems: MenuItem[] = [
+    {
+      label: adminOpen ? "收起房管面板" : "房管面板",
+      onSelect: () => {
+        const next = !adminOpen;
+        setAdminOpen(next);
+        setAdminConfirm(null);
+        // 面板没权限也能打开（看上游原样回应）；打开时顺手刷新身份与三块列表。
+        void loadRoomIdentity(room.room_id);
+        if (next) void loadAdmin(room.room_id);
+      },
+    },
     { label: "刷新连接", onSelect: onRefresh },
     {
       label: "断开连接",
@@ -361,6 +450,57 @@ export function RoomView({
           >
             取消
           </button>
+        </div>
+      )}
+
+      {/* 房管面板（issue #3）：三块列表 + 增删，无权限也能打开看上游原样回应。
+          它是文档流里的一块（不是浮层），与输入区的面板一样只挤压弹幕列表 */}
+      {adminOpen && (
+        <AdminPanel
+          isAdmin={isAdmin}
+          silent={adminSilent}
+          blacklist={adminBlacklist}
+          keywords={adminKeywords}
+          errors={adminErrors}
+          busy={adminBusy}
+          onRefresh={() => {
+            void loadAdmin(room.room_id);
+            void loadRoomIdentity(room.room_id);
+          }}
+          onConfirm={setAdminConfirm}
+          onClose={() => {
+            setAdminOpen(false);
+            setAdminConfirm(null);
+          }}
+        />
+      )}
+
+      {/* 二次确认条：所有房管写操作都先经过它，文案说清对象与时长（不可逆） */}
+      {adminConfirm && (
+        <div className={styles.adminConfirm} data-testid="db-admin-confirm">
+          <span className={styles.roomMeta}>{adminActionText(adminConfirm)}</span>
+          {adminConfirm.kind === "mute" && (
+            <select
+              className={styles.adminSelect}
+              value={String(adminConfirm.hour)}
+              onChange={(event) =>
+                setAdminConfirm({
+                  ...adminConfirm,
+                  hour: Number(event.target.value),
+                })
+              }
+            >
+              {MUTE_HOURS.map((item) => (
+                <option key={item.hour} value={item.hour}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          )}
+          <button disabled={adminBusy} onClick={() => void commitAdmin()}>
+            {ADMIN_CONFIRM_LABEL[adminConfirm.kind]}
+          </button>
+          <button onClick={() => setAdminConfirm(null)}>取消</button>
         </div>
       )}
 

@@ -640,6 +640,82 @@
   padding: 3px 6px;
 }
 
+/* 房管面板（issue #3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表 */
+.adminPanel {
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  padding: 8px 14px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.adminSection {
+  margin-bottom: 8px;
+}
+
+.adminSectionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.adminList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.adminItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  font-size: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.adminForm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.adminInput {
+  width: 160px;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+/* 上游拒绝时原样展示 code + message，不做本地翻译 */
+.adminError {
+  margin-bottom: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-radius: 4px;
+}
+
+/* 房管写操作的二次确认条（在输入区上方，与举报条同层） */
+.adminConfirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.adminSelect {
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
 .pickerGroup {
   margin-bottom: 8px;
 }

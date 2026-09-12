@@ -156,11 +156,14 @@ async fn send(store: &Arc<ConfigStore>, room: &str, text: &str, color: Option<i6
         .await
         .context("发送失败")?;
     println!("# 房间 {} 发送结果：{:?}", resolved.room_id, report.outcome);
-    if let Some(code) = report.upstream_code {
-        println!(
-            "# 上游 code={code} 原话：{}",
-            report.upstream_message.as_deref().unwrap_or("（无）")
-        );
+    // 成功时上游的 code=0 与原话没有信息量，只在非 ok 时打印。
+    if report.outcome != danmubox_core::SendOutcome::Ok {
+        if let Some(code) = report.upstream_code {
+            println!(
+                "# 上游 code={code} 原话：{}",
+                report.upstream_message.as_deref().unwrap_or("（无）")
+            );
+        }
     }
     println!(
         "# 含义：{}",

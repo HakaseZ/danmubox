@@ -5,6 +5,7 @@ import { FilterBar } from "./FilterBar";
 import {
   EMOTE_PACKAGE_LABEL,
   SEND_OUTCOME_TEXT,
+  SEND_TOAST_MS,
   type Emote,
   type EmotePackage,
   type Message,
@@ -43,17 +44,6 @@ interface Props {
   onRetryOwned: () => void;
   onNotice: (text: string) => void;
 }
-
-/** 发送结果 → 文案与样式（docs/ui.md §6.5 的七态）。 */
-const OUTCOME_CLASS: Record<SendOutcome, string | undefined> = {
-  ok: styles.sendOk,
-  blocked_platform: styles.sendFail,
-  blocked_room: styles.sendWarn,
-  rate_limited: styles.sendWarn,
-  medal_required: styles.sendWarn,
-  muted: styles.sendFail,
-  failed: styles.sendFail,
-};
 
 /** 表情分组展示顺序：接口给的包在前（通用 → 我的表情 → 本房间 → 粉丝牌 → 大航海）。 */
 const PACKAGE_ORDER: EmotePackage[] = [
@@ -98,10 +88,17 @@ export function Composer({
   const gridRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
   const [newPhrase, setNewPhrase] = useState("");
+  // 发送失败那条**浮动提示**（用户 2026-09-12：不要在**最下**出常驻提示，要「弹窗 + 渐隐」，
+  // 而且整个过程不能挡住滚动的弹幕 —— 见 .toast 的 pointer-events 与它在文档流里的位置）。
+  const [toast, setToast] = useState<string | null>(null);
+  // 每一次发送落定都 +1：连续两次同样的失败因此会**重新弹一次**（挂在 outcome 字符串上不会重跑）。
+  const [sendSeq, setSendSeq] = useState(0);
   // 短语的「改」：就地变成输入框（右键菜单里点「编辑」进入）。
   const [editingPhrase, setEditingPhrase] = useState<{ index: number; text: string } | null>(null);
   const [phraseMenu, setPhraseMenu] = useState<{ at: MenuPoint; index: number } | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  // 输入区这一块（含向上展开的面板）：用来判「点在外面就收起面板」（见下面的 pointerdown）。
+  const composerRef = useRef<HTMLDivElement>(null);
 
   // 行菜单送来的动作：@ 与回复各应用一次（token 每次点击都变，不会自激）。
   useEffect(() => {
@@ -117,6 +114,33 @@ export function Composer({
       setReplyTo(message);
     }
   }, [pendingAction]);
+
+  useEffect(() => {
+    // `sendSeq === 0` = 还没发过东西（可能是进房间带进来的旧结果）：不弹。
+    if (sendSeq === 0) return;
+    if (lastOutcome === undefined || lastOutcome === "ok") return;
+    setToast(
+      `发送失败：${SEND_OUTCOME_TEXT[lastOutcome]}${lastDetail ? ` · ${lastDetail}` : ""}`,
+    );
+    // 渐隐是 CSS 动画（.toast），这里只负责在动画走完之后把元素摘掉 ——
+    // 否则它会「透明地占着一块地方」，那正是用户不要的形态。
+    const timer = window.setTimeout(() => setToast(null), SEND_TOAST_MS);
+    return () => window.clearTimeout(timer);
+  }, [sendSeq, lastOutcome, lastDetail]);
+
+  // 面板顶上不再有「关闭」按钮（用户 2026-09-12：表情与关闭都不需要），
+  // 关面板的入口因此是两条：① 再点一次那个工具按钮（togglePanel）；
+  // ② 点输入区这一块**外面**的任何地方 —— 包括弹幕列表、别的面板入口。
+  useEffect(() => {
+    if (panel === null) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const root = composerRef.current;
+      if (root && !root.contains(event.target as Node)) setPanel(null);
+    };
+    // 捕获阶段：先于被点元素的处理收起面板，避免「点了一下别人、面板还挂在上面」
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [panel]);
 
   const customPhrases = prefs["composer.phrases"] ?? [];
 
@@ -345,6 +369,7 @@ export function Composer({
     setBusy(true);
     const outcome = await onSend(emote.text, token, reply);
     setBusy(false);
+    setSendSeq((value) => value + 1);
     // 被这一条消耗掉的回复目标就清掉；失败保留（与文字发送同一口径：留着能重试）
     if (replyTo && outcome !== undefined && outcome !== "failed") setReplyTo(null);
   };
@@ -362,6 +387,7 @@ export function Composer({
     setBusy(true);
     const outcome = await onSend(content, undefined, reply);
     setBusy(false);
+    setSendSeq((value) => value + 1);
     // 只有确实发出去（或被吞）才清空草稿；失败保留内容便于重试。
     if (outcome !== undefined && outcome !== "failed") {
       setDraft("");
@@ -390,15 +416,13 @@ export function Composer({
     <>
       {panel === "emotes" && (
         <div
-          className={styles.picker}
+          className={`${styles.picker} ${activeKind === "common" ? "" : styles.pickerBig}`}
           data-testid="db-panel"
           style={panelFont}
         >
-          <div className={styles.panelHead}>
-            <span className={styles.panelTitle}>表情</span>
-            <span className={styles.composerSpacer} />
-            {panelClose}
-          </div>
+          {/* 面板顶上**没有标题、也没有「关闭」**（用户 2026-09-12：「表情包栏顶部的表情和
+              关闭不需要」）：收起面板靠再点一次「表情」或点输入区外面（见上面那条 pointerdown）。
+              少掉这一行之后，两行表情格就是面板的全部高度。 */}
           {/* 「我的表情」拉失败只在面板里提示并可重试：输入框与已加载的分组照常可用 */}
           {ownedError !== undefined && (
             <div className={styles.panelError} data-testid="db-owned-error">
@@ -414,8 +438,9 @@ export function Composer({
           {grouped.length === 0 ? (
             <div className={styles.empty}>没有可用表情（或尚未加载）</div>
           ) : (
-            // 面板主体分两列：左边**竖向 tab 轨道**（分组），右边表情网格。两列各自滚，
-            // 面板头常驻（用户 #6：tab 是切组的唯一入口，不许被格子滚走）。
+            // 面板主体分两列：左边**竖向 tab 轨道**（分组），右边表情网格。
+            // 两列**各自滚且同高**（轨道高 = 网格高 = 两行表情格）：分组多了在轨道里上下滚，
+            // 表情多了在网格里上下滚（用户 2026-09-12：「左边也加入上下滚动」）。
             <div className={styles.emoteBody}>
               {/* 分组 tab 轨道：一组一个 tab，选中那格左侧一条强调色 + 底色抬起 + 字重加粗。
                   用 `role=tablist/tab` + roving tabindex（WAI-ARIA tabs 口径），↑↓ 换组、焦点跟着走 ——
@@ -634,7 +659,20 @@ export function Composer({
         </div>
       )}
 
-      <div className={styles.composer}>
+      {/* 发送失败的**浮动提示**：排在弹幕列表与输入区之间（文档流里的一张浮片），
+          矩形因此与弹幕列表区域不相交；`pointer-events: none` 让提示期间弹幕照常滚。 */}
+      {toast !== null && (
+        <div
+          className={styles.toast}
+          data-testid="db-toast"
+          role="status"
+          style={{ animationDuration: `${SEND_TOAST_MS}ms` }}
+        >
+          {toast}
+        </div>
+      )}
+
+      <div className={styles.composer} ref={composerRef}>
         <textarea
           ref={areaRef}
           value={draft}
@@ -687,21 +725,12 @@ export function Composer({
           </button>
         </div>
       </div>
-      {/* 发送结果只在**需要用户做点什么**时占一行：失败 / 被吞 / 限流要说清原因，
-          成功不必说——弹幕已经出现在列表里了（用户：那条「上次发送：已发出」没有意义
-          且不协调）。没有话要说时整行不渲染，窄屏也就不用白留一行。 */}
-      {(!loggedIn || (lastOutcome !== undefined && lastOutcome !== "ok")) && (
-        <div
-          className={`${styles.composerHint} ${
-            lastOutcome ? (OUTCOME_CLASS[lastOutcome] ?? "") : ""
-          }`}
-          data-testid="db-send-hint"
-        >
-          {!loggedIn
-            ? "未登录：仅能接收弹幕，发送需要先扫码登录"
-            : `上次发送：${SEND_OUTCOME_TEXT[lastOutcome as SendOutcome]}${
-                lastDetail ? ` · ${lastDetail}` : ""
-              }`}
+      {/* 最下方只留**一直成立**的静态说明（未登录）。发送失败不再在这里出行：
+          用户 2026-09-12：「发送失败也不要在最下出提示，弹窗提示然后渐隐消失即可」——
+          那一条改成了输入区上方的 .toast（见上）。 */}
+      {!loggedIn && (
+        <div className={styles.composerHint} data-testid="db-send-hint">
+          未登录：仅能接收弹幕，发送需要先扫码登录
         </div>
       )}
     </>

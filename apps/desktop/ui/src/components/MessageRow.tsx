@@ -15,15 +15,13 @@ import styles from "../app.module.css";
 interface Props {
   row: DisplayRow;
   anchorUid?: number;
-  /** 当前登录用户的 uid：`ui.theme` 之外的唯一用途是给「自己发的那条」加行级标记（.rowOwn） */
-  myUid?: number;
   prefs: Prefs;
   /** 右键（或行尾「⋯」）时把坐标与消息交给上层弹菜单（docs/ui.md §4.5）。 */
   onMenu: (message: Message, at: MenuPoint) => void;
 }
 
 /** 六种 kind 的渲染规范见 docs/ui.md §4.1；互动与系统行的文案由展示层生成。 */
-export function MessageRow({ row, anchorUid, myUid, prefs, onMenu }: Props) {
+export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   const { message, count } = row;
   const badges = badgesFor(message, anchorUid);
   const medal = medalColors(message);
@@ -65,10 +63,6 @@ export function MessageRow({ row, anchorUid, myUid, prefs, onMenu }: Props) {
   const variant = [
     kindClass[message.kind] ?? "",
     autoHide ? styles.autoHide : "",
-    // 我方弹幕的**行级标记**（用户已定：不做气泡、不右对齐、不做已读回执）。
-    // 判据与右键菜单的 `mine` 同源（RoomView 的 session.uid === message.uid）；
-    // `myUid > 0` 挡掉 uid 缺失（系统行 / 夹具）被误判成「我」。
-    myUid !== undefined && myUid > 0 && message.uid === myUid ? styles.rowOwn : "",
   ]
     .filter(Boolean)
     .join(" ");

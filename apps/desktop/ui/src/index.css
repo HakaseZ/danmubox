@@ -70,12 +70,10 @@ select:focus {
   outline: 1px solid var(--accent);
 }
 
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: var(--r-full);
-}
+/* 这里**故意不写** ::-webkit-scrollbar 一族样式：一旦给滚动条写样式（哪怕是宽度或圆角），
+   WebKit 就会把 macOS 原生的**覆盖式**滚动条（不占宽度、自动隐藏）换成**经典**滚动条
+   （占宽度、常驻）。用户 2026-09-12 的两个现象都是它引起的：
+     ① 窗口高度缩到内容装不下时，滚动条出现并吃掉内容右侧一条 → 「元素右侧往中间回缩」；
+     ② 它贴在窗口最右缘，吃掉那几像素的 resize 命中区 → 「窗口右边缘拖不动」。
+   不写样式即恢复覆盖式滚动条；需要「有没有滚动条都不跳」的容器用 `scrollbar-gutter`
+   （见 app.module.css 的 .listPage / .scroller），**不靠**定制滚动条。 */

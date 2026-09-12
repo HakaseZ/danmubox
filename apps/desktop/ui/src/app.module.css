@@ -39,6 +39,11 @@
   --danger: #ff6b6b; /* B+（对 --bg 6.7:1 ✓） */
   --warn: #e9a038; /* B+（对 --bg 8.5:1 ✓） */
   --ok: #25d366; /* A：品牌绿（对 --bg 9.4:1 ✓） */
+  /* 直播状态点（房间头第一排那枚小圆点）：**绿 = 直播中、橙 = 未开播**（用户 2026-09-12）。
+     它表示的是**直播状态**（`room.live_status`），不是连接状态 —— 连接状态只在房间标签页上
+     （`.dot*` 一族）与 `⋯` 菜单里，房间头不再写「已连接」文字（用户 2026-09-12）。 */
+  --live-on: var(--ok);
+  --live-off: #e9a038; /* B+：橙（对 --bg 8.5:1 ✓） */
   /* 次级文字的两档（docs/ui.md §4.1 的弱化口径） */
   --fg-muted: #8696a0; /* B */
   --fg-subtle: #6a7e8a; /* B+：三级弱化，只用于非关键微文案（对 --bg ≈ 4.6:1，勉强过线） */
@@ -65,10 +70,6 @@
   --badge-border: color-mix(in srgb, var(--badge-lift) 45%, transparent);
   /* 悬停洗色：同一处定义，行 / 折叠条 / 卡片都用它 */
   --hover-wash: color-mix(in srgb, var(--accent) 8%, transparent);
-  /* 我方弹幕（自己发的那条）的整行底色。**不能复用 --hover-wash**：语义不同
-     （「这是我发的」≠「鼠标在这」），且同一元素上两者会同时命中、互相覆盖。
-     取 WhatsApp 深色「我方气泡」绿 #005c4b 的 45% 透明（B）。 */
-  --own-wash: color-mix(in srgb, #005c4b 45%, transparent);
   --overlay: rgba(0, 0, 0, 0.55);
 
   /* 间距阶：4 / 8 / 12 / 16 / 24 */
@@ -125,6 +126,18 @@
 
   /* 触屏与弹出层 */
   --tap-min: 40px; /* 窄屏 sheet / 对话框里的热区下限（触屏） */
+  /* 房间头顶栏：**半透明**的一层 + 自上而下的一道高光（参考截图的层次做法）。
+     值只从本主题已有的槽里混出来 —— 深色下就是「半透明深色」，浅色下自动是半透明白面，
+     组件规则一行不用改；文字仍是 --fg，压在这层上 ≥ 15:1 ✓。 */
+  /* 浮动提示的底色 / 文字色：从本主题的失败色与表面色混出来，深浅两套自动成立
+     （文字仍是 --fg，压在这层上 ≥ 12:1 ✓） */
+  --toast-bg: color-mix(in srgb, var(--danger) 22%, var(--bg-elevated));
+  --toast-fg: var(--fg);
+  --header-bg: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  --header-lift: color-mix(in srgb, var(--fg) 5%, transparent);
+  /* 圆形控件的直径：返回 / 电池 / ⋯ 三枚**同一个值**（用户 2026-09-12 要求形状一致）。
+     取 --tap-min：它本来就是触屏热区下限，窄屏下按着不费劲。 */
+  --ctl-round: var(--tap-min);
   --panel-max-h: 260px; /* 宽屏面板在文档流里展开的最大高度 */
   --panel-max-h-narrow: 45vh; /* 窄屏面板的限高（视口份额）：844px 下 ≈ 380px，超出由面板内部滚动 */
   --sheet-max-h: min(80vh, 640px); /* 窄屏账号对话框（模态）的最大高度 */
@@ -150,6 +163,8 @@
   --accent: #00a884; /* B：只做填充与边（对白面 3.0:1 压线，对米色 2.5:1） */
   --accent-text: #07705a; /* B+：浅色下唯一可做文字的绿（米色 5.1:1 / 白面 5.8:1 ✓） */
   --ok: #0a7c5f; /* B+：#25d366 当文字在米色上只有 1.8:1 ✗（品牌绿只做填充） */
+  --live-on: #0a7c5f; /* B+：浅色下的「直播中」绿（对白面 4.5:1 ✓） */
+  --live-off: #c2410c; /* B+：浅色下的「未开播」橙（对白面 4.9:1 ✓） */
   --warn: #8a5200; /* B+（对米色 5.7:1 ✓） */
   --danger: #c4292f; /* B+（对米色 5.0:1 ✓） */
   --on-accent: #0b141a; /* B+：绿底深字，不做白字（白字只有 3.0:1） */
@@ -157,7 +172,6 @@
   --on-danger: #ffffff; /* B+（对 #c4292f 5.6:1 ✓） */
   /* 浅色底更亮，洗色比例由 8% 提到 12% 才看得出（同一令牌、两套值，不新增名字） */
   --hover-wash: color-mix(in srgb, var(--accent) 12%, transparent);
-  --own-wash: #d9fdd3; /* B：WhatsApp 浅色「我方气泡」绿搬到整行底色（对 --fg 14.5:1 ✓） */
   --overlay: rgba(11, 20, 26, 0.32); /* B：浅色下更轻 */
   --shadow-menu: 0 2px 10px rgba(11, 20, 26, 0.14); /* B+ */
   --shadow-dialog: 0 6px 24px rgba(11, 20, 26, 0.18); /* B+ */
@@ -226,12 +240,23 @@
 
 /* ---------------------------------------------------------------- 房间列表页 */
 
+/* 列表页是**居中的滚动容器**：滚动条（下面的 ::-webkit-scrollbar 把它定成 10px 的经典条）
+   只吃内容盒的右侧，`margin: 0 auto` 的居中块因此右宽左窄正好一个滚动条宽 ——
+   用户 2026-09-12 报的「主页好像没有居中？右边的边距好像稍微宽一些」就是这个。
+   `scrollbar-gutter: stable both-edges` 在两侧对称预留，左右到内容的距离因此相等；
+   `stable` 同时挡住「内容长到出滚动条时整块内容跳一下」。 */
 .listPage {
   padding: var(--sp-5);
   max-width: 760px;
   margin: 0 auto;
   width: 100%;
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  /* 滚动条从窗口最右缘往里让 4px：那一条是窗口自己的边缘热区（拖拽改窗口宽度的落点）。
+     边框是透明的，只占位不改观感；两侧同宽，配合 both-edges 的槽，左右仍然对称。 */
+  /* `both-edges`：两侧对称预留滚动条的槽 —— 覆盖式滚动条下它是 0（不占宽、看不见），
+     万一落到「经典滚动条」的引擎（别的平台 / 别的内核），左右也仍然对称、
+     而且「有没有滚动条都不跳」。见 index.css 里那条「不写滚动条样式」的注释。 */
 }
 
 .listPage h1 {
@@ -453,21 +478,80 @@
 
 /* ---------------------------------------------------------------- 房间页 */
 
+/* 房间头 = **两排**（用户 2026-09-12 反馈 1）：
+   第一排只有控件与状态点（返回 / 电池 / ⋯ 三枚圆形按钮，同一个 --ctl-round），第二排是直播间标题。
+   标题不再与按钮挤一行，窄屏下也不会被压成一条缝；顶栏是半透明的一层 + 一道自上而下的高光
+   （参考截图的做法），深浅两套都从本主题的槽混出来，组件规则一行不用改。 */
 .roomHeader {
   display: flex;
-  align-items: center;
-  gap: var(--sp-3);
+  flex-direction: column;
+  gap: var(--sp-1);
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background-color: var(--header-bg);
+  background-image: linear-gradient(var(--header-lift), transparent);
+  backdrop-filter: blur(12px);
+}
+
+.headerBar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* 圆形控件：返回 / 电池 / ⋯ **同形状同大小**（几何由 --ctl-round 一处给出）。
+   `--r-full` 作用在正方盒上就是正圆（圆角 = 半径），不需要各处再写 50%。 */
+.ctlRound {
+  flex: none;
+  width: var(--ctl-round);
+  height: var(--ctl-round);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-full);
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  line-height: 1;
+}
+
+.ctlRound:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+.ctlIcon {
+  width: 60%;
+  height: 60%;
+}
+
+/* 直播状态点：绿 = 直播中、橙 = 未开播（用户 2026-09-12 的「靠小圆点区分」）。
+   比标签页上的连接点（.dot，--sp-2）大一号并带一圈同色柔光，一眼能看出在播与否。 */
+.liveDot {
+  flex: none;
+  width: var(--sp-3);
+  height: var(--sp-3);
+  border-radius: var(--r-full);
+  display: inline-block;
+}
+
+.liveOn {
+  background: var(--live-on);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--live-on) 22%, transparent);
+}
+
+.liveOff {
+  background: var(--live-off);
 }
 
 .roomHeader .title {
-  flex: 0 1 auto;
+  width: 100%;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: var(--fs-5);
   font-weight: 600;
 }
 
@@ -508,6 +592,8 @@
 .scroller {
   position: absolute;
   inset: 0;
+  /* 与 .listPage 同一口径：有滚动条时也不许整块内容横移（覆盖式滚动条下为 0） */
+  scrollbar-gutter: stable;
   overflow-y: auto;
   padding: var(--sp-2) var(--sp-3);
   /* 内容不足视口高度时整体贴底（直播弹幕自下往上读，官方聊天栏同样贴底）。
@@ -571,21 +657,6 @@
 
 .row:hover {
   background: var(--hover-wash);
-}
-
-/* 我方弹幕（自己发的那条）：整行底色 + 行首 2px 竖条。
-   用户已定口径：**不搬气泡结构**（弹幕是多人流水，没有回合、也没有「这条属于上一句」的语义），
-   因此不做尾巴、不右对齐、不做已读回执。竖条走 box-shadow inset，**零布局位移** ——
-   时间戳列 8ch、头像列、悬挂缩进与上面那一整套对齐口径一格不动。
-   ⚠ 顺序要紧：`.rowOwn` 必须在 `.row:hover` 之后（同一元素上两者都会命中，
-   悬停时用 `.rowOwn:hover` 把自己那层压回去，否则自己的弹幕一悬停就「消失」）。 */
-.rowOwn {
-  background: var(--own-wash);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-
-.rowOwn:hover {
-  background: color-mix(in srgb, var(--own-wash) 55%, var(--accent));
 }
 
 /* 时间戳列：定宽 + 等宽数字，逐行纵向对齐（issue #8） */
@@ -1045,14 +1116,33 @@
   initial-value: 40px;
 }
 
-/* 表情面板的**网格区高度 = 两行大表情**（用户 2026-09-12：「既然表情包做了滚动，展开只展示
-   2 行（大表情的 2 行，以此高度为标准）就行」）。
-   三个量都在**面板这一层**算：行高 = 图片盒 + 格子上下内边距（--sp-1），网格高 = 两行 + 一道行距。
-   这样「格子里的图」与「网格区多高」永远是同一个数，不会各写一个 2.2em 然后对不齐。
-   高度写死（不是 max-height）：换分组时面板高度不跳，滚动条该出就出。 */
+/* 普通档（通用组）的图片盒：= 1.5 × `--fs-6`，与 `.pickerItem` 自己的字号无关。
+   与上一条同一个理由，**也必须注册**：不注册的话 `calc(var(--fs-6) * 1.5)` 会在**使用处**
+   按各元素自己的字号解析 —— 格子的字号是 `--fs-6`（1.15em），网格的字号是面板字号（1em），
+   同一个式子会得出 27.8px 与 24.2px 两个值，「网格区恰好两行」这个等式就散了。 */
+@property --emote-size-sm {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 32px;
+}
+
+/* 表情面板的**网格区高度 = 两行表情格**（用户 2026-09-12：上一版两行**大**表情仍有 100px 高，
+   面板总高 257px 还是太高 ——「高度降低到 2 排表情包」）。
+   三个量都在**面板这一层**算：格子高 = 图片盒 + 格子上下内边距（--sp-1），网格高 = 两行 + 一道行距。
+   高度写死（不是 max-height）：换分组时格子数始终是两行，滚动条该出就出。
+   **两行按当前那一组的格子尺寸算**（见 .emoteBodyBig）：通用组是小格，
+   本房间 / 粉丝牌 / 大航海是放大档 —— 一律按小格算会把放大档那组切成一行半（第二行只剩半格），
+   一律按大格算就是上一版那个「嫌高」的高度。两组都**恰好看到两行**，面板随组变矮。 */
 .picker {
+  --emote-size-sm: calc(var(--fs-6) * 1.5);
   --emote-size-big: calc(var(--fs-7) * 2.2);
+  --emote-row-h: calc(var(--emote-size-sm) + var(--sp-1) * 2);
   --emote-row-h-big: calc(var(--emote-size-big) + var(--sp-1) * 2);
+  --emote-grid-h: calc(var(--emote-row-h) * 2 + var(--sp-1));
+}
+
+/* 放大档那一组（非通用）：网格与轨道都换成「两行放大格」的高度 */
+.pickerBig {
   --emote-grid-h: calc(var(--emote-row-h-big) * 2 + var(--sp-1));
 }
 
@@ -1162,9 +1252,9 @@
 
 /* 表情面板主体：左边一条**竖向 tab 轨道**，右边表情网格（用户 2026-09-12：
    「给表情的全是按钮，根本框不住表情图标，可以直接仿照官方实现」）。
-   两列各自滚：轨道自己滚、网格自己滚，面板头与轨道因此都不动。
-   `align-items: flex-start`：两列**各自决定自己的高度**——网格区是固定的两行大表情
-   （见 .picker 的 --emote-grid-h），不被轨道那一列的高度带着走。 */
+   两列各自滚：轨道自己滚、网格自己滚，谁都不会被对方的高度带着走。
+   两列的高度都是 --emote-grid-h（= 两行表情格，见 .picker）：轨道因此**等高**，
+   分组多过两行时就在自己的列里上下滚动（用户 2026-09-12：「左边也加入上下滚动」）。 */
 .emoteBody {
   flex: 1;
   min-height: 0;
@@ -1184,7 +1274,14 @@
   min-width: 0;
   min-height: 0;
   max-width: 42%;
+  /* 与网格**同高**（两行表情格），分组多过两行就在轨道里滚（用户 2026-09-12：
+     「左边也加入上下滚动」——上一版轨道按内容撑高，组一多就把面板顶高、把网格挤窄）。 */
+  height: var(--emote-grid-h);
   overflow-y: auto;
+  /* 滚动条的槽恒定预留：出不出滚动条都不改轨道的宽度，**因此不会把网格挤窄**。
+     不认这条属性的老引擎退化成「滚动条出现/消失时宽度差一条滚动条」，
+     而轨道在 5 个分组下始终是溢出状态，宽度本来就是恒定的。 */
+  scrollbar-gutter: stable;
   padding-right: var(--sp-2);
   border-right: 1px solid var(--border);
 }
@@ -1234,8 +1331,7 @@
 }
 
 /* 表情格：等宽格子（一行放几个由宽度定），格子里的图居中。
-   它是表情面板里**唯一会滚的部分**（面板头与分组 tab 常驻），见上一条注释。
-   高度固定成**两行大表情**（--emote-grid-h，见 .picker）：超出的部分滚动。 */
+   高度固定成**两行表情格**（--emote-grid-h，见 .picker）：超出的部分在网格里滚动。 */
 .emoteGrid {
   flex: 1;
   min-width: 0;
@@ -1255,11 +1351,12 @@
 }
 
 .pickerItem {
-  /* 表情尺寸走自定义属性：基础档与「非通用放大档」只差这一个值，
-     不再靠两条 height 声明的先后顺序决定谁生效 */
-  --emote-size: 1.5em;
+  /* 表情尺寸走自定义属性：小格与「非通用放大档」只差这一个值，
+     不再靠两条 height 声明的先后顺序决定谁生效。值由 `.picker` 在**面板那一层**算好
+     （--emote-size-sm 已注册成 <length>，在这里就是 px），格子与网格因此量的是同一个数。 */
+  --emote-size: var(--emote-size-sm);
   box-sizing: border-box;
-  /* 格子高度**显式给死**（图片盒 + 上下内边距），不靠内容撑：这样「网格区 = 两行大表情」
+  /* 格子高度**显式给死**（图片盒 + 上下内边距），不靠内容撑：这样「网格区 = 两行表情格」
      这个等式两边量的是同一件事（改前靠内容撑时，按钮那 1px 边框会让实测值多出 2px）。 */
   height: calc(var(--emote-size) + var(--sp-1) * 2);
   display: flex;
@@ -1620,6 +1717,45 @@
   color: var(--on-ok);
 }
 
+/* 浮动提示（发送失败 / 被吞 / 限流）：用户 2026-09-12 定案 —— **不要**在最下方出一条常驻提示，
+   改成「弹一下然后渐隐」，而且整个过程**不挡滚动的弹幕**。
+   两件事都由这里给出：① `pointer-events: none`（提示期间弹幕区照常滚动、照常点右键）；
+   ② 它是**文档流里的一张浮片**（不是浮层）——排在弹幕列表与输入区之间，
+   所以它的矩形与弹幕列表区域**不相交**，只会短暂把列表压矮一点。
+   渐隐交给 CSS 动画（时长由组件按 SEND_TOAST_MS 内联给出，与那条摘除定时器同源）。 */
+.toast {
+  pointer-events: none;
+  align-self: center;
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--toast-bg);
+  color: var(--toast-fg);
+  box-shadow: var(--shadow-menu);
+  animation-name: toastFade;
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: forwards;
+}
+
+@keyframes toastFade {
+  0% {
+    opacity: 0;
+    transform: translateY(calc(var(--sp-1) * -1));
+  }
+  8% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 .logs {
   max-height: 160px;
   overflow-y: auto;
@@ -1754,6 +1890,16 @@
     border-bottom: none;
     box-shadow: var(--shadow-sheet);
     padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+  }
+
+  /* 窄屏的触屏热区下限（下面那条 .picker button{min-height}）把表情格撑到 --tap-min，
+     两行的算式得用**同一个数**，否则第二行会被切掉一截、面板高度也对不上。 */
+  .picker {
+    --emote-row-h: max(var(--emote-size-sm) + var(--sp-1) * 2, var(--tap-min));
+  }
+
+  .pickerBig {
+    --emote-row-h-big: max(var(--emote-size-big) + var(--sp-1) * 2, var(--tap-min));
   }
 
   /* 触屏热区：sheet / 对话框里的可点元素一律 ≥ --tap-min。

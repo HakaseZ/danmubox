@@ -404,3 +404,10 @@ export const KIND_LABEL: Record<MessageKind, string> = {
  * `store` 的摘除定时器与行的淡出动画共用这一个长度，两者不会错位。
  */
 export const INTERACT_AUTO_HIDE_MS = 8000;
+
+/**
+ * 发送失败那条**浮动提示**从出现到消失的时长（含淡出）。
+ * 淡出本身是 CSS 动画（`.toast` 的 `toastFade`），这里只决定动画时长与
+ * 「什么时候把元素摘掉」同一个数 —— 两者错位就会出现「已经透明了还占着位置」。
+ */
+export const SEND_TOAST_MS = 2600;

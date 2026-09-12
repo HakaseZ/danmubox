@@ -27,7 +27,6 @@ import styles from "../app.module.css";
 interface Props {
   room: RoomViewData;
   rows: DisplayRow[];
-  status?: { state: ConnState; detail: string };
   prefs: Prefs;
   session?: SessionState;
   lastOutcome?: SendOutcome;
@@ -62,18 +61,12 @@ export const DOT: Record<ConnState, string> = {
   error: styles.dotError,
 };
 
-const STATE_TEXT: Record<ConnState, string> = {
-  connected: "已连接",
-  connecting: "连接中",
-  disconnected: "已断开",
-  error: "异常",
-};
-
 /**
  * 房间页。从左到右、从上到下只有一条生长轴（issue #8 的重排）：
  *
  * ```
- * [头部：返回 · ●状态 · 标题 ······ 在线 · 看过 · 电池 · ⋯菜单]
+ * [头部排一：◀返回 · ●直播状态 ······ 在线 · 看过 · 🔋电池 · ⋯菜单]
+ * [头部排二：直播间标题]
  * [弹幕列表  ← 唯一的 flex-1 生长/滚动区]
  * [弹出面板（表情 / 短语 / 筛选）← 向上展开，列表自动上弹]
  * [输入区：输入框 + 工具行 + 发送]
@@ -85,7 +78,6 @@ const STATE_TEXT: Record<ConnState, string> = {
 export function RoomView({
   room,
   rows,
-  status,
   prefs,
   session,
   lastOutcome,
@@ -123,7 +115,10 @@ export function RoomView({
   // 举报理由改用上游固定清单（`dReport/ForReason`，实测 7 条）：
   // 官方客户端按文案反查 `reason_id` 后与文案一起上报，因此界面不该让用户手输。
   const [reasonId, setReasonId] = useState("");
-  const state = status?.state ?? "disconnected";
+  // 直播状态点：绿 = 直播中、橙 = 未开播（轮播归到橙）。文案只进 title / aria-label，不上屏
+  // （用户 2026-09-12：房间头不再写字，靠小圆点区分）。
+  const liveText =
+    room.live_status === 1 ? "直播中" : room.live_status === 2 ? "轮播中" : "未开播";
   const separateGifts = prefs["ui.gift_panel_mode"] === "separate";
 
   // 从 store 直接取 action：它的身份在渲染之间是稳定的，
@@ -347,47 +342,111 @@ export function RoomView({
 
   return (
     <div className={styles.shell}>
+      {/* 房间头（用户 2026-09-12 反馈 1）：**第一排只有控件与状态点，标题另起一排**。
+          连接状态不再写字（「已连接」文字已删），一眼要看的是「在不在播」——
+          绿点 = 直播中、橙点 = 未开播（.liveOn / .liveOff，色值走 --live-on / --live-off）。
+          连接状态仍可在房间标签页的圆点上看到（见 DOT）。 */}
       <div className={styles.roomHeader} data-testid="db-room-header">
-        <button onClick={onBack}>返回</button>
-        <span className={`${styles.dot} ${DOT[state]}`} />
-        <span className={styles.title}>
+        <div className={styles.headerBar} data-testid="db-room-header-bar">
+          <button
+            className={styles.ctlRound}
+            data-testid="db-header-back"
+            title="返回房间列表"
+            aria-label="返回房间列表"
+            onClick={onBack}
+          >
+            <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 4.5 7.5 12l7.5 7.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <span
+            className={`${styles.liveDot} ${
+              room.live_status === 1 ? styles.liveOn : styles.liveOff
+            }`}
+            data-testid="db-live-dot"
+            data-live={String(room.live_status)}
+            role="img"
+            title={liveText}
+            aria-label={liveText}
+          />
+          <span className={styles.headerSpacer} />
+          {roomStats?.online !== undefined && (
+            <span className={styles.balance} title="在线人数（协议 §10.7 的 ONLINE_RANK_COUNT）">
+              在线 {formatCount(roomStats.online)}
+            </span>
+          )}
+          {roomStats?.watched !== undefined && (
+            <span className={styles.balance} title="累计看过（协议 §10.7 的 WATCHED_CHANGE）">
+              看过 {formatCount(roomStats.watched)}
+            </span>
+          )}
+          {/* 电池 = 圆形按钮（与返回 / ⋯ 同形状），余额数字贴着它（参考截图：一个图标 + 一个小数字） */}
+          {balance !== undefined && (
+            <>
+              <button
+                className={styles.ctlRound}
+                data-testid="db-header-battery"
+                title={`电池余额 ${balance}`}
+                aria-label={`电池余额 ${balance}`}
+              >
+                <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+                  <rect
+                    x="2"
+                    y="7"
+                    width="16"
+                    height="10"
+                    rx="3"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  />
+                  <path
+                    d="M20.5 10.5v3"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+              <span className={styles.balance} data-testid="db-header-balance">
+                {balance}
+              </span>
+            </>
+          )}
+          <button
+            className={styles.ctlRound}
+            data-testid="db-header-more"
+            title="刷新 / 断开 / 日志"
+            aria-label="更多"
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setHeaderMenu({ x: rect.left - 120, y: rect.bottom + 2 });
+            }}
+          >
+            ⋯
+          </button>
+        </div>
+        <span
+          className={styles.title}
+          data-testid="db-room-title"
+          title={room.title.length > 0 ? room.title : `房间 ${room.room_id}`}
+        >
           {room.title.length > 0 ? room.title : `房间 ${room.room_id}`}
         </span>
-        <span className={styles.roomMeta}>
-          {STATE_TEXT[state]}
-          {status?.detail ? `（${status.detail}）` : ""}
-        </span>
-        <span className={styles.headerSpacer} />
-        {roomStats?.online !== undefined && (
-          <span className={styles.balance} title="在线人数（协议 §10.7 的 ONLINE_RANK_COUNT）">
-            在线 {formatCount(roomStats.online)}
-          </span>
-        )}
-        {roomStats?.watched !== undefined && (
-          <span className={styles.balance} title="累计看过（协议 §10.7 的 WATCHED_CHANGE）">
-            看过 {formatCount(roomStats.watched)}
-          </span>
-        )}
-        {balance !== undefined && (
-          <span className={styles.balance}>电池 {balance}</span>
-        )}
-        <button
-          title="刷新 / 断开 / 日志"
-          aria-label="更多"
-          onClick={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect();
-            setHeaderMenu({ x: rect.left - 120, y: rect.bottom + 2 });
-          }}
-        >
-          ⋯
-        </button>
       </div>
 
       {/* 唯一的生长区：面板与礼物栏展开时只有它会变矮 */}
       <MessageList
         rows={chatRows}
         anchorUid={room.anchor_uid}
-        myUid={session?.uid}
         prefs={prefs}
         onMenu={(message, at) => setMessageMenu({ at, message })}
       />

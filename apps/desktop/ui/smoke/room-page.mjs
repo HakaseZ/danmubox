@@ -336,6 +336,11 @@ const MOCK = (theme) => `(function () {
   var calls = [];
   // 带参数的调用记录（看请求形状，如 chat_send 的表情唯一键）；calls 只有命令名，保持原样。
   var callsWithArgs = [];
+  // 发送结果替身：默认 ok；用 __setSendOutcome 改成失败态，验证「浮动提示」那一套
+  var sendOutcome = { outcome: "ok", detail: null };
+  window.__setSendOutcome = function (outcome, detail) {
+    sendOutcome = { outcome: outcome, detail: detail || null };
+  };
   var nextId = 1;
   var prefs = {
     "ui.font_scale": 1, "ui.theme": "${theme}", "ui.auto_scroll": true,
@@ -532,7 +537,8 @@ const MOCK = (theme) => `(function () {
         case "report_reasons": return Promise.resolve([{ id: 1, reason: "垃圾广告" }]);
         // 主站「我的表情」：用户点名要的那条必须能从面板发回去（issue #8）。
         case "emotes_owned": return Promise.resolve(EMOTES.owned);
-        case "chat_send": return Promise.resolve({ room_id: args.roomId, content: args.content, outcome: "ok", detail: null });
+        case "chat_send": return Promise.resolve(Object.assign(
+          { room_id: args.roomId, content: args.content }, sendOutcome));
         // 房内身份（房管权限前置）+ 房管只读三块 + 写操作（替身只记调用，不动真上游）。
         case "room_session": return Promise.resolve({ room_id: args.roomId, my_medal_level: 0, my_medal_name: "", my_guard_level: 0, is_admin: window.__admin });
         case "admin_silent_list": return window.__adminFail
@@ -776,6 +782,39 @@ const MOCK = (theme) => `(function () {
       roomCard.scrollIntoView({ block: "start" });
     }
     out.roomsListRendered = !!roomCard;
+    // ---- 主页左右边距对称（用户 2026-09-12：「主页好像没有居中？右边的边距好像稍微宽一些」）。
+    //      根因：经典滚动条（index.css 把它定制成 10px）只吃内容盒的**右侧**，
+    //      max-width + margin: 0 auto 的居中块因此右宽左窄正好一个滚动条宽
+    //      （改前实测 4 档：宽屏 24 / 34，窄屏 16 / 26）。判据取「到内容的左右距离相等」（容差 1px），
+    //      并**同时**要求容器真的在滚 —— 没有滚动条时这条断言会假绿。
+    var listEl = byTestId("db-list-page");
+    var listBox = rect(listEl);
+    var listAnchorBox = rect(byTestId("db-account") || listEl.querySelector("h1"));
+    out.listPageScrolls = listEl.scrollHeight > listEl.clientHeight + 1;
+    out.listPageScrollbarPx = listEl.offsetWidth - listEl.clientWidth;
+    out.listPageLeftGapPx = Math.round((listAnchorBox.left - listBox.left) * 10) / 10;
+    out.listPageRightGapPx = Math.round((listBox.right - listAnchorBox.right) * 10) / 10;
+    out.listPageMarginsSymmetric = out.listPageScrolls &&
+      Math.abs(out.listPageLeftGapPx - out.listPageRightGapPx) <= 1;
+    // ---- 「高度缩到出现滚动条之后，元素右侧往中间回缩」（用户 2026-09-12 的决定性复现）。
+    //      判据：**同一个元素**的右缘 x 在「内容装得下（不出滚动条）」与「装不下（出滚动条）」
+    //      两态下相等（容差 1px）。根因是 index.css 里那条自定义滚动条样式 —— 它把 macOS 的
+    //      **覆盖式**滚动条（不占宽）换成**经典**滚动条（占宽），一出现就吃掉内容右侧一条；
+    //      现已删除那些样式（同一个改动也把「窗口右边缘拖不动」一起解了）。
+    var stableProbe = byTestId("db-account");
+    var followRowsProbe = allByTestId("db-follow-item");
+    var rightWhenScrolling = rect(stableProbe).right;
+    var savedRowDisplay = followRowsProbe.map(function (el) { return el.style.display; });
+    followRowsProbe.forEach(function (el) { el.style.display = "none"; });
+    await sleep(300);
+    var shortListEl = byTestId("db-list-page");
+    out.listPageShortStateHasNoScrollbar = shortListEl.scrollHeight <= shortListEl.clientHeight + 1;
+    var rightWhenShort = rect(stableProbe).right;
+    followRowsProbe.forEach(function (el, index) { el.style.display = savedRowDisplay[index]; });
+    await sleep(300);
+    out.listPageRightEdgeDeltaPx = Math.round(Math.abs(rightWhenShort - rightWhenScrolling) * 10) / 10;
+    out.listPageRightEdgeStable = out.listPageShortStateHasNoScrollbar &&
+      out.listPageRightEdgeDeltaPx <= 1;
     snap();
     await sleep(900);
 
@@ -855,6 +894,73 @@ const MOCK = (theme) => `(function () {
     put("pageNoHorizontalScroll",
       document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
       document.body.scrollWidth <= document.body.clientWidth);
+
+    // ---- 房间头（用户 2026-09-12 反馈 1）：**两排**（控件一排、标题另一排）、
+    //      返回 / 电池 / ⋯ 三枚**圆形控件**、直播状态点（绿 = 直播中、橙 = 未开播）、
+    //      不再有「已连接（缓冲 N）」文字与 verified 徽标。
+    var headerEl1 = byTestId("db-room-header");
+    var roundCtl = [byTestId("db-header-back"), byTestId("db-header-battery"), byTestId("db-header-more")];
+    var circleOf = function (el) {
+      if (!el) return null;
+      var box = rect(el);
+      var radius = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
+      return {
+        w: Math.round(box.width * 10) / 10, h: Math.round(box.height * 10) / 10, r: radius,
+        // 「圆角 = 半径」：正方盒 + 圆角不小于半边长 = 正圆（--r-full 在正方盒上被夹到半边长）
+        round: Math.abs(box.width - box.height) < 0.6 && radius >= box.width / 2 - 0.6,
+      };
+    };
+    out.headerControls = roundCtl.map(circleOf);
+    out.headerControlsAllRound = roundCtl.every(function (el) { return !!circleOf(el) && circleOf(el).round; });
+    out.headerControlsSameSize = roundCtl.every(function (el) {
+      return !!el && Math.abs(rect(el).width - rect(roundCtl[0]).width) < 0.6;
+    });
+    out.headerBackIsArrowOnly = !!roundCtl[0] && roundCtl[0].innerText.trim() === "" &&
+      !!roundCtl[0].querySelector("svg") &&
+      (roundCtl[0].getAttribute("aria-label") || "").indexOf("返回") >= 0;
+    out.headerNoConnectedText = headerEl1.innerText.indexOf("已连接") < 0 &&
+      headerEl1.innerText.indexOf("缓冲") < 0 && headerEl1.innerText.indexOf("连接中") < 0 &&
+      headerEl1.innerText.indexOf("已断开") < 0;
+    // verified 徽标：类名与 testid 两种命名都不许出现（本仓库本来就没有，这条是防它被加回来）
+    out.headerNoVerifiedBadge =
+      document.querySelectorAll('[data-testid*="verified"], [class*="verified"], [class*="Verified"]').length === 0;
+    var barBox = rect(byTestId("db-room-header-bar"));
+    var titleBox = rect(byTestId("db-room-title"));
+    out.headerTitleOwnRow = !!titleBox && !!barBox &&
+      titleBox.top >= barBox.bottom - 0.5 && titleBox.left <= barBox.left + 0.5;
+    // 直播状态点：颜色必须等于令牌值，且**随 live_status 变**（发一条 room 事件翻成未开播再翻回来）
+    var cssColorOf = function (name) {
+      var probe = document.createElement("span");
+      probe.style.color = "var(" + name + ")";
+      document.body.appendChild(probe);
+      var value = getComputedStyle(probe).color;
+      probe.parentNode.removeChild(probe);
+      return value;
+    };
+    var liveOnColor = cssColorOf("--live-on");
+    var liveOffColor = cssColorOf("--live-off");
+    var dotColor = function () {
+      var dot = byTestId("db-live-dot");
+      return dot ? getComputedStyle(dot).backgroundColor : null;
+    };
+    out.liveDotTokensDistinct = liveOnColor !== liveOffColor;
+    // 绿 = 直播中、橙 = 未开播：夹具里的 live_status 是多少就按哪个色验（不写死 1 ——
+    // 真实载荷是轮播（live_status = 2），它不是「直播中」，落到橙色那一档）。
+    var liveIsOn = fixtureRoom.live_status === 1;
+    var liveExpectedColor = liveIsOn ? liveOnColor : liveOffColor;
+    var liveOtherStatus = liveIsOn ? 0 : 1;
+    var liveOtherColor = liveIsOn ? liveOffColor : liveOnColor;
+    out.liveDotMatchesStatus = dotColor() === liveExpectedColor;
+    // 然后**把状态翻过去**再量一次：颜色必须跟着 live_status 变（这才是「随它变」的可验形式）
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: liveOtherStatus });
+    await sleep(350);
+    var toggledDot = byTestId("db-live-dot");
+    out.liveDotFollowsStatus = dotColor() === liveOtherColor && !!toggledDot &&
+      toggledDot.getAttribute("data-live") === String(liveOtherStatus);
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: fixtureRoom.live_status });
+    await sleep(350);
+    out.liveDotRestored = dotColor() === liveExpectedColor && !!byTestId("db-live-dot") &&
+      byTestId("db-live-dot").getAttribute("data-live") === String(fixtureRoom.live_status);
     // 输入区：输入框占满宽度；工具行放不下就换行，不许挤成小方块
     var composerEl0 = document.querySelector("textarea").parentElement;
     var toolsEl0 = byTestId("db-composer-tools");
@@ -1260,23 +1366,6 @@ const MOCK = (theme) => `(function () {
       Math.abs(out.rowScale.avatar / lineBoxPx - 0.9) < 0.06 &&
       Math.abs(out.rowScale.emote / lineBoxPx - 1.1) < 0.06;
 
-    // ---- 我方弹幕（用户已定：只做**行级标记**，不搬气泡结构）
-    // 三个可观察面：① 行上有 inset 竖条；② 底色与别人的行不同（透明）；
-    // ③ 时间戳 / 头像 / 悬挂缩进那套对齐**没有位移**（竖条走 box-shadow，零布局影响）。
-    var ownRow = rowWith("我自己发的弹幕");
-    var otherRow = rowWith("带头像的弹幕");
-    var ownStyle = ownRow ? getComputedStyle(ownRow) : null;
-    var otherStyle = otherRow ? getComputedStyle(otherRow) : null;
-    out.rowOwnMarked = Boolean(ownStyle) && ownStyle.boxShadow.indexOf("inset") >= 0;
-    out.rowOwnBackground = ownStyle ? ownStyle.backgroundColor : null;
-    out.rowOwnBackgroundDiffers = Boolean(ownStyle) && Boolean(otherStyle) &&
-      ownStyle.backgroundColor !== otherStyle.backgroundColor;
-    var ownName = ownRow ? ownRow.querySelector('[data-testid="db-msg-name"]') : null;
-    var otherName = otherRow ? otherRow.querySelector('[data-testid="db-msg-name"]') : null;
-    out.rowOwnNoBubble = Boolean(ownStyle) && Boolean(otherStyle) &&
-      ownStyle.textAlign === otherStyle.textAlign &&
-      rect(ownRow).left === rect(otherRow).left;
-
     // ---- 昵称不吃弹幕颜色，颜色只落正文（用户 #2）
     var redRow = rowWith("红字弹幕正文");
     var redNameEl = redRow ? redRow.querySelector('[data-testid="db-msg-name"]') : null;
@@ -1512,7 +1601,42 @@ const MOCK = (theme) => `(function () {
     //      网格区高度 = 两行**大表情**（那几族本来就是最大的一档）+ 一道行距，内容超出滚动。
     var gridEl = byTestId("db-emote-group");
     var gridStyle = getComputedStyle(gridEl);
+    var rowGapOf = function (el) { return parseFloat(getComputedStyle(el).rowGap) || 0; };
     out.panelEmoteGridHeightPx = f1(rect(gridEl).height);
+    // ---- 面板顶上**没有「表情」标题、也没有「关闭」**（用户 2026-09-12：两样都不需要）。
+    //      判据分两半：① 面板里没有关闭按钮（testid 契约）；② 没有任何元素**只**写着「表情」
+    //      （分组名叫「我的表情」，不是同一个字符串，不会撞上）。
+    out.panelEmoteSpace = {
+      closeButtons: panel.querySelectorAll('[data-testid="db-panel-close"]').length,
+      headlineOnly: [].slice.call(panel.querySelectorAll("*")).filter(function (el) {
+        return el.children.length === 0 && el.textContent.trim() === "表情";
+      }).length,
+      hasCloseWord: panel.innerText.indexOf("关闭") >= 0,
+    };
+    out.panelEmoteHeaderGone = out.panelEmoteSpace.closeButtons === 0 &&
+      out.panelEmoteSpace.headlineOnly === 0 && !out.panelEmoteSpace.hasCloseWord;
+    // 网格高 = **两行当前这一组的格子** + 一道行距；面板高 = 两行 + 上下内边距（没有别的行）
+    var commonCellH = commonMetrics.length > 0
+      ? Math.max.apply(null, commonMetrics.map(function (m) { return m.cellH; })) : 0;
+    out.panelEmoteCommonCellHeightPx = f1(commonCellH);
+    out.panelEmoteGridTwoCommonRows = commonMetrics.length > 0 &&
+      Math.abs(rect(gridEl).height - (commonCellH * 2 + rowGapOf(gridEl))) <= 1;
+    var panelPad = getComputedStyle(panel);
+    out.panelHeightPx = f1(rect(panel).height);
+    out.panelEmoteHeightIsTwoRows = Math.abs(rect(panel).height -
+      (parseFloat(panelPad.paddingTop) + rect(gridEl).height + parseFloat(panelPad.paddingBottom))) <= 1;
+    // ---- 左侧 tab 轨道**自己能上下滚**（用户 2026-09-12：「左边也加入上下滚动」），
+    //      而且滚动条的槽不挤窄右边的网格（scrollbar-gutter: stable）。
+    var railEl = byTestId("db-emote-tabs");
+    var gridWidthBefore = rect(gridEl).width;
+    out.panelEmoteRailScrollable = getComputedStyle(railEl).overflowY === "auto";
+    railEl.scrollTop = railEl.scrollHeight;
+    await sleep(250);
+    out.panelEmoteRailScrolled = railEl.scrollTop > 1 &&
+      railEl.scrollHeight > railEl.clientHeight + 1;
+    out.panelEmoteRailKeepsGridWidth = Math.abs(rect(gridEl).width - gridWidthBefore) < 0.6;
+    railEl.scrollTop = 0;
+    await sleep(200);
     out.panelEmoteGridKind = gridEl.getAttribute("data-kind");
     out.panelEmoteGridScrollHeightPx = gridEl.scrollHeight;
     // 网格是面板里**唯一会滚的部分**（固定高度 + overflow-y: auto）；
@@ -1697,14 +1821,51 @@ const MOCK = (theme) => `(function () {
       var narrowHotspots = shortHotspots(narrowPanel);
       put("panelHotspotsBad", narrowHotspots);
       put("panelHotspotsAtLeast40", narrowHotspots.length === 0);
-      put("panelClosable", !!byTestId("db-panel-close"));
-      var panelCloseBtn = byTestId("db-panel-close");
-      if (panelCloseBtn) {
-        panelCloseBtn.click();
-        await sleep(300);
-      }
-      put("panelCloseWorks", !byTestId("db-panel"));
+      // 关面板的两条路（用户 2026-09-12：顶上不再有「关闭」）：① 再点一次「表情」；
+      // ② 点输入区**外面**的任何地方（Composer 的 pointerdown 监听）。
+      clickTool("表情");
+      await sleep(300);
+      put("panelClosesOnToolToggle", !byTestId("db-panel"));
+      clickTool("表情");
+      await sleep(300);
+      put("panelReopenWorks", !!byTestId("db-panel"));
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      await sleep(300);
+      put("panelClosesOnOutsideClick", !byTestId("db-panel"));
     }
+
+    // ---- 发送失败 = **浮动提示**（用户 2026-09-12：「发送失败也不要在最下出提示，弹窗提示
+    //      然后渐隐消失（这个过程不要挡住滚动的弹幕）即可」）。四条一起量：
+    //      ① 最下方**没有**常驻提示行；② 浮片在且 pointer-events 为 none（弹幕照常滚、照常点）；
+    //      ③ 浮片的矩形与弹幕列表区域**不相交**（这才是「不挡弹幕」的可验形式）；
+    //      ④ 渐隐之后元素被摘掉（不是「透明地占着位置」）。
+    window.__setSendOutcome("failed", "上游拒绝：弹幕被吞");
+    typeIntoArea(document.querySelector("textarea"), "这条会发失败");
+    await sleep(250);
+    var sendButton = [].slice.call(byTestId("db-composer-tools").querySelectorAll("button"))
+      .filter(function (b) { return b.innerText.trim() === "发送"; })[0];
+    if (sendButton) sendButton.click();
+    await sleep(500);
+    var toastEl = byTestId("db-toast");
+    var toastBox = rect(toastEl);
+    var chatBoxForToast = rect(byTestId("db-chat-scroll"));
+    out.sendFailNoBottomHint = !byTestId("db-send-hint");
+    out.sendFailToastShown = !!toastEl && toastEl.innerText.indexOf("发送失败") >= 0;
+    out.sendFailToastText = toastEl ? toastEl.innerText : null;
+    out.sendFailToastPassive = !!toastEl &&
+      getComputedStyle(toastEl).pointerEvents === "none";
+    out.sendFailToastClearsList = !!toastEl && !!chatBoxForToast &&
+      !(toastBox.bottom > chatBoxForToast.top + 1 && toastBox.top < chatBoxForToast.bottom - 1 &&
+        toastBox.right > chatBoxForToast.left + 1 && toastBox.left < chatBoxForToast.right - 1);
+    out.sendFailToastAboveComposer = !!toastEl &&
+      toastBox.bottom <= rect(document.querySelector("textarea")).top + 1;
+    snap();
+    await sleep(3200);
+    out.sendFailToastGone = !byTestId("db-toast");
+    typeIntoArea(document.querySelector("textarea"), "");
+    window.__setSendOutcome("ok", null);
+    await sleep(200);
+    snap();
 
     // ---- 面板展开会改可视高度：**正在看的位置不能被弹走**
     // 先把列表停在中间（此时不在底部 = 非跟随模式），再展开面板，量同一个行在视口里的
@@ -2169,7 +2330,7 @@ const MOCK = (theme) => `(function () {
     snap();
 
     // ---- account 账号区一行身份 + 账号管理对话框（契约 §7 accounts_*）
-    buttonWith(null, "返回").click();
+    byTestId("db-header-back").click();
     await sleep(500);
     var account = byTestId("db-account");
     out.accountShown = !!account;
@@ -2355,9 +2516,14 @@ const MOCK = (theme) => `(function () {
     // 标签条只在**多于一个**房间时渲染（App 既有语义），所以这里补登记第二个房间，
     // 再走一次真实路径（点房间卡 → openRoom → connect 会重拉 rooms_list）把它带出来。
     window.__addSecondRoom();
+    await sleep(400);
+    // 主页**不挂**弹幕页的标签条（用户 2026-09-12：与主页的「已连接房间」卡片列表重复）。
+    // 这里正是「有两个房间」的状态 —— 旧实现下标签条就是在这个条件下冒出来的。
+    out.listPageNoRoomTabs = !byTestId("db-room-tabs") && allByTestId("db-room-tab").length === 0;
     byTestId("db-room-card").click();
     await sleep(800);
     var tabs = allByTestId("db-room-tab");
+    out.roomTabsInsideRoom = !!byTestId("db-room-tabs");
     out.tabsRendered = tabs.length === 2;
     // 有名字的那个标签：报的是**真实载荷**里的主播名，且不露房间号。
     var namedTab = tabs.filter(function (t) {

@@ -92,58 +92,62 @@ export function App() {
 
   const activeRoom = rooms.find((room) => room.room_id === activeRoomId);
 
+  // 多房间标签页（需求 §2.8）：房间本来就能同时连接，这里只是给一个切换入口。
+  // **只在房间页里渲染**（用户 2026-09-12）：列表页已经有「已连接房间」卡片列表，
+  // 两者做的是同一件事，主页再挂一条标签条是重复。房间页内部照旧。
+  const roomTabs = (
+    <div className={styles.tabs} data-testid="db-room-tabs">
+      {rooms.map((room) => {
+        const state = status[room.room_id]?.state ?? "disconnected";
+        // 标签条报主播名，不报房间号（用户 #18）；拿不到主播名才退回直播间标题。
+        const name = roomTabName(room);
+        return (
+          <button
+            key={room.room_id}
+            className={room.room_id === activeRoomId ? styles.tabActive : styles.tab}
+            data-testid="db-room-tab"
+            title={`${name} · ${state}`}
+            onClick={() => void openRoom(room.room_id)}
+          >
+            <span className={`${styles.dot} ${DOT[state]}`} />
+            {name}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className={styles.shell}>
-      {/* 多房间标签页（需求 §2.8）：房间本来就能同时连接，这里只是给一个切换入口 */}
-      {rooms.length > 1 && (
-        <div className={styles.tabs}>
-          {rooms.map((room) => {
-            const state = status[room.room_id]?.state ?? "disconnected";
-            // 标签条报主播名，不报房间号（用户 #18）；拿不到主播名才退回直播间标题。
-            const name = roomTabName(room);
-            return (
-              <button
-                key={room.room_id}
-                className={room.room_id === activeRoomId ? styles.tabActive : styles.tab}
-                data-testid="db-room-tab"
-                title={`${name} · ${state}`}
-                onClick={() => void openRoom(room.room_id)}
-              >
-                <span className={`${styles.dot} ${DOT[state]}`} />
-                {name}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
       {activeRoom && prefs ? (
-        <RoomView
-          room={activeRoom}
-          rows={rows}
-          status={status[activeRoom.room_id]}
-          prefs={prefs}
-          session={session}
-          lastOutcome={lastSend?.outcome}
-          lastDetail={lastSend?.detail}
-          logs={logs}
-          emotes={emotes}
-          ownedEmotes={ownedEmotes}
-          ownedError={ownedError}
-          seenEmotes={seenEmotes}
-          balance={balance}
-          onBack={closeRoom}
-          onRefresh={() => void refresh(activeRoom.room_id)}
-          onDisconnect={() => void disconnect(activeRoom.room_id)}
-          onSend={(content, emote, reply) =>
-            send(activeRoom.room_id, content, emote, reply)
-          }
-          onReport={async (message, reason) => {
-            if (await report(message, reason)) setNotice("举报已提交");
-          }}
-          onPrefs={(patch) => void updatePrefs(patch)}
-          onNotice={setNotice}
-        />
+        <>
+          {rooms.length > 1 && roomTabs}
+          <RoomView
+            room={activeRoom}
+            rows={rows}
+            prefs={prefs}
+            session={session}
+            lastOutcome={lastSend?.outcome}
+            lastDetail={lastSend?.detail}
+            logs={logs}
+            emotes={emotes}
+            ownedEmotes={ownedEmotes}
+            ownedError={ownedError}
+            seenEmotes={seenEmotes}
+            balance={balance}
+            onBack={closeRoom}
+            onRefresh={() => void refresh(activeRoom.room_id)}
+            onDisconnect={() => void disconnect(activeRoom.room_id)}
+            onSend={(content, emote, reply) =>
+              send(activeRoom.room_id, content, emote, reply)
+            }
+            onReport={async (message, reason) => {
+              if (await report(message, reason)) setNotice("举报已提交");
+            }}
+            onPrefs={(patch) => void updatePrefs(patch)}
+            onNotice={setNotice}
+          />
+        </>
       ) : (
         <RoomList
           rooms={rooms}

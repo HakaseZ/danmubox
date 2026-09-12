@@ -138,9 +138,25 @@ impl MessageSink {
     }
 
     /// 投递一条归一化消息；`local_id` 由本方法分配（适配器不负责）。
-    pub fn publish_message(&self, mut message: Message) {
+    pub fn publish_message(&self, message: Message) {
+        self.publish_with(message, true);
+    }
+
+    /// 投递一条**进场回填**的历史弹幕。
+    ///
+    /// 与实时消息**共用同一套会话序号**——界面拿 `local_id` 当列表 key，
+    /// 两条路径（`danmubox://message` 与 `history_query`）给出的号必须一致且唯一，
+    /// 否则回填的这批会全部以 `local_id = 0` 落到同一个 key 上。
+    /// 但回填**不计入** `messages` 统计：它不是「收到的包」。
+    pub fn publish_history(&self, message: Message) {
+        self.publish_with(message, false);
+    }
+
+    fn publish_with(&self, mut message: Message, count: bool) {
         message.local_id = self.next_local_id.fetch_add(1, Ordering::Relaxed) + 1;
-        Counters::bump(&self.counters.messages);
+        if count {
+            Counters::bump(&self.counters.messages);
+        }
         self.bus.publish(Event::Message(message));
     }
 

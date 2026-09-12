@@ -96,10 +96,18 @@ impl MessageBuffer {
         self.items.clear();
     }
 
-    /// 追加一条并分配 `local_id`；返回被淘汰的最旧一条（若有）。
+    /// 追加一条；`local_id` 已由 `MessageSink` 分配时**原样保留**，未分配（0）才由本缓冲补号。
+    ///
+    /// 必须保留的原因：同一个 `local_id` 会经两条路径到达界面（`danmubox://message`
+    /// 事件与 `history_query` 快照），二次编号会让两条路径给出不同的号，界面按
+    /// `local_id` 做 key 就会错乱。返回被淘汰的最旧一条（若有）。
     pub fn push(&mut self, mut message: Message) -> Option<Message> {
-        self.next_local_id += 1;
-        message.local_id = self.next_local_id;
+        if message.local_id == 0 {
+            self.next_local_id += 1;
+            message.local_id = self.next_local_id;
+        } else {
+            self.next_local_id = self.next_local_id.max(message.local_id);
+        }
         self.items.push_back(message);
         if self.items.len() > self.cap {
             return self.items.pop_front();
@@ -188,8 +196,6 @@ impl RoomRuntime {
         let restart = Arc::new(tokio::sync::Notify::new());
         let driver = {
             let sink = MessageSink::new(bus.clone(), counters);
-            // 回填走总线（不经过 MessageSink，因此不计入「收到的包」统计）。
-            let history_bus = bus.clone();
             let session = cancel.clone();
             let restart = Arc::clone(&restart);
             tokio::spawn(async move {
@@ -201,7 +207,7 @@ impl RoomRuntime {
                     Ok(items) if !items.is_empty() => {
                         tracing::debug!(room_id, count = items.len(), "进场回填历史弹幕");
                         for message in items {
-                            history_bus.publish(Event::Message(message));
+                            sink.publish_history(message);
                         }
                     }
                     Ok(_) => tracing::debug!(room_id, "上游未返回历史弹幕，按空列表进场"),
@@ -455,8 +461,23 @@ mod tests {
         assert_eq!(
             counters.snapshot().messages,
             1,
-            "历史不经 MessageSink，不得计入「收到的消息」"
+            "回填不计入「收到的消息」（它不是收到的包）"
         );
+
+        // 关键不变式：界面拿 `local_id` 当列表 key，而同一个号会经两条路径到达
+        // ——`danmubox://message` 事件与 `history_query` 快照。两条路径必须给出
+        // 同一套、非零、互不相同的号，否则回填那批会全部落到 key 0 上。
+        let ids: Vec<u64> = rows.iter().map(|m| m.local_id).collect();
+        assert!(
+            ids.iter().all(|id| *id > 0),
+            "回填也必须由 MessageSink 编号，不得留 0：{ids:?}"
+        );
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "local_id 不得重复：{ids:?}");
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "号必须递增：{ids:?}");
+        assert_eq!(ids, vec![1, 2], "历史先于实时，占用最早的号：{ids:?}");
         runtime.close().await.unwrap();
     }
 

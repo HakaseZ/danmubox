@@ -17,6 +17,7 @@ interface Props {
 /** 聊天流。虚拟滚动 + 自动跟随/暂停规则见 docs/ui.md §2、§3。 */
 export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(prefs["ui.auto_scroll"]);
   const pauseOnHover = prefs["ui.pause_on_hover"];
   const [hovered, setHovered] = useState(false);
@@ -24,6 +25,9 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
   // 但观察器只该建一次（每来一条消息重建一次 ResizeObserver 是纯浪费）。
   const stateRef = useRef({ following, count: rows.length });
   stateRef.current = { following, count: rows.length };
+  // 上一次滚动位置：用来分辨「用户往上滚」与「布局变化导致的离底变远」（见 onScroll）。
+  // 首个滚动事件没有可比的上一次（`null`），按「不在底部就算暂停」处理。
+  const prevScrollTopRef = useRef<number | null>(null);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -47,8 +51,11 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
 
   // 聊天区是唯一生长区：表情/短语/筛选面板向上展开时它变矮。
   // 跟随模式下必须重新贴底，否则最新弹幕会被面板推出视口（issue #8 末条）。
+  // 两个元素都要观察：外层容器（面板/礼物栏开合改可视高度）与内层高度块
+  // （虚拟列表先估后测，实测修正同样会改内容高度），否则都会让「贴底」悄悄失效。
   useEffect(() => {
     const el = scrollerRef.current;
+    const content = listRef.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
       const { following: pinned, count } = stateRef.current;
@@ -56,6 +63,7 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
       virtualizer.scrollToIndex(count - 1, { align: "end" });
     });
     observer.observe(el);
+    if (content) observer.observe(content);
     return () => observer.disconnect();
   }, [virtualizer]);
 
@@ -76,12 +84,25 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
           // 8px 阈值：小于它视为仍在底部（docs/ui.md §3.3）。
           const atBottom =
             el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-          if (atBottom !== following) setFollowing(atBottom);
+          const previous = prevScrollTopRef.current;
+          prevScrollTopRef.current = el.scrollTop;
+          if (atBottom) {
+            // 回到（或仍在）底部 = 跟随。
+            if (!following) setFollowing(true);
+            return;
+          }
+          // 不在底部时**只有用户往上滚**才算「我想暂停跟随」。
+          // 面板展开/收起、礼物栏开合、行高实测修正都会让「离底多远」变化，但那不是用户的意图——
+          // 那些情况由上面的 ResizeObserver 重新贴底。修复前这里是 `setFollowing(atBottom)`，
+          // 于是展开一轮面板就会把跟随悄悄关掉（窄屏实测：展开房管面板后列表停在离底 398px 处，
+          // 最新一条被推出视口，只剩「回到最新」按钮在提示）。
+          if (previous === null || el.scrollTop < previous) setFollowing(false);
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
         <div
+          ref={listRef}
           data-testid="db-msg-list"
           className={styles.msgList}
           style={{
@@ -116,6 +137,7 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
       {showJumpButton && (
         <button
           className={styles.bottomAnchor}
+          data-testid="db-bottom-anchor"
           onClick={() => {
             setFollowing(true);
             virtualizer.scrollToIndex(rows.length - 1, { align: "end" });

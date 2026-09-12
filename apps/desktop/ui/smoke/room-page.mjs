@@ -305,6 +305,10 @@ const MOCK = `(function () {
   var openRowMenu = function (row) {
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
   };
+  // 离底部还有多远（0 = 贴底）。「跟随最新」是否还活着，看这个数就知道。
+  var bottomGap = function (el) {
+    return Math.round((el.scrollHeight - el.scrollTop - el.clientHeight) * 10) / 10;
+  };
   var pickGiftMode = function () {
     var panel = byTestId("db-panel");
     if (!panel) return false;
@@ -642,7 +646,15 @@ const MOCK = `(function () {
     // 由上面的 layoutOnlyChatShrank / layoutNewestNotCovered 按同一口径断言。
     out.panelInline = getComputedStyle(panel).position !== "fixed";
     clickTool("表情");
-    await sleep(200);
+    await sleep(300);
+
+    // ---- 面板展开 → 收起一轮之后，「跟随最新」必须还活着
+    // 修复前：收起面板会让容器变高、可滚区间变大，onScroll 只看几何就把 following 判成 false，
+    // 于是列表停在半路、最新一条被推出视口，界面上只剩「回到最新」按钮在提示。
+    // 判据取两条：几何上仍贴底（bottomGap < 8），且 UI 自己说的状态按钮不出现
+    // （db-bottom-anchor 只在 !following 时渲染，是 following 的对外可观察面）。
+    out.layoutFollowingAfterPanelToggle = bottomGap(byTestId("db-chat-scroll")) < 8;
+    out.layoutNoJumpButtonAfterPanelToggle = !byTestId("db-bottom-anchor");
 
     // ---- 面板形态（窄屏）：限高（视口份额）+ 内容超出时**面板内部**滚动 + 关闭入口 + 热区 ≥ 40px，
     //      同时列表仍要剩下可观的高度（不遮最新一条，也不把列表挤成一条缝）
@@ -684,6 +696,8 @@ const MOCK = `(function () {
     stableScroll.scrollTop = Math.round((stableScroll.scrollHeight - stableScroll.clientHeight) * 0.55);
     await sleep(300);
     out.layoutPausedBeforePanel = stableScroll.scrollHeight - stableScroll.scrollTop - stableScroll.clientHeight > 8;
+    // 另一半：**用户自己往上滚**必须真的降为「不跟随」——判据同样是状态按钮出现
+    out.layoutPausedShowsJumpButton = !!byTestId("db-bottom-anchor");
     var anchorRow = rows()[4];
     var anchorTopBefore = anchorRow ? Math.round(rect(anchorRow).top * 10) / 10 : null;
     clickTool("表情");
@@ -703,6 +717,7 @@ const MOCK = `(function () {
     await sleep(500);
     out.layoutStabilityRestored =
       stableScroll.scrollHeight - stableScroll.scrollTop - stableScroll.clientHeight < 8;
+    out.layoutJumpButtonGoneAfterRestore = !byTestId("db-bottom-anchor");
 
     // ---- emotes 主站「我的表情」：分组可见、选得到、发出去带的是唯一键（issue #8）
     out.emotesOwnedCalled = calls.indexOf("emotes_owned") >= 0;
@@ -955,6 +970,11 @@ const MOCK = `(function () {
       allByTestId("db-admin-blacklist-item").length,
       allByTestId("db-admin-keyword-item").length
     ];
+    // 房管面板是最高的一个（窄屏撞 45vh 上限），它展开时最能暴露「跟随被悄悄关掉」：
+    // 修复前这里实测离底 398px，最新一条落在面板下方 318px 处。
+    out.layoutAdminBottomGap = bottomGap(byTestId("db-chat-scroll"));
+    out.layoutAdminFollowing = out.layoutAdminBottomGap < 8;
+    out.layoutNoJumpButtonWithAdminPanel = !byTestId("db-bottom-anchor");
     // 窄屏：房管面板同样是文档流里的一块（只挤列表、不遮最新一条），限高 + 内部滚动 + 关闭入口 + 热区 ≥ 40px
     if (NARROW) {
       var adminPanelRect = rect(adminPanel);

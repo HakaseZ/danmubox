@@ -23,10 +23,16 @@ const EXPECTED_FALSE = new Set([
   "step6_prefAutoHide",
 ]);
 
-/** 视口：宽屏在前（截图沿用既有文件名），窄屏的截图带 `-narrow` 前缀。 */
+/**
+ * 视口：宽屏在前（截图沿用既有文件名），窄屏的截图带 `-narrow` 前缀。
+ *
+ * 窄屏跑 **360×844**：窗口最小宽度就是 360（`tauri.conf.json` 的 `minWidth`），
+ * 也是**可达面的边界值**——按「验证要覆盖可达面的边界」这条规矩，冒烟就该压在边界上
+ * （390×844 是窗口默认值，比边界宽 30px，跑它会被这 30px 的宽容度掩盖溢出类问题）。
+ */
 const VIEWPORTS = [
   { name: "wide", width: 1440, height: 900 },
-  { name: "narrow", width: 390, height: 844 },
+  { name: "narrow", width: 360, height: 844 },
 ];
 
 /** 找一台可用的 Chrome：显式 CHROME_BIN 优先，否则用 omp 自带的那份。 */

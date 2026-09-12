@@ -155,7 +155,7 @@
 | 返回列表 | `xs` / `md` 下从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-reply` / `db-msg-reply-name` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-panel-close` / `db-composer-tools` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-msg-list` / `db-bottom-anchor` / `db-msg-row` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-reply` / `db-msg-reply-name` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-panel-close` / `db-composer-tools` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col`。`db-bottom-anchor` 是「回到最新」按钮（§7.4），它**只在 `!following` 时渲染**，因此也是「跟随/暂停」这个状态的对外可观察面——冒烟靠它的有无断言跟随态，而不是靠内部 state |
 
 ### 2.4 会话缓冲生命周期（契约 §4.3）
 
@@ -688,20 +688,25 @@
 
 | 状态 | 进入条件 | 行为 | 退出条件 |
 |---|---|---|---|
-| 跟随最新 `following` | 进入房间且 `ui.auto_scroll = true`；点击「回到最新」；滚动到距底 ≤ 8px | 每次 flush 后定位到列表底部；隐藏「回到最新」 | 距底 > 8px |
-| 用户暂停 `paused` | 上滑 / 拖动滚动条使距底 > 8px | 冻结视口位置；新消息不改动 `scrollTop`；显示「N 条新消息 · 回到最新」 | 点击「回到最新」；滚回距底 ≤ 8px |
+| 跟随最新 `following` | 进入房间且 `ui.auto_scroll = true`；点击「回到最新」；滚动到距底 ≤ 8px | 每次 flush 后定位到列表底部；隐藏「回到最新」 | 距底 > 8px **且** 这一次是用户往上滚（见规则 1） |
+| 用户暂停 `paused` | 上滑 / 拖动滚动条，使距底 > 8px（**真的往上滚**——`scrollTop` 比上一次小） | 冻结视口位置；新消息不改动 `scrollTop`；显示「N 条新消息 · 回到最新」 | 点击「回到最新」；滚回距底 ≤ 8px |
 | 悬停暂停 `hovered` | `ui.pause_on_hover = true` 且鼠标进入聊天流区域 | 与 `paused` 相同的冻结行为，但不显示「回到最新」 | 鼠标离开后回到进入前的状态；触控设备不进入该状态 |
 | 非激活标签 `background` | 该房间不是当前标签 | 不入渲染队列；连接保持、会话缓冲照常追加 | 切回该标签 |
 
 规则：
 
-1. 距底阈值 8px 是唯一判定依据，不用滚动方向启发式（手势惯性下会抖动）。
+1. 判定分两步，别混：**「是不是在底部」只看距底阈值 8px**；**「这个不在底部是不是用户干的」看滚动方向**
+   （`scrollTop` 比上一次小 = 用户往上滚）。只有两步都成立才降为 `paused`。
+   方向只在「已经不在底部」这一支里参与判定，不参与「是否贴底」，因此不会引入惯性抖动。
+   反过来（修复前的写法）只看阈值会误判：容器变矮/变高同样让距底变远，那是**布局**干的，不是用户——
+   读成「用户想暂停」就会在展开一轮面板之后把跟随悄悄关掉，最新一条被推出视口（实测见 `CHANGELOG.md`）。
 2. 初始状态由 `ui.auto_scroll` 决定；用户暂停/恢复时把新状态写回 `ui.auto_scroll`，作为下次进入房间的初始值。
 3. 独立礼物栏（`separate` 模式）各自维护跟随状态，互不影响。
 4. 「回到最新」使用平滑滚动。
 5. `visibilitychange` 为 hidden 时不依赖 rAF（后台会被节流），改为 1s 定时批量写入 store，恢复可见时立即 flush 并对齐滚动。
-6. **可视高度变化要重新贴底**：弹出面板展开/收起、窗口缩放、礼物栏开合都会改聊天区高度（`ResizeObserver` 监听滚动容器）。跟随模式下重新定位到末尾，否则最新弹幕会被挤出视口（`docs/ui.md` §2.3 的「不遮挡最新弹幕」）；暂停状态下不动视口。
+6. **可视高度变化要重新贴底**：弹出面板展开/收起、窗口缩放、礼物栏开合都会改聊天区高度；虚拟列表「先估后测」，行高实测修正也会改**内容**高度。因此 `ResizeObserver` 要同时盯**滚动容器**与**内层虚拟高度块**。跟随模式下重新定位到末尾，否则最新弹幕会被挤出视口（§2.3 的「不遮挡最新弹幕」）；暂停状态下不动视口。
 7. **内容不足视口高度时整体贴底**：直播弹幕自下往上读，最新一条应紧贴输入区上方（官方聊天栏同样贴底），因此富余空间留在**顶部**、不留底部。实现是滚动容器 `display: flex; flex-direction: column`、内层虚拟高度块 `margin-top: auto`——**不用** `justify-content: flex-end`：在滚动容器上用 flex-end，内容一旦超过视口高度，顶部会被顶出可滚动区间（滚不回去，flex + overflow 的经典坑）。虚拟行是 `position: absolute` + `translateY` 定位，不受这层对齐影响。
+8. 「回到最新」按钮带 `data-testid="db-bottom-anchor"`，且**只在 `!following` 时渲染**——它是跟随状态的对外可观察面（§2.3 的稳定钩子），冒烟靠它的有无断言跟随态。
 
 ### 7.3 滚动锚定
 
@@ -862,7 +867,7 @@
 
 浅色主题（`ui.theme`）**不是第二套样式**：只在 `:root[data-theme="light"]` 里给这些槽位换一组值，组件规则一行都不用改。新增样式时不得再写字面颜色 / 间距 / 圆角 / 字号——要新值就先加令牌。
 
-**关于「挤了怎么办」的一条规矩**（用户 2026-09-12 定案）：弹幕行的行高是 **内容 + `--sp-1`（4px）上下内边距 ≈ 30px**（原来是 23px），这是为了让行与行在触屏上分得开；代价是同样高度少看几行——面板展开时弹幕列表约剩 **54%**（390×844 下约 337px ≈ 11 行 @30px），面板内容超出则走面板**内部滚动**，不靠遮挡换空间。如果将来真觉得挤，**正确的做法是新增一档「紧凑」令牌**（例如 `--sp-0: 2px`，并在令牌表里写清它只用于哪一类场景），**不是**就地把某个 `--sp-1` 改成 `2px`：间距阶的价值就在于「以后不用微调」，破一次例就等于给下一个人留了口子。
+**关于「挤了怎么办」的一条规矩**（用户 2026-09-12 定案）：弹幕行的行高是 **内容 + `--sp-1`（4px）上下内边距 ≈ 30px**（原来是 23px），这是为了让行与行在触屏上分得开；代价是同样高度少看几行——面板展开时弹幕列表约剩 **54%**（360×844 下约 337px ≈ 11 行 @30px；这两个数与宽度无关，390×844 下同值），面板内容超出则走面板**内部滚动**，不靠遮挡换空间。如果将来真觉得挤，**正确的做法是新增一档「紧凑」令牌**（例如 `--sp-0: 2px`，并在令牌表里写清它只用于哪一类场景），**不是**就地把某个 `--sp-1` 改成 `2px`：间距阶的价值就在于「以后不用微调」，破一次例就等于给下一个人留了口子。
 
 ---
 
@@ -938,8 +943,11 @@ npm run build
 node smoke/run-headless.mjs          # 自己起 Chrome for Testing 走 CDP，两个视口各跑一遍，打印 data-smoke 快照
 ```
 
-**两个视口**：1440×900（宽屏）与 **390×844**（窄屏，竖屏手机比例，安卓的参考）。用 CDP 的 `Emulation.setDeviceMetricsOverride`
+**两个视口**：1440×900（宽屏）与 **360×844**（窄屏 = 窗口能达到的最窄值）。用 CDP 的 `Emulation.setDeviceMetricsOverride`
 把布局视口改小，跑的是**同一份场景代码**——窄屏那遍不是另写一套脚本，否则两边会各自漂移。
+窄屏覆盖取 **360** 而不是默认窗口的 390：`minWidth` 是 360（§9.1），**可达面的边界值就是 360**，
+覆盖压在边界上才叫覆盖到最坏情况；390 比它宽 30px，跑 390 会被这 30px 的宽容度掩盖溢出类问题。
+（形状与尺寸类断言本来就与宽度无关的，两档结果一致；冒烟只跑边界那一档。）
 
 **判据：视口是产品的可达面，不是测试的自由参数。** 凡新增「只在某些视口成立」的行为，必须同时确认**用户能到达那个视口**——
 窗口/设备的最小尺寸、断点、以及入口（能不能拖到、能不能旋转到）。2026-09-12 的反例：窄屏形态在无头浏览器的 390px 视口里全绿，
@@ -951,8 +959,8 @@ node smoke/run-headless.mjs          # 自己起 Chrome for Testing 走 CDP，�
 |---|---|
 | 断言口径 | 只依赖**对外可观察**的行为：DOM 文本、`getBoundingClientRect` 几何、`Range.getClientRects()` 行盒、`getComputedStyle` 定位/滚动、IPC 调用记录。定位一律走 `data-testid`（§2.3 的稳定钩子），**不依赖 CSS 类名** |
 | 快照即契约 | 快照字段名（`step1_*` … `step6_*` 与 `layout*` / `menu*` / `time*` / `gift*` / `follow*` / `account*` / `emotes*` / `owned*` / `admin*` / `medal*` / `narrow*` / `wide*`）是断言契约，改名等于改断言。视口专属的断言按视口取名（`narrow_*` / `wide_*`，由场景里的 `put()` 写入）：同一份场景两个视口都跑，前缀只表示「这条是哪个视口的快照」 |
-| 几何口径 | `layoutShortContentBottomGap` = 滚动容器底边与末行底边之差（贴底时只剩容器 `padding-bottom`，8px）；`layoutNameLefts` = 三行昵称左边缘（头像列占位后完全一致）；`layoutBadgeNameGap` / `layoutNameBodyGap` = 徽标组→昵称 / 昵称→正文两道间距（前者必须更小）；`layoutHangIndentFirstLeft` / `layoutHangIndentLastLeft` / `layoutHangIndentLines` = 折行后首行与末行的文字左边缘（相等）与行数（≥2 才不算空对空）；`layoutAvatarFirstLineDelta` = 头像中心 − 首行行盒中心（首行居中口径，≈0）；`layoutHeaderOverlapPx` = 滚到顶部时滚动容器顶边 − 第一条行盒顶边（≥0 即没被头部压住）；`panelChildLefts` = 面板直接子元素的左边缘（必须只有一个值）；`layoutPanelScrollStablePx` = 展开面板前后、同一行在视口里的位移 |
-| 覆盖 | 关注列表自动加载与排序分页、账号区（一行身份 + 对话框：单账号也有添加入口、扫码添加不覆盖、重新登录需确认、删除当前自动切走、退出登录回游客态）、弹幕列表是唯一生长区、面板向上展开不遮挡最新弹幕、行右键菜单、时间戳默认关且打开后等宽对齐、礼物栏在输入区下方且不抢宽度、系统通知与互动自动消失、历史与实时同款、**内容不足视口时整体贴底**、**头像列永远占位（昵称三列纵向对齐）**、**粉丝牌真彩色与兜底色**、**回复关系可见（非回复不画标记）+ 被 @ 名字用 `reply_uname_color` 上色、空串不上色**、**舰长标只认本房间的 `guard_level`**、**主站「我的表情」分组可见且发出去带唯一键**、**@ 目标与文本同源**、**房管权限前置 / 写操作二次确认与请求形状 / 面板三块列表增删 / 无权限时原样展示上游 code + message**、**行排版的整体感（两种间距、徽标贴昵称、悬挂缩进、头像首行居中）**、**面板：只挤列表 / 不遮最新一条 / 内容对齐一条左边缘 / 展开不弹走滚动位置**、**窄屏：无横向滚动、面板与对话框限高且内部滚动、有关闭入口、热区 ≥ 40px、工具行不溢出、礼物折叠条不挤列表、账号行不叠字** |
+| 几何口径 | `layoutShortContentBottomGap` = 滚动容器底边与末行底边之差（贴底时只剩容器 `padding-bottom`，8px）；`layoutNameLefts` = 三行昵称左边缘（头像列占位后完全一致）；`layoutBadgeNameGap` / `layoutNameBodyGap` = 徽标组→昵称 / 昵称→正文两道间距（前者必须更小）；`layoutHangIndentFirstLeft` / `layoutHangIndentLastLeft` / `layoutHangIndentLines` = 折行后首行与末行的文字左边缘（相等）与行数（≥2 才不算空对空）；`layoutAvatarFirstLineDelta` = 头像中心 − 首行行盒中心（首行居中口径，≈0）；`layoutHeaderOverlapPx` = 滚到顶部时滚动容器顶边 − 第一条行盒顶边（≥0 即没被头部压住）；`panelChildLefts` = 面板直接子元素的左边缘（必须只有一个值）；`layoutPanelScrollStablePx` = 展开面板前后、同一行在视口里的位移；`layoutAdminBottomGap` = 房管面板（最高的一档，窄屏撞 45vh 上限）展开时列表离底的距离（0 = 仍贴底；修复前实测 398px） |
+| 覆盖 | 关注列表自动加载与排序分页、账号区（一行身份 + 对话框：单账号也有添加入口、扫码添加不覆盖、重新登录需确认、删除当前自动切走、退出登录回游客态）、弹幕列表是唯一生长区、面板向上展开不遮挡最新弹幕、行右键菜单、时间戳默认关且打开后等宽对齐、礼物栏在输入区下方且不抢宽度、系统通知与互动自动消失、历史与实时同款、**内容不足视口时整体贴底**、**头像列永远占位（昵称三列纵向对齐）**、**粉丝牌真彩色与兜底色**、**回复关系可见（非回复不画标记）+ 被 @ 名字用 `reply_uname_color` 上色、空串不上色**、**舰长标只认本房间的 `guard_level`**、**主站「我的表情」分组可见且发出去带唯一键**、**@ 目标与文本同源**、**房管权限前置 / 写操作二次确认与请求形状 / 面板三块列表增删 / 无权限时原样展示上游 code + message**、**行排版的整体感（两种间距、徽标贴昵称、悬挂缩进、头像首行居中）**、**面板：只挤列表 / 不遮最新一条 / 内容对齐一条左边缘 / 展开不弹走滚动位置**、**跟随态（§7.2）：展开→收起一轮面板后仍跟随、用户往上滚确实暂停、最高的房管面板展开后仍贴底**、**窄屏：无横向滚动、面板与对话框限高且内部滚动、有关闭入口、热区 ≥ 40px、工具行不溢出、礼物折叠条不挤列表、账号行不叠字** |
 | 两个视口 | 同一份场景代码在两个视口各跑一遍，**断言集合相同、没有例外名单**：面板在窄屏也是文档流里的一块（§9.1），所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真。视口专属的补充断言按 `narrow_*` / `wide_*` 前缀分开存放 |
 | 产物 | 快照 JSON + **十六张**截图（每个视口各八张）：`danmubox-ui-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-final.png` 结束时；窄屏那八张带 `-narrow` 前缀（如 `danmubox-ui-narrow-room.png`）。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
 | 维护约定 | 场景代码整段是一个模板字符串：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩（踩过两次） |

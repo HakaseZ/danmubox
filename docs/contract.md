@@ -70,13 +70,14 @@ danmubox/
 
 | 端口 | 职责 |
 |---|---|
-| `AuthProvider` | 登录态、凭据读写、扫码流程、buvid3 |
+| `AuthProvider` | 登录态、凭据读写、扫码流程、buvid3；`create_profile(name)`（新建空 profile 并设为当前，名字 `[A-Za-z0-9_-]{1,32}`，非法/重名 → `BAD_REQUEST`，不覆盖已有）、`remove_profile(name)`（不许删最后一个 → `BAD_REQUEST`；不存在 → `NOT_FOUND`；删当前项则当前指向切到剩下的条目） |
 | `LiveSource` | 房间解析、建立/断开连接、事件流 |
 | `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5）。`emote: Option<&EmoteToken>` 非空时发送**表情弹幕**；`reply: Option<&ReplyTarget>` 非空时带上 @ / 回复字段（见 `protocol.md` §11.6） |
 | `DanmakuReporter` | 举报弹幕；`reasons()` 取上游固定理由清单（官方客户端按文案反查 `reason_id` 后与文案一起上报） |
-| `EmoteProvider` | 按身份加载表情包库 |
+| `EmoteProvider` | 按身份加载表情包库；`owned()` 取主站「我的表情」（未登录时为上游免费表情包） |
 | `RoomCatalog` | 关注列表、直播状态、房间元信息 |
 | `WalletProvider` | 电池余额 |
+| `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查。仅房管可用；上游非 0 code 原样带回、不赋语义 |
 
 > **后期想法（本期不实现）**：接入 MCP，让 Agent 直接消费弹幕数据。为此刻意保持架构兼容——core 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层。本期不定义任何 MCP 工具、协议或端点。
 
@@ -236,6 +237,8 @@ sessdata = ""
 > 为什么存整份而不只存图片地址：上游有些表情家族（`upower_` 的 UP 主专属表情）**不在直播表情接口里**，
 > 只能从收到的弹幕学到。存全了，界面才能把它们补进选择器、让用户**再发出去**（`protocol.md` A35）。
 
+`SilentUser` / `BlacklistedUser`（房管列表条目，规范性）：`uid` / `uname` / `face`。禁言名单与黑名单各一套——前者是「本直播间禁言」，后者是「拉黑（自动解除关系并禁止互动）」。
+
 `ReportReason`（举报理由，规范性）：`id` / `reason`。取自上游 `dMReport/ForReason`，界面只让用户从清单里选。
 
 `FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
@@ -275,8 +278,11 @@ Frontend → Rust 命令（`invoke`）：
 | `admin_mute` / `admin_unmute` | 禁言 / 解除（`room_id`、`uid`、`hour`：`-1` 永久、`0` 本场） |
 | `admin_blacklist_list` / `_add` / `_del` | 直播间黑名单（列表 / 加入 / 移除） |
 | `admin_keywords_list` / `_add` / `_del` | 直播间屏蔽词（列表 / 添加 / 删除） |
+| `admin_silent_list` | 禁言名单（`SilentUser[]`）——房管功能做完整所需，官方面板也有这一栏 |
 | `session_logout` | 登出并清空 `config.toml` 中当前 profile 的凭据 |
 | `profiles_list` / `profiles_switch` | 列出配置文件中的 profiles、切换当前 profile 并以新凭据重连 |
+| `profiles_create` | 新建 profile 并设为当前（非法/重名 → `BAD_REQUEST`，不覆盖已有） |
+| `profiles_remove` | 删除 profile（不许删最后一个；不存在 → `NOT_FOUND`；删当前项自动切换） |
 | `rooms_list` / `rooms_add` / `rooms_remove` | 房间增删查 |
 | `rooms_connect` / `rooms_disconnect` | 连接控制 |
 | `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |

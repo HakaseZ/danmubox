@@ -1,0 +1,11 @@
+{
+ "code": 0,
+ "message": "OK",
+ "ttl": 1,
+ "data": {
+  "rooms": [],
+  "list": [],
+  "count": 0,
+  "not_living_num": 0
+ }
+}

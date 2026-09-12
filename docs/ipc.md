@@ -194,9 +194,11 @@ type FollowedRoom = {
   room_id: number;
   uname: string;
   face: string;
-  title: string;                  // 直播间标题（上游 GetWebList 的 title；空串 = 上游未给）
+  title: string;                  // 直播间标题（上游 GetWebList / 批量房间接口的 title；空串 = 上游未给）
   live_status: number;           // 0 未开播 / 1 直播中 / 2 轮播
   group_name: string;
+  live_start_at: number;         // 本场开播时刻（Unix 秒，上游 liveTime）；0 = 未知（未开播条目拿不到，见 contract §5）
+  online: number;                // 人气 / 在线数（上游 online；缺失 = 0）
 };
 
 type RoomStats = {

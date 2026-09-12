@@ -107,6 +107,23 @@
   输入区、展开中的面板、面板自己弹出的右键菜单三块都不关，点弹幕列表等外面照旧关。冒烟复现补了一次真实的
   `pointerdown`（`.click()` 只发 click 事件、绕过那条监听，这正是它当初漏测的原因），断言
   `panelSurvivesTabSwitch`（面板还在 + 选中的组确实换了）/ `panelStaysOnInsidePress` / `panelClosesOnChatPress`。
+- **「关注了但没开播」的人现在真的会出现在主界面**（用户 2026-09-13：「关注但未开播的用户也一直没有加载到主界面」）。
+  先只读取证，两个账号交叉验证：直播侧 `GET /xlive/web-ucenter/v1/xfetter/GetWebList` **只返回在播房间**——
+  账号 A 关注 90 人、当时在播 0 人 → `count=0` / `list=[]` / `rooms=[]`，而 `not_living_num=90`；账号 B 关注 5 人 →
+  `not_living_num=5`、列表同样空。换 `page_size`（10/30/50/100）、翻到第 2/3 页、加 `type` / `sortRule` /
+  `needNotLiving` / `includeNotLiving`、加带 `w_rid` 的 WBI 签名，都拿不到未开播条目（`hit_ab=false` 时连
+  `not_living_num` 也归零）。⇒ **未开播的人不是本实现丢的，是这个端点根本不给**（此前台账把它记成「已做」，
+  是因为冒烟里的「离线甲 / 离线乙」是**手造**的，真实故障照不出来）。现在 `BiliFollow::followed()` 两步取全量：
+  ① 主站关注关系 `GET https://api.bilibili.com/x/relation/followings?vmid=<自己>&ps=50&pn=<页>`（`data.total`
+  + `data.list[].mid`，实测 total 90 = 直播侧 `not_living_num` 90）；② `GET /room/v1/Room/get_status_info_by_uids`
+  （`data` 是**以 uid 为键的对象**，字段与本端点同构）批量取直播间，**含未开播**。在播条目仍优先用
+  `GetWebList` 的那一份（它带 `liveTime`）。实机（CLI，真实登录态）改前 **0** 条 → 改后 **70** 条
+  （90 个关注里 70 个有直播间；另 20 个没有直播间，不产生列表项），其中 65 条未开播 + 5 条轮播、0 条在播；
+  另一个账号 0 → 4 条（全部未开播）。补取这两步失败时**只丢未开播那一份并打 `warn`**，不影响在播的。
+  冒烟夹具换成真实响应派生（`smoke/fixtures/follow-list.json` 等 4 份，脱敏），新增断言
+  `followOfflineVisibleOnPage1` / `followOfflineAllListed`（真实取样下未开播项必须**第 1 页可见**且**翻页到底一条不少**）。
+  取证见 `docs/protocol.md` A28 修正；契约 §5、`docs/ui.md` §2.2、`docs/requests.md` P11/P16 同步。
+  ⚠ 未开播条目的「最后开播时间」上游两个端点都不给（`live_time` 在未开播时为 0），排序里这一档仍按 `online` / 房间号兜底。
 - **弹幕行里的表情图不再按原图尺寸渲染**（用户 2026-09-12 报的第 3 次同款错误：头像 512×512 顶爆主页、
   表情撑出面板格子、这次在弹幕行）。`.contentEmote` / `.contentEmoteBulge` 只写了 `height`，宽度就按原图比例反推——
   真站的通用表情是 **200×60 的横条**，`1.1 × 行盒`（23.1px）高会算出 **77px** 宽。现在宽高都给死（见方）+

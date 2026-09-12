@@ -273,10 +273,16 @@ sessdata = ""
 
 `FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `title` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
 
+**`RoomCatalog::followed()` 的取数口径（2026-09-13 修正）**：列表 = **全部关注里「有直播间」的那些**（在播 + 未开播）。
+直播侧 `GetWebList` **只返回在播房间**（实测：关注 90 人、在播 0 人时它给 `count=0` + `list=[]` + `not_living_num=90`），
+因此未开播那一份必须另取：① 主站关注关系 `relation/followings` 拿全量关注的 uid；② 直播 `room/v1/Room/get_status_info_by_uids`
+按 uid 批量取直播间（含未开播）。**没有直播间的关注不产生列表项**（没有房间可进；实测 90 个关注里 20 个没有直播间）。
+在播条目优先用 `GetWebList` 的那一份（它带 `liveTime`）。取证见 `docs/protocol.md` A28 修正。
+
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `title` | String | **直播间标题**（上游 `GetWebList` 的 `title`，2026-09-12 实测；与房间模型 `Room.title` 同义）。空串 = 上游未给，界面不渲染该元素。 |
-| `live_start_at` | i64 | **最后/本次开播的起始时间**（上游 `liveTime`，Unix 秒；0 = 未知）。命名刻意避开上游另一个字段 `live_time`（那个是**已开播秒数**，与 `liveTime` 相加等于当前时间——靠这个关系确认了 `liveTime` 的语义，见 2026-09-12 实测）。 |
+| `live_start_at` | i64 | **最后/本次开播的起始时间**（上游 `liveTime`，Unix 秒；0 = 未知）。命名刻意避开上游另一个字段 `live_time`（那个是**已开播秒数**，与 `liveTime` 相加等于当前时间——靠这个关系确认了 `liveTime` 的语义，见 2026-09-12 实测）。**只有直播侧 `GetWebList` 给这个量**，而它只返回在播房间；未开播条目走批量房间接口，那里 `live_time` 在未开播时为 0（`room/v1/Room/get_info` 甚至给 `0000-00-00 00:00:00`），因此**未开播条目的 `live_start_at` 恒为 0**——排序里这一档落回 `online` / 房间号（2026-09-13 实测）。 |
 | `online` | i64 | 人气/在线数（上游 `online`；缺失 = 0） |
 
 **展示排序**：`live_status == 1` 置顶（REQUIREMENTS.md 需求）→ **最近观看降序**（用户 2026-09-12 #16；数据是 `ui.recent_watched`，没看过的不计入该档、排在看过的之后）→ `live_start_at` 降序 → `online` 降序 → `room_id` 升序。用户追加要求：**未开播的也要列出**，因此不再只展示直播中的房间。

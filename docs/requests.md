@@ -30,17 +30,17 @@
 | P8 | 参照 web 直播栏优化布局：筛选收进展开菜单；短语增删逻辑修正；更多动作收进右键；时间对齐；非通用表情放大；主站表情要能选；字号联动表情尺寸；面板展开不挡最新弹幕 | `issue` #8（8 个子项）；`CHANGELOG` Changed「房间页按一条纵向生长轴重排」等 | 已做（1 项为有意删除） | 筛选面板 `ui.md` §8.5；右键菜单 §4.5；短语右键增删改 §6.2；时间戳列对齐 §4.1；表情尺寸分级 §6.3；`emotes_owned` 接进面板；「最近发言」面板**整条链路删除**（`CHANGELOG`「删掉『最近发言』面板及其整条链路」，属有意） |
 | P9 | 透明度功能非预期实现，先删了，放待办 | `issue` #9；`CHANGELOG` Removed「透明度功能（`ui.opacity`）」 | 已做（重做待办已登记） | `roadmap` §8.3（重做前先明确它作用在什么上）；`contract` §8 已无该键 |
 | P10 | 互动（进场）消息加自动消失开关，只有常开才一直显示；系统通知默认关闭 | `issue` #10；`CHANGELOG` Added「两个消息显示开关」 | 已做 | 偏好键 `ui.interact_auto_hide`（默认 true）/ `ui.system_notice`（默认 false），`contract` §8；`ui.md` §4.8 |
-| P11 | 关注的未开播也展示，按最后开播时间排序，分页 | `issue` #11；`CHANGELOG` Added「关注列表展示未开播房间、按最后开播时间排序、分页」 | 已做 | `contract` §5 新增 `live_start_at` / `online`；每页 30 条；`docs/protocol.md` A28 |
+| P11 | 关注的未开播也展示，按最后开播时间排序，分页 | `issue` #11；`CHANGELOG` Added「关注列表展示未开播房间、按最后开播时间排序、分页」 | **部分**（2026-09-13 之前：**未开播的一个都没展示到**；现已修） | **事实**：直播侧 `GetWebList` **只返回在播房间**（实测关注 90 人 / 在播 0 人 → `list=[]` + `not_living_num=90`），此前 `followed()` 只吃这一个端点，因此主界面永远看不到未开播的关注——用户 2026-09-13 报的正是这条（台账原记「已做」是**被手造夹具骗了**：冒烟当时用「离线甲 / 离线乙」手写条目）。**现已补齐**：主站关注关系 + 直播批量房间接口两步取全量（实机 0 → 70 条，另一账号 0 → 4 条，全部未开播）；冒烟换成真实派生夹具并断言未开播项第 1 页可见、翻页到底一条不少。**仍未闭环**：未开播条目的「最后开播时间」上游两个端点都不给（`live_time` 未开播时为 0），这一档排序落回 `online` / 房间号。取证：`docs/protocol.md` A28 修正；`docs/contract.md` §5；`docs/ui.md` §2.2/§15；`CHANGELOG` Fixed（2026-09-13） |
 | P12 | 舰长标与本房间舰长不一致；其他房间的舰长也有舰长标 | `issue` #12；`CHANGELOG` Added「舰长标只看『本房间』的舰长身份」 | 已做 | `Message.guard_level` 取 `info[7]`；粉丝牌自身标记另开 `medal_guard_level`（`contract` §5）；`docs/protocol.md` A39 |
 | P13 | @ 之后删掉文本里的 `@xxx` 再发送仍会 @；弹幕里看不到 @ 关系 | `issue` #13；`CHANGELOG` Fixed「@ 目标与文本框不再脱钩」、Added「弹幕里的『回复了谁』可见」 | 部分 | @ 目标从草稿派生（已做）；回复关系可见（`db-msg-reply`，已做）；**「纯 @」与「回复」在收包侧不可区分**（`docs/protocol.md` §11.6 / A40 未闭），界面统一渲染 `@昵称` |
 | P14 | 主界面竖屏：第一排左 头像 + 主播名 / 右 直播状态；第二排左 直播标题 / 右 最后开播时间；不要房间号 | `issue` #14；`CHANGELOG` Changed「主界面房间列表与关注列表重排」；提交 `f8444ad` | 已做 | 一套 DOM + 两种 grid 模板，断点 520px，窄屏验证视口 360（窗口最小宽度）；`ui.md` §2.2 / §9.1 |
 | P15 | 主界面宽屏：一排；左 头像·主播名·直播标题 / 右 直播状态·最后开播时间；不要房间号 | `issue` #15；`CHANGELOG` 同上；提交 `f8444ad` | 已做 | 宽屏 > 520px 一排；两处均不含房间号（冒烟 `followItemHidesRoomNumber` / `roomCardHidesRoomNumber` / `tabHidesRoomNumbers`） |
-| P16 | 所有关注都要展示；直播中置顶；按最近观看降序 | `issue` #16；`CHANGELOG` Changed「#16 排序」 | 已做 | 排序链完整为「直播中置顶 → **最近观看降序**（新增偏好键 `ui.recent_watched`）→ 最后开播时间降序 → 人气 → 房间号」，`contract` §8 / `ui.md` §2.2 |
+| P16 | 所有关注都要展示；直播中置顶；按最近观看降序 | `issue` #16；`CHANGELOG` Changed「#16 排序」 | 已做（「所有关注都要展示」这一半 2026-09-13 才成立，见 P11） | **事实**：排序链完整为「直播中置顶 → **最近观看降序**（新增偏好键 `ui.recent_watched`）→ 最后开播时间降序 → 人气 → 房间号」，`contract` §8 / `ui.md` §2.2。**但直到 2026-09-13 之前，「所有关注都要展示」实际只能拿到在播的那些**（上游 `GetWebList` 只给在播房间），现已由 P11 的两步取法补齐（实机 0 → 70 条） |
 | P17 | 连接中的房间列表不展示房间号，仅展示「主播 · 直播间名」 | `issue` #17；`CHANGELOG` Changed「#17 连接的房间列表」；Fixed（真正的主播名） | 已做 | 先取错接口（`getRoomPlayInfo` 里根本没有 `anchor_info`/`title`）→ 改从 `getH5InfoByRoom` 取（`Room.anchor_uname`，`contract` §5）；回落口径 主播名 → 标题 → 「房间 <号>」，占位词已删；`ui.md` §2.2；`docs/protocol.md` A41；提交 `2e95a22` |
 | P18 | 房间 tab 不展示房间号，展示主播名 | `issue` #18；`CHANGELOG` Changed「#18 房间标签条」；提交 `2e95a22` | 已做 | 标签名取主播名（取不到退回标题）；`App.tsx` tab 渲染；`ui.md` §2.3 |
 | P19 | 短语删除颜文字部分 | `issue` #19；`CHANGELOG` Removed「短语面板删掉内置颜文字」 | 已做 | 删 `Composer.tsx` 的 `KAOMOJI` 常量与该行渲染；`ui.md` §6.2 同步；提交 `d6ba109`（worktree 内 `9db6e35`） |
 | P20 | 表情界面仿官方：用 tab 不要用按钮；通用表情全部超出边框很丑 | `issue` #20；`CHANGELOG` Changed「表情面板重做：竖向 tab 轨道 + 表情完整落在格子里」 | 已做 | 左侧竖向 tab 轨道（`role=tablist` + roving tabindex + 方向键）；`<img>` 宽高由 CSS 显式给出 + `object-fit: contain`（溢出 24.9px → 0）；夹具由真实载荷 `smoke/fixtures/emotes.json` 派生；`ui.md` §6.3；提交 `f19de72`（worktree 内 `0375f44`） |
-| P21 | 关注列表要能看到直播间标题；房间卡片标题要加悬停提示（免得被当成 bug） | 子代理票 `FollowTitle`（分支 `feat/ui-follow-title`）；`CHANGELOG` Added「关注列表带出直播间标题」 | 已做 | 先只读取证：`GetWebList` 条目里本来就有 `title`（同条目 `roomname` 是房间默认名），直接转发不另调接口；`FollowedRoom.title`（`contract` §5）；空串不渲染；房间卡片标题行加 `title="直播间标题（上游）"` |
+| P21 | 关注列表要能看到直播间标题；房间卡片标题要加悬停提示（免得被当成 bug） | 子代理票 `FollowTitle`（分支 `feat/ui-follow-title`）；`CHANGELOG` Added「关注列表带出直播间标题」 | 已做 | 先只读取证：`GetWebList` 条目里本来就有 `title`（同条目 `roomname` 是房间默认名），直接转发不另调接口（**2026-09-13 修正口径见 P11**：该端点只给在播条目；未开播条目的 `title` 来自批量房间接口的同名字段，同义）；`FollowedRoom.title`（`contract` §5）；空串不渲染；房间卡片标题行加 `title="直播间标题（上游）"` |
 | P22 | 用户名与正文都不吃上游自定义弹幕颜色（浅色主题下白字人名等于隐形、正文偏黄）；用户明确「不需要再改动」 | `CHANGELOG` Changed「弹幕自定义颜色整体不再消费」；提交 `4b33e87` | 已做 | 界面一处都不读 `Message.color`（`filtering.ts` 的 `cssColor` 删除），正文与昵称都用主题 token；被 @ 的名字仍按上游 `reply_uname_color` 上色；`ui.md` §4.1/§4.3 |
 | P23 | 点选表情直接发送（去掉二次确认）；去掉表情面板搜索框；网格区高度 = 两行大表情，超出滚动 | 子代理票 `RowEmoteFix`（用户原话）；`CHANGELOG` 尚未有条目 | 未做（进行中） | 当前 main：`Composer.tsx:392-395` 仍是「搜索表情」输入框，`ui.md` §6.3「搜索」行仍在；三项改动在 `RowEmoteFix` 票（分支 `fix/row-emote-render`，worktree `danmubox-wt-rowemote`），**未合入 main** |
 | P24 | 表情包弹幕渲染不能撑破行；正文要能在身份簇下方换行 | 子代理票 `RowEmoteFix`（用户原话）；`CHANGELOG` 尚未有条目 | 未做（进行中） | 同上，随 `RowEmoteFix` 落地；先取证 `/tmp/standalone.log` 两条真实弹幕记录 → 夹具（脱敏、不得含真实房间号）→ 断言「行内图尺寸 ≤ 行可用宽度、正文可换行、无横向溢出」 |
@@ -93,12 +93,12 @@
 | 8 界面布局 8 项 | 已做（1 项有意删除） | `ui.md` §8.5 / §4.5 / §6.2 / §6.3 | 「最近发言」面板**整条链路删除**（与右键菜单重复），不是欠账 |
 | 9 透明度先删 | 已做 | `CHANGELOG` Removed；`roadmap` §8.3 | 重做待办已登记 |
 | 10 互动自动消失 / 系统通知默认关 | 已做 | 偏好键 `ui.interact_auto_hide` / `ui.system_notice`（`contract` §8）；`ui.md` §4.8 | 默认值 true / false |
-| 11 未开播也展示 + 排序 + 分页 | 已做 | `contract` §5 `live_start_at` / `online`；`docs/protocol.md` A28 | 每页 30 条 |
+| 11 未开播也展示 + 排序 + 分页 | 部分（2026-09-13 修正） | **原审计结论不成立**：上游 `GetWebList` 只给在播房间（关注 90 人 / 在播 0 人 → `list=[]` + `not_living_num=90`），未开播的一个都没进过列表；已改为「主站关注关系 + 直播批量房间接口」两步取全量（实机 0 → 70 条）；`docs/protocol.md` A28 修正、`CHANGELOG` Fixed | 每页 30 条；**仍未闭环**：未开播条目拿不到「最后开播时间」（上游不给），该档排序落回 `online` / 房间号；见 P11 |
 | 12 舰长标只看本房间 | 已做 | `Message.guard_level` 取 `info[7]`；`docs/protocol.md` A39 | 粉丝牌自身标记另开 `medal_guard_level` |
 | 13 @ 脱钩 / 弹幕里看不到 @ | 部分 | @ 目标从草稿派生（已做）；回复关系可见（`db-msg-reply`，已做） | 「纯 @」与「回复」在**收包侧不可区分**，`docs/protocol.md` §11.6 / A40 未闭；界面统一渲染 `@昵称` |
 | 14 窄屏两排 + 不露房间号 | 已做 | 提交 `f8444ad`；`ui.md` §2.2 / §9.1 | 断点 520px，360 可达 |
 | 15 宽屏一排 + 不露房间号 | 已做 | 提交 `f8444ad` | 同上 |
-| 16 全量展示 + 置顶 + 最近观看降序 | 已做 | 新偏好键 `ui.recent_watched`（`contract` §8） | 审计时「最近观看」这一维不存在，已新增 |
+| 16 全量展示 + 置顶 + 最近观看降序 | 已做（「全量展示」2026-09-13 才成立） | 新偏好键 `ui.recent_watched`（`contract` §8）；全量展示由 P11 的两步取法补齐 | 审计时「最近观看」这一维不存在，已新增；「全量展示」此前实际只有在播那些，见 P11 |
 | 17 房间列表不露房间号 + 主播·直播间名 | 已做 | `Room.anchor_uname`（`contract` §5）；`docs/protocol.md` A41；提交 `2e95a22` | 审计时未做，且需先补 `anchor_uname` 字段（动契约 + 后端） |
 | 18 tab 显主播名 | 已做 | 提交 `2e95a22`；`ui.md` §2.3 | 同上（依赖 `anchor_uname`） |
 | 19 短语删颜文字 | 已做 | 提交 `d6ba109`（worktree 内 `9db6e35`）；`CHANGELOG` Removed | 审计时未做 |
@@ -112,9 +112,9 @@
 
 | 部分 | 条数 | 已做 | 部分 | 未做（进行中） | 不做 / 待核 |
 |---|---|---|---|---|---|
-| §1 产品需求 | 31 | 27 | 1 | 3 | 0 |
-| §2 工程与过程规矩 | 9 | 7 | 0 | 0 | 2（待核） |
-| §3 `issue` 20 条 | 20 | 19 | 1 | 0 | 0 |
-| **合计** | **60** | **53** | **2** | **3** | **2** |
+| §1 产品需求 | 31 | 27 | 2 | 2 | 0 |
+| §2 工程与过程规矩 | 10 | 8 | 0 | 0 | 2（待核） |
+| §3 `issue` 20 条 | 20 | 18 | 2 | 0 | 0 |
+| **合计** | **61** | **53** | **4** | **2** | **2** |
 
 > 待核两项（E1「清单外动作先问」、E3「重建攒批做」）是对话内规矩但尚未固化成仓库条文；证据栏给了最接近的已有条文与出处，并各留了一条落地建议。

@@ -40,7 +40,7 @@
 //   gift   礼物栏在输入区下方、全宽、可折叠，展开不改变弹幕宽度
 //   admin  房管权限前置（是房管才可用 / 不是则置灰并说明）、写操作二次确认与请求形状、
 //          面板三块列表增删、无权限时只读面板仍可打开且原样展示上游 code + message
-//   follow 未开播也列出、按最后开播时间排序、>30 条分页
+//   follow 未开播也列出（**真实取样夹具**：未开播项第 1 页可见且翻页到底一条不少）、按最后开播时间排序、>30 条分页
 //   account 账号区只留一行身份 + 「账号」按钮（不再有下拉——单条目下拉会被读成功能坏了）；
 //          对话框里一行一个账号（昵称 + uid + 状态 + 操作）；单账号也能看到「＋ 添加账号」；
 //          添加 = account_qr_start（不带 target，永不覆盖）+ 2 秒轮询到 confirmed 后多一行且标为当前；
@@ -219,6 +219,18 @@ const ROW_FIXTURE = JSON.parse(
   readFileSync(new URL("./fixtures/danmaku-rows.json", import.meta.url), "utf8"),
 );
 
+/**
+ * 关注列表的**真实取样**（用户 2026-09-13 报的「看不到未开播的关注」）：
+ * 由 `fixtures/follow-status-raw.json`（真实响应，已脱敏）派生，**70 条、取样当时全部未开播**。
+ *
+ * 为什么用这份而不是手写：此前冒烟里的「离线甲 / 离线乙」是**手造的**，于是
+ * 「上游只给在播房间、未开播的一个都不返回」这个真实故障在冒烟里从来照不出来。
+ * 现在列表里绝大多数条目都是真实取样，未开播项一旦丢掉（过滤 / 分页 / 渲染），冒烟必红。
+ */
+const FOLLOW_FIXTURE = JSON.parse(
+  readFileSync(new URL("./fixtures/follow-list.json", import.meta.url), "utf8"),
+);
+
 /** 真实 CDN 图的**内联替身**：固有尺寸与真图一样（头像原图直出，见 app.module.css 的 512 事故）。 */
 function inlineImage(width, height, fill) {
   return (
@@ -343,6 +355,7 @@ const MOCK = (theme) => `(function () {
   var ROW_FIXTURES = ${embed(ROW_FIXTURES)};
   // 无空格的长 ASCII 串（真实载荷里的 CDN 地址，见 Node 侧 ROW_ASCII_TOKEN 的说明）
   var ROW_ASCII = ${embed(ROW_ASCII_TOKEN)};
+  var FOLLOW_FIXTURE_ROWS = ${embed(FOLLOW_FIXTURE)};
   var listeners = {};
   var calls = [];
   // 带参数的调用记录（看请求形状，如 chat_send 的表情唯一键）；calls 只有命令名，保持原样。
@@ -362,9 +375,9 @@ const MOCK = (theme) => `(function () {
     "filter.keywords_alert": false, "filter.uids": [],
     "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard", "system"],
     "filter.medal_level_min": 0, "history.buffer_rows": 5000,
-    // 「最近观看」（契约 §8）：离线甲（room 300）先看过，填充28（room 428）后看过 ——
+    // 「最近观看」（契约 §8）：离线甲（room 300）先看过，**夹具第 1 条**（真实取样）后看过 ——
     // 用来看排序是否真的按它降序（见场景 step1 的 #16 断言）。
-    "ui.recent_watched": { "300": 1789900000000, "428": 1789990000000 }
+    "ui.recent_watched": { "300": 1789900000000, "${FOLLOW_FIXTURE[0].room_id}": 1789990000000 }
   };
   var nextLocal = 1;
   function msg(kind, content, isHistory, extra) {
@@ -398,19 +411,22 @@ const MOCK = (theme) => `(function () {
       title: "", live_status: 0, connected: false, buffered: 0
     });
   };
-  // 关注列表：上游顺序刻意打乱，用来看排序是否真按最后开播时间生效；
-  // 再补 28 条凑够 31 条，验证「>30 条才出现分页」。
-  var followed = [
-    { room_id: 300, uname: "离线甲", face: "", title: "", live_status: 0, group_name: "", live_start_at: 1700000000, online: 0 },
+  // 关注列表（用户 2026-09-13：「关注但未开播的也一直没加载到主界面」）：
+  // **70 条真实取样**直接来自夹具（fixtures/follow-list.json ← follow-status-raw.json，
+  // 取证当天全部未开播）。此前这里只有手造的「离线甲 / 离线乙」，于是「上游只给在播房间、
+  // 未开播一个都不返回」这个真实故障在冒烟里永远照不出来。
+  // 只有下面 3 条是自造的：取证当天该账号无人开播，live_status == 1 的真实样本拿不到，
+  // 而「在播置顶 / 标题行 / 最后开播时间」必须有条目可断言。字段名仍按 A28 实测
+  // （liveTime → live_start_at）。
+  var followed = FOLLOW_FIXTURE_ROWS.map(function (row, index) {
+    // 头像位换成冒烟的内联替身：夹具里是脱敏后的 CDN 地址，真去请求只会挂网。
+    return Object.assign({}, row, { face: index % 3 === 0 ? FACE_512 : "" });
+  });
+  followed = followed.concat([
     { room_id: 100, uname: "在播主播", face: FACE_512, title: "在播中的直播间标题", live_status: 1, group_name: "", live_start_at: 1789000000, online: 500 },
-    { room_id: 200, uname: "离线乙", face: "", title: "离线乙的直播间标题", live_status: 0, group_name: "", live_start_at: 1789500000, online: 0 }
-  ];
-  for (var i = 1; i <= 28; i += 1) {
-    followed.push({
-      room_id: 400 + i, uname: "填充" + (i < 10 ? "0" + i : i), face: "",
-      title: "", live_status: 0, group_name: "", live_start_at: 1000000000 + i, online: 0
-    });
-  }
+    { room_id: 200, uname: "离线乙", face: "", title: "离线乙的直播间标题", live_status: 0, group_name: "", live_start_at: 1789500000, online: 0 },
+    { room_id: 300, uname: "离线甲", face: "", title: "", live_status: 0, group_name: "", live_start_at: 1700000000, online: 0 }
+  ]);
   // 账号（契约 §7 accounts_list）：条目自带登录状态与身份。
   var accounts = [
     {
@@ -699,7 +715,18 @@ const MOCK = (theme) => `(function () {
     out.followOrder = followNames.slice(0, 3);
     out.followPage1Count = followNames.length;
     out.followPagerShown = !!document.querySelector('[class*="pager"]');
-    out.followNonLiveListed = followNames.indexOf("离线乙") >= 0 && followNames.indexOf("离线甲") >= 0;
+    // 夹具里真实取样的名字（全部 live_status != 1：取证当天那 70 条没人开播）。
+    var fixtureNames = FOLLOW_FIXTURE_ROWS.map(function (row) { return row.uname; });
+    var fixtureOfflineNames = FOLLOW_FIXTURE_ROWS
+      .filter(function (row) { return row.live_status !== 1; })
+      .map(function (row) { return row.uname; });
+    out.followOfflineFixtureTotal = fixtureOfflineNames.length;
+    var followHeaderEl = document.querySelector('[class*="followSection"] h2') ||
+      document.querySelector('[class*="followHeader"] h2');
+    out.followHeaderText = followHeaderEl ? followHeaderEl.innerText : "";
+    // 列表头报出的总数 = 真实取样 70 + 自造 3：**一条都没被过滤掉**（第 1 页只画 30 条）。
+    out.followHeaderCountsAll = out.followHeaderText.indexOf(
+      "（" + (fixtureNames.length + 3) + "）") >= 0;
     // 关注项带出直播间标题（上游 title 字段）：非空的渲染出文本，空串的不渲染该元素
     // （不留空框、不用占位符）。
     var followItemNamed = function (name) {
@@ -717,20 +744,41 @@ const MOCK = (theme) => `(function () {
     out.step1_followEmptyTitleHidden = !!emptyTitleItem &&
       !emptyTitleItem.querySelector('[data-testid="db-follow-title"]');
 
+    // ---- 用户 2026-09-13：「关注但未开播的也一直没加载到主界面」。
+    // 判据分两层，都用**真实取样**的条目：
+    //   ① 第 1 页里必须真的有夹具里的未开播条目，并且**真的布了局**（有尺寸、没被藏掉）；
+    //   ② 翻完所有页，夹具里的每一条未开播取样都必须出现过（谁都没在过滤 / 分页里掉队）。
+    // 「可见」不写成「在视口内」：窄屏第 1 页的关注列表本来就在折线以下，滚过去才看得到
+    // （截图那一步会滚），能判的是「布局出来了、不是被隐藏」。
+    var offlineOnPage1 = followNames.filter(function (name) {
+      return fixtureOfflineNames.indexOf(name) >= 0;
+    });
+    out.followOfflineOnPage1 = offlineOnPage1.length;
+    out.followOfflineVisibleOnPage1 = offlineOnPage1.filter(function (name) {
+      var el = followItemNamed(name);
+      return !!el && el.offsetParent !== null && el.getBoundingClientRect().height > 8;
+    }).length;
+    out.followNonLiveListed = offlineOnPage1.length > 0 && out.followOfflineVisibleOnPage1 > 0;
+    put("followOfflineVisibleOnPage1", out.followOfflineVisibleOnPage1 > 0);
+
     // ---- #16 排序：直播中置顶 → **最近观看降序** → 最后开播时间降序。
-    // 夹具设计：#300（离线甲，最后开播最旧）与 #428（填充28，最后开播垫底那一批）是**看过**的
-    // （prefs 的 ui.recent_watched），#200（离线乙，最后开播最新）没看过。
-    // 于是「填充28 在 离线甲 之前」证明看过的按时间降序，「离线甲 在 离线乙 之前」证明
-    // 「看过的」整档排在「没看过的」之前（否则按 live_start_at 离线乙才是最前的未开播项）。
+    // 「最近观看」的样本换成了**真实取样**的那条（prefs 的 ui.recent_watched 指向夹具第 1 条）：
+    // 它比离线甲后看过，因此必须排在最前——看过的那些按时间降序。
+    var watchedFixtureName = FOLLOW_FIXTURE_ROWS[0].uname;
     out.followLivePinnedFirst = followNames.length > 0 && followNames[0] === "在播主播";
     out.followWatchedDesc =
-      followNames.indexOf("填充28") >= 0 && followNames.indexOf("填充28") < followNames.indexOf("离线甲");
+      followNames.indexOf(watchedFixtureName) >= 0 &&
+      followNames.indexOf(watchedFixtureName) < followNames.indexOf("离线甲");
     out.followWatchedBeforeUnwatched =
-      followNames.indexOf("离线甲") >= 0 && followNames.indexOf("离线甲") < followNames.indexOf("离线乙") &&
-      followNames.indexOf("离线乙") >= 0;
+      followNames.indexOf("离线甲") >= 0 && followNames.indexOf("离线甲") < followNames.indexOf("离线乙");
+    // 没看过的按「最后开播时间」降序：只有自造条目带 live_start_at（真实取样的未开播条目
+    // 拿不到这个量——上游未开播时不给，见 A28），所以它们整体排在离线乙之后。
+    var unwatchedFixtureName = followNames.filter(function (name) {
+      return fixtureNames.indexOf(name) >= 0 && name !== watchedFixtureName;
+    })[0] || "";
     out.followUnwatchedKeepsLiveStartOrder =
-      followNames.indexOf("离线乙") >= 0 && followNames.indexOf("填充27") >= 0 &&
-      followNames.indexOf("离线乙") < followNames.indexOf("填充27");
+      followNames.indexOf("离线乙") >= 0 && !!unwatchedFixtureName &&
+      followNames.indexOf("离线乙") < followNames.indexOf(unwatchedFixtureName);
 
     // ---- #14/#15 排布：宽屏一排（左 头像·主播名·直播标题 / 右 状态·最后开播时间），
     // 窄屏两排（第二排 左标题 / 右最后开播时间）；两档都不得出现房间号。
@@ -771,6 +819,52 @@ const MOCK = (theme) => `(function () {
         put("followTimeAtRightEdge", rect(partsTime).right >= rect(partsStatus).right);
       }
     }
+    // ---- 翻完所有页：夹具里的每一条未开播取样都必须出现过（谁都没在过滤 / 分页里掉队）。
+    //      跑完翻回第 1 页：后面的排布断言与截图都按第 1 页来。
+    var pagerButton = function (label) {
+      var pager = document.querySelector('[class*="pager"]');
+      if (!pager) return null;
+      return [].slice.call(pager.querySelectorAll("button")).filter(function (b) {
+        return b.innerText.indexOf(label) >= 0;
+      })[0] || null;
+    };
+    var seenFollowNames = followNames.slice();
+    var collectNames = function () {
+      allByTestId("db-follow-item").forEach(function (el) {
+        var name = el.innerText.split("\\n")[0];
+        if (seenFollowNames.indexOf(name) < 0) seenFollowNames.push(name);
+      });
+    };
+    var forwardPages = 0;
+    for (var step = 0; step < 8; step += 1) {
+      var next = pagerButton("下一页");
+      if (!next || next.disabled) break;
+      next.click();
+      await sleep(160);
+      collectNames();
+      forwardPages += 1;
+    }
+    var missingFollowed = fixtureOfflineNames.filter(function (name) {
+      return seenFollowNames.indexOf(name) < 0;
+    });
+    out.followWindowPages = forwardPages;
+    out.followOfflineSeen = fixtureOfflineNames.length - missingFollowed.length;
+    out.followOfflineAllListed = missingFollowed.length === 0;
+    out.followOfflineMissing = missingFollowed.slice(0, 3);
+    for (var back = 0; back < 8; back += 1) {
+      var prev = pagerButton("上一页");
+      if (!prev || prev.disabled) break;
+      prev.click();
+      await sleep(140);
+    }
+    out.followBackOnFirstPage =
+      allByTestId("db-follow-item").length === out.followPage1Count;
+    // 翻页会重建关注项的 DOM 节点：后面还用 liveFollowItem / emptyTitleItem（房间号不得出现
+    // 那条断言），必须重新取，否则是拿脱离文档的旧节点在判（innerText 为空 → 断言假绿）。
+    liveFollowItem = followItemNamed("在播主播");
+    emptyTitleItem = followItemNamed("离线甲");
+    await sleep(200);
+
     // 房间号不得出现在关注项里（用户 #14/#15：两档都「不要房间号」）：
     // #100 是「有标题 + 直播中」那条，#300 是「无标题 + 未开播且看过」那条，两类都查。
     out.followItemHidesRoomNumber = !!liveFollowItem && !!emptyTitleItem &&

@@ -505,9 +505,9 @@ sid = ""
 
 | 项 | 现状 | 核对方法与步骤 |
 |---|---|---|
-| 关注列表上游端点与分页 | **已实测（2026-09-11）**：`GET /xlive/web-ucenter/v1/xfetter/GetWebList`，分页 `page` / `page_size`；vmid 随 `SESSDATA` 自动识别，无需显式传 | 已执行；条目字段名仍缺样本（该账号关注数为 0），见 `protocol.md` A28 |
-| `live_status` 的来源 | 未知：可能随关注列表返回，也可能需另调直播状态接口 | 对比同一批关注在开播/停播时的响应，确认 `live_status` 出现在哪个响应中 |
-| `group_name`（关注分组）字段 | 未知 | 抓取带分组的账号响应，记录分组字段名与多分组呈现方式 |
+| 关注列表上游端点与分页 | **已实测（2026-09-11）**：`GET /xlive/web-ucenter/v1/xfetter/GetWebList`，分页 `page` / `page_size`；vmid 随 `SESSDATA` 自动识别，无需显式传。**2026-09-13 修正：这个端点只返回在播房间**（关注 90 人 / 在播 0 人时给 `list=[]` + `not_living_num=90`）；未开播那一份另取：主站关注关系 `GET https://api.bilibili.com/x/relation/followings?vmid=<自己>&ps=50&pn=<页>` + 直播 `GET /room/v1/Room/get_status_info_by_uids?uids[]=<uid>...` | 已执行，见 `protocol.md` A28 修正 |
+| `live_status` 的来源 | **已实测（2026-09-13）**：随关注列表返回（`live_status`），未开播的那一份随批量房间接口 `get_status_info_by_uids` 返回，取值口径一致（0 未开播 / 1 直播中 / 2 轮播） | 已执行（同上） |
+| `group_name`（关注分组）字段 | 直播侧两个关注端点都不给分组（见 A34）；分组在**主站**关注关系里（`tag` = 分组 id 数组） | 待产品决定是否新增端口，见 `protocol.md` A34 |
 | 电池余额端点与字段 | **已实测（2026-09-11）**：`GET /xlive/revenue/v1/wallet/myWallet`；字段 `data.gold`（金瓜子）/`silver`/`bp`；单位口径为电池 = gold / 100 | 已执行，端口实测返回 150；见 `protocol.md` A29 |
 | 余额是否需 `csrf` | **已实测（2026-09-11）**：不需要，GET + Cookie 即返回 `code=0` | 已执行（同上） |
 

@@ -877,7 +877,7 @@ stateDiagram-v2
 | A11 | **已解决**：V2 载荷在 `data.pb`（非 `data`）；tag 1/2/5/6/7/8/22 与社区 schema 一致，但 tag 15 类型与 `activity_message` 位置被纠正，且 `timestamp_millisecond` 必须按 64 位声明 |
 | A14 | **已解决**：`ENTRY_EFFECT` 是 JSON；`data.uid` 为 UID，昵称在 `data.uinfo.base.name`（**没有** `data.uname`），展示文案在 `data.copy_writing` |
 | A15 | **部分解决**：认证回应与认证包同帧头（`protover=1`）；线上稳定观测到 `code=0` 表示成功。非 0 取值集合仍缺样本 |
-| A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态 | 需一条**已知房管**的发言样本 | **三条来源已落实两条（2026-09-12）**：① **SC** 载荷自带 `user_info.manager`（实测样本）；② **历史条目**自带顶层 `isadmin`（文档有载，已映射进 `history.rs`）；③ **实时 `DANMU_MSG` 没有等价字段**——逐项查过实测载荷：`info[0][15].user` 的键为 `anon/base/bubble_box/dm_config/guard/guard_leader/medal/name_color/title/uhead_frame/uid/wealth`，`extra`（JSON 字符串）的键里有 `is_collaboration_member` 一类但**没有房管项**。因此只剩社区约定的经典槽位 `info[2][2]` 未证实——要证实它需要一条已知房管的发言 | `cmd.rs`、`history.rs` |
+| A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态 | 需一条**已知房管**的发言样本 | **部分解决（2026-09-12）**：① **SC** 载荷自带 `user_info.manager`（实测样本）；② **历史条目**自带顶层 `isadmin`，且已用一条**已知房管**的发言证实其语义——在某个（房间号不写入仓库）由使用者担任房管的房间里，其本人与其同房间其他房管的条目 `isadmin=1`，非房管为 `0`，`history.rs` 的映射据此确认；③ **实时 `DANMU_MSG` 仍缺样本**——逐项查过实测载荷：`info[0][15].user` 的键为 `anon/base/bubble_box/dm_config/guard/guard_leader/medal/name_color/title/uhead_frame/uid/wealth`，`extra`（JSON 字符串）里也没有房管项。只剩社区约定的经典槽位 `info[2][2]` 待证实 | `cmd.rs`、`history.rs` |
 | A8 / A9 / A12 / A13 | **未解决**：本轮未出现礼物、SC、大航海样本，字段名仍待采集 |
 | A10 | **未解决**：`msg_type` 的枚举与文案映射仍缺对照样本 |
 | A19 | **部分解决**：`host_list[].host` 可直接拼 `wss://<host>/sub`，首节点连接成功 |

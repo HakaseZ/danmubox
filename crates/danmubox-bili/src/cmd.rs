@@ -61,6 +61,9 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
             None
         }
         "SEND_GIFT" => gift(room_id, value),
+        // V2 礼物管线：内容在 `data.pb`（protobuf），字段见 `pb::GiftV2`。
+        // 有些直播间只发这个命令，不接就等于完全看不到礼物（需求 §2.7）。
+        "SEND_GIFT_V2" => gift_v2(room_id, value, counters),
         "SUPER_CHAT_MESSAGE" | "SUPER_CHAT_MESSAGE_JP" => superchat(room_id, value),
         "INTERACT_WORD" => interact_json(room_id, value),
         "INTERACT_WORD_V2" => interact_v2(room_id, value, counters),
@@ -207,6 +210,66 @@ fn gift(room_id: i64, value: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    Some(message)
+}
+
+/// `SEND_GIFT_V2`：V2 礼物管线的礼物事件（`docs/protocol.md` §10.2）。
+///
+/// 载荷是 base64 的 protobuf（`data.pb`），字段反推自真实样本（`pb::GiftV2` 的注释记了判据）。
+/// 解析失败一律丢弃并计入 `malformed`——宁可少显示一条礼物，也不能产出半条假消息。
+fn gift_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> {
+    let encoded = value.pointer("/data/pb").and_then(Value::as_str)?;
+    let bytes = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::debug!(%err, "SEND_GIFT_V2 的 data.pb 不是合法 base64，丢弃");
+            Counters::bump(&counters.malformed_dropped);
+            return None;
+        }
+    };
+    let decoded = match crate::pb::GiftV2::decode(bytes.as_slice()) {
+        Ok(decoded) => decoded,
+        Err(err) => {
+            tracing::debug!(%err, "SEND_GIFT_V2 protobuf 解码失败，丢弃");
+            Counters::bump(&counters.malformed_dropped);
+            return None;
+        }
+    };
+    let Some(item) = decoded.gift else {
+        tracing::debug!("SEND_GIFT_V2 没有礼物子消息，丢弃");
+        Counters::bump(&counters.malformed_dropped);
+        return None;
+    };
+
+    let num = i64::try_from(item.num.max(1)).unwrap_or(1);
+    // 金额优先用官方给的 `total_coin`（价 × 数量）；缺失时按折后价或原价 × 数量算，都没有则为 0。
+    let unit = if item.discount_price > 0 {
+        item.discount_price
+    } else {
+        item.price
+    };
+    let amount = if item.total_coin > 0 {
+        i64::try_from(item.total_coin).unwrap_or(0)
+    } else {
+        i64::try_from(unit).unwrap_or(0) * num
+    };
+    let ts_ms = if item.timestamp > 0 {
+        i64::try_from(item.timestamp).unwrap_or(0) * 1000
+    } else {
+        danmubox_core::now_ms()
+    };
+
+    let mut message = Message::new(room_id, MessageKind::Gift, ts_ms);
+    message.uid = decoded.uid as i64;
+    message.uname = decoded.uname;
+    message.content = format!("{} {} ×{}", item.action, item.gift_name, num);
+    message.amount = amount;
+    // 连击标识用于会话内聚合；订单号是这条礼物的上游标识。
+    message.upstream_id = item.tid;
+    if let Some(medal) = decoded.medal {
+        message.medal_level = i64::from(medal.level);
+        message.medal_name = medal.name;
+    }
     Some(message)
 }
 
@@ -529,6 +592,68 @@ mod tests {
         assert_eq!(live.content, "开播");
         assert!(message(1, &json!({"cmd": "SOME_NEW_CMD"}), &c).is_none());
         assert_eq!(c.snapshot().unknown_cmd, 1);
+    }
+
+    #[test]
+    fn send_gift_v2_maps_to_a_gift_message() {
+        use base64::Engine as _;
+        use prost::Message as _;
+
+        // 用真实样本的字段结构自造载荷（样本里含他人昵称，不入仓库）。
+        let original = crate::pb::GiftV2 {
+            uid: 1920714644,
+            uname: "送礼的人".into(),
+            face: String::new(),
+            medal: Some(crate::pb::GiftV2Medal {
+                level: 12,
+                name: "牌子".into(),
+            }),
+            gift: Some(crate::pb::GiftV2Item {
+                gift_id: 31164,
+                gift_name: "粉丝团灯牌".into(),
+                num: 2,
+                price: 100,
+                discount_price: 100,
+                coin_type: "gold".into(),
+                tid: "4816040157599941120".into(),
+                timestamp: 1_789_177_882,
+                batch_combo_id: "batch:gift:combo_id:1:2:31164:1789177882.31".into(),
+                total_coin: 200,
+                action: "投喂".into(),
+            }),
+            anchor: None,
+        };
+        let payload = json!({
+            "cmd": "SEND_GIFT_V2",
+            "data": {
+                "dmscore": 6,
+                "pb": base64::engine::general_purpose::STANDARD.encode(original.encode_to_vec()),
+            }
+        });
+
+        let message = message(7, &payload, &counters()).expect("必须解出礼物");
+        assert_eq!(message.kind, MessageKind::Gift);
+        assert_eq!(message.uid, 1920714644);
+        assert_eq!(message.uname, "送礼的人");
+        assert_eq!(message.content, "投喂 粉丝团灯牌 ×2");
+        assert_eq!(message.amount, 200, "100 金瓜子 × 2");
+        assert_eq!(message.ts, 1_789_177_882_000, "pb 里是秒级时间戳");
+        assert_eq!(message.medal_level, 12);
+        assert_eq!(message.medal_name, "牌子");
+        assert_eq!(message.upstream_id, "4816040157599941120", "订单号即上游标识");
+    }
+
+    #[test]
+    fn broken_send_gift_v2_payloads_are_dropped_and_counted() {
+        let c = counters();
+        for payload in [
+            json!({"cmd": "SEND_GIFT_V2", "data": {"pb": "%%%不是 base64%%%"}}),
+            json!({"cmd": "SEND_GIFT_V2", "data": {"pb": "AAAA"}}),
+            json!({"cmd": "SEND_GIFT_V2", "data": {}}),
+        ] {
+            assert!(message(7, &payload, &c).is_none(), "坏载荷必须丢弃");
+        }
+        assert_eq!(c.snapshot().malformed_dropped, 2, "能解码但无礼物子消息的不计 malformed");
     }
 
     #[test]

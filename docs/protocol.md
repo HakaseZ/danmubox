@@ -291,6 +291,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 |---|---|
 | `DANMU_MSG` | `danmaku` |
 | `SEND_GIFT` | `gift` |
+| `SEND_GIFT_V2` | `gift`（载荷是 protobuf，见 §10.2） |
 | `SUPER_CHAT_MESSAGE` / `SUPER_CHAT_MESSAGE_JP` | `superchat` |
 | `INTERACT_WORD` / `INTERACT_WORD_V2` / `ENTRY_EFFECT` | `interact` |
 | `GUARD_BUY` / `USER_TOAST_MSG` | `guard` |
@@ -364,6 +365,34 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 - 单次数量为 0 或礼物标识缺失的载荷视为无效，丢弃并计数。
 - 「免费礼物 / 活动礼物」不做特殊丢弃，价格缺失时 `amount=0` 并保留。
+
+#### `SEND_GIFT_V2`（V2 礼物管线）
+
+有些直播间**只发这个命令**（实测一次 55 秒采样里出现 24 次，同期没有 `SEND_GIFT`），
+不接它等于完全看不到礼物。载荷是 base64 的 **protobuf**（`data.pb`），
+JSON 里只有 `{dmscore, pb}`。
+
+字段名与 tag **抄自官方前端产物里生成好的 proto 代码**（包名 `bilibili.live.gift.v1`，
+`t.GiftItem=function(){…}` 的声明顺序即 tag 顺序）：
+
+| tag | 字段 | 用途 |
+|---|---|---|
+| 1 | `gift_id` | 礼物 id（如 `31164` = 粉丝团灯牌） |
+| 2 | `gift_name` | 礼物名 |
+| 3 | `num` | 数量 |
+| 5 / 6 | `price` / `discount_price` | 原价 / 折后价（金瓜子） |
+| 7 | `total_coin` | 本次总瓜子数，**金额优先用它** |
+| 8 | `coin_type` | `gold`（电池体系）/ 银瓜子等 |
+| 9 | `tid` | 订单号，作为 `Message.upstream_id` |
+| 10 | `timestamp` | 秒级时间戳 |
+| 12 | `batch_combo_id` | 连击标识（`batch:gift:combo_id:…`），供会话内聚合 |
+| 18 | `action` | 动作词，样本为「投喂」 |
+
+顶层的 `uid` / `uname` / `face` / 粉丝牌 / 接收者按真实样本取值核对（顶层另有一个
+`sender_uinfo` 嵌套用户信息，tag 未知，本实现不用）。
+
+> **教训（2026-09-12）**：这份 schema 起初是"按取值反推"的，把 `num` 猜成了 tag 11、
+> 连击标识命名成 `combo_id`。对照官方生成代码后发现两处都错——**能拿到官方产物就别猜**。
 
 ### 10.3 `SUPER_CHAT_MESSAGE` / `SUPER_CHAT_MESSAGE_JP`（`kind=superchat`）
 
@@ -872,7 +901,7 @@ stateDiagram-v2
 | A19 | `host_list` 元素 | 节点字段名（主机、`wss_port` / `ws_port`）与地址拼接规则、节点顺序是否即优先级 | 同上，打印 `getDanmuInfo` 响应（脱敏） | 对每个节点实际建立一次连接验证可达性 | §2.1、§15.3 |
 | A20 | 僵死判定与 HTTP 心跳必要性 | 上游在心跳停发 / 网络中断时是否主动关闭；90 秒阈值是否合适；缺失 HTTP 心跳时的判死时间 | 同上，做一次「只发 WS 心跳、不发 HTTP 心跳」与一次断网实验 | 观察断开行为，必要时调整阈值并更新 §8.2 / §13.2 | §8、§13.2 |
 | A21 | 游客模式字段覆盖 | 游客态下具体哪些命令 / 字段缺失或被掩码 | 游客连接 + 同一房间登录连接对照 | 对同一时间窗的两份数据做字段差集 | §7.2、§10 各命令 |
-| A22 | 未归类命令 | `ONLINE_RANK_COUNT` / `ONLINE_RANK_V3` / `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` / `SEND_GIFT_V2` 的语义与是否携带用户可见内容 | `DANMUBOX_LOG=debug` 抓取这些命令的原始载荷 | 逐条判断归属（计数类 / 丢弃 / 新消息类），归类后更新 §10.0；**分类前一律计入 `unknown_cmd` 并丢弃，禁止按命名猜测** | §10.0、`unknown_cmd` 计数 |
+| A22 | 未归类命令 | `ONLINE_RANK_COUNT` / `ONLINE_RANK_V3` / `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` / `SEND_GIFT_V2` 的语义与是否携带用户可见内容 | 在活动期（PK / 连麦 / 抽奖）抓包，逐个比对载荷 | **部分解决（2026-09-12）**：`SEND_GIFT_V2` 已归类为 **V2 礼物管线**并实现映射（§10.2，字段抄自官方 proto 生成代码）；`UNIVERSAL_EVENT_GIFT(_V2)` 由社区文档确认是**连线礼物**（PK 连线时投喂），字段多且嵌套，**映射尚未做**。其余命令仍缺样本 | `cmd.rs`、`pb.rs` |
 | A22-1 | 未归类命令的**规模** | 这些命令在真实流量里占多大比例 | 任一 ≥2 小时长连的 `CounterSnapshot` | **已实测**：2 小时 4 分收 6956 个业务包，其中 `unknown_cmd` **1887**（约 27%）；已直接观测到的命令名见 §10.0 的实测记录。这批命令偏**活动驱动**（PK / 抽奖 / 礼物 V2 管线），不随时可复现，需要在活动期抓样本 | §10.0 |
 | A23 | 人气值口径 | `POPULARITY_CHANGE.data.popularity` 与 `op=3` 心跳回应的数值是否为同一口径、更新频率差异 | 同一房间同时记录两类来源各 ≥10 个值 | 比对数值序列，确认展示时以哪个为准 | §2.1 人气值展示（阶段 3） |
 | A24 | 上游主动断连的周期与诱因 | 是否为常态轮换、是否与心跳节奏或房间热度相关 | 连续多次 ≥2 小时长连，记录每次断连的时刻与间隔 | **已实测（2 小时 4 分）**：共 4 次断连，**全部由上游发起**（TLS `close_notify` / `Connection reset by peer`），间隔约 1 分钟 / 40 分钟 / 18 分钟，**无固定周期**；退避按 `5s→10s→20s→40s` 升级；期间 **HTTP 心跳失败 0 次**；每次断连后均自动恢复。结论：属上游常态轮换，不应视为故障 | §13.2、S1-AC2 |

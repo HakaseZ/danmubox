@@ -91,6 +91,89 @@ impl InteractWordV2 {
     }
 }
 
+/// `SEND_GIFT_V2` 的 protobuf 载荷（`docs/protocol.md` §10.2）。
+///
+/// 与 `INTERACT_WORD_V2` 同一套路：JSON 只有 `{dmscore, pb}`，内容在 `pb` 里。
+///
+/// **字段名的来源**：礼物子消息（`GiftV2Item`）的字段名与 tag 抄自官方前端产物里
+/// 生成好的 proto 代码；顶层这几个字段（uid / uname / face / 粉丝牌 / 接收者）
+/// 则是按真实样本的取值形态核对出来的（10 位数且与用户名同现 → uid，等等）。
+/// 顶层还有一个 `sender_uinfo`（嵌套用户信息），tag 未知、本实现不用。
+/// 社区文档里没有这个命令的 schema。
+#[derive(Clone, PartialEq, Message)]
+pub struct GiftV2 {
+    #[prost(uint64, tag = "1")]
+    pub uid: u64,
+    #[prost(string, tag = "2")]
+    pub uname: String,
+    #[prost(string, tag = "3")]
+    pub face: String,
+    #[prost(message, optional, tag = "8")]
+    pub medal: Option<GiftV2Medal>,
+    #[prost(message, optional, tag = "10")]
+    pub gift: Option<GiftV2Item>,
+    #[prost(message, optional, tag = "29")]
+    pub anchor: Option<GiftV2Anchor>,
+}
+
+/// 送礼者的粉丝牌。`5`/`6` 分别是等级与名称（按取值形态反推）。
+#[derive(Clone, PartialEq, Message)]
+pub struct GiftV2Medal {
+    #[prost(uint32, tag = "5")]
+    pub level: u32,
+    #[prost(string, tag = "6")]
+    pub name: String,
+}
+
+/// 礼物本体，对应官方 `bilibili.live.gift.v1.GiftItem`。
+///
+/// 字段名与 tag 取自**官方前端产物里生成好的 proto 代码**（`t.GiftItem=function(){…}`
+/// 的字段声明顺序即 tag 顺序），因此不再是"按取值反推"。
+/// 只声明用得到的字段：prost 会跳过未声明的 tag。
+#[derive(Clone, PartialEq, Message)]
+pub struct GiftV2Item {
+    #[prost(uint64, tag = "1")]
+    pub gift_id: u64,
+    #[prost(string, tag = "2")]
+    pub gift_name: String,
+    /// 数量。
+    #[prost(uint64, tag = "3")]
+    pub num: u64,
+    /// 原价（金瓜子）。
+    #[prost(uint64, tag = "5")]
+    pub price: u64,
+    /// 折后价（金瓜子）。
+    #[prost(uint64, tag = "6")]
+    pub discount_price: u64,
+    /// 金瓜子 / 银瓜子等口径。
+    #[prost(string, tag = "8")]
+    pub coin_type: String,
+    /// 订单号。
+    #[prost(string, tag = "9")]
+    pub tid: String,
+    /// 秒级时间戳。
+    #[prost(uint64, tag = "10")]
+    pub timestamp: u64,
+    /// 连击标识（样本形如 `batch:gift:combo_id:…`），供会话内聚合。
+    #[prost(string, tag = "12")]
+    pub batch_combo_id: String,
+    /// 本次投喂的总瓜子数（价 × 数量）。
+    #[prost(uint64, tag = "7")]
+    pub total_coin: u64,
+    /// 动作词，样本为「投喂」。
+    #[prost(string, tag = "18")]
+    pub action: String,
+}
+
+/// 受赠主播。
+#[derive(Clone, PartialEq, Message)]
+pub struct GiftV2Anchor {
+    #[prost(string, tag = "1")]
+    pub uname: String,
+    #[prost(uint64, tag = "2")]
+    pub uid: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +242,48 @@ mod tests {
         assert_eq!(decoded.display_name(), "nested");
         assert_eq!(decoded.medal(), (24, "粉丝牌".to_string()));
         assert_eq!(decoded.ts_ms(), None, "两个时间戳都缺失时不得编造");
+    }
+
+    #[test]
+    fn gift_v2_decodes_gift_sender_and_combo() {
+        use prost::Message as _;
+        let item = GiftV2Item {
+            gift_id: 31164,
+            gift_name: "粉丝团灯牌".into(),
+            num: 1,
+            price: 100,
+            discount_price: 100,
+            coin_type: "gold".into(),
+            tid: "4816040157599941120".into(),
+            timestamp: 1_789_177_882,
+            batch_combo_id: "batch:gift:combo_id:1:2:31164:1789177882.31".into(),
+            total_coin: 100,
+            action: "投喂".into(),
+        };
+        let original = GiftV2 {
+            uid: 1920714644,
+            uname: "送礼的人".into(),
+            face: "https://i2.hdslb.com/bfs/face/x.jpg".into(),
+            medal: Some(GiftV2Medal {
+                level: 12,
+                name: "小碗茶".into(),
+            }),
+            gift: Some(item),
+            anchor: Some(GiftV2Anchor {
+                uname: "主播".into(),
+                uid: 401742377,
+            }),
+        };
+        let bytes = original.encode_to_vec();
+        let decoded = GiftV2::decode(bytes.as_slice()).expect("必须解得出来");
+        assert_eq!(decoded.uid, 1920714644);
+        assert_eq!(decoded.uname, "送礼的人");
+        let gift = decoded.gift.expect("礼物子消息");
+        assert_eq!(gift.gift_name, "粉丝团灯牌");
+        assert_eq!(gift.price, 100);
+        assert_eq!(gift.coin_type, "gold");
+        assert_eq!(gift.num, 1);
+        assert!(gift.batch_combo_id.starts_with("batch:gift:combo_id:"));
+        assert_eq!(decoded.medal.map(|m| m.level), Some(12));
     }
 }

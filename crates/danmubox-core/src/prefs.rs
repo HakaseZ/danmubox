@@ -107,6 +107,10 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         ),
         // 系统通知（开播 / 下播 / 标题变更 / 公告）：默认不显示（需求 §2.4）。
         spec("ui.system_notice", Ty::Bool, json!(false), None, None, None),
+        // 弹幕时间戳列（需求 §2.1 / 契约 §8）。**曾漏登记在白名单里**：界面、契约、
+        // 文档三处都写了它，但 SPECS 没有 → `set_patch` 命中未知键分支返回
+        // `BAD_REQUEST`，开关存不下去也读不回来（用户 2026-09-12 核 issue #6 时发现）。
+        spec("ui.show_timestamp", Ty::Bool, json!(false), None, None, None),
         // 自定义短语（需求 §2.2）。颜文字是内置常量，不进偏好。
         spec("composer.phrases", Ty::StrArr, json!([]), None, None, None),
         spec("filter.keywords", Ty::StrArr, json!([]), None, None, None),
@@ -314,12 +318,60 @@ impl Prefs {
 mod tests {
     use super::*;
 
+    /// SPECS 必须与**契约 §8 的表**逐键一致——这里真的去读契约，不是数个数。
+    ///
+    /// 2026-09-12（issue #6）的教训：`ui.show_timestamp` 在界面、契约、文档、
+    /// CHANGELOG 四处都有，却漏在 SPECS 白名单里，于是 `set_patch` 命中未知键
+    /// 分支返回 `BAD_REQUEST`：开关存不下去也读不回来，形同虚设（而冒烟用假
+    /// IPC 返回完整 prefs，照样全绿）。当时这条测试只断言 `SPECS.len() == 17`，
+    /// 数量对得上就放行了——数个数挡不住「键漏了但数量没变」。
     #[test]
     fn spec_table_matches_contract_keys() {
-        // 数量与契约 §8 的表逐行对应：加/删偏好键必须同时改这里与契约。
-        assert_eq!(SPECS.len(), 17, "契约 §8 规定 17 个偏好键");
+        let contract = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/contract.md"
+        ))
+        .expect("读得到 docs/contract.md");
+
+        let mut documented: Vec<String> = Vec::new();
+        let mut in_section_8 = false;
+        for line in contract.lines() {
+            if line.starts_with("## ") {
+                in_section_8 = line.starts_with("## 8.");
+                continue;
+            }
+            if !in_section_8 {
+                continue;
+            }
+            // 表格行形如：| `ui.theme` | string | `"system"` | 说明 |
+            let Some(rest) = line.strip_prefix("| `") else {
+                continue;
+            };
+            if let Some((key, _)) = rest.split_once('`') {
+                documented.push(key.to_string());
+            }
+        }
+
+        let specs = Prefs::keys();
+        for key in &documented {
+            assert!(
+                specs.contains(&key.as_str()),
+                "契约 §8 的 `{key}` 不在 SPECS 白名单里：界面用它存偏好会被 \
+                 `set_patch` 当未知键拒绝（BAD_REQUEST），开关/设置形同虚设"
+            );
+        }
+        for key in &specs {
+            assert!(
+                documented.iter().any(|k| k == key),
+                "SPECS 里的 `{key}` 没写进契约 §8"
+            );
+        }
         let effective = Prefs::new().effective();
-        assert_eq!(effective.as_object().unwrap().len(), 17);
+        assert_eq!(
+            effective.as_object().unwrap().len(),
+            documented.len(),
+            "生效值的键数应与契约 §8 一致"
+        );
     }
 
     #[test]

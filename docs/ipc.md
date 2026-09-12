@@ -208,13 +208,14 @@ type WalletBalance = { battery: number };
 
 type ReportResult = { ok: boolean; upstream_code: number | null; upstream_message: string | null };
 
-type PrefsSnapshot = {            // 契约 §8 的 17 键全量，键名即契约字面
+type PrefsSnapshot = {            // 契约 §8 的 18 键全量，键名即契约字面
   "ui.font_scale": number; "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean; "ui.pause_on_hover": boolean;
   "ui.merge_similar": boolean; "ui.merge_window_ms": number;
   "ui.gift_panel_mode": "merged" | "separate";
   "ui.interact_auto_hide": boolean;   // 互动/进场消息显示一会儿后自动消失（默认 true）
   "ui.system_notice": boolean;        // 系统通知显示（默认 false）
+  "ui.show_timestamp": boolean;       // 弹幕前显示时间戳（默认 false）
   "composer.phrases": string[];
   "filter.keywords": string[]; "filter.keywords_mode": "hide" | "only";
   "filter.keywords_alert": boolean; "filter.uids": number[]; "filter.kinds": MessageKind[];

@@ -59,6 +59,8 @@ export interface ChatSendResult {
   room_id: number;
   content: string;
   outcome: SendOutcome;
+  /** 上游原始答复（非 ok 时）：原话 + code，见 docs/ui.md §6.5。 */
+  detail?: string | null;
 }
 
 export interface SessionState {

@@ -13,6 +13,7 @@ interface Props {
   disabled: boolean;
   loggedIn: boolean;
   lastOutcome?: SendOutcome;
+  lastDetail?: string | null;
   emotes: Emote[];
   onSend: (content: string) => Promise<SendOutcome | undefined>;
   onOpenEmotes: () => void;
@@ -36,6 +37,7 @@ export function Composer({
   disabled,
   loggedIn,
   lastOutcome,
+  lastDetail,
   emotes,
   onSend,
   onOpenEmotes,
@@ -142,7 +144,9 @@ export function Composer({
         {!loggedIn
           ? "未登录：仅能接收弹幕，发送需要先在凭据文件中登录"
           : lastOutcome
-            ? `上次发送：${SEND_OUTCOME_TEXT[lastOutcome]}`
+            ? `上次发送：${SEND_OUTCOME_TEXT[lastOutcome]}${
+                lastDetail ? ` · ${lastDetail}` : ""
+              }`
             : " "}
       </div>
     </>

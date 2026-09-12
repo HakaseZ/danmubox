@@ -72,7 +72,7 @@ danmubox/
 |---|---|
 | `AuthProvider` | 登录态、凭据读写、扫码流程、buvid3 |
 | `LiveSource` | 房间解析、建立/断开连接、事件流 |
-| `DanmakuSender` | 发送弹幕（含被吞状态归一化） |
+| `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5） |
 | `DanmakuReporter` | 举报弹幕 |
 | `EmoteProvider` | 按身份加载表情包库 |
 | `RoomCatalog` | 关注列表、直播状态、房间元信息 |
@@ -185,6 +185,16 @@ sessdata = ""
 | `muted` | 已被禁言 | 上游对应错误码 |
 | `failed` | 其他失败 | 兜底，需带原始 code 与 message |
 
+`SendReport`（发送结果的规范性形状，`chat_send` 与端口共用）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `outcome` | `SendOutcome` | 归一化结论，上表七取一 |
+| `upstream_code` | `number | null` | 上游 `code` 原样，**不翻译**；本地节流拦下时为 `null`（没发请求） |
+| `upstream_message` | `string | null` | 上游 `msg` / `message` 原话，**不改写** |
+
+> 纪律：`SendOutcome` 只表达**已经敢下结论**的取值；一切未知 code 进 `failed`，其原始 `code` 与 `message` 通过 `SendReport` 一路带到界面（`REQUIREMENTS.md` §2.3 要求给出禁言 / 频率 / 粉丝牌等原因）。码表映射见 `protocol.md` 附录 A17。
+
 > `blocked_platform` / `blocked_room` 的判定规则来自一个可复现的社区实现（见 `protocol.md` 发送章节），阶段 1 必须用真实发送复核后写死。
 
 `RoomSession`（**本人在该房间的身份**，会话级、不落盘，规范性）：
@@ -233,7 +243,7 @@ Frontend → Rust 命令（`invoke`）：
 | `rooms_connect` / `rooms_disconnect` | 连接控制 |
 | `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |
 | `history_query` | 查询**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`） |
-| `chat_send` | 发弹幕，返回 `SendOutcome` |
+| `chat_send` | 发弹幕，返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现 |
 | `chat_report` | 举报弹幕 |
 | `emotes_list` | 按身份加载表情包库 |
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令） |

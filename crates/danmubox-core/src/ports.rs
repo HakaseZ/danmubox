@@ -70,6 +70,31 @@ pub trait LiveSource: Send + Sync {
     async fn stream(&self, room_id: i64, sink: MessageSink, cancel: Cancel) -> Result<()>;
 }
 
+/// 一次发送的完整结果：归一化结论 + 上游的原始答复。
+///
+/// `SendOutcome` 只表达**已经敢下结论**的那几种；上游的 `code` 与 `msg` 原话一并带回，
+/// 界面才能回答「为什么失败」（`REQUIREMENTS.md` §2.3 要求给出禁言 / 频率 / 粉丝牌等原因）。
+/// **不做码表映射**：`code` 只原样透传，不翻译成自造语义（`docs/protocol.md` 附录 A17）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendReport {
+    pub outcome: SendOutcome,
+    /// 上游 `code`；本地节流拦下时为 `None`（那时根本没发请求）。
+    pub upstream_code: Option<i64>,
+    /// 上游 `msg` / `message` 原文，不翻译。
+    pub upstream_message: Option<String>,
+}
+
+impl SendReport {
+    /// 已知结论且无附加信息的报告（本地判定用）。
+    pub fn local(outcome: SendOutcome) -> Self {
+        Self {
+            outcome,
+            upstream_code: None,
+            upstream_message: None,
+        }
+    }
+}
+
 #[async_trait]
 pub trait DanmakuSender: Send + Sync {
     /// 发送弹幕；被吞的两种情形由上游响应判定（`docs/contract.md` §5）。
@@ -79,7 +104,7 @@ pub trait DanmakuSender: Send + Sync {
         content: &str,
         color: Option<i64>,
         mode: Option<i64>,
-    ) -> Result<SendOutcome>;
+    ) -> Result<SendReport>;
 }
 
 #[async_trait]

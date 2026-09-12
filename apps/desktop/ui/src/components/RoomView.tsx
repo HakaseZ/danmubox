@@ -23,6 +23,7 @@ interface Props {
   prefs: Prefs;
   session?: SessionState;
   lastOutcome?: SendOutcome;
+  lastDetail?: string | null;
   logs: string[];
   emotes: Emote[];
   balance?: number;
@@ -56,6 +57,7 @@ export function RoomView({
   prefs,
   session,
   lastOutcome,
+  lastDetail,
   logs,
   emotes,
   balance,
@@ -148,6 +150,7 @@ export function RoomView({
         disabled={!room.connected}
         loggedIn={session?.logged_in ?? false}
         lastOutcome={lastOutcome}
+        lastDetail={lastDetail}
         emotes={emotes}
         onSend={onSend}
         onOpenEmotes={() => void loadEmotes(room.room_id)}

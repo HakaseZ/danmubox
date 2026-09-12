@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use danmubox_core::ports::DanmakuSender;
+use danmubox_core::ports::{DanmakuSender, SendReport};
 use danmubox_core::{ConfigStore, Error, Result, SendOutcome};
 use serde_json::Value;
 
@@ -26,6 +26,20 @@ const EP_MSG_SEND: &str = "https://api.live.bilibili.com/msg/send";
 /// 响应 → `SendOutcome`（`docs/protocol.md` §11.2 / §11.3）。
 ///
 /// 纯函数，便于离线覆盖各分支；真实发送的复核见附录 A16。
+/// 归一化结论 + 上游原始 code / 原话。界面要回答「为什么失败」就靠它，
+/// 因此 `code` 与 `msg` 一律原样带回，不翻译、不映射语义。
+pub fn report_from_response(value: &Value) -> SendReport {
+    SendReport {
+        outcome: outcome_from_response(value),
+        upstream_code: value.get("code").and_then(Value::as_i64),
+        upstream_message: value
+            .get("msg")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("message").and_then(Value::as_str))
+            .map(str::to_owned),
+    }
+}
+
 pub fn outcome_from_response(value: &Value) -> SendOutcome {
     // 被吞标记优先于 code：实测脚本里被吞时 code 仍为 0。
     let marker = value
@@ -123,7 +137,7 @@ impl DanmakuSender for BiliSender {
         content: &str,
         color: Option<i64>,
         mode: Option<i64>,
-    ) -> Result<SendOutcome> {
+    ) -> Result<SendReport> {
         let profile = self
             .store
             .active()
@@ -160,8 +174,8 @@ impl DanmakuSender for BiliSender {
         let body = wbi::signed_query(&params, &mixin);
 
         let value = self.http.post_form(EP_MSG_SEND, &body).await?;
-        let outcome = outcome_from_response(&value);
-        match outcome {
+        let report = report_from_response(&value);
+        match report.outcome {
             SendOutcome::Ok => {}
             SendOutcome::BlockedPlatform | SendOutcome::BlockedRoom => {
                 // 被吞原因与原文只记日志，不回显给前端（前端本就知道自己发了什么）。
@@ -175,7 +189,7 @@ impl DanmakuSender for BiliSender {
                 tracing::warn!(room_id, detail = %failure_detail(&value), "发送失败");
             }
         }
-        Ok(outcome)
+        Ok(report)
     }
 }
 

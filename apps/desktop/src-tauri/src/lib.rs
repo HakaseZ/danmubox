@@ -99,6 +99,26 @@ pub struct ChatSendResult {
     pub room_id: i64,
     pub content: String,
     pub outcome: SendOutcome,
+    /// 上游的原始答复（`outcome` 非 `ok` 时）：`msg` 原话 + `code`。
+    /// 界面据此回答「为什么失败」（`REQUIREMENTS.md` §2.3）；**不做码表翻译**。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// 把上游原始答复拼成给界面看的一行。
+///
+/// 只搬运上游自己给的文字与数字，不翻译、不归类——码表映射见
+/// `docs/protocol.md` 附录 A17，结论出来之前一律原样透传。
+fn send_detail(report: &danmubox_core::ports::SendReport) -> Option<String> {
+    if report.outcome == SendOutcome::Ok {
+        return None;
+    }
+    match (&report.upstream_message, report.upstream_code) {
+        (Some(message), Some(code)) => Some(format!("{message}（code {code}）")),
+        (Some(message), None) => Some(message.clone()),
+        (None, Some(code)) => Some(format!("code {code}")),
+        (None, None) => None,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -308,7 +328,7 @@ async fn chat_send(
     color: Option<i64>,
 ) -> ApiResult<ChatSendResult> {
     let sender = BiliSender::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let outcome = sender
+    let report = sender
         .send(room_id, &content, color, None)
         .await
         .map_err(ApiError::from)?;
@@ -316,7 +336,8 @@ async fn chat_send(
     let result = ChatSendResult {
         room_id,
         content,
-        outcome,
+        outcome: report.outcome,
+        detail: send_detail(&report),
     };
     let _ = app.emit("danmubox://send", &result);
     Ok(result)
@@ -518,7 +539,11 @@ pub fn run() {
         use tracing_subscriber::util::SubscriberInitExt as _;
         let filter = tracing_subscriber::EnvFilter::try_from_env("DANMUBOX_LOG")
             .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-        let fmt_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+        // 桌面端总是被重定向到日志文件（或 PTY），ANSIC 颜色码只会污染文件、
+        // 让 grep/解析失效，因此固定关闭。
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_ansi(false);
         let _ = tracing_subscriber::registry()
             .with(filter)
             .with(fmt_layer)
@@ -577,4 +602,59 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use danmubox_core::ports::SendReport;
+
+    fn report(outcome: SendOutcome, code: Option<i64>, message: Option<&str>) -> SendReport {
+        SendReport {
+            outcome,
+            upstream_code: code,
+            upstream_message: message.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn success_carries_no_detail() {
+        assert_eq!(
+            send_detail(&report(SendOutcome::Ok, Some(0), Some("ok"))),
+            None
+        );
+    }
+
+    #[test]
+    fn failure_shows_upstream_words_and_code_verbatim() {
+        // 真实样本：房间 5440（登录态）发送被拒。
+        let detail = send_detail(&report(
+            SendOutcome::Failed,
+            Some(10023),
+            Some("发送失败，请先移除该用户黑名单"),
+        ))
+        .expect("失败必须给出原因");
+        assert!(detail.contains("发送失败，请先移除该用户黑名单"), "{detail}");
+        assert!(detail.contains("10023"), "{detail}");
+    }
+
+    #[test]
+    fn partial_upstream_answers_still_render_something() {
+        assert_eq!(
+            send_detail(&report(SendOutcome::Failed, Some(-400), None)).as_deref(),
+            Some("code -400")
+        );
+        assert_eq!(
+            send_detail(&report(SendOutcome::Failed, None, Some("被拦下"))).as_deref(),
+            Some("被拦下")
+        );
+        assert_eq!(send_detail(&report(SendOutcome::Failed, None, None)), None);
+    }
+
+    #[test]
+    fn swallowed_outcomes_also_explain_themselves() {
+        // 被吞不是 ok，界面同样要给说法。
+        assert!(send_detail(&report(SendOutcome::BlockedPlatform, Some(0), Some("f"))).is_some());
+        assert!(send_detail(&report(SendOutcome::BlockedRoom, Some(0), Some("k"))).is_some());
+    }
 }

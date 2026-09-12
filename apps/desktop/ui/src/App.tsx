@@ -77,6 +77,7 @@ export function App() {
           prefs={prefs}
           session={session}
           lastOutcome={lastSend?.outcome}
+          lastDetail={lastSend?.detail}
           logs={logs}
           emotes={emotes}
           balance={balance}

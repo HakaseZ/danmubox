@@ -151,14 +151,20 @@ async fn send(store: &Arc<ConfigStore>, room: &str, text: &str, color: Option<i6
     let live = BiliLive::with_store(Arc::clone(store))?;
     let resolved = live.resolve_room(room).await?;
     let sender = BiliSender::new(Arc::clone(store))?;
-    let outcome = sender
+    let report = sender
         .send(resolved.room_id, text, color, None)
         .await
         .context("发送失败")?;
-    println!("# 房间 {} 发送结果：{:?}", resolved.room_id, outcome);
+    println!("# 房间 {} 发送结果：{:?}", resolved.room_id, report.outcome);
+    if let Some(code) = report.upstream_code {
+        println!(
+            "# 上游 code={code} 原话：{}",
+            report.upstream_message.as_deref().unwrap_or("（无）")
+        );
+    }
     println!(
         "# 含义：{}",
-        match outcome {
+        match report.outcome {
             danmubox_core::SendOutcome::Ok => "已发出并进入公开弹幕流",
             danmubox_core::SendOutcome::BlockedPlatform => "被平台风控吞掉（划线红线）",
             danmubox_core::SendOutcome::BlockedRoom => "被直播间吞掉（划线黄线）",

@@ -244,25 +244,25 @@ async fn rooms_remove(state: State<'_, AppState>, room_id: i64) -> ApiResult<()>
 
 #[tauri::command]
 async fn rooms_connect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()> {
-    {
-        let rooms = state.rooms.lock().expect("rooms poisoned");
-        if rooms.runtimes.contains_key(&room_id) {
-            return Ok(());
-        }
-        if !rooms.meta.contains_key(&room_id) {
-            return Err(ApiError::from(danmubox_core::Error::RoomNotFound(
-                format!("房间 {room_id} 未登记"),
-            )));
-        }
-    }
-
-    let room = {
-        let rooms = state.rooms.lock().expect("rooms poisoned");
-        rooms.meta.get(&room_id).cloned().unwrap_or_default()
-    };
+    // 锁外先备好构造运行时需要的东西（凭据、偏好），避免把两把锁叠在一起。
     let source: Arc<dyn LiveSource> =
         Arc::new(BiliLive::with_store(Arc::clone(&state.store)).map_err(ApiError::from)?);
     let buffer_rows = state.prefs.lock().expect("prefs poisoned").buffer_rows();
+
+    // **存在性检查与插入必须在同一把锁内完成**：界面在 StrictMode 下会并发触发连接，
+    // 若分两次加锁，两个调用都会通过检查并各自 `spawn` 一个运行时——于是同一个房间
+    // 会有两套会话缓冲，两套都从 `local_id = 1` 开始回填，界面收到重复 id
+    // （表现为 React 报「two children with the same key, 1」且刷满日志）。
+    // `RoomRuntime::spawn` 是同步的（内部只起任务），因此在锁内构造是安全的。
+    let mut rooms = state.rooms.lock().expect("rooms poisoned");
+    if rooms.runtimes.contains_key(&room_id) {
+        return Ok(());
+    }
+    let Some(room) = rooms.meta.get(&room_id).cloned() else {
+        return Err(ApiError::from(danmubox_core::Error::RoomNotFound(
+            format!("房间 {room_id} 未登记"),
+        )));
+    };
     let runtime = RoomRuntime::spawn(
         room,
         buffer_rows,
@@ -270,12 +270,7 @@ async fn rooms_connect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()
         Arc::clone(&state.counters),
         source,
     );
-    state
-        .rooms
-        .lock()
-        .expect("rooms poisoned")
-        .runtimes
-        .insert(room_id, runtime);
+    rooms.runtimes.insert(room_id, runtime);
     Ok(())
 }
 
@@ -453,6 +448,7 @@ const CONSOLE_BRIDGE: &str = r#"
   window.__danmuboxLogBridge = true;
   var send = function (level, message) {
     try {
+      if (isDuplicate(level + '\u0000' + String(message).slice(0, 200))) return;
       window.__TAURI_INTERNALS__.invoke('frontend_log', {
         level: level,
         message: String(message).slice(0, 2000),
@@ -462,6 +458,19 @@ const CONSOLE_BRIDGE: &str = r#"
   var stringify = function (value) {
     if (typeof value === 'string') return value;
     try { return JSON.stringify(value); } catch (e) { return String(value); }
+  };
+  // 去重：同一条告警 1 秒内只上报一次。
+  // 必要性：Rust 侧日志会回推成 danmubox://log，界面日志面板随 setState 重渲染；
+  // 若某条告警在每次渲染都会复现（如 React 的重复 key），不回推去重就会形成
+  // 「渲染 → 告警 → 日志 → 重渲染」的反馈环，实测一次会话能刷出 30 万行日志。
+  var recent = new Map();
+  var isDuplicate = function (key) {
+    var now = Date.now();
+    var last = recent.get(key);
+    if (last !== undefined && now - last < 1000) return true;
+    recent.set(key, now);
+    if (recent.size > 200) recent.clear();
+    return false;
   };
   ['error', 'warn'].forEach(function (level) {
     var original = console[level].bind(console);

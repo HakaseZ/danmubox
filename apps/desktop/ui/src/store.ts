@@ -81,7 +81,14 @@ export const useApp = create<AppStore>((set, get) => ({
       unsubscribe = await subscribeEvents({
         onMessage: (message) => {
           if (message.room_id !== get().activeRoomId) return;
-          const messages = [...get().messages, message];
+          const current = get().messages;
+          // `local_id` 是会话内的单调序号（契约 §5）。进场时我们会用 `history_query`
+          // 整批覆盖一次，其间到达的事件可能已经包含在那批快照里；此外运行时若被
+          // 重建，序号会从头开始。两种情况下都只能接受「比现有末尾更新」的消息，
+          // 否则同一 local_id 会进列表两次（React 会报重复 key，渲染也会错乱）。
+          const last = current.length > 0 ? current[current.length - 1].local_id : 0;
+          if (message.local_id !== 0 && message.local_id <= last) return;
+          const messages = [...current, message];
           if (messages.length > CLIENT_MESSAGE_CAP) {
             messages.splice(0, messages.length - CLIENT_MESSAGE_CAP);
           }

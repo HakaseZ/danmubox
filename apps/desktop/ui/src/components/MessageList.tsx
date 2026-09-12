@@ -63,7 +63,8 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
         data-testid="db-chat-scroll"
         className={styles.scroller}
         style={{
-          fontSize: `${14 * prefs["ui.font_scale"]}px`,
+          // em 而不是 px：基准字号由 body 的 --fs-root 给定（app.module.css 的令牌）
+          fontSize: `${prefs["ui.font_scale"]}em`,
         }}
         onScroll={(event) => {
           const el = event.currentTarget;

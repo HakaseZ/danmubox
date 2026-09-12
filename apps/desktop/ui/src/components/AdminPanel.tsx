@@ -65,7 +65,11 @@ export function AdminPanel({
         <button onMouseDown={(event) => event.preventDefault()} onClick={onRefresh} disabled={busy}>
           刷新
         </button>
-        <button onMouseDown={(event) => event.preventDefault()} onClick={onClose}>
+        <button
+          data-testid="db-admin-close"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onClose}
+        >
           关闭
         </button>
       </div>

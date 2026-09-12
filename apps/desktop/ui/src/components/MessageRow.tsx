@@ -28,6 +28,17 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   const medal = medalColors(message);
   const color = cssColor(message.color);
   const highlight = alertsOn(message, prefs) ? styles.highlight : undefined;
+  // 被 @ 的名字用上游给的颜色（与粉丝牌真彩色同一口径：空串不是颜色，缺失就不上色）
+  const replyNameColor =
+    message.reply_uname_color !== undefined && message.reply_uname_color.length > 0
+      ? message.reply_uname_color
+      : undefined;
+  // 一枚徽标都没有时不渲染空徽标组：空的 flex 项会白吃掉簇内的一道间距
+  const hasBadges =
+    badges.anchor ||
+    badges.admin ||
+    badges.guardLevel > 0 ||
+    (badges.medalLevel > 0 && badges.medalName.length > 0);
 
   const kindClass: Record<Message["kind"], string | undefined> = {
     danmaku: undefined,
@@ -79,71 +90,94 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
           <Avatar url={message.face} name={message.uname} />
         </span>
       )}
-      {message.kind !== "system" && (
-        <span className={styles.badges}>
-          {badges.anchor && (
-            <span className={`${styles.badge} ${styles.badgeAnchor}`}>主播</span>
-          )}
-          {badges.admin && (
-            <span className={`${styles.badge} ${styles.badgeAdmin}`}>房管</span>
-          )}
-          {badges.guardLevel > 0 && (
-            <span
-              className={`${styles.badge} ${
-                styles[`badgeGuard${badges.guardLevel}`] ?? styles.badgeGuard
-              }`}
-            >
-              {GUARD_TITLE[badges.guardLevel] ?? `Guard${badges.guardLevel}`}
+      {message.kind !== "system" && (hasBadges || message.uname.length > 0) && (
+        // 身份簇：徽标组 + 昵称 + 回复标记**是一个整体**——身份属于人名，不是独立一栏。
+        // 簇内只用一种间距（--sp-1），簇与正文之间才用另一种（--sp-2，见 `.identity + .content`）。
+        <span className={styles.identity} data-testid="db-msg-identity">
+          {hasBadges && (
+            <span className={styles.badges} data-testid="db-msg-badges">
+              {badges.anchor && (
+                <span className={`${styles.badge} ${styles.badgeAnchor}`}>主播</span>
+              )}
+              {badges.admin && (
+                <span className={`${styles.badge} ${styles.badgeAdmin}`}>房管</span>
+              )}
+              {badges.guardLevel > 0 && (
+                <span
+                  className={`${styles.badge} ${
+                    styles[`badgeGuard${badges.guardLevel}`] ?? styles.badgeGuard
+                  }`}
+                >
+                  {GUARD_TITLE[badges.guardLevel] ?? `Guard${badges.guardLevel}`}
+                </span>
+              )}
+              {badges.medalLevel > 0 && badges.medalName.length > 0 && (
+                <span
+                  className={`${styles.badge} ${styles.badgeMedal}`}
+                  style={{
+                    // 牌面配色优先用上游真彩色（契约 §5）；空串不是颜色，缺失时
+                    // medalColors 已回退到按牌名派生的色相（docs/ui.md §4.2）。
+                    backgroundImage: `linear-gradient(45deg, ${medal.start}, ${medal.end})`,
+                    ...(medal.border ? { borderColor: medal.border } : null),
+                    ...(medal.text ? { color: medal.text } : null),
+                  }}
+                >
+                  <span className={styles.medalName}>{badges.medalName}</span>
+                  <span className={styles.medalLevel}>{badges.medalLevel}</span>
+                </span>
+              )}
             </span>
           )}
-          {badges.medalLevel > 0 && badges.medalName.length > 0 && (
+          {message.uname.length > 0 && (
             <span
-              className={`${styles.badge} ${styles.badgeMedal}`}
-              style={{
-                // 牌面配色优先用上游真彩色（契约 §5）；空串不是颜色，缺失时
-                // medalColors 已回退到按牌名派生的色相（docs/ui.md §4.2）。
-                backgroundImage: `linear-gradient(45deg, ${medal.start}, ${medal.end})`,
-                ...(medal.border ? { borderColor: medal.border } : null),
-                ...(medal.text ? { color: medal.text } : null),
-              }}
+              className={styles.name}
+              data-testid="db-msg-name"
+              style={color ? { color } : undefined}
             >
-              <span className={styles.medalName}>{badges.medalName}</span>
-              <span className={styles.medalLevel}>{badges.medalLevel}</span>
+              {message.uname}:
+            </span>
+          )}
+          {message.reply_to_uid !== 0 && message.reply_to_uname.length > 0 && (
+            // 「回复了谁」看得到（用户 #13b）：显示在被回复者该出现的位置——昵称之后、正文之前。
+            // 这一格同时是「纯 @ 某人」的槽位：两种形态只差文案与层级，不各开一列；
+            // 收包侧的 `reply_type_enum` / `show_reply` 还没进契约，所以此刻只有「回复」这一种形态。
+            // 长昵称按 `.replyTo` 截断，完整名字在 title 里。
+            <span
+              className={styles.replyTo}
+              data-testid="db-msg-reply"
+              title={`回复 @${message.reply_to_uname}`}
+            >
+              回复{" "}
+              {/* 被 @ 的名字单独一格：上游给了颜色就上色（实测 #FB7299），没给就沿用标记的弱化色 */}
+              <span
+                data-testid="db-msg-reply-name"
+                style={replyNameColor ? { color: replyNameColor } : undefined}
+              >
+                @{message.reply_to_uname}
+              </span>
             </span>
           )}
         </span>
       )}
-      {message.kind !== "system" && message.uname.length > 0 && (
-        <span
-          className={styles.name}
-          data-testid="db-msg-name"
-          style={color ? { color } : undefined}
-        >
-          {message.uname}:
-        </span>
-      )}
-      {message.kind !== "system" && message.reply_to_uid !== 0 && message.reply_to_uname.length > 0 && (
-        // 「回复了谁」看得到（用户 #13b）：显示在被回复者该出现的位置——昵称之后、正文之前。
-        // 长昵称按 `.replyTo` 截断，完整名字在 title 里。
-        <span className={styles.replyTo} data-testid="db-msg-reply" title={`回复 @${message.reply_to_uname}`}>
-          回复 @{message.reply_to_uname}
-        </span>
-      )}
-      {message.emote ? (
-        // 表情弹幕：正文就是表情名，只显示文字会让人以为「表情没渲染」，
-        // 因此改画图（标题与 alt 都保留表情名——图加载不出来时浏览器回退显示 alt）。
-        // 尺寸用 em，随 `ui.font_scale` 联动（docs/ui.md §4.1）。
-        <img
-          className={`${styles.contentEmote} ${
-            message.emote.bulge_display ? styles.contentEmoteBulge : ""
-          } ${highlight ?? ""}`}
-          src={message.emote.url}
-          alt={message.content}
-          title={message.content}
-        />
-      ) : (
-        <span className={`${styles.content} ${highlight ?? ""}`}>{text}</span>
-      )}
+      {/* 正文：文字与表情图**同一个行盒**——表情不另起一列、不另站一个基线；
+          大表情（bulge）尺寸太大，由 `.contentEmoteBulge` 单独占一行。 */}
+      <span className={styles.content} data-testid="db-msg-body">
+        {message.emote ? (
+          // 表情弹幕：正文就是表情名，只显示文字会让人以为「表情没渲染」，
+          // 因此改画图（标题与 alt 都保留表情名——图加载不出来时浏览器回退显示 alt）。
+          // 尺寸用 em，随 `ui.font_scale` 联动（docs/ui.md §4.1）。
+          <img
+            className={`${styles.contentEmote} ${
+              message.emote.bulge_display ? styles.contentEmoteBulge : ""
+            } ${highlight ?? ""}`}
+            src={message.emote.url}
+            alt={message.content}
+            title={message.content}
+          />
+        ) : (
+          <span className={highlight}>{text}</span>
+        )}
+      </span>
       {/* 礼物行始终显示数量（连击聚合后的次数）；其余类型只在合并时显示 */}
       {(count > 1 || message.kind === "gift") && (
         <span className={styles.merged}>×{count}</span>

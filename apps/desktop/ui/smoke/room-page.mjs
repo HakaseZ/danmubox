@@ -18,6 +18,7 @@
 //      行的正文里恰好出现同样两个字就会让断言说谎（#12 那次的样本正文含「舰长」两字，
 //      于是「不该有舰长标」的断言假失败——它反过来也会让真 bug 混过去）。
 //      例：判徽标看 `span.innerText.trim() === "舰长"`，而不是 `row.innerText.indexOf("舰长")`。
+//   4) 场景代码整段是一个模板字符串（MOCK）：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩。
 //
 // 覆盖：docs/ui.md §2、§3、§4、§6、§8。
 //   step1  关注列表自动加载、列表页展示关注项
@@ -317,6 +318,25 @@ const MOCK = `(function () {
   };
 
   window.__smoke_run = async function () {
+    // 视口：390×844（窄屏，竖屏手机比例）与 1440×900（宽屏）各跑一遍。
+    // 视口专属的断言只写进对应视口的快照（narrow_* / wide_*），
+    // 否则「宽屏的面板在文档流里」这类口径会在窄屏那边假失败。
+    var NARROW = window.innerWidth <= 520;
+    out.viewport = NARROW ? "narrow" : "wide";
+    var put = function (name, value) { out[(NARROW ? "narrow_" : "wide_") + name] = value; };
+    // 触屏热区体检：sheet / 对话框里凡是可点的东西都必须 ≥ 40px。
+    // 复选框与滑杆本身不撑高（会变形），它们的热区由各自的 label 承担，所以按 label 计。
+    var shortHotspots = function (root) {
+      var els = [].slice.call(root.querySelectorAll("button, select, label, input"));
+      var bad = [];
+      els.forEach(function (el) {
+        if (el.tagName === "INPUT" && (el.type === "checkbox" || el.type === "range")) return;
+        var r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) return;
+        if (r.height < 39.5) bad.push(el.tagName + "=" + Math.round(r.height) + "×" + Math.round(r.width));
+      });
+      return bad;
+    };
     // ---- step1 关注列表自动加载 + 列表页展示关注项（语义不得改）
     await sleep(900);
     out.step1_followCalls = window.__followCalls;
@@ -328,6 +348,11 @@ const MOCK = `(function () {
     out.followPagerShown = !!document.querySelector('[class*="pager"]');
     out.followNonLiveListed = followNames.indexOf("离线乙") >= 0 && followNames.indexOf("离线甲") >= 0;
     out.accountArea = !!byTestId("db-account");
+    // 列表页在窄屏也不许横向滚动（关注项一行放不下要换行）
+    var listPage = byTestId("db-list-page");
+    put("listNoHorizontalScroll", !!listPage &&
+      document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+      listPage.scrollWidth <= listPage.clientWidth);
     snap();
 
     // ---- step2 进房间 + 历史回填可见
@@ -359,6 +384,21 @@ const MOCK = `(function () {
     out.step3_liveOpacity = live ? getComputedStyle(live).opacity : null;
     out.step3_dividerTextPresent = text().indexOf("以上为进场前的最新弹幕") >= 0;
     out.step3_interactAnimation = interact ? getComputedStyle(interact).animationName : null;
+    // 窄屏：头部（在线 / 看过 / 电池）与弹幕列表都不许横向滚动——放不下就换行，不许溢出
+    var headerEl0 = byTestId("db-room-header");
+    var scrollerEl0 = byTestId("db-chat-scroll");
+    put("headerNoHorizontalScroll", headerEl0.scrollWidth <= headerEl0.clientWidth);
+    put("chatNoHorizontalScroll", scrollerEl0.scrollWidth <= scrollerEl0.clientWidth + 1);
+    put("pageNoHorizontalScroll",
+      document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+      document.body.scrollWidth <= document.body.clientWidth);
+    // 输入区：输入框占满宽度；工具行放不下就换行，不许挤成小方块
+    var composerEl0 = document.querySelector("textarea").parentElement;
+    var toolsEl0 = byTestId("db-composer-tools");
+    put("textareaFullWidth",
+      Math.abs(rect(document.querySelector("textarea")).width - composerEl0.clientWidth) < 26);
+    put("toolsRowNoOverflow", !!toolsEl0 &&
+      toolsEl0.scrollWidth <= toolsEl0.clientWidth + 1);
     snap();
 
     // ---- 几何：内容不足视口高度时整体贴底（直播弹幕自下往上读，最新一条紧贴输入区）
@@ -394,7 +434,19 @@ const MOCK = `(function () {
     }));
     // 回复关系（issue #13b）与「舰长标只认本房间」（issue #12）的样本行
     window.__emit("danmubox://message", window.__mk("danmaku", "这条是回复", false, {
-      reply_to_uid: 777, reply_to_uname: "被回复的人"
+      reply_to_uid: 777, reply_to_uname: "被回复的人", reply_uname_color: "#FB7299"
+    }));
+    // 上游没给配色（空串）时不上色：**空串不是颜色**，与粉丝牌真彩色同一口径
+    window.__emit("danmubox://message", window.__mk("danmaku", "没有配色的回复", false, {
+      reply_to_uid: 778, reply_to_uname: "另一个被回复的人", reply_uname_color: ""
+    }));
+    // 排版样本（issue #8 的「一条弹幕要像一个整体」）：
+    // ① 长正文：在 390 与 1440 两个视口都会折行，用来量折行后的首字位置；
+    // ② 带徽标 + 昵称 + 正文的行：用来量「徽标组→昵称」与「昵称→正文」两道间距。
+    window.__emit("danmubox://message", window.__mk("danmaku",
+      "折行样本：" + "身份属于人名，正文属于内容，两者之间要分开；折行之后每一行都要与首行文字左对齐，而不是回到头像下面。".repeat(3)));
+    window.__emit("danmubox://message", window.__mk("danmaku", "紧贴昵称的徽标弹幕", false, {
+      uname: "身份样本", medal_level: 7, medal_name: "紧贴牌", guard_level: 3
     }));
     window.__emit("danmubox://message", window.__mk("danmaku", "他房间的牌子弹幕", false, {
       medal_level: 7, medal_name: "外间牌", medal_guard_level: 3, guard_level: 0
@@ -460,6 +512,17 @@ const MOCK = `(function () {
     var plainRow = rowWith("无头像的弹幕");
     out.replyLabelAbsentWhenNotReply = !!plainRow &&
       !plainRow.querySelector('[data-testid="db-msg-reply"]');
+    // 被 @ 的名字用上游给的 reply_uname_color 上色；空串则保持标记自身的弱化色（不上色）
+    var replyNameEl = replyRow ? replyRow.querySelector('[data-testid="db-msg-reply-name"]') : null;
+    var replyNamePaint = replyNameEl
+      ? (replyNameEl.getAttribute("style") || "") + "|" + getComputedStyle(replyNameEl).color
+      : "";
+    out.replyNameColorApplied =
+      replyNamePaint.indexOf("#FB7299") >= 0 || replyNamePaint.indexOf("251, 114, 153") >= 0;
+    var noColorRow = rowWith("没有配色的回复");
+    var noColorNameEl = noColorRow ? noColorRow.querySelector('[data-testid="db-msg-reply-name"]') : null;
+    out.replyNameColorAbsentWhenEmpty = !!noColorNameEl &&
+      (noColorNameEl.getAttribute("style") || "") === "";
     // 舰长标只认本房间的 guard_level：戴着别的房间舰长牌（medal_guard_level=3）不亮舰长标（issue #12）
     // 判据看**徽标元素本身**的文本（正文里出现「舰长」两字不算）
     var hasGuardBadge = function (row) {
@@ -472,6 +535,57 @@ const MOCK = `(function () {
     var roomGuardRow = rowWith("本房间的大航海弹幕");
     out.guardBadgeNotFromMedalGuardLevel = !!outsideGuardRow && !hasGuardBadge(outsideGuardRow);
     out.guardBadgeShownForRoomGuard = hasGuardBadge(roomGuardRow);
+
+    // ---- 排版的「整体感」：一行里的间距只有两种（贴 / 分）
+    // 徽标组属于人名（紧贴昵称），昵称与正文之间才是「分」。
+    var badgeRow = rowWith("紧贴昵称的徽标弹幕");
+    var badgesEl = badgeRow ? badgeRow.querySelector('[data-testid="db-msg-badges"]') : null;
+    var badgeNameEl = badgeRow ? badgeRow.querySelector('[data-testid="db-msg-name"]') : null;
+    var badgeBodyEl = badgeRow ? badgeRow.querySelector('[data-testid="db-msg-body"]') : null;
+    out.layoutBadgeNameGap = badgesEl && badgeNameEl
+      ? Math.round((rect(badgeNameEl).left - rect(badgesEl).right) * 10) / 10
+      : null;
+    out.layoutNameBodyGap = badgeNameEl && badgeBodyEl
+      ? Math.round((rect(badgeBodyEl).left - rect(badgeNameEl).right) * 10) / 10
+      : null;
+    out.layoutBadgeGroupTightWithName =
+      out.layoutBadgeNameGap !== null && out.layoutNameBodyGap !== null &&
+      out.layoutBadgeNameGap < out.layoutNameBodyGap;
+
+    // ---- 悬挂缩进：折行后每一行的首字都与首行的文字左对齐（不是回到头像下面）
+    // 量法用 Range.getClientRects()：它按**行盒**返回矩形，正好能拿到每一行的左边缘。
+    var wrapRow = rowWith("折行样本");
+    var wrapBody = wrapRow ? wrapRow.querySelector('[data-testid="db-msg-body"]') : null;
+    var lineRects = [];
+    if (wrapBody) {
+      var range = document.createRange();
+      range.selectNodeContents(wrapBody);
+      lineRects = [].slice.call(range.getClientRects());
+    }
+    out.layoutHangIndentLines = lineRects.length;
+    out.layoutHangIndentFirstLeft = lineRects.length > 0 ? Math.round(lineRects[0].left * 10) / 10 : null;
+    out.layoutHangIndentLastLeft = lineRects.length > 0
+      ? Math.round(lineRects[lineRects.length - 1].left * 10) / 10
+      : null;
+    // 行数 ≥ 2 才算真的折了行，否则这条断言是「空对空」
+    out.layoutHangIndentAligned = lineRects.length >= 2 &&
+      Math.abs(lineRects[lineRects.length - 1].left - lineRects[0].left) < 1;
+
+    // ---- 头像对齐口径：**垂直居中于首行**（钉在首行，不随折行掉到行的中间）
+    var avatarColEl = wrapRow ? wrapRow.querySelector('[data-testid="db-msg-avatar-col"]') : null;
+    var wrapRowRect = rect(wrapRow);
+    var avatarRect = rect(avatarColEl);
+    var firstLine = lineRects[0];
+    out.layoutAvatarFirstLineDelta = firstLine && avatarRect
+      ? Math.round(((avatarRect.top + avatarRect.height / 2) -
+          (firstLine.top + firstLine.height / 2)) * 10) / 10
+      : null;
+    out.layoutAvatarAlignedToFirstLine = out.layoutAvatarFirstLineDelta !== null &&
+      Math.abs(out.layoutAvatarFirstLineDelta) < 3;
+    // 反面对照：这一行折了 3 行左右，头像若按「整行居中」会明显更低
+    out.layoutAvatarNotRowCentered = !!firstLine && !!avatarRect && !!wrapRowRect &&
+      (avatarRect.top + avatarRect.height / 2) <
+        (wrapRowRect.top + wrapRowRect.height / 2) - 4;
 
     // ---- layout 弹幕列表是唯一生长区；面板向上展开不遮挡最新弹幕
     var scroller = byTestId("db-chat-scroll");
@@ -515,8 +629,35 @@ const MOCK = `(function () {
     // 面板还开着就先把快照写进去、并多停 1.5s：跑脚本的进程据此抓一张「面板已展开」的截图
     snap();
     await sleep(1500);
+    if (!NARROW) {
+      // 宽屏口径不变：面板仍是文档流里的一块（不是浮层），展开只挤弹幕列表
+      out.wide_panelInline = getComputedStyle(panel).position !== "fixed";
+    }
     clickTool("表情");
     await sleep(200);
+
+    // ---- 面板形态（窄屏）：自底部升起的 sheet、内容可滚动、有明确的关闭入口、热区 ≥ 40px
+    if (NARROW) {
+      clickTool("表情");
+      await sleep(400);
+      var sheet = byTestId("db-panel");
+      var sheetRect = rect(sheet);
+      put("panelIsBottomSheet", !!sheet &&
+        getComputedStyle(sheet).position === "fixed" &&
+        Math.abs(sheetRect.bottom - window.innerHeight) < 2 &&
+        Math.abs(sheetRect.width - document.documentElement.clientWidth) < 2);
+      var sheetHotspots = sheet ? shortHotspots(sheet) : ["没有面板"];
+      put("panelHotspotsBad", sheetHotspots);
+      put("panelHotspotsAtLeast40", !!sheet && sheetHotspots.length === 0);
+      put("panelScrollable", !!sheet && getComputedStyle(sheet).overflowY === "auto");
+      put("panelClosable", !!byTestId("db-panel-close"));
+      var panelCloseBtn = byTestId("db-panel-close");
+      if (panelCloseBtn) {
+        panelCloseBtn.click();
+        await sleep(300);
+      }
+      put("panelCloseWorks", !byTestId("db-panel"));
+    }
 
     // ---- emotes 主站「我的表情」：分组可见、选得到、发出去带的是唯一键（issue #8）
     out.emotesOwnedCalled = calls.indexOf("emotes_owned") >= 0;
@@ -653,6 +794,9 @@ const MOCK = `(function () {
       (composer.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     out.giftDockCollapsed = !!dock && !byTestId("db-gift-body");
     out.giftDockFullWidth = !!dock && Math.abs(rect(dock).width - document.body.clientWidth) < 2;
+    // 窄屏：折叠条只占一行，弹幕列表不被它挤掉
+    put("giftDockCompact", !!dock && rect(dock).height <= 56);
+    put("giftListKeptTall", rect(byTestId("db-chat-scroll")).height >= 200);
     buttonWith(dock, "礼物 / SC").click();
     await sleep(300);
     out.giftDockExpands = !!byTestId("db-gift-body");
@@ -766,6 +910,18 @@ const MOCK = `(function () {
       allByTestId("db-admin-blacklist-item").length,
       allByTestId("db-admin-keyword-item").length
     ];
+    // 窄屏：房管面板同样是自底部升起的 sheet，可滚动、有明确关闭入口、热区 ≥ 40px
+    if (NARROW) {
+      var adminRect = rect(adminPanel);
+      put("adminPanelIsBottomSheet",
+        getComputedStyle(adminPanel).position === "fixed" &&
+        Math.abs(adminRect.bottom - window.innerHeight) < 2);
+      put("adminPanelScrollable", getComputedStyle(adminPanel).overflowY === "auto");
+      put("adminPanelClosable", !!byTestId("db-admin-close"));
+      var adminHotspots = shortHotspots(adminPanel);
+      put("adminPanelHotspotsBad", adminHotspots);
+      put("adminPanelHotspotsAtLeast40", adminHotspots.length === 0);
+    }
     // 停一下让跑脚本的进程抓一张「房管面板三块」的截图
     snap();
     await sleep(1200);
@@ -822,6 +978,19 @@ const MOCK = `(function () {
     byTestId("db-account-open").click();
     await sleep(400);
     out.accountDialogShown = !!byTestId("db-account-dialog");
+    // 窄屏：账号对话框是自底部升起的 sheet（占满宽度、贴着视口底），可滚动、有关闭入口、热区 ≥ 40px
+    if (NARROW) {
+      var accountDlgEl = byTestId("db-account-dialog");
+      var accountDlgRect = rect(accountDlgEl);
+      var accountDlgHotspots = shortHotspots(accountDlgEl);
+      put("accountDialogIsBottomSheet",
+        Math.abs(accountDlgRect.bottom - window.innerHeight) < 2 &&
+        Math.abs(accountDlgRect.width - document.documentElement.clientWidth) < 2);
+      put("accountDialogScrollable", getComputedStyle(accountDlgEl).overflowY === "auto");
+      put("accountDialogClosable", !!byTestId("db-account-close"));
+      put("accountDialogHotspotsBad", accountDlgHotspots);
+      put("accountDialogHotspotsAtLeast40", accountDlgHotspots.length === 0);
+    }
     var rowsBefore = allByTestId("db-account-row");
     out.accountDialogRowsBefore = rowsBefore.length;
     out.accountRowShowsWho = rowsBefore.length === 1 &&
@@ -829,6 +998,17 @@ const MOCK = `(function () {
       rowsBefore[0].innerText.indexOf("uid 1000") >= 0;
     out.accountRowAvatarShown = rowsBefore.length === 1 &&
       !!rowsBefore[0].querySelector("img");
+    // 窄屏：账号行里「昵称 / uid / 账号名」与操作按钮不许横向叠在一起（放不下就该换行）
+    var rowUidEl = rowsBefore.length === 1
+      ? rowsBefore[0].querySelector('[data-testid="db-account-row-uid"]')
+      : null;
+    var rowRemoveEl = rowsBefore.length === 1
+      ? rowsBefore[0].querySelector('[data-testid="db-account-remove"]')
+      : null;
+    var rowActionsEl = rowRemoveEl ? rowRemoveEl.parentElement : null;
+    put("accountRowNoOverlap", !!rowUidEl && !!rowActionsEl &&
+      (rect(rowUidEl).right <= rect(rowActionsEl).left + 1 ||
+        rect(rowActionsEl).top >= rect(rowUidEl).bottom - 1));
     out.accountCurrentMarked = rowsBefore.length === 1 &&
       byTestId("db-account-row-status").innerText.trim() === "已登录 · 当前";
     // 单账号时也必须看得到添加入口（用户卡住的就是这一步）

@@ -322,7 +322,21 @@ export function Composer({
     }
   };
 
-  const panelFont = { fontSize: `${14 * prefs["ui.font_scale"]}px` };
+  // 与弹幕列表同一口径：em 相对 body 的 --fs-root，字号滑杆改这一处
+  const panelFont = { fontSize: `${prefs["ui.font_scale"]}em` };
+
+  // 四个面板共用的关闭入口。窄屏下面板是自底部升起的 sheet（app.module.css 的断点），
+  // 必须有一个明确的关闭按钮；宽屏下它同样让「关掉面板」不必靠再点一次工具按钮。
+  const panelClose = (
+    <button
+      data-testid="db-panel-close"
+      title="关闭面板"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => setPanel(null)}
+    >
+      关闭
+    </button>
+  );
 
   return (
     <>
@@ -336,6 +350,8 @@ export function Composer({
               placeholder="搜索表情"
               onChange={(event) => setEmoteQuery(event.target.value)}
             />
+            <span className={styles.composerSpacer} />
+            {panelClose}
           </div>
           {/* 「我的表情」拉失败只在面板里提示并可重试：输入框与已加载的分组照常可用 */}
           {ownedError !== undefined && (
@@ -393,6 +409,11 @@ export function Composer({
 
       {panel === "phrases" && (
         <div className={styles.phrases} data-testid="db-panel">
+          <div className={styles.panelHead}>
+            <span className={styles.panelTitle}>短语与颜文字</span>
+            <span className={styles.composerSpacer} />
+            {panelClose}
+          </div>
           <div className={styles.phrasesRow}>
             <span className={styles.previewLabel}>颜文字</span>
             {KAOMOJI.map((text) => (
@@ -478,7 +499,11 @@ export function Composer({
 
       {panel === "recent" && (
         <div className={styles.recent} data-testid="db-panel">
-          <span className={styles.previewLabel}>最近发言</span>
+          <div className={styles.panelHead}>
+            <span className={styles.panelTitle}>最近发言</span>
+            <span className={styles.composerSpacer} />
+            {panelClose}
+          </div>
           {recentSends.length === 0 ? (
             <span className={styles.previewLabel}>（本会话还没发过）</span>
           ) : (
@@ -499,6 +524,11 @@ export function Composer({
 
       {panel === "filter" && (
         <div className={styles.filterPanel} data-testid="db-panel">
+          <div className={styles.panelHead}>
+            <span className={styles.panelTitle}>筛选与显示</span>
+            <span className={styles.composerSpacer} />
+            {panelClose}
+          </div>
           <FilterBar prefs={prefs} onChange={onPrefs} />
         </div>
       )}
@@ -566,7 +596,7 @@ export function Composer({
           }}
         />
         {/* 工具行：四个面板入口在左，发送在右。按钮 mousedown 不抢焦点，草稿与光标都留着 */}
-        <div className={styles.composerTools}>
+        <div className={styles.composerTools} data-testid="db-composer-tools">
           <button
             className={panel === "emotes" ? styles.toolActive : undefined}
             disabled={disabled || !loggedIn}

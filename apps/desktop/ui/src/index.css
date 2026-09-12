@@ -1,47 +1,7 @@
-/* 全局样式：深色为主，聊天区用等宽友好的系统字体栈。 */
+/* 全局重置与元素默认样式。
 
-:root {
-  --bg: #12141a;
-  --bg-elevated: #1a1d25;
-  --bg-input: #232733;
-  --border: #2c313d;
-  --fg: #e6e8ee;
-  --fg-dim: #9aa2b1;
-  --accent: #00aeec;
-  --danger: #ff6b6b;
-  --warn: #f09300;
-  --ok: #4ade80;
-  color-scheme: dark;
-
-  /* docs/ui.md §4.1 用到的语义色：原先只写在文档里，这里落地成变量 */
-  --fg-muted: #9aa2b1;
-  --fg-subtle: #7c8494;
-  --gold: #c08a2e;
-  --neutral: #6b7280;
-  --guard-1: #c0392b;
-  --guard-2: #8e44ad;
-  --guard-3: #2980b9;
-  --sc-1: #2f6fd0;
-  --sc-2: #1e9e8a;
-  --sc-3: #c9a227;
-  --sc-4: #d1603d;
-  --sc-5: #c0392b;
-  --block-platform: #d93025;
-  --block-room: #f0a020;
-}
-
-:root[data-theme="light"] {
-  --bg: #f6f7f9;
-  --bg-elevated: #ffffff;
-  --bg-input: #eef0f4;
-  --border: #d8dce4;
-  --fg: #1c1f26;
-  --fg-dim: #667085;
-  color-scheme: light;
-
-  --fg-muted: #667085;
-  --fg-subtle: #8a92a3;
-}
+   设计令牌（调色板 + 间距 / 圆角 / 字号阶 + 阴影 / 遮罩）定义在 app.module.css 的 `:root`，
+   那里是唯一来源；本文件只消费令牌，不再定义任何值（否则又出现「两处都能改颜色」的老问题）。 */
 
 * {
   box-sizing: border-box;
@@ -59,7 +19,8 @@ body {
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  font-size: 14px;
+  /* em 刻度盘的根：--fs-root 是唯一基准，弹幕区 / 面板再乘 `ui.font_scale`（docs/ui.md §8.2） */
+  font-size: var(--fs-root);
   line-height: 1.5;
   overflow: hidden;
 }
@@ -69,8 +30,8 @@ button {
   color: inherit;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 10px;
+  border-radius: var(--r-1);
+  padding: var(--sp-1) var(--sp-3);
   cursor: pointer;
 }
 
@@ -90,8 +51,8 @@ select {
   color: inherit;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 8px;
+  border-radius: var(--r-1);
+  padding: var(--sp-1) var(--sp-2);
 }
 
 input:focus,
@@ -107,5 +68,5 @@ select:focus {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 5px;
+  border-radius: var(--r-full);
 }

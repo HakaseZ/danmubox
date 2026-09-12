@@ -38,6 +38,11 @@ export interface Message {
   reply_to_uid: number;
   /** 被回复者昵称；非回复为空串。 */
   reply_to_uname: string;
+  /**
+   * 被 @ 的昵称的颜色（契约 §5）：上游 `extra.reply_uname_color`，实测 `#FB7299`。
+   * 与粉丝牌真彩色同一口径——**空串不是颜色**，缺失时沿用标记自身的弱化色，不拿黑色顶替。
+   */
+  reply_uname_color?: string;
   is_admin: boolean;
   /**
    * 发送者头像 URL（契约 §5 新增字段，无则空串）。

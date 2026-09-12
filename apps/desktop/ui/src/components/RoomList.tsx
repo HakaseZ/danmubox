@@ -72,7 +72,7 @@ export function RoomList({
   const uid = active?.uid ?? session?.uid ?? 0;
 
   return (
-    <div className={styles.listPage}>
+    <div className={styles.listPage} data-testid="db-list-page">
       <h1>弹幕框</h1>
 
       {/*

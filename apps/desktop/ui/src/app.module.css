@@ -1,23 +1,134 @@
 /* 布局与组件样式：布局与交互的规则来源是 docs/ui.md。
    房间页的纵向结构（issue #8 的重排）：
-   头部 → 弹幕列表（唯一生长区）→ 弹出面板（向上展开）→ 输入区 → 礼物栏（可折叠）。 */
+   头部 → 弹幕列表（唯一生长区）→ 弹出面板（向上展开）→ 输入区 → 礼物栏（可折叠）。
+
+   宽窄屏：同一套 DOM，只有断点（520px）下的排布不同（docs/ui.md §9）。
+   窄屏下面板 / 对话框 / 房管面板从文档流里脱出，变成自底部升起的 sheet。 */
+
+/* ======================================================================== 令牌
+
+   这里是本仓库唯一的令牌来源：换主题色、改一档间距、调一处圆角，都只改下面这一段。
+   组件规则一律引用令牌，不再写字面值。
+
+   两条读法：
+   - 间距只看 --sp-*（4 / 8 / 12 / 16 / 24）。弹幕行内只许出现 --sp-1 与 --sp-2
+     两种（见 .row），别处从这一档里挑最接近的，不再出现 6px / 10px / 14px 这类裸值。
+   - 字号全部是 em：基准由 body 的 --fs-root 与 .scroller / 面板容器上的
+     `ui.font_scale` 一起给出，所以令牌值不能写成 px，否则字号滑杆对它们失效（docs/ui.md §8.2）。 */
+:root {
+  /* 调色板（语义槽）：背景 / 表面 / 下沉面 / 分隔线 / 正文 / 次级文字 / 强调 / 成功 / 警告 / 错误 */
+  --bg: #12141a;
+  --bg-elevated: #1a1d25;
+  --bg-input: #232733;
+  --border: #2c313d;
+  --fg: #e6e8ee;
+  --fg-dim: #9aa2b1;
+  --accent: #00aeec;
+  --danger: #ff6b6b;
+  --warn: #f09300;
+  --ok: #4ade80;
+  /* 次级文字的两档（docs/ui.md §4.1 的弱化口径） */
+  --fg-muted: #9aa2b1;
+  --fg-subtle: #7c8494;
+  /* 徽标底色族：金瓜子 / 中性 / 大航海 / SC 档位 / 被吞标记 */
+  --gold: #c08a2e;
+  --neutral: #6b7280;
+  --guard-1: #c0392b;
+  --guard-2: #8e44ad;
+  --guard-3: #2980b9;
+  --sc-1: #2f6fd0;
+  --sc-2: #1e9e8a;
+  --sc-3: #c9a227;
+  --sc-4: #d1603d;
+  --sc-5: #c0392b;
+  --block-platform: #d93025;
+  --block-room: #f0a020;
+  /* 彩色底上的文字：对比度在令牌这一层定死，使用处不再各写一次 */
+  --on-accent: #001018;
+  --on-ok: #002b12;
+  --on-danger: #1b0000;
+  --badge-fg: #fff;
+  --badge-lift: #fff;
+  --badge-border: color-mix(in srgb, var(--badge-lift) 45%, transparent);
+  /* 悬停洗色：同一处定义，行 / 折叠条 / 卡片都用它 */
+  --hover-wash: color-mix(in srgb, var(--accent) 8%, transparent);
+  --overlay: rgba(0, 0, 0, 0.55);
+
+  /* 间距阶：4 / 8 / 12 / 16 / 24 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+
+  /* 圆角阶：4 / 8 / 12 / 16 / 胶囊（正圆也走它） */
+  --r-1: 4px;
+  --r-2: 8px;
+  --r-3: 12px;
+  --r-4: 16px;
+  --r-full: 999px;
+
+  /* 字号阶（em） */
+  --fs-1: 0.79em; /* 徽标 / 日志 / 最低档 */
+  --fs-2: 0.86em; /* 时间戳 / 面板小字 */
+  --fs-3: 0.93em; /* 昵称 / 菜单项 */
+  --fs-4: 1em; /* 正文 / 控件默认 */
+  --fs-5: 1.07em; /* 小标题 */
+  --fs-6: 1.15em; /* 对话框标题 / 表情项 */
+  --fs-7: 1.3em; /* 放大档表情项 */
+  --fs-8: 1.43em; /* 页面标题 */
+  /* em 刻度盘的根：body 用它，MessageList / 面板再用 `ui.font_scale`（em）乘上去 */
+  --fs-root: 14px;
+
+  /* 弹幕行的固定尺寸 */
+  --row-line: 1.5em; /* 行盒高：头像按它对齐首行 */
+  --avatar: 1.35em;
+  --time-col: 8ch;
+  --row-menu-slot: 2em; /* 行尾给悬停「⋯」留的位，避免它压住正文 */
+
+  /* 阴影与遮罩 */
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --shadow-sheet: 0 -8px 28px rgba(0, 0, 0, 0.5);
+
+  /* 触屏与弹出层 */
+  --tap-min: 40px; /* 窄屏 sheet 里的热区下限（触屏） */
+  --panel-max-h: 260px; /* 宽屏面板在文档流里展开的最大高度 */
+  --sheet-max-h: min(80vh, 640px); /* 窄屏 sheet 的最大高度 */
+
+  color-scheme: dark;
+}
+
+/* 浅色不是新主题，只是把同一套语义槽换一组值：组件规则一行都不用改 */
+:root[data-theme="light"] {
+  --bg: #f6f7f9;
+  --bg-elevated: #ffffff;
+  --bg-input: #eef0f4;
+  --border: #d8dce4;
+  --fg: #1c1f26;
+  --fg-dim: #667085;
+  --fg-muted: #667085;
+  --fg-subtle: #8a92a3;
+  --overlay: rgba(0, 0, 0, 0.35);
+  color-scheme: light;
+}
 
 /* 礼物金额统计与排行（需求 §2.7） */
 .giftStats {
-  margin: 4px 0 8px;
-  font-size: 12px;
+  margin: var(--sp-1) 0 var(--sp-2);
+  font-size: var(--fs-2);
   color: var(--fg-dim);
 }
 
 .giftRankItem {
-  padding-left: 8px;
+  padding-left: var(--sp-2);
 }
 
 /* 多房间标签页（需求 §2.8） */
 .tabs {
   display: flex;
-  gap: 4px;
-  padding: 4px 8px 0;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2) 0;
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
 }
@@ -26,16 +137,16 @@
 .tabActive {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-1);
   max-width: 180px;
-  padding: 3px 10px;
-  font-size: 12px;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   border: 1px solid var(--border);
   border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: var(--r-1) var(--r-1) 0 0;
   background: transparent;
   color: var(--fg-dim);
 }
@@ -59,7 +170,7 @@
 /* ---------------------------------------------------------------- 房间列表页 */
 
 .listPage {
-  padding: 24px;
+  padding: var(--sp-5);
   max-width: 760px;
   margin: 0 auto;
   width: 100%;
@@ -67,32 +178,32 @@
 }
 
 .listPage h1 {
-  font-size: 20px;
-  margin: 0 0 4px;
+  font-size: var(--fs-8);
+  margin: 0 0 var(--sp-1);
 }
 
 /* 账号区（用户 2026-09-12：切换不再做成下拉，只留「当前身份 + 账号按钮」） */
 .account {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-2);
   background: var(--bg-elevated);
-  padding: 10px 12px;
-  margin-bottom: 14px;
+  padding: var(--sp-3);
+  margin-bottom: var(--sp-4);
 }
 
 .accountIdentity {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   min-width: 0;
   flex: 1;
 }
 
 .accountName {
-  font-size: 14px;
+  font-size: var(--fs-4);
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -100,13 +211,15 @@
 }
 
 .accountMeta {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .accountGuest {
-  font-size: 13px;
+  font-size: var(--fs-3);
   color: var(--fg-dim);
 }
 
@@ -119,59 +232,59 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 48px 16px;
-  background: rgba(0, 0, 0, 0.55);
+  padding: var(--sp-5) var(--sp-4);
+  background: var(--overlay);
   overflow-y: auto;
 }
 
 .accountDialog {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sp-3);
   width: 100%;
   max-width: 680px;
-  padding: 16px;
+  padding: var(--sp-4);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--r-3);
   background: var(--bg-elevated);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-dialog);
 }
 
 .dialogHead {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .dialogTitle {
-  font-size: 16px;
+  font-size: var(--fs-6);
   font-weight: 600;
 }
 
 .dialogSub {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
 }
 
 .accountList {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-1);
 }
 
 .accountItem {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-2);
 }
 
 /* 当前账号要明显标出：它决定「覆盖的是谁」 */
 .accountItemActive {
   border-color: var(--accent);
-  background: rgba(0, 174, 236, 0.08);
+  background: var(--hover-wash);
 }
 
 .accountWho {
@@ -182,20 +295,20 @@
 }
 
 .accountLoggedIn {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--ok);
   white-space: nowrap;
 }
 
 .accountOffline {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--warn);
   white-space: nowrap;
 }
 
 .accountActions {
   display: flex;
-  gap: 6px;
+  gap: var(--sp-1);
   flex-wrap: wrap;
 }
 
@@ -205,7 +318,7 @@
 
 .accountAdvanced {
   align-self: flex-start;
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
   background: transparent;
 }
@@ -213,20 +326,20 @@
 .accountCookie {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-2);
 }
 
 .accountCookie input {
-  font-size: 12px;
+  font-size: var(--fs-2);
 }
 
 .addRow {
   display: flex;
-  gap: 8px;
-  margin-bottom: 18px;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
 }
 
 .addRow input {
@@ -236,12 +349,12 @@
 .roomCard {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-2);
   background: var(--bg-elevated);
-  margin-bottom: 8px;
+  margin-bottom: var(--sp-2);
   cursor: pointer;
 }
 
@@ -262,22 +375,22 @@
 
 .roomMeta {
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--fs-2);
 }
 
 .live {
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--fs-2);
 }
 
 .idle {
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--fs-2);
 }
 
 .empty {
   color: var(--fg-dim);
-  padding: 16px 0;
+  padding: var(--sp-4) 0;
 }
 
 /* ---------------------------------------------------------------- 房间页 */
@@ -285,8 +398,8 @@
 .roomHeader {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);
 }
@@ -301,9 +414,9 @@
 }
 
 .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: var(--sp-2);
+  height: var(--sp-2);
+  border-radius: var(--r-full);
   display: inline-block;
 }
 
@@ -338,7 +451,7 @@
   position: absolute;
   inset: 0;
   overflow-y: auto;
-  padding: 8px 14px;
+  padding: var(--sp-2) var(--sp-3);
   /* 内容不足视口高度时整体贴底（直播弹幕自下往上读，官方聊天栏同样贴底）。
      用「flex 列 + 内层 margin-top: auto」，**不用** justify-content: flex-end——
      后者会把超长内容的顶部顶到可滚动区间之外，滚不回去（flex + overflow 的经典坑）。 */
@@ -352,65 +465,79 @@
   margin-top: auto;
 }
 
+/* 一条弹幕：`[时间] [头像] [身份簇] 正文 [×N]`。
+   间距只由下面两条 margin 给出（--sp-1 贴、--sp-2 分），不再用容器 gap——
+   这样「徽标贴着昵称、正文与身份分开」才是排版规则，而不是各处微调出来的。 */
 .row {
   position: relative;
   display: flex;
-  gap: 6px;
+  gap: 0;
   align-items: baseline;
   /* 右侧给悬停出现的「⋯」留位，避免它压住行尾文字 */
-  padding: 1px 2em 1px 0;
+  padding: var(--sp-1) var(--row-menu-slot) var(--sp-1) 0;
   word-break: break-word;
   white-space: pre-wrap;
 }
 
 .row:hover {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: var(--hover-wash);
 }
 
 /* 时间戳列：定宽 + 等宽数字，逐行纵向对齐（issue #8） */
 .time {
   flex: none;
-  width: 8ch;
+  width: var(--time-col);
+  margin-right: var(--sp-2);
   text-align: right;
   font-variant-numeric: tabular-nums;
-  font-size: 0.86em;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
   white-space: nowrap;
 }
 
-/* 头像列：永远占位（没有 face 的行也不画图，但列宽照留），保证徽标/昵称/正文三列纵向对齐 */
+/* 头像列：永远占位（没有 face 的行也不画图，但列宽照留），保证徽标/昵称/正文三列纵向对齐。
+   对齐口径 = **垂直居中于首行**：钉在首行顶端（不随折行整体居中），高度取行盒高 --row-line，
+   里面的头像再居中。于是多行正文时头像不会掉到行的中间（docs/ui.md §4.1）。 */
 .avatarCol {
   flex: none;
-  width: 1.35em;
-  height: 1.35em;
+  width: var(--avatar);
+  height: var(--row-line);
+  margin-right: var(--sp-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  align-self: center;
+  align-self: flex-start;
 }
 
 /* 发言者头像（Message.face）；加载失败时用昵称首字符占位（Avatar 组件） */
 .avatar {
   flex: none;
-  width: 1.35em;
-  height: 1.35em;
-  border-radius: 50%;
+  width: var(--avatar);
+  height: var(--avatar);
+  border-radius: var(--r-full);
   object-fit: cover;
   background: var(--bg-input);
-  align-self: center;
 }
 
 .avatarFallback {
   flex: none;
-  width: 1.35em;
-  height: 1.35em;
-  border-radius: 50%;
+  width: var(--avatar);
+  height: var(--avatar);
+  border-radius: var(--r-full);
   background: var(--bg-input);
   color: var(--fg-dim);
-  font-size: 0.75em;
-  line-height: 1.8em;
+  font-size: var(--fs-1);
+  line-height: var(--avatar);
   text-align: center;
-  align-self: center;
+}
+
+/* 身份簇：徽标组 + 昵称 + 回复标记。身份属于人名，是一个整体而不是独立一栏，
+   因此簇内只用 --sp-1（贴），簇与正文之间才用 --sp-2（分）。 */
+.identity {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
 }
 
 /* 互动/进场消息：显示一会儿就淡出（`ui.interact_auto_hide` 打开时）。
@@ -433,36 +560,49 @@
   }
 }
 
+/* 正文：折行后与首行左对齐（悬挂缩进）——它是身份簇之后的**一个** flex 项，
+   所以每一行的起点都是它自己的左边缘，不会回到头像下面。 */
 .content {
   flex: 1;
   min-width: 0;
 }
 
-.name {
-  flex: none;
-  font-size: 0.9em;
-  color: var(--fg-dim);
+/* 身份簇与正文之间才是「分」（--sp-2）；系统行没有身份簇，也就不该被推开 */
+.identity + .content {
+  margin-left: var(--sp-2);
 }
 
-/* 「回复 @昵称」标记：弱化、定宽截断（完整名字在 title 里），不抢正文（issue #13b） */
+.name {
+  flex: none;
+  font-size: var(--fs-3);
+  color: var(--fg-dim);
+  /* 超长昵称就地截断：窄屏下不能让昵称把正文挤出屏幕 */
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「回复 @昵称」标记：弱化、定宽截断（完整名字在 title 里），不抢正文（issue #13b）。
+   它与「纯 @ 某人」共用这一个槽位（昵称之后、正文之前）：两种形态的差别只是文案与层级，
+   不各开一列；收包侧的 `reply_type_enum` / `show_reply` 尚未进契约，因此此刻只有「回复」这一种形态。 */
 .replyTo {
   flex: none;
   max-width: 14em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.9em;
+  font-size: var(--fs-3);
   color: var(--fg-dim);
   background: color-mix(in srgb, var(--fg-dim) 14%, transparent);
-  border-radius: 4px;
-  padding: 0 4px;
+  border-radius: var(--r-1);
+  padding: 0 var(--sp-1);
 }
 
 .badges {
   display: inline-flex;
-  gap: 3px;
+  gap: var(--sp-1);
   align-items: center;
-  vertical-align: baseline;
 }
 
 /* 徽标：官方聊天栏的胶囊形（45° 渐变 + 1px 描边 + 白字 + 8px 圆角），
@@ -470,15 +610,15 @@
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.25em;
-  height: 1.35em;
+  gap: var(--sp-1);
+  height: var(--avatar);
   padding: 0 0.45em;
   border-radius: 0.55em;
-  border: 1px solid color-mix(in srgb, #fff 45%, transparent);
+  border: 1px solid var(--badge-border);
   box-sizing: border-box;
-  font-size: 0.79em;
+  font-size: var(--fs-1);
   line-height: 1;
-  color: #fff;
+  color: var(--badge-fg);
   white-space: nowrap;
 }
 
@@ -486,7 +626,7 @@
   background-image: linear-gradient(
     45deg,
     var(--danger),
-    color-mix(in srgb, var(--danger) 62%, #fff)
+    color-mix(in srgb, var(--danger) 62%, var(--badge-lift))
   );
 }
 
@@ -494,7 +634,7 @@
   background-image: linear-gradient(
     45deg,
     var(--accent),
-    color-mix(in srgb, var(--accent) 62%, #fff)
+    color-mix(in srgb, var(--accent) 62%, var(--badge-lift))
   );
 }
 
@@ -502,7 +642,7 @@
   background-image: linear-gradient(
     45deg,
     var(--warn),
-    color-mix(in srgb, var(--warn) 62%, #fff)
+    color-mix(in srgb, var(--warn) 62%, var(--badge-lift))
   );
 }
 
@@ -510,7 +650,7 @@
   background-image: linear-gradient(
     45deg,
     var(--guard-1),
-    color-mix(in srgb, var(--guard-1) 62%, #fff)
+    color-mix(in srgb, var(--guard-1) 62%, var(--badge-lift))
   );
 }
 
@@ -518,7 +658,7 @@
   background-image: linear-gradient(
     45deg,
     var(--guard-2),
-    color-mix(in srgb, var(--guard-2) 62%, #fff)
+    color-mix(in srgb, var(--guard-2) 62%, var(--badge-lift))
   );
 }
 
@@ -526,7 +666,7 @@
   background-image: linear-gradient(
     45deg,
     var(--guard-3),
-    color-mix(in srgb, var(--guard-3) 62%, #fff)
+    color-mix(in srgb, var(--guard-3) 62%, var(--badge-lift))
   );
 }
 
@@ -554,8 +694,9 @@
 }
 
 .merged {
+  margin-left: var(--sp-1);
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--fs-2);
 }
 
 .kindGift {
@@ -578,14 +719,14 @@
 /* 行尾的菜单入口：悬停才出现，动作本身在右键菜单里（issue #8） */
 .rowMenuTrigger {
   position: absolute;
-  right: 2px;
+  right: var(--sp-1);
   top: 50%;
   transform: translateY(-50%);
   opacity: 0;
-  padding: 0 0.5em;
-  font-size: 0.82em;
-  line-height: 1.5em;
-  border-radius: 0.4em;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-2);
+  line-height: var(--row-line);
+  border-radius: var(--r-1);
   background: var(--bg-elevated);
   color: var(--fg-dim);
 }
@@ -601,22 +742,22 @@
   z-index: 60;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-1);
   min-width: 150px;
-  padding: 5px;
+  padding: var(--sp-1);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow-menu);
 }
 
 .contextMenu button {
   text-align: left;
-  padding: 5px 10px;
+  padding: var(--sp-1) var(--sp-3);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--r-1);
   background: transparent;
-  font-size: 13px;
+  font-size: var(--fs-3);
 }
 
 .contextMenu button:hover:not(:disabled) {
@@ -637,49 +778,59 @@
 .giftDockHead {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-2);
   width: 100%;
-  padding: 6px 14px;
+  padding: var(--sp-1) var(--sp-3);
   border: none;
   border-radius: 0;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
   text-align: left;
 }
 
 .giftDockHead:hover {
   border: none;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: var(--hover-wash);
 }
 
 .giftDockTitle {
   color: var(--fg);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .giftDockSummary {
   flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.giftDockToggle {
+  flex: none;
+  color: var(--fg-dim);
 }
 
 .giftDockBody {
   max-height: 140px;
   overflow-y: auto;
-  padding: 0 14px 8px;
-  font-size: 12px;
+  padding: 0 var(--sp-3) var(--sp-2);
+  font-size: var(--fs-2);
 }
 
 .giftItem {
-  padding: 3px 0;
+  padding: var(--sp-1) 0;
   border-bottom: 1px dashed var(--border);
 }
 
 .bottomAnchor {
   position: absolute;
-  right: 24px;
-  bottom: 16px;
+  right: var(--sp-5);
+  bottom: var(--sp-4);
   background: var(--accent);
-  color: #001018;
+  color: var(--on-accent);
   border: none;
   font-weight: 600;
 }
@@ -689,8 +840,8 @@
 .composer {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 14px;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
 }
@@ -706,8 +857,8 @@
 .composerTools {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--sp-2);
+  font-size: var(--fs-2);
 }
 
 .composerSpacer {
@@ -720,8 +871,8 @@
 }
 
 .composerHint {
-  padding: 0 14px 8px;
-  font-size: 12px;
+  padding: 0 var(--sp-3) var(--sp-2);
+  font-size: var(--fs-2);
   color: var(--fg-dim);
 }
 
@@ -739,27 +890,28 @@
 
 /* ---------------------------------------------------------------- 弹出面板 */
 
-/* 面板在输入区上方、向上展开：它是文档流里的一块，展开只会挤压弹幕列表 */
+/* 面板在输入区上方、向上展开：它是文档流里的一块，展开只会挤压弹幕列表。
+   窄屏下同一块变成自底部升起的 sheet（见文件末尾的断点）。 */
 .picker,
 .phrases,
 .recent,
 .filterPanel {
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
-  padding: 8px 14px;
-  max-height: 260px;
+  padding: var(--sp-2) var(--sp-3);
+  max-height: var(--panel-max-h);
   overflow-y: auto;
 }
 
 .panelHead {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
 }
 
 .panelTitle {
-  font-size: 12px;
+  font-size: var(--fs-2);
   font-weight: 600;
   color: var(--fg-dim);
 }
@@ -767,122 +919,122 @@
 .panelSearch {
   flex: 1;
   max-width: 220px;
-  font-size: 12px;
-  padding: 3px 6px;
+  font-size: var(--fs-2);
+  padding: var(--sp-1) var(--sp-2);
 }
 
 /* 房管面板（issue #3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表 */
 .adminPanel {
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
-  padding: 8px 14px;
-  max-height: 260px;
+  padding: var(--sp-2) var(--sp-3);
+  max-height: var(--panel-max-h);
   overflow-y: auto;
 }
 
 .adminSection {
-  margin-bottom: 8px;
+  margin-bottom: var(--sp-2);
 }
 
 .adminSectionHead {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
 }
 
 .adminList {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 4px;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-1);
 }
 
 .adminItem {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 6px;
-  font-size: 12px;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2);
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-2);
 }
 
 .adminForm {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 .adminInput {
   width: 160px;
-  font-size: 12px;
-  padding: 2px 6px;
+  font-size: var(--fs-2);
+  padding: var(--sp-1) var(--sp-2);
 }
 
 /* 上游拒绝时原样展示 code + message，不做本地翻译 */
 .adminError {
-  margin-bottom: 4px;
-  padding: 3px 6px;
-  font-size: 12px;
+  margin-bottom: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2);
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
-  border-radius: 4px;
+  border-radius: var(--r-1);
 }
 
 /* 房管写操作的二次确认条（在输入区上方，与举报条同层） */
 .adminConfirm {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  font-size: 12px;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-2);
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
 }
 
 .adminSelect {
-  font-size: 12px;
-  padding: 1px 4px;
+  font-size: var(--fs-2);
+  padding: var(--sp-1);
 }
 
 .pickerGroup {
-  margin-bottom: 8px;
+  margin-bottom: var(--sp-2);
 }
 
 /* 「我的表情」拉取失败的提示行：不阻塞输入框，只在这里给原因与重试 */
 .panelError {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 4px 6px;
-  font-size: 12px;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2);
   color: var(--fg-dim);
-  background: color-mix(in srgb, var(--danger, #d93025) 12%, transparent);
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-radius: var(--r-1);
 }
 
 .pickerTitle {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
-  margin-bottom: 4px;
+  margin-bottom: var(--sp-1);
 }
 
 .pickerItems {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
 .pickerItem {
   /* 表情尺寸走自定义属性：基础档与「非通用放大档」只差这一个值，
      不再靠两条 height 声明的先后顺序决定谁生效 */
   --emote-size: 1.5em;
-  padding: 2px 6px;
-  font-size: 1.15em;
-  line-height: 1.5em;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-6);
+  line-height: var(--row-line);
   min-width: 2em;
 }
 
@@ -894,7 +1046,7 @@
 /* 通用以外（本房间 / 粉丝牌 / 大航海）的表情放大：那几族本来就大，缩成通用那么大看不清 */
 .pickerItemBig {
   --emote-size: 2.2em;
-  font-size: 1.3em;
+  font-size: var(--fs-7);
 }
 
 /* 输入区上方的「将发送」预览：草稿里对得上的表情名在这里显示成图片（docs/ui.md §6.3）。 */
@@ -902,9 +1054,9 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  padding: 4px 14px;
-  font-size: 12px;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-2);
   color: var(--fg-dim);
   border-top: 1px dashed var(--border);
 }
@@ -922,25 +1074,25 @@
 .phrases {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
 .phrasesRow {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
 .phraseItem {
-  font-size: 12px;
-  padding: 1px 6px;
+  font-size: var(--fs-2);
+  padding: var(--sp-1) var(--sp-2);
 }
 
 .phraseInput {
   width: 140px;
-  font-size: 12px;
-  padding: 2px 6px;
+  font-size: var(--fs-2);
+  padding: var(--sp-1) var(--sp-2);
 }
 
 /* 最近发言（会话内，需求 §2.2）：面板里点一下填回输入框 */
@@ -948,14 +1100,14 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  gap: var(--sp-1);
+  font-size: var(--fs-2);
   color: var(--fg-dim);
 }
 
 .recentItem {
-  font-size: 12px;
-  padding: 1px 6px;
+  font-size: var(--fs-2);
+  padding: var(--sp-1) var(--sp-2);
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -966,9 +1118,9 @@
 .replyBar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 14px;
-  font-size: 12px;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-2);
   color: var(--fg-dim);
   border-top: 1px dashed var(--border);
 }
@@ -977,19 +1129,19 @@
 .filterGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-  font-size: 12px;
+  gap: var(--sp-3);
+  font-size: var(--fs-2);
 }
 
 .filterSection {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 .filterSection h3 {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-2);
   font-weight: 600;
   color: var(--fg-dim);
 }
@@ -998,33 +1150,35 @@
 .filterKinds label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-1);
 }
 
 .filterKinds {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
-/* 弹幕里的表情图：与文字同高、跟基线对齐，并随 `ui.font_scale` 联动（docs/ui.md §4.1） */
+/* 弹幕里的表情图：与文字同高、跟基线对齐，并随 `ui.font_scale` 联动（docs/ui.md §4.1）。
+   它是正文块里的**行内**元素，与文字同一个行盒——表情与文字不会各站一个基线。 */
 .contentEmote {
   height: 1.65em;
   vertical-align: middle;
 }
 
-/* 官方把「大表情」（bulge）画两倍大并加 4px 圆角 */
+/* 官方把「大表情」（bulge）画两倍大并加圆角；这一档尺寸太大，独占一行 */
 .contentEmoteBulge {
+  display: block;
   height: 3.3em;
-  border-radius: 4px;
+  border-radius: var(--r-1);
 }
 
 /* 举报条（docs/ui.md §4.6） */
 .reportBar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
   border-top: 1px solid var(--border);
   background: var(--bg-input);
 }
@@ -1032,18 +1186,18 @@
 /* ---------------------------------------------------------------- 关注列表 */
 
 .followSection {
-  margin-top: 24px;
+  margin-top: var(--sp-5);
 }
 
 .followHeader {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
 }
 
 .followHeader h2 {
-  font-size: 15px;
+  font-size: var(--fs-5);
   margin: 0;
   flex: 1;
 }
@@ -1051,11 +1205,11 @@
 .followItem {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 6px;
+  border-radius: var(--r-2);
+  margin-bottom: var(--sp-1);
   cursor: pointer;
   background: var(--bg-elevated);
 }
@@ -1075,8 +1229,8 @@
 .pager {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
 }
 
 /* 扫码面板（契约 §7）：二维码由后端离线渲染，状态文案与重试都在这里 */
@@ -1084,11 +1238,11 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  padding: 10px;
-  border: 1px solid #333;
-  border-radius: 8px;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
   width: fit-content;
 }
 
@@ -1096,35 +1250,36 @@
   width: 200px;
   height: 200px;
   background: #fff;
-  padding: 6px;
-  border-radius: 4px;
+  padding: var(--sp-2);
+  border-radius: var(--r-1);
 }
 
 .qrTitle {
-  font-size: 14px;
+  font-size: var(--fs-6);
   font-weight: 600;
 }
 
 /* 「重新登录」= 覆盖已有凭据，这行字必须显眼（用户的原账号就是这样被顶掉的） */
 .qrWarn {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--warn);
   text-align: center;
 }
 
 .qrHint {
-  font-size: 12px;
+  font-size: var(--fs-2);
   opacity: 0.8;
 }
 
 .qrActions {
   display: flex;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 .balance {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
+  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------- 通用 */
@@ -1133,13 +1288,13 @@
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 24px;
+  bottom: var(--sp-5);
   background: var(--danger);
-  color: #1b0000;
-  padding: 8px 14px;
-  border-radius: 8px;
+  color: var(--on-danger);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-2);
   display: flex;
-  gap: 10px;
+  gap: var(--sp-3);
   align-items: center;
   max-width: 80vw;
   z-index: 50;
@@ -1155,16 +1310,176 @@
 
 .notice {
   background: var(--ok);
-  color: #002b12;
+  color: var(--on-ok);
 }
 
 .logs {
   max-height: 160px;
   overflow-y: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--fg-dim);
   border-top: 1px solid var(--border);
-  padding: 6px 14px;
+  padding: var(--sp-2) var(--sp-3);
   background: var(--bg);
+}
+
+/* ==========================================================================
+   窄屏（竖屏，手机比例；主参考 390×844）
+
+   同一套 DOM，只调排布：面板 / 对话框 / 房管面板从文档流里脱出，变成自底部升起的
+   sheet（内容可滚动、有明确的关闭入口、热区 ≥ --tap-min）；头部与工具行允许换行，
+   不允许出现横向滚动（docs/ui.md §9）。
+   ========================================================================== */
+@media (max-width: 520px) {
+  .listPage {
+    padding: var(--sp-3);
+  }
+
+  /* 头部：在线 / 看过 / 电池不缩字号、不隐字段，改为换行；标题仍可截断 */
+  .roomHeader {
+    flex-wrap: wrap;
+    row-gap: var(--sp-1);
+  }
+
+  .account {
+    flex-wrap: wrap;
+  }
+
+  .accountIdentity {
+    flex-wrap: wrap;
+    row-gap: var(--sp-1);
+  }
+
+  /* 账号行：一行放不下时按钮另起一行，不跟昵称/uid 抢宽度（会压字） */
+  .accountItem {
+    flex-wrap: wrap;
+    row-gap: var(--sp-1);
+  }
+
+  .accountWho {
+    flex: 1 1 auto;
+  }
+
+  .accountActions {
+    flex: 1 1 100%;
+  }
+
+  /* 关注项一行放不下时换行，不横向溢出 */
+  .followItem {
+    flex-wrap: wrap;
+  }
+
+  .followName {
+    max-width: none;
+  }
+
+  /* 输入区：输入框占满宽度；工具行放不下就换行，不挤成小方块 */
+  .composer {
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  .composerTools {
+    flex-wrap: wrap;
+    row-gap: var(--sp-1);
+  }
+
+  .composer textarea {
+    min-height: var(--tap-min);
+  }
+
+  /* 确认条 / 举报条 / 回复条：窄屏下同样会换行 */
+  .adminConfirm,
+  .reportBar,
+  .replyBar,
+  .preview {
+    flex-wrap: wrap;
+    row-gap: var(--sp-1);
+  }
+
+  /* ---- 自底部升起的 sheet ---- */
+  .picker,
+  .phrases,
+  .recent,
+  .filterPanel,
+  .adminPanel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    max-height: var(--sheet-max-h);
+    overflow-y: auto;
+    border-top: 1px solid var(--border);
+    border-radius: var(--r-4) var(--r-4) 0 0;
+    box-shadow: var(--shadow-sheet);
+    padding: var(--sp-3);
+    padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+  }
+
+  /* 账号对话框：同一个遮罩，只是把卡片挪到底部并让它占满宽度 */
+  .dialogBackdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .accountDialog {
+    max-width: none;
+    max-height: var(--sheet-max-h);
+    overflow-y: auto;
+    border-radius: var(--r-4) var(--r-4) 0 0;
+    border-bottom: none;
+    box-shadow: var(--shadow-sheet);
+    padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+  }
+
+  /* 触屏热区：sheet / 对话框里的可点元素一律 ≥ --tap-min。
+     复选框与滑杆本身不撑高（会变形），改为把它们的 label 撑成热区。 */
+  .picker button,
+  .phrases button,
+  .recent button,
+  .filterPanel button,
+  .filterPanel label,
+  .adminPanel button,
+  .accountDialog button,
+  .picker input:not([type="checkbox"]):not([type="range"]),
+  .phrases input:not([type="checkbox"]):not([type="range"]),
+  .filterPanel input:not([type="checkbox"]):not([type="range"]),
+  .filterPanel select,
+  .adminPanel input:not([type="checkbox"]):not([type="range"]),
+  .adminPanel select,
+  .accountDialog input:not([type="checkbox"]):not([type="range"]),
+  .accountDialog select,
+  .qrPanel button {
+    min-height: var(--tap-min);
+  }
+
+  /* 面板头在窄屏下是 sheet 的把柄：标题靠左、关闭靠右 */
+  .panelHead {
+    position: sticky;
+    top: calc(var(--sp-3) * -1);
+    background: var(--bg-elevated);
+    padding-top: var(--sp-2);
+    z-index: 1;
+  }
+
+  /* 触屏没有悬停：行尾的「⋯」常显，否则这条菜单在手机上根本没有入口 */
+  .rowMenuTrigger {
+    opacity: 0.6;
+  }
+
+  /* 礼物折叠条只占一行，不把弹幕列表挤掉 */
+  .giftDockHead {
+    flex-wrap: nowrap;
+  }
+
+  .adminInput,
+  .phraseInput {
+    width: 100%;
+    flex: 1;
+  }
+
+  .panelSearch {
+    max-width: none;
+  }
 }

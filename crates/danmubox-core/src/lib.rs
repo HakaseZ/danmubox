@@ -17,9 +17,8 @@ pub use bus::{Cancel, ConnState, Counters, Event, EventBus, MessageSink, RoomSta
 pub use config::{AppConfig, ConfigStore, Profile};
 pub use error::{Error, Result};
 pub use model::{
-    sort_followed, Emote, EmotePackage, EmoteRef, FollowedRoom, Message, MessageKind, ReportReason,
-    Room,
-    RoomSession, SendOutcome,
+    sort_followed, BlacklistedUser, Emote, EmotePackage, EmoteRef, FollowedRoom, Message,
+    MessageKind, ReportReason, Room, RoomSession, SendOutcome, SilentUser,
 };
 pub use paths::{config_path, data_dir, prefs_path};
 pub use prefs::Prefs;

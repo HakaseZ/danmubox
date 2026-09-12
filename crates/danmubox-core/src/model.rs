@@ -63,6 +63,10 @@ pub struct Message {
     pub ts: i64,
     pub uid: i64,
     pub uname: String,
+    /// 发送者头像地址（上游 `user.base.face`，实时弹幕与历史条目同一位置）。
+    /// 取不到或上游未下发时为空串——界面据此决定是否渲染头像。
+    #[serde(default)]
+    pub face: String,
     pub content: String,
     pub color: i64,
     pub medal_level: i64,
@@ -101,6 +105,7 @@ impl Message {
             ts,
             uid: 0,
             uname: String::new(),
+            face: String::new(),
             content: String::new(),
             color: 0,
             medal_level: 0,
@@ -192,6 +197,10 @@ pub enum EmotePackage {
     Room,
     Medal,
     Guard,
+    /// **主站「我的表情」**：与直播间那套（通用 / 房间 / 粉丝牌 / 大航海）来源不同，
+    /// 取自主站表情面板（`docs/protocol.md` 附录 A35 结案）。这些表情没有上游
+    /// `emoticon_unique`，唯一键由 `upower_` + 表情文本拼装。
+    Owned,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -221,6 +230,32 @@ pub struct FollowedRoom {
     pub face: String,
     pub live_status: i32,
     pub group_name: String,
+    /// 本场开播时刻（上游 `liveTime`，**Unix 秒**）；`0` 表示未开播或上游未给。
+    ///
+    /// 与上游另一个同名的 `live_time`（已开播**秒数**，两者相加约等于当前时间）
+    /// 是两回事，取值时必须区分，见 `docs/protocol.md` 附录 A28。
+    #[serde(default)]
+    pub live_start_at: i64,
+    /// 在线人数（上游 `online`）；未开播或缺失时为 `0`。
+    #[serde(default)]
+    pub online: i64,
+}
+
+/// 被禁言的观众（房管面板的只读列表项）。字段对应上游列表里的
+/// `tuid` / `tname` / `face`（`docs/protocol.md` 附录 A36）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SilentUser {
+    pub uid: i64,
+    pub uname: String,
+    pub face: String,
+}
+
+/// 房间黑名单条目（`docs/protocol.md` 附录 A36）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlacklistedUser {
+    pub uid: i64,
+    pub uname: String,
+    pub face: String,
 }
 
 /// 关注列表排序：直播中置顶，其余按房间号稳定升序。
@@ -266,6 +301,8 @@ mod tests {
                 face: String::new(),
                 live_status: 0,
                 group_name: String::new(),
+                live_start_at: 0,
+                online: 0,
             },
             FollowedRoom {
                 room_id: 2,
@@ -273,6 +310,8 @@ mod tests {
                 face: String::new(),
                 live_status: 1,
                 group_name: String::new(),
+                live_start_at: 0,
+                online: 0,
             },
             FollowedRoom {
                 room_id: 1,
@@ -280,6 +319,8 @@ mod tests {
                 face: String::new(),
                 live_status: 1,
                 group_name: String::new(),
+                live_start_at: 0,
+                online: 0,
             },
         ];
         sort_followed(&mut rooms);

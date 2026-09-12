@@ -350,6 +350,19 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 - 空文本或纯空白弹幕不进入会话缓冲，但计入「已收弹幕」计数。
 - 屏蔽词 / 关键词过滤属于 UI 层规则（见 [`ui.md`](ui.md)），协议层不丢弃原文。
 
+#### 10.1.x 表情：两条按官方前端产物核对的事实（2026-09-12）
+
+> 这两条**不是实测流量**得出的，而是从官方直播间前端产物（`blfe-live-room` 的 chunk）里读出来的，
+> 标注为「按官方实现核对，未用真实样本复现」。
+
+1. **表情信息的槽位与字段名与官方一致**。官方在解析弹幕时用的正是同一个槽位，并把它归一化成
+   `emoticonOptions: { bulgeDisplay, emoticonUnique, inPlayerArea, isDynamic, height, width, url }`——
+   与本实现 `EmoteRef` 的字段一一对应（`info[0][13]`）。官方另有一路兜底：载荷里若带 `emoticons` 映射，
+   则按弹幕正文 `emoticons[content]` 取表情。本实现只走 `info[0][13]`，实测未见过后者。
+2. **`emoticon_id` 的算法**：官方对 `emoticon_unique` 按 `_` 切分取**最后一段**作为 `emoticon_id`
+   （`(""+unique).split("_").pop()`）。本实现不需要它（发送时 `msg` 传的是 `emoticon_unique` 本身），
+   记录在此以免将来重复推导。
+
 ### 10.2 `SEND_GIFT`（`kind=gift`）
 
 语义：礼物投放（含批量 / 连击）。
@@ -962,6 +975,7 @@ stateDiagram-v2
 | A24 | 上游主动断连的周期与诱因 | 是否为常态轮换、是否与心跳节奏或房间热度相关 | 连续多次 ≥2 小时长连，记录每次断连的时刻与间隔 | **已实测（2 小时 4 分）**：共 4 次断连，**全部由上游发起**（TLS `close_notify` / `Connection reset by peer`），间隔约 1 分钟 / 40 分钟 / 18 分钟，**无固定周期**；退避按 `5s→10s→20s→40s` 升级；期间 **HTTP 心跳失败 0 次**；每次断连后均自动恢复。结论：属上游常态轮换，不应视为故障 | §13.2、S1-AC2 |
 | A25 | `msg/send` 的请求形态 | 参数放 body 还是 query；`rnd` 的取值语义；`csrf` 与 `csrf_token` 是否必须是同一值；`w_rid` 是否必需 | 登录态下各发一条，用抓包或对照官方 web 客户端请求 | **已验证**：`application/x-www-form-urlencoded` body（含 `w_rid`、`csrf` / `csrf_token`）的上报被上游接受且弹幕成功出现；`rnd` 语义仍未知但不影响发送 | §11.1、`send.rs` |
 | A26 | 表情包库接口 | 端点路径、查询参数、是否需 WBI 签名、响应信封与字段名、包分类的判定依据 | 登录态下请求一次并比对原始响应 | **已实测（端点 2026-09-11 / 分类 2026-09-12）**：`GET /xlive/web-ucenter/v2/emoticon/GetEmoticons?platform=pc&room_id=<id>`（`platform=web` 被拒为 `code=500`）；信封 `data.data[]`；表情字段 `emoji`（显示文本）/`url`/`emoticon_unique`（房间专属形如 `room_<房间号>_<id>`）/`emoticon_id`——**不存在 `text` 字段**。**分类判据**：包级 `pkg_perm`/`unlock_identity`/`unlock_need_gift` 在实测的三个包里取值完全相同、不能用于分类；判据在**表情级**——`identity` 的语义取自**官方客户端的解锁文案映射**（`emoticonDanmakuPermCheck`）：`identity === 4` → 「加入主播的粉丝团」，`identity` 1/2/3 → 「开通主播的总督/提督/舰长」。由此：含 identity 4 或 `unlock_need_level > 0` → 粉丝牌包；只有 identity 1..=3 → **大航海包**；都没有（identity 99）→ 按 `pkg_type` 分通用（1）/ 房间（2）。**注意**：实测的一个包（「UP主大表情」）**同时含粉丝团与大航海门槛的表情**，因此包级分类只是近似， REQUIREMENTS §2.2 的「按身份分组」严格来说应按**表情级** `identity` 分组——这条留待后续决定 | `emote.rs` |
+| A26 补充（2026-09-12，查官方前端产物） | 房管表情包到底靠什么区分 | 反编译官方直播间前端（79 个 chunk）搜 `房管` 与表情判定 | 官方唯一的表情权限判定是 `emoticonDanmakuPermCheck(emote, {pkgtype, fansBrand})`，其身份分支**只有两种**：`identity === 4` → 粉丝团（再按 `pkgtype` 分「加入任一主播的」/「加入主播的」，并按 `unlock_need_level` 提等级要求）；否则按 `{1:"总督",2:"提督",3:"舰长"}[identity]` → 大航海。**其中没有任何房管分支**。全部 `房管` 命中都在管理语境（禁言/拉黑/任命房管、`admin_level === 2` 为高级房管），与表情包无关。结论：房管表情包**不是靠表情级 `identity` 区分的**，只能靠**包级字段**；那个字段没有真实样本就看不到 → A26 仍需一个真有该包的房间 |
 | A27 | 举报接口 | 端点路径与表单字段集、理由的合法取值与映射、结果码集合、是否需要 WBI 签名 | 在公开测试房间对**自己刚发的那条**弹幕举报 | **已实测（2026-09-12，用户实操）**：界面走完整流程——先取 `dMReport/ForReason` 的理由清单，再 `POST dMReport/Report`，**全程无失败日志**（非 0 code 会经 IPC 层报错），即 `code=0` 成功。§11.5 的载荷形状（`reason` 文案 + 按文案反查的 `reason_id`，再带 `id_str`/`tuid`/`msg`/`dm_type`）因此有效；未上报的 `ts` / `sign`（取自弹幕 `check_info`）**看来不是必需**——缺失时上游仍接受 | `report.rs`、`chat_report` |
 | A28 | 关注列表接口 | 端点路径、分页参数名与页大小上限、响应信封、`room_id`/`uname`/`face`/`live_status`/分组名的真实字段名、`live_status` 口径 | 登录态下拉取并比对原始响应 | **已解决（2026-09-12，权威文档 + 实测吻合）**：端点 `GET /xlive/web-ucenter/v1/xfetter/GetWebList`；信封 `data.{rooms, list, count, not_living_num}`（`rooms` 与 `list` 内容相同，实测确认）。条目字段：`room_id`/`roomid`、`uid`、`uname`、`face`、`live_status`、`title`、`short_id`、`area*`、`tag_name` 等——实现里用的 `roomid`/`uname`/`face`/`live_status` 全部命中。**参数 `hit_ab`（默认 true）会影响字段值**：true 时拿到全部在播房间但 `online`/`short_id`/封面/链接等被置零，false 时只有前 10 个但字段齐全；本实现只用 `room_id`/`uname`/`face`/`live_status`，这几项**不受 `hit_ab` 影响**，因此保持默认即可。**注意：本端点不返回关注分组**（见 A34） | `follow.rs`、`follow_list` |
 | A29 | 电池余额口径 | 端点路径、数值字段名（电池 / 金瓜子 / 银瓜子）、三者之间的关系与单位 | 登录态下请求一次，并与官方「电池」页显示值对照 | **已实测（2026-09-11）**：端点 `GET /xlive/revenue/v1/wallet/myWallet`——**此前四个候选（`revenue/v1|v2`、`app-ucenter`、`pay` 下的 `getUserWallet`）实测全部 404**；返回 `data.gold`（金瓜子）/`silver`/`bp`，**没有独立的「电池」字段**。口径：**电池 = gold / 100**，依据社区文档「金瓜子数量 / 100 = 电池数量」，并用同账号交叉验证（`gold=15000` ↔ 15 元 ↔ 150 电池）。`wallet_balance` 实测返回 **150** | `wallet.rs`、`wallet_balance` |

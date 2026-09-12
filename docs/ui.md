@@ -972,7 +972,7 @@ swift smoke/wkwebview-host.swift /tmp/danmubox-ui-smoke.html "$TMPDIR/wk-host" 3
 node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"                      # 同一套断言判定
 ```
 
-它的已知局限（所以它是旁证、不是主闸门）：没有显示会话时 rAF 被节流，**按时间推进的断言会假失败**（跟随贴底那几条），几何 / 尺寸 / 溢出 / 截图仍然可靠；每次只跑一个视口。时序类结论一律以 `run-headless.mjs --engine webkit` 为准。
+它的已知局限（所以它是旁证、不是主闸门）：**没有显示会话时 rAF 没有持续帧** —— 2026-09-12 实测 `requestAnimationFrame` 在 2.2s 里只触发 **1** 次（首帧），而 `setTimeout` 正常。后果是「跟随最新 / 虚拟列表窗口」这类**按帧推进**的断言会假失败：同一份快照交给 `--from-snapshot` 判定，**退出码是 1，213 条里有 24 条不成立**，全部是这类（`row*` / `layoutNewest*` / `layoutFollowing*` / QR 轮询那一条）；而**几何 / 尺寸 / 溢出 / 颜色**那一类（`listAvatarsSized`、`listAvatarBoxes`、`narrow_listNoHorizontalScroll`、`rowScale`…）成立 —— 这正是它存在的意义：**宿主引擎上的尺寸与布局证据**（这次根因 `--avatar` 就是靠它钉死的）。工具自己会把这句局限打在 stderr 上，别把这里的失败读成产品问题。每次只跑一个视口；完整断言一律以 `run-headless.mjs --engine webkit` 为准（Playwright 的 WebKit 有持续帧，516 项全绿）。
 
 **两个引擎**：Chromium 与 WebKit 各跑一遍同一份场景代码、同一套断言（不是两套脚本），视口也一样。为什么要两个：**应用跑在 macOS 的 WKWebView 里，Chromium 的绿只证明「在 Chromium 里成立」**。两边的差别是真实存在的（`@property` 注册自定义属性、网格的 `minmax()`、`em` 的求值时机），但也**不要**把所有问题都归给引擎——见下面 2026-09-12 的第二个反例。跑 WebKit 需要一次性的 `npm i -D playwright && npx playwright install webkit`（后者约 80MB，落在 `~/Library/Caches/ms-playwright`）。
 

@@ -47,6 +47,11 @@ console.error = function () {
   window.__errors.push(Array.prototype.map.call(arguments, String).join(' '));
   __logError.apply(null, arguments);
 };
+// rAF 可用性：没有显示会话时 requestAnimationFrame 一次都不触发（实测 raf=0 / 2.2s，
+// 而 setTimeout 正常）。这会让「跟随最新 / 虚拟列表窗口」这类**按帧推进**的断言假失败，
+// 所以要在结论里显式带出来，别让人把环境限制读成产品 bug。
+window.__rafTicks = 0;
+(function tick() { window.__rafTicks += 1; requestAnimationFrame(tick); })();
 """
 
 let config = WKWebViewConfiguration()
@@ -126,6 +131,13 @@ for _ in 0..<1200 {
 }
 
 let errors = evalAsync("JSON.stringify(window.__errors || [])") as? String ?? "[]"
+let rafTicks = (evalAsync("window.__rafTicks") as? NSNumber)?.intValue ?? -1
+let rafNote = rafTicks <= 1
+    ? "⚠ 本会话 rAF 没有持续帧（tick=\(rafTicks)，实测无显示会话时只有首帧）：跟随最新 / 虚拟列表窗口这类"
+        + "按帧推进的断言会假失败（实测 24 条），几何 / 尺寸 / 溢出 / 颜色仍然可靠；"
+        + "完整断言以 run-headless.mjs --engine webkit 为准，不要把这里的失败读成产品问题。"
+    : "rAF 正常（tick=\(rafTicks)）"
+FileHandle.standardError.write("\(rafNote)\n".data(using: .utf8)!)
 if let snapshot = snapshotJSON {
     try? snapshot.write(toFile: "\(outDir)/snapshot.json", atomically: true, encoding: .utf8)
     print(snapshot)

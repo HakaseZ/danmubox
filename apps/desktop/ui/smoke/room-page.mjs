@@ -400,6 +400,14 @@ const MOCK = `(function () {
       var r = rect(el);
       return r.width > 8 && r.width <= 40 && r.height > 8 && r.height <= 40;
     });
+    // 失败时把「为什么」也带出来：--avatar 算成什么、img 实际渲染多大（那次主页被顶爆，
+    // 就是这个字段把根因钉死的：--avatar 取不到值 → computed width 变成原图的 512px）。
+    out.listAvatarBoxes = listAvatars.map(function (el) {
+      var r = rect(el);
+      var cs = getComputedStyle(el);
+      return [Math.round(r.width), Math.round(r.height), cs.width, cs.height,
+        cs.getPropertyValue("--avatar").trim() || "(未解析)"];
+    });
     // 列表页在窄屏也不许横向滚动（关注项一行放不下要换行）
     var listPage = byTestId("db-list-page");
     put("listNoHorizontalScroll", !!listPage &&

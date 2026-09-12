@@ -687,8 +687,10 @@ const MOCK = `(function () {
     out.rowNameNotPaintedByDanmakuColor = !!redNameEl &&
       paintOf(redNameEl).indexOf("255, 0, 0") < 0 &&
       paintOf(redNameEl).indexOf("#ff0000") < 0;
-    out.rowBodyPaintedByDanmakuColor = !!redBodyEl &&
-      paintOf(redBodyEl).indexOf("rgb(255, 0, 0)") >= 0;
+    // 用户 2026-09-12：所有文本统一，正文不再照搬上游弹幕的自定义颜色
+    out.rowBodyNotPaintedByDanmakuColor = !!redBodyEl &&
+      paintOf(redBodyEl).indexOf("rgb(255, 0, 0)") < 0 &&
+      paintOf(redBodyEl).indexOf("#ff0000") < 0;
     var whiteRow = rowWith("白字弹幕正文");
     var whiteBodyEl = whiteRow ? whiteRow.querySelector('[data-testid="db-msg-body"]') : null;
     // 16777215 是上游给普通弹幕的「白」= 未指定：不许照搬到正文（浅色主题下正文会瞎）
@@ -715,7 +717,13 @@ const MOCK = `(function () {
     var lightPageBg = getComputedStyle(document.body).backgroundColor;
     out.rowLightNameReadable = lightNameColor.length > 0 &&
       lightNameColor !== "rgb(255, 255, 255)" && lightNameColor !== lightPageBg;
-    out.rowLightBodyKeepsDanmakuColor = lightBodyColor === "rgb(255, 0, 0)";
+    out.rowLightBodyNotPaintedByDanmakuColor = lightBodyColor.length > 0 &&
+      lightBodyColor !== "rgb(255, 0, 0)" && lightBodyColor !== lightPageBg;
+    // 最强的一条：同一屏里所有正文颜色必须完全一致（用户要的是「统一」）
+    var allBodyColors = Array.from(document.querySelectorAll('[data-testid="db-msg-body"]'))
+      .map(function (el) { return getComputedStyle(el).color; });
+    out.rowAllBodiesSameColor = allBodyColors.length >= 3 &&
+      allBodyColors.every(function (c) { return c === allBodyColors[0]; });
     out.rowLightDefaultWhiteTreatedAsUnset = lightWhiteBodyColor.length > 0 &&
       lightWhiteBodyColor !== "rgb(255, 255, 255)" && lightWhiteBodyColor !== lightPageBg;
     out.rowLightColors = [lightNameColor, lightBodyColor, lightWhiteBodyColor, lightPageBg];

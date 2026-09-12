@@ -3,7 +3,6 @@ import type { MenuPoint } from "./ContextMenu";
 import {
   alertsOn,
   badgesFor,
-  cssColor,
   formatClock,
   GUARD_TITLE,
   medalColors,
@@ -26,9 +25,8 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   const { message, count } = row;
   const badges = badgesFor(message, anchorUid);
   const medal = medalColors(message);
-  // 弹幕自身颜色（十进制 RGB）**只属于正文**。普通弹幕上游给的是 16777215（白），
-  // 白与 0 一样按「未指定」处理（见 `cssColor`），否则浅色主题下正文会与背景同色。
-  const color = cssColor(message.color);
+  // 正文统一用主题前景色：上游允许发送者自定义弹幕颜色（舰长/老爷常见金黄），
+  // 用户 2026-09-12 要求「所有文本统一一下」，因此不再照色渲染。
   const highlight = alertsOn(message, prefs) ? styles.highlight : undefined;
   // 被 @ 的名字用上游给的颜色（与粉丝牌真彩色同一口径：空串不是颜色，缺失就不上色）
   const replyNameColor =
@@ -165,14 +163,11 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             )}
           </span>
         )}
-        {/* 正文：文字与表情图**同一个行盒**——表情不另起一列、不另站一个基线；
-            它是唯一吃弹幕颜色的地方（`color` 只在这里出现，白与 0 视为未指定）。
+        {/* 正文：文字与表情图**同一个行盒**——表情不另起一列、不另站一个基线。
+            正文统一用主题前景色：上游允许发送者自定义弹幕颜色（舰长/老爷常见金黄），
+            用户 2026-09-12 要求「所有文本统一一下」，因此不再照色渲染。
             大表情（bulge）尺寸太大，由 `.contentEmoteBulge` 单独占一行。 */}
-        <span
-          className={styles.content}
-          data-testid="db-msg-body"
-          style={color ? { color } : undefined}
-        >
+        <span className={styles.content} data-testid="db-msg-body">
           {message.emote ? (
             // 表情弹幕：正文就是表情名，只显示文字会让人以为「表情没渲染」，
             // 因此改画图（标题与 alt 都保留表情名——图加载不出来时浏览器回退显示 alt）。

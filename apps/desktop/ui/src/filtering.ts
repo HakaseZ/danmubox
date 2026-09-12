@@ -238,16 +238,3 @@ export function formatLastLive(startAt?: number): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
-
-/**
- * 弹幕颜色是十进制 RGB；`0` 与 `0xFFFFFF` 都表示**未指定**，用主题前景色。
- *
- * 为什么把白色也算未指定：上游给普通弹幕的颜色就是 `16777215`（白）。界面里它只作用于
- * **正文**（人名不吃它），而浅色主题的前景是深色、背景是白的——照搬白色等于把正文写没。
- * 真正的彩色弹幕（付费色）照原样上色。
- */
-export function cssColor(value: number): string | undefined {
-  // `!(value > 0)` 同时盖住 0 与 NaN（上游字段缺失时可能给进来一个非数字）
-  if (!(value > 0) || value >= 0xffffff) return undefined;
-  return `#${value.toString(16).padStart(6, "0")}`;
-}

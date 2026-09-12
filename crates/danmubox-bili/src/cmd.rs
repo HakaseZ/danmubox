@@ -209,6 +209,9 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
 }
 
 /// 礼物。字段名（礼物名 / 数量 / 金额）待实测校准，暂只取已确认存在的可读文本。
+/// V1 礼物（`SEND_GIFT`）。字段名按社区文档核对（`docs/live/gift.md`）：
+/// `name` 礼物名、`price` 单位为金瓜子（文档记「该值/1000 的单位为元」，即 1 元 = 1000 金瓜子）、
+/// `coin_type` 一般为 `gold`（电池体系）。**尚未观测到真实样本**——实测流量里只出现 `SEND_GIFT_V2`。
 fn gift(room_id: i64, value: &Value) -> Option<Message> {
     let data = value.get("data")?;
     let mut message = Message::new(room_id, MessageKind::Gift, danmubox_core::now_ms());
@@ -218,6 +221,12 @@ fn gift(room_id: i64, value: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let num = data.get("num").and_then(Value::as_i64).unwrap_or(1).max(1);
+    let name = data.get("giftName").or_else(|| data.get("gift_name")).and_then(Value::as_str);
+    if let Some(name) = name.filter(|n| !n.is_empty()) {
+        message.content = format!("投喂 {name} ×{num}");
+    }
+    message.amount = data.get("price").and_then(Value::as_i64).unwrap_or(0) * num;
     Some(message)
 }
 
@@ -410,17 +419,62 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
 }
 
 /// 大航海开通。等级口径（1 总督 / 2 提督 / 3 舰长）待实测校准。
+/// 大航海开通 / 续费播报（`GUARD_BUY` 与 `USER_TOAST_MSG` 共用）。
+///
+/// 字段名按社区接口文档核对（`docs/live/message_stream.md` 两节都有字段表），
+/// **尚未用真实样本观测**——这类事件在 10 分钟巨型房间采集里零条（见附录 A33）。
+/// 文档给出的取值：`guard_level` 1 总督 / 2 提督 / 3 舰长；`price` 为原金瓜子标价（CNY×1000）。
 fn guard(room_id: i64, value: &Value) -> Option<Message> {
     let data = value.get("data")?;
-    let mut message = Message::new(room_id, MessageKind::Guard, danmubox_core::now_ms());
+    let ts_ms = data
+        .get("start_time")
+        .and_then(Value::as_i64)
+        .filter(|sec| *sec > 0)
+        .map(|sec| sec * 1000)
+        .unwrap_or_else(danmubox_core::now_ms);
+    let mut message = Message::new(room_id, MessageKind::Guard, ts_ms);
+
     message.uid = data.get("uid").and_then(Value::as_i64).unwrap_or(0);
     message.uname = data
         .get("username")
+        .or_else(|| data.get("uname"))
+        .or_else(|| data.pointer("/user_info/uname"))
         .and_then(Value::as_str)
-        .or_else(|| data.get("uname").and_then(Value::as_str))
         .unwrap_or_default()
         .to_string();
+
+    message.guard_level = data
+        .get("guard_level")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    message.amount = data.get("price").and_then(Value::as_i64).unwrap_or(0);
+    message.upstream_id = data
+        .get("payflow_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let num = data.get("num").and_then(Value::as_i64).unwrap_or(1).max(1);
+    // 名称优先取载荷里的（`gift_name` / `role_name`），缺失时按文档的等级映射补。
+    let title = data
+        .get("gift_name")
+        .or_else(|| data.get("role_name"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| guard_title(message.guard_level).to_string());
+    message.content = format!("开通 {title} ×{num}");
     Some(message)
+}
+
+/// 大航海等级 → 名称。取值按社区文档（1 总督 / 2 提督 / 3 舰长），未知等级不编造。
+fn guard_title(level: i64) -> &'static str {
+    match level {
+        1 => "总督",
+        2 => "提督",
+        3 => "舰长",
+        _ => "大航海",
+    }
 }
 
 #[cfg(test)]
@@ -709,6 +763,39 @@ mod tests {
             assert!(message(7, &payload, &c).is_none(), "坏载荷必须丢弃");
         }
         assert_eq!(c.snapshot().malformed_dropped, 2, "能解码但无礼物子消息的不计 malformed");
+    }
+
+    #[test]
+    fn guard_buy_uses_the_documented_fields() {
+        // 形状取自社区文档的字段表（尚无真实样本，见 A33）。
+        let payload = json!({
+            "cmd": "GUARD_BUY",
+            "data": {
+                "uid": 12345, "username": "开舰长的人",
+                "guard_level": 3, "num": 1, "price": 138000,
+                "gift_id": 10003, "gift_name": "舰长", "start_time": 1_789_179_000
+            }
+        });
+        let m = message(7, &payload, &counters()).expect("必须解出大航海");
+        assert_eq!(m.kind, MessageKind::Guard);
+        assert_eq!(m.uname, "开舰长的人");
+        assert_eq!(m.guard_level, 3);
+        assert_eq!(m.amount, 138000, "price 是金瓜子（文档记 CNY×1000）");
+        assert_eq!(m.content, "开通 舰长 ×1");
+        assert_eq!(m.ts, 1_789_179_000_000, "start_time 是秒级");
+    }
+
+    #[test]
+    fn user_toast_msg_falls_back_to_the_level_title() {
+        // USER_TOAST_MSG 没有昵称字段，且 role_name 可能缺失——此时按等级补名字。
+        let payload = json!({
+            "cmd": "USER_TOAST_MSG",
+            "data": {"guard_level": 2, "num": 2, "price": 2000000}
+        });
+        let m = message(7, &payload, &counters()).expect("必须解出播报");
+        assert_eq!(m.guard_level, 2);
+        assert_eq!(m.content, "开通 提督 ×2");
+        assert_eq!(m.amount, 2000000);
     }
 
     #[test]

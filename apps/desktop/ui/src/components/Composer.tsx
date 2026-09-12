@@ -31,7 +31,7 @@ const OUTCOME_CLASS: Record<SendOutcome, string | undefined> = {
 };
 
 /** 表情分组展示顺序。 */
-const PACKAGE_ORDER: EmotePackage[] = ["common", "medal", "guard", "admin"];
+const PACKAGE_ORDER: EmotePackage[] = ["common", "room", "medal", "guard", "admin"];
 
 export function Composer({
   disabled,
@@ -46,10 +46,11 @@ export function Composer({
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  // 按身份分组展示（通用 / 粉丝牌 / 大航海 / 房管），见 docs/ui.md §6.3。
+  // 按来源分组展示（通用 / 本房间 / 粉丝牌 / 大航海 / 房管），见 docs/ui.md §6.3。
   const grouped = useMemo(() => {
     const groups: Record<EmotePackage, Emote[]> = {
       common: [],
+      room: [],
       medal: [],
       guard: [],
       admin: [],

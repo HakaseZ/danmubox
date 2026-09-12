@@ -215,7 +215,7 @@ sessdata = ""
 
 > 与 `Message.medal_level` 区分：后者是**发送者**的牌，前者是**我**在这个房间的牌。表情包库可用范围取决于这套身份。
 
-`Emote`（表情，规范性）：`key` / `package_kind`（`common` / `medal` / `guard` / `admin`）/ `text` / `url` / `room_id`（房间专属时非 0）。
+`Emote`（表情，规范性）：`key` / `package_kind`（`common` / `room` / `medal` / `guard` / `admin`；`room` = UP 主大表情与房间专属表情）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
 `FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name`。**展示排序：`live_status == 1` 置顶**（REQUIREMENTS.md 需求）。
 

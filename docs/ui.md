@@ -358,7 +358,8 @@
 
 | 分组（`package_kind`） | 可见条件 | 说明 |
 |---|---|---|
-| 通用 `common` | 始终可见 | 全站通用表情 |
+| 通用 `common` | 始终可见 | 全站通用表情（实测 `pkg_type = 1`） |
+| 本房间 `room` | 始终可见 | UP 主大表情与房间专属表情（实测 `pkg_type = 2`，见 `protocol.md` A26）；房间没有这类表情时不渲染该标签 |
 | 粉丝牌 `medal` | `RoomSession.my_medal_level > 0` | 我在**该直播间**的粉丝牌表情；无牌时不渲染该分组标签 |
 | 大航海 `guard` | `RoomSession.my_guard_level ∈ {1, 2, 3}` | 按当前大航海等级可用集合；未开通时不渲染该分组标签 |
 | 房管 `admin` | `RoomSession.is_admin == true` | 房管专属表情；非房管时不渲染该分组标签 |

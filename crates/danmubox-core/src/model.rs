@@ -150,6 +150,9 @@ pub struct RoomSession {
 #[serde(rename_all = "lowercase")]
 pub enum EmotePackage {
     Common,
+    /// **房间相关**：UP 主大表情与房间专属表情。实测两者的 `pkg_type` 都是 `2`
+    /// （`pkg_id` 形如 `327` / `100327`），与通用表情（`pkg_type = 1`）可区分。
+    Room,
     Medal,
     Guard,
     Admin,

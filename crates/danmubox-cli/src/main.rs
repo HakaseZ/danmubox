@@ -141,8 +141,19 @@ async fn emotes(store: &Arc<ConfigStore>, room: &str) -> Result<()> {
         .await
         .context("拉取表情包失败")?;
     println!("# 房间 {} 可用表情：{} 个", resolved.room_id, emotes.len());
-    for emote in emotes.iter().take(20) {
-        println!("  [{:?}] {:?} -> {}", emote.package_kind, emote.text, emote.url);
+    let mut by_kind: std::collections::BTreeMap<String, Vec<&danmubox_core::Emote>> =
+        std::collections::BTreeMap::new();
+    for emote in &emotes {
+        by_kind
+            .entry(format!("{:?}", emote.package_kind))
+            .or_default()
+            .push(emote);
+    }
+    for (kind, items) in &by_kind {
+        println!("  [{kind}] {} 个", items.len());
+        for emote in items.iter().take(8) {
+            println!("      {}  -> {}", emote.text, emote.url);
+        }
     }
     Ok(())
 }

@@ -318,6 +318,15 @@ const ROW_FIXTURES = {
   emoticon: messageFromDanmakuPayload(ROW_FIXTURE.emoticon),
 };
 
+/**
+ * 一条**无空格的长 ASCII 串**的取证样本（用户 2026-09-13：长文本要能好好折行）：
+ * 直接取夹具那条真实载荷里的 CDN 地址（`info[0][15].user.base.face`，只脱敏哈希段），
+ * **不手写**。别人在弹幕里贴链接就是这个形状：一整串没有空格、没有可断点，
+ * 只能靠 `overflow-wrap` 就地断开。它在 360 宽下必然超出一行的宽度
+ * （45 个 ASCII 字符 ≈ 300px+，而正文可用宽度不到 300px），所以「有没有断」是量得出来的。
+ */
+const ROW_ASCII_TOKEN = ROW_FIXTURE.text.info[0][15].user.base.face;
+
 /** 把值嵌进 MOCK 模板字符串：反引号与 `${` 必须先转义，否则场景代码会提前结束。 */
 function embed(value) {
   return JSON.stringify(value).replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
@@ -332,6 +341,8 @@ const MOCK = (theme) => `(function () {
   var EMOTES = ${embed(FIXTURE_EMOTES)};
   var ROW_EMOTES = ${embed(ROW_EMOTE_SAMPLES)};
   var ROW_FIXTURES = ${embed(ROW_FIXTURES)};
+  // 无空格的长 ASCII 串（真实载荷里的 CDN 地址，见 Node 侧 ROW_ASCII_TOKEN 的说明）
+  var ROW_ASCII = ${embed(ROW_ASCII_TOKEN)};
   var listeners = {};
   var calls = [];
   // 带参数的调用记录（看请求形状，如 chat_send 的表情唯一键）；calls 只有命令名，保持原样。
@@ -1017,6 +1028,10 @@ const MOCK = (theme) => `(function () {
     // ② 带徽标 + 昵称 + 正文的行：用来量「徽标组→昵称」与「昵称→正文」两道间距。
     window.__emit("danmubox://message", window.__mk("danmaku",
       "折行样本：" + "身份属于人名，正文属于内容，两者之间要分开；折行之后每一行都要与首行文字左对齐，而不是回到头像下面。".repeat(3)));
+    // ③ 无空格的长 ASCII 串（真实载荷里的 CDN 地址）：必须就地断开，不许把行撑出横向滚动。
+    window.__emit("danmubox://message", window.__mk("danmaku", ROW_ASCII, false, {
+      uname: "贴链接的观众"
+    }));
     window.__emit("danmubox://message", window.__mk("danmaku", "紧贴昵称的徽标弹幕", false, {
       uname: "身份样本", medal_level: 7, medal_name: "紧贴牌", guard_level: 3
     }));
@@ -1123,10 +1138,17 @@ const MOCK = (theme) => `(function () {
       var imgStyle = img ? getComputedStyle(img) : null;
       return {
         rowW: f1(rowBox ? rowBox.width : 0),
+        rowLeft: f1(rowBox ? rowBox.left : 0),
         bodyLeft: f1(bodyBox ? bodyBox.left : 0),
+        bodyRight: f1(bodyBox ? bodyBox.right : 0),
+        bodyTop: f1(bodyBox ? bodyBox.top : 0),
         bodyW: f1(bodyBox ? bodyBox.width : 0),
         identityW: identity ? f1(rect(identity).width) : null,
+        identityLeft: identity ? f1(rect(identity).left) : null,
+        identityTop: identity ? f1(rect(identity).top) : null,
+        identityH: identity ? f1(rect(identity).height) : null,
         lines: lines.length,
+        lineLefts: lines.map(function (l) { return f1(l.left); }),
         firstLineLeft: lines.length > 0 ? f1(lines[0].left) : null,
         lastLineLeft: lines.length > 0 ? f1(lines[lines.length - 1].left) : null,
         imgW: imgBox ? f1(imgBox.width) : null,
@@ -1154,34 +1176,59 @@ const MOCK = (theme) => `(function () {
     // 正文不许越出自己那一列（「挤到右边 / 撑出去」的判据）：行与正文列都不得横向溢出
     out.fixtureTextNoOverflow = !!out.fixtureTextRow &&
       out.fixtureTextRow.rowOverflowPx === 0 && out.fixtureTextRow.bodyOverflowPx === 0;
-    // 正文列必须拿到**至少一半**可用宽度：身份簇再长也不许把正文挤成一条缝
-    // （改前实测 360 宽：身份簇列 182.7px / 正文列 112.4px —— 用户看到的「文字全挤在右边」）。
-    // 量的是**列**：第 1 列的宽 = 正文起点 − 正文块起点 − 正文自己那道 --sp-2 外边距
-    // （身份簇的盒子会被上限截断，拿它的盒子量会低估列宽）。
+    // 正文必须拿到**整行宽度**（≥ 视口的一半，用户 2026-09-13）：
+    // 改前是「身份簇 ｜ 正文」两列，360 宽下身份簇列 182.7px（占正文块 56%）、正文列只剩
+    // 112.4px —— 用户的「长文本弹幕自动换行还是没有实现好」就是它。改后正文另起一行。
+    // 量的是**视口**的一半（不是「正文块的一半」）：那才是用户眼睛看到的宽度。
     var fixtureBodyEl = fixtureTextRow
       ? fixtureTextRow.querySelector('[data-testid="db-msg-body"]')
       : null;
     var fixtureBlockEl = fixtureBodyEl ? fixtureBodyEl.parentElement : null;
     var fixtureBlockBox = rect(fixtureBlockEl);
-    var bodyMarginLeft = fixtureBodyEl
-      ? parseFloat(getComputedStyle(fixtureBodyEl).marginLeft) || 0
-      : 0;
-    out.fixtureTextIdentityColPx = fixtureBlockBox && out.fixtureTextRow
-      ? f1(out.fixtureTextRow.bodyLeft - fixtureBlockBox.left - bodyMarginLeft)
-      : null;
     out.fixtureTextBlockPx = fixtureBlockBox ? f1(fixtureBlockBox.width) : null;
-    out.fixtureTextIdentityColumnShare =
-      out.fixtureTextIdentityColPx !== null && out.fixtureTextBlockPx !== null &&
-      out.fixtureTextBlockPx > 0
-        ? f1(out.fixtureTextIdentityColPx / out.fixtureTextBlockPx)
-        : null;
-    out.fixtureTextColumnKeepsHalf = out.fixtureTextIdentityColumnShare !== null &&
-      out.fixtureTextIdentityColumnShare <= 0.5 + 0.01;
+    out.fixtureTextBodyShareOfViewport = out.fixtureTextRow
+      ? f1(out.fixtureTextRow.bodyW / window.innerWidth)
+      : null;
+    out.fixtureTextBodyKeepsHalfViewport = !!out.fixtureTextRow &&
+      out.fixtureTextRow.bodyW >= window.innerWidth / 2;
+    // 正文的行宽 = 正文块的宽度减去那一道行内左边距（--sp-1 已经在头像列上，这里应是 0）
+    out.fixtureTextBodyFillsBlock = !!out.fixtureTextRow && out.fixtureTextBlockPx !== null &&
+      out.fixtureTextBlockPx - out.fixtureTextRow.bodyW < 1;
+    // 悬挂缩进 = 正文左边缘与**用户名**左边缘一致（上下两行共用同一个左起点）
+    out.fixtureBodyAlignedWithName = !!out.fixtureTextRow &&
+      out.fixtureTextRow.identityLeft !== null &&
+      Math.abs(out.fixtureTextRow.bodyLeft - out.fixtureTextRow.identityLeft) < 1;
+    // 正文在身份行**下面**（另起一行）：正文顶边 ≥ 身份行底边
+    out.fixtureBodyOnSecondRow = !!out.fixtureTextRow &&
+      out.fixtureTextRow.identityTop !== null && out.fixtureTextRow.identityH !== null &&
+      out.fixtureTextRow.bodyTop >= out.fixtureTextRow.identityTop + out.fixtureTextRow.identityH - 1;
     // 「能换行」在**窄屏**上量（360 = 窗口最小宽度，也就是可达面的边界）：折成 ≥2 个行盒，
-    // 且每行与首行左对齐（悬挂缩进）——不是被挤到右侧去。宽屏下这条正文一行放得下，不要求折行。
-    out.fixtureTextWrapsWhenNarrow = !NARROW || (!!out.fixtureTextRow &&
-      out.fixtureTextRow.lines >= 2 &&
-      Math.abs(out.fixtureTextRow.lastLineLeft - out.fixtureTextRow.firstLineLeft) < 1);
+    // 且**每一行**都与首行左对齐（悬挂缩进）——不是被挤到右侧去、也不是回到头像下面。
+    out.fixtureTextWrapLineLefts = out.fixtureTextRow
+      ? [out.fixtureTextRow.firstLineLeft, out.fixtureTextRow.lastLineLeft]
+      : null;
+    // 真实夹具那条正文只有 21 个字：正文拿到整行宽后，窄屏下一行就放得下了 —— 那不是失败，
+    // 所以这里只断言「折行时每一行都与首行左对齐」；「窄屏下长正文折 ≥2 行」由下面
+    // layoutHangIndent* 那组在**足够长**的样本上断言（用户 2026-09-13 的第 ② 条）。
+    out.fixtureTextLinesAlignWhenWrapped = !!out.fixtureTextRow &&
+      out.fixtureTextRow.lineLefts.every(function (l) {
+        return Math.abs(l - out.fixtureTextRow.firstLineLeft) < 1;
+      });
+    // ---- 无空格的长 ASCII 串（真实载荷里的 CDN 地址，用户 2026-09-13）：就地断开、
+    //      不许把行撑出横向滚动。窄屏下它必然放不进一行，所以「断了」是量得出来的；
+    //      宽屏下放得下就不断——两种情形都只要求**不溢出**。
+    var asciiRow = rowWith(ROW_ASCII);
+    out.fixtureAsciiRow = fixtureMetricsOf(asciiRow);
+    out.fixtureAsciiNoOverflow = !!out.fixtureAsciiRow &&
+      out.fixtureAsciiRow.rowOverflowPx === 0 && out.fixtureAsciiRow.bodyOverflowPx === 0;
+    // 正文的右边缘不许越出行（行盒 scrollWidth ≤ clientWidth 的另一半：几何上也在里面）
+    out.fixtureAsciiInsideRow = !!out.fixtureAsciiRow &&
+      out.fixtureAsciiRow.bodyRight <= out.fixtureAsciiRow.rowLeft + out.fixtureAsciiRow.rowW + 1;
+    // 断开点必须落在正文块内部：行内最长的一行长（= 正文宽度）不超出行宽
+    out.fixtureAsciiWrapsWhenNarrow = !NARROW || (!!out.fixtureAsciiRow &&
+      out.fixtureAsciiRow.lines >= 2);
+
+
     // 行内表情图的**盒子**不许跟着原图走：同一个尺寸档里，200×60 的横条（通用表情样本，
     // 取自 emotes.json 的真实尺寸）与 162×162 的方图（夹具里的表情包弹幕）必须渲染成同一个盒。
     // 只给 height 的话宽度会按原图比例算出来 —— 改前实测：横条那条 23.1px 高 / 77px 宽。
@@ -1270,21 +1317,26 @@ const MOCK = (theme) => `(function () {
     out.guardBadgeNotFromMedalGuardLevel = !!outsideGuardRow && !hasGuardBadge(outsideGuardRow);
     out.guardBadgeShownForRoomGuard = hasGuardBadge(roomGuardRow);
 
-    // ---- 排版的「整体感」：一行里的间距只有两种（贴 / 分）
-    // 徽标组属于人名（紧贴昵称），昵称与正文之间才是「分」。
+    // ---- 身份行：**昵称在前、身份牌在昵称右侧**（参考图口径，用户 2026-09-13）；
+    //      正文另起一行、左起点与昵称一致（不是被牌挤到右边去）。
     var badgeRow = rowWith("紧贴昵称的徽标弹幕");
     var badgesEl = badgeRow ? badgeRow.querySelector('[data-testid="db-msg-badges"]') : null;
     var badgeNameEl = badgeRow ? badgeRow.querySelector('[data-testid="db-msg-name"]') : null;
     var badgeBodyEl = badgeRow ? badgeRow.querySelector('[data-testid="db-msg-body"]') : null;
-    out.layoutBadgeNameGap = badgesEl && badgeNameEl
-      ? Math.round((rect(badgeNameEl).left - rect(badgesEl).right) * 10) / 10
+    out.layoutNameBadgeGap = badgesEl && badgeNameEl
+      ? Math.round((rect(badgesEl).left - rect(badgeNameEl).right) * 10) / 10
       : null;
-    out.layoutNameBodyGap = badgeNameEl && badgeBodyEl
-      ? Math.round((rect(badgeBodyEl).left - rect(badgeNameEl).right) * 10) / 10
-      : null;
-    out.layoutBadgeGroupTightWithName =
-      out.layoutBadgeNameGap !== null && out.layoutNameBodyGap !== null &&
-      out.layoutBadgeNameGap < out.layoutNameBodyGap;
+    out.layoutBadgeAfterName = !!badgesEl && !!badgeNameEl &&
+      rect(badgesEl).left >= rect(badgeNameEl).right - 1;
+    // 牌与名字之间是「贴」（--sp-1 = 4px），不许出现第三种间距
+    out.layoutBadgeTightWithName = out.layoutNameBadgeGap !== null &&
+      out.layoutNameBadgeGap <= 4.01 && out.layoutNameBadgeGap >= 0;
+    // 身份行独占一行：正文顶边在身份行底边**之下**（同一行的两列排法已删除）
+    out.layoutBodyBelowIdentity = !!badgeBodyEl && !!badgesEl &&
+      rect(badgeBodyEl).top >= rect(badgesEl).bottom - 1;
+    // 正文与昵称共用左边缘（悬挂缩进的另一半：正文不是接在牌后面）
+    out.layoutBodyLeftAlignedWithName = !!badgeBodyEl && !!badgeNameEl &&
+      Math.abs(rect(badgeBodyEl).left - rect(badgeNameEl).left) < 1;
 
     // ---- 悬挂缩进：折行后每一行的首字都与首行的文字左对齐（不是回到头像下面）
     // 量法用 Range.getClientRects()：它按**行盒**返回矩形，正好能拿到每一行的左边缘。
@@ -1301,27 +1353,37 @@ const MOCK = (theme) => `(function () {
     out.layoutHangIndentLastLeft = lineRects.length > 0
       ? Math.round(lineRects[lineRects.length - 1].left * 10) / 10
       : null;
-    // 行数 ≥ 2 才算真的折了行，否则这条断言是「空对空」
+    // 行数 ≥ 2 才算真的折了行，否则这条断言是「空对空」。
+    // 用户 2026-09-13 的第 ② 条：**每一行**（不只是末行）的左边界都要与首行一致（悬挂缩进）。
+    out.layoutHangIndentLineLefts = lineRects.map(function (r) {
+      return Math.round(r.left * 10) / 10;
+    });
     out.layoutHangIndentAligned = lineRects.length >= 2 &&
-      Math.abs(lineRects[lineRects.length - 1].left - lineRects[0].left) < 1;
+      out.layoutHangIndentLineLefts.every(function (l) {
+        return Math.abs(l - out.layoutHangIndentLineLefts[0]) < 1;
+      });
 
-    // ---- 头像对齐口径：**垂直居中于首行**（钉在首行，不随折行掉到行的中间）
+    // ---- 头像对齐口径：**顶部与身份行对齐**（参考图），且头像比身份行**稍高**
+    //      （用户 2026-09-13：「头像需要比身份簇稍微高一些，太小了看不清」）。
+    //      旧口径是「垂直居中于首行盒」——两行布局下首行就是身份行，居中会让头像整体下沉，
+    //      所以这里改为量**顶边**：头像列/头像图的顶边与身份行顶边一致。
+    var wrapIdentityEl = wrapRow ? wrapRow.querySelector('[data-testid="db-msg-identity"]') : null;
     var avatarColEl = wrapRow ? wrapRow.querySelector('[data-testid="db-msg-avatar-col"]') : null;
     var wrapRowRect = rect(wrapRow);
     var avatarRect = rect(avatarColEl);
+    var wrapIdentityRect = rect(wrapIdentityEl);
     var firstLine = lineRects[0];
-    out.layoutAvatarFirstLineDelta = firstLine && avatarRect
-      ? Math.round(((avatarRect.top + avatarRect.height / 2) -
-          (firstLine.top + firstLine.height / 2)) * 10) / 10
+    out.layoutAvatarTopDelta = wrapIdentityRect && avatarRect
+      ? Math.round((avatarRect.top - wrapIdentityRect.top) * 10) / 10
       : null;
-    out.layoutAvatarAlignedToFirstLine = out.layoutAvatarFirstLineDelta !== null &&
-      Math.abs(out.layoutAvatarFirstLineDelta) < 3;
-    // 反面对照：这一行折了 3 行左右，头像若按「整行居中」会明显更低
+    out.layoutAvatarTopAlignedWithIdentity = out.layoutAvatarTopDelta !== null &&
+      Math.abs(out.layoutAvatarTopDelta) < 1.5;
+    // 反面对照：这一行折了好几行，头像若按「整行居中」会明显更低
     out.layoutAvatarNotRowCentered = !!firstLine && !!avatarRect && !!wrapRowRect &&
       (avatarRect.top + avatarRect.height / 2) <
         (wrapRowRect.top + wrapRowRect.height / 2) - 4;
 
-    // ---- 头像钉首行盒 + 身份簇与正文同一个起点（用户 #1/#2：发表情时「错开」）
+    // ---- 头像顶边 = 身份行顶边，正文在身份行**下面**（用户 #1/#2：发表情时「错开」）
     // 量的是两条**表情弹幕**：行内表情与大表情（bulge）。旧版在这两行上分别错开 1.8px / 32px。
     var emoteRows = rows().filter(function (r) {
       return !!r.querySelector('[data-testid="db-msg-body"] img');
@@ -1332,13 +1394,18 @@ const MOCK = (theme) => `(function () {
       var body = row.querySelector('[data-testid="db-msg-body"]');
       if (!col || !identity || !body) return null;
       var round = function (v) { return Math.round(v * 10) / 10; };
-      return { avatarTop: round(rect(col).top), identityTop: round(rect(identity).top), bodyTop: round(rect(body).top) };
+      return {
+        avatarTop: round(rect(col).top),
+        identityTop: round(rect(identity).top),
+        identityBottom: round(rect(identity).bottom),
+        bodyTop: round(rect(body).top)
+      };
     };
     out.rowEmoteFirstLineTops = emoteRows.map(firstLineTops);
     out.rowIdentityOnFirstLineBox = emoteRows.length >= 2 && emoteRows.every(function (row) {
       var t = firstLineTops(row);
       return !!t && Math.abs(t.identityTop - t.avatarTop) < 1.5 &&
-        Math.abs(t.identityTop - t.bodyTop) < 1.5;
+        t.bodyTop >= t.identityBottom - 0.5;
     });
     // 反面对照：大表情那一行折不了行（图是块级），头像按「行容器 flex-start + 行容器居中」会明显更低
     out.rowAvatarNotDroppedByTallEmote = emoteRows.length >= 2 && emoteRows.every(function (row) {
@@ -1346,8 +1413,9 @@ const MOCK = (theme) => `(function () {
       return !!t && Math.abs(t.avatarTop - Math.min(t.avatarTop, t.bodyTop)) < 1.5;
     });
 
-    // ---- 尺度：头像 / 徽标 / 表情图同出一条基准（用户 #3）
-    // 基准 = 正文行盒高（--row-line）；三者应分别是 0.9 / 0.9 / 1.1 倍。
+    // ---- 尺度：头像 / 身份牌 / 表情图同出一条基准（用户 #3），但**头像单独一档**
+    //      （用户 2026-09-13：「头像需要比身份簇稍微高一些，太小了看不清」）：
+    //      头像 = 1.25 × 行盒、身份牌 = 0.9 × 行盒（**不跟头像走**）、表情 = 1.1 × 行盒。
     var bodyForScale = byTestId("db-msg-body");
     var lineBoxPx = bodyForScale ? parseFloat(getComputedStyle(bodyForScale).lineHeight) : NaN;
     var avatarImgEl = avatarOf(withFace);
@@ -1360,11 +1428,51 @@ const MOCK = (theme) => `(function () {
       badge: sizeOf(badgeForScale),
       emote: sizeOf(emoteImgEl)
     };
+    // 身份行的高度：身份是「用户名 + 身份牌」那一行，它的行盒就是 --row-line
+    var identityForScale = byTestId("db-msg-identity");
+    out.rowIdentityBoxPx = identityForScale ? Math.round(rect(identityForScale).height * 10) / 10 : null;
     out.rowScaleCoherent = !isNaN(lineBoxPx) &&
       out.rowScale.avatar !== null && out.rowScale.badge !== null && out.rowScale.emote !== null &&
-      Math.abs(out.rowScale.avatar - out.rowScale.badge) < 0.6 &&
-      Math.abs(out.rowScale.avatar / lineBoxPx - 0.9) < 0.06 &&
+      Math.abs(out.rowScale.avatar / lineBoxPx - 1.25) < 0.06 &&
+      Math.abs(out.rowScale.badge / lineBoxPx - 0.9) < 0.06 &&
       Math.abs(out.rowScale.emote / lineBoxPx - 1.1) < 0.06;
+    // 用户 2026-09-13 的正题：头像**比身份簇稍高**（不是等高、更不是更小），高度差 ≥ 15%
+    out.rowAvatarTallerThanIdentity =
+      out.rowScale.avatar !== null && out.rowIdentityBoxPx !== null &&
+      out.rowScale.avatar > out.rowIdentityBoxPx &&
+      out.rowScale.avatar / out.rowIdentityBoxPx >= 1.15;
+    // 反面：身份牌**不**跟着头像放大（复用时它就 1.25 × 行盒了）
+    out.rowBadgeNotFollowingAvatar =
+      out.rowScale.badge !== null && out.rowScale.avatar !== null &&
+      out.rowScale.avatar - out.rowScale.badge > 1;
+
+    // ---- 字号滑杆联动（用户 2026-09-13：头像放大后，三种字号下都得成立）。
+    //      弹幕区把 ui.font_scale 写成 scroller 上的 font-size: <scale>em（MessageList），
+    //      行内尺寸全部由行盒按 em 派生，所以换三档字号量比值：头像/行盒恒 = 1.25、
+    //      头像恒比身份行高 ≥ 15%。把尺寸写死成 px 的实现会在这里露出（比值随字号漂）。
+    var scrollerEl = byTestId("db-chat-scroll");
+    var probeAvatar = avatarOf(withFace);
+    var probeIdentity = withFace ? withFace.querySelector('[data-testid="db-msg-identity"]') : null;
+    var probeBody = withFace ? withFace.querySelector('[data-testid="db-msg-body"]') : null;
+    var prevFontSize = scrollerEl.style.fontSize;
+    var scaleProbe = [];
+    // 比值记到 3 位小数：f1 那种 1 位小数会把 1.252 记成 1.3，容差就没意义了
+    var f3 = function (v) { return Math.round(v * 1000) / 1000; };
+    [0.85, 1, 1.6].forEach(function (scale) {
+      scrollerEl.style.fontSize = scale + "em";
+      var line = parseFloat(getComputedStyle(probeBody).lineHeight);
+      var av = rect(probeAvatar).height;
+      var idH = rect(probeIdentity).height;
+      scaleProbe.push({
+        scale: scale, line: f1(line), avatar: f1(av), identity: f1(idH),
+        avatarPerLine: f3(av / line), avatarOverIdentity: f3(av / idH)
+      });
+    });
+    scrollerEl.style.fontSize = prevFontSize;
+    out.rowScaleProbe = scaleProbe;
+    out.rowScaleFollowsFontSlider = scaleProbe.length === 3 && scaleProbe.every(function (p) {
+      return Math.abs(p.avatarPerLine - 1.25) < 0.01 && p.avatarOverIdentity >= 1.15;
+    });
 
     // ---- 昵称不吃弹幕颜色，颜色只落正文（用户 #2）
     var redRow = rowWith("红字弹幕正文");

@@ -49,7 +49,10 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollerRef.current,
-    estimateSize: () => 26,
+    // 行的实测高度由虚拟列表量准，这里只是**估值**（先估后测，见下面的贴底注释）。
+    // 弹幕行改成上下两行（身份行 + 正文行）后，一行 = 2 × 21px 行盒 + 2 × 8px 内边距 ≈ 58px
+    // （改前是单行 ≈ 29px，估值写的是 26）。正文折行时更高，由实测修正。
+    estimateSize: () => 58,
     overscan: 12,
     getItemKey: (index) => rows[index].message.local_id,
   });

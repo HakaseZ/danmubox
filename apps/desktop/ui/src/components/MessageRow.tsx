@@ -91,15 +91,23 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
           <Avatar url={message.face} name={message.uname} />
         </span>
       )}
-      {/* 正文块：身份簇与正文是它的**同一个网格的两列**——两列都从首行盒顶起算，
-          于是共用同一条基线；正文只在第 2 列里折行，折行后每一行都与首行文字左对齐
-          （悬挂缩进），不会回到头像下面。为什么不用 `align-items: baseline`：
-          见 app.module.css `.row` 上的注释（块级大表情会让身份簇跳到图片底边）。 */}
+      {/* 正文块 = **上下两行**（参考图口径，用户 2026-09-13）：第一行身份
+          （用户名 + 身份牌），第二行正文。两块都是块级，所以正文必然落在自己的行上、
+          左起点与用户名对齐（悬挂缩进），并且拿到**整行宽度**——旧版是「身份簇 ｜ 正文」
+          左右两列，窄屏 360 下正文只有 112–165px（占视口 46%），长文本自然折得又窄又碎。
+          身份行内只用 --sp-1（贴）；与正文的「分」由换行本身给出，不再有 --sp-2 外边距。 */}
       <span className={styles.text}>
         {message.kind !== "system" && (hasBadges || message.uname.length > 0) && (
-          // 身份簇：徽标组 + 昵称 + 回复标记**是一个整体**——身份属于人名，不是独立一栏。
-          // 簇内只用一种间距（--sp-1），簇与正文之间才用另一种（--sp-2）。
+          // 身份行：昵称 + 身份牌 + 回复标记**是一个整体**（都属于「谁在说话」）。
+          // 牌在昵称**右边**（参考图：蓝底白字的房间牌跟在用户名后面）。
           <span className={styles.identity} data-testid="db-msg-identity">
+            {message.uname.length > 0 && (
+              // 昵称**不吃**弹幕自身颜色：那是正文的颜色，套到人名的后果是普通弹幕
+              // （上游给 16777215 白色）在浅色主题下与背景同色、整条人名看不见（用户实测）。
+              <span className={styles.name} data-testid="db-msg-name">
+                {message.uname}:
+              </span>
+            )}
             {hasBadges && (
               <span className={styles.badges} data-testid="db-msg-badges">
                 {badges.anchor && (
@@ -134,18 +142,11 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
                 )}
               </span>
             )}
-            {message.uname.length > 0 && (
-              // 昵称**不吃**弹幕自身颜色：那是正文的颜色，套到人名的后果是普通弹幕
-              // （上游给 16777215 白色）在浅色主题下与背景同色、整条人名看不见（用户实测）。
-              <span className={styles.name} data-testid="db-msg-name">
-                {message.uname}:
-              </span>
-            )}
             {message.reply_to_uid !== 0 && message.reply_to_uname.length > 0 && (
-              // 「回复了谁」看得到（用户 #13b）：显示在被回复者该出现的位置——昵称之后、正文之前。
-              // 这一格同时是「纯 @ 某人」的槽位：两种形态只差文案与层级，不各开一列；
-              // 收包侧的 `reply_type_enum` / `show_reply` 还没进契约，所以此刻只有「回复」这一种形态。
-              // 长昵称按 `.replyTo` 截断，完整名字在 title 里。
+              // 「回复了谁」看得到（用户 #13b）：排在身份行的最后（昵称与身份牌之后、
+              // 正文那一行之前）。这一格同时是「纯 @ 某人」的槽位：两种形态只差文案与层级，
+              // 不各开一列；收包侧的 `reply_type_enum` / `show_reply` 还没进契约，
+              // 所以此刻只有「回复」这一种形态。长昵称按 `.replyTo` 截断，完整名字在 title 里。
               <span
                 className={styles.replyTo}
                 data-testid="db-msg-reply"

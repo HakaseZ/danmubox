@@ -398,14 +398,22 @@ JSON 里只有 `{dmscore, pb}`。
 
 语义：醒目留言（SC）及其日文版命令变体。
 
-| 归一化字段 | 来源（语义槽位） | 说明 | 校准状态 |
-|---|---|---|---|
-| `content` | SC 正文槽位 | 用户提交的留言文本 | 待实测校准（A9） |
-| `amount` | 金额槽位 | 单位与人民币展示值的关系待核对 | 待实测校准（A9） |
-| `uid` / `uname` | 发送者槽位 | 游客态可能缺失 | 待实测校准（A9） |
-| 去重标识 | SC 自身的标识槽位 | 供会话内重复推送判别 | 待实测校准（A9） |
-| `ts` | SC 起始时间槽位 | 归一化为 UTC 毫秒 | 待实测校准（A9） |
-| `medal_level` / `medal_name` / `guard_level` | 发送者粉丝牌槽位 | 无则零值 | 待实测校准（A4） |
+| 归一化字段 | 来源（**已实测**） | 说明 |
+|---|---|---|
+| `content` | `data.message` | 留言正文 |
+| `amount` | `data.price` | **单位是元**（样本 `30`，正是 B 站 SC 的最低档）|
+| `uid` / `uname` | `data.uid`；`data.uinfo.base.name`，回落 `data.user_info.uname` | 昵称两处同名，实测一致 |
+| `upstream_id` | `data.id` | SC 标识（样本为数字 `18968196`），举报与去重都用得上 |
+| `ts` | `data.ts`，回落 `data.start_time` | **秒级**，×1000 归一化为毫秒 |
+| `medal_level` / `medal_name` | `data.medal_info.medal_level` / `.medal_name` | 样本 `10` / `粉丝团` |
+| `guard_level` | `data.user_info.guard_level`，回落 `medal_info.guard_level` | 样本两者都在 |
+| `is_admin` | `data.user_info.manager` | 房管标记（样本 `0`）|
+
+**换算**：同一载荷还带 `data.rate = 1000`，即 1 元 = 1000 金瓜子——礼物金额（金瓜子）
+与 SC 金额（元）因此**不同口径**，`contract.md` §5 对此的措辞是「礼物金瓜子或 SC 金额」。
+
+**其他可用字段**（本实现暂不用）：`time`（SC 持续秒数，样本 `60`）、`start_time` / `end_time`、
+`message_font_color` / `background_*`（官方客户端用于 SC 配色）、`token`。
 
 噪声过滤建议：
 
@@ -888,7 +896,7 @@ stateDiagram-v2
 | A6 | `Message.upstream_id`（举报所需标识） | 举报弹幕所需的上游标识位于哪个槽位（弹幕 id / 消息 id / 组合串） | 同上，抓取一条可被举报的弹幕原文 | 用该标识对目标弹幕发起一次举报并核对是否命中，确认取哪个槽位 | `chat_report`、`upstream_id` |
 | A7 | 时间戳字段 | 各命令载荷中时间戳的字段名与单位（秒 / 毫秒）；缺失时是否可安全回退到本地时间 | 同上 | 与本地收帧时间比对，误差应在秒级以内；写入归一化规则 | `ts` 全命令 |
 | A8 | `SEND_GIFT`（含金额与连击字段） | 礼物名称、数量、单价（金瓜子）字段名；礼物标识与连击数（去重聚合用）字段名；用户 UID / 昵称字段名 | 同上 | 连续触发单价礼物与连击礼物各一次，比对数值与连击字段 | `content`、`amount`、连击聚合 |
-| A9 | `SUPER_CHAT_MESSAGE` / `_JP`（含金额与去重字段） | SC 标识、金额、正文、时长字段名；`_JP` 与主命令的载荷差异 | 同上，需真实 SC 样本 | 各取 1 条 SC，确认金额口径与去重标识 | `superchat` 全字段 |
+| A9 | `SUPER_CHAT_MESSAGE` / `_JP`（含金额与去重字段） | SC 标识、金额、正文、时长字段名；`_JP` 与主命令的载荷差异 | 同上，需真实 SC 样本 | **已实测（2026-09-12）**：字段见 §10.3——`message` / `price`（**元**）/ `id` / `ts`（秒）/ `uinfo.base.name` / `user_info.{uname,guard_level,manager}` / `medal_info.{medal_level,medal_name,guard_level}`，另有 `rate = 1000`（1 元 = 1000 金瓜子）。10 分钟采集到 1 条 SC。**`_JP` 仍未见样本** | `cmd.rs`、§10.3 |
 | A10 | `INTERACT_WORD`（V1） | 互动类型枚举的字面值与取值集合（进入 / 关注 / 分享等） | 同上 | 按可触发的类型逐项采集，建立完整映射后再写描述文案 | `content` 文案 |
 | A11 | `INTERACT_WORD_V2` 的 proto 字段名 | 上表 §10.4 所列 8 个字段的真实 tag 号、类型与嵌套结构；`msg_type` 枚举值与文案映射 | 同上，需一条 V2 进场样本与一条 V1 同场景样本 | base64 解码 `data` 后用 `prost` 试解，与 V1 对照确认字段名与语义 | `interact` 解析、`prost` schema |
 | A12 | `GUARD_BUY` | 守护等级字段、数量与价格字段及单位（金瓜子 / 月） | 同上，需一次真实开通样本 | 记录数值并核对等级取值方向（1 总督 / 2 提督 / 3 舰长） | `guard_level`、`amount` |
@@ -913,7 +921,7 @@ stateDiagram-v2
 | A30 | 进场回填的历史弹幕 | 能否在进房间时取到最近若干条；上限；字段；**调用前提** | 官方页面前端产物里检索 `dM/` 路径，并在在播房间上实测计数 | **已实测并已实现（2026-09-12）**：`GET /xlive/web-room/v1/dM/gethistory?roomid=<真实房间号>&room_type=<0|1>`（官方页面两个取值都观测到过）。`data.room` **恰好 10 条**（普通用户）+ `data.admin` **至多 10 条**（房管）= 最多 20；`limit` / `page_size` / `size` / `ps` / `page` / `offset` / `last_id` 实测均不加量——**不可翻页**。`timeline` 是**北京时间**秒级 `yyyy-MM-dd HH:mm:ss`（实测：UTC 00:49 时返回 08:49）。**调用前提（关键）**：需要完整的会话 Cookie——带完整 cookie 实测 **3/3 稳定**返回 10+10；只带 `buvid3` 时 **3/3 全空**；完全不带头时 2/3 空。**坑**：取不到时是 `code=0` + 空数组，**与「真的没有弹幕」无法区分**，调用方不得当成错误。字段含 `text` / `uid` / `nickname` / `timeline` / `isadmin` / `guard_level` / `id_str` / `user.medal.{name,level}`；**无文字颜色字段**（`color` 取 0）。实现见 `contract.md` §4.3、`ui.md` §4.7 |
 | A31 | 表情弹幕发送载荷的**编码** | 官方实现把 `emoticonOptions` 整体交给其请求器，本实现按 JSON 字符串放入表单——该编码未经上游确认 | 在公开测试房间 `1` 用 `--emote <唯一键>` 发一条，随即在本连接的弹幕流里核对回声是否带 `info[0][13]`（带上即为表情） | **待实测**：确认后回填 §11.4 并去掉本行；若上游拒绝，改为展平字段名（`emoticonOptions[width]` 等）逐项试 | `send.rs` |
 | A32 | 历史条目的表情字段 | 回填的历史弹幕里，表情信息在顶层 `emoticon` 对象的哪些字段上 | 在弹幕活跃的在播房间上抓一次 `gethistory`，找带表情的条目比对 | **已实测（2026-09-12）**：表情在顶层 `emoticon` 对象里，字段为 `{id, emoticon_unique, text, url, perm, in_player_area, bulge_display, is_dynamic, width, height}`，且 `dm_type = 1`。样本：`emoticon_unique = "upower_[小电视_赞]"`、`text = "[小电视_赞]"`、`width/height = 20/20`、`url` 是 **http**（同样需要升 https）。正文就是那个 token。**顺带**：实时弹幕的表情对象里**没有**文本字段，因此「正文是否等于表情」这条核对只能在历史这一侧做（`history.rs` 已加：正文与 `text` 不一致时不画图，避免吞掉混排正文） | `history.rs` |
-| A33 | SC 与大航海的**命令名** | `SUPER_CHAT_MESSAGE` / `_JP` / `GUARD_BUY` / `USER_TOAST_MSG` 是否仍是当前线上命令名 | 在弹幕活跃的大房间做 ≥10 分钟采集，统计这几个命令是否出现 | **待补样本（2026-09-12）**：10 分钟、1530 条业务载荷的巨型房间采集里，这四个命令**零条**——同期 `DANMU_MSG` 580、`SEND_GIFT_V2` 72、`COMBO_SEND` 8 都正常。两种可能：命令名已变，或这些事件不推给该房间的公开连接。**在拿到样本前不得改判**，现有映射（§10.3 / §10.6）保持按文档字段名实现并零值容错 | `cmd.rs`、§10.3、§10.6 |
+| A33 | SC 与大航海的**命令名** | `SUPER_CHAT_MESSAGE` / `_JP` / `GUARD_BUY` / `USER_TOAST_MSG` 是否仍是当前线上命令名 | 在弹幕活跃的大房间做 ≥10 分钟采集，统计这几个命令是否出现 | **部分解决（2026-09-12，10 分钟 / 1730 余条业务载荷）**：`SUPER_CHAT_MESSAGE` **出现 2 条**——命令名仍然有效（先前一次中途读日志得出的「零条」是**我的分析错误**：日志仍在写入）。`GUARD_BUY` / `USER_TOAST_MSG` / `SEND_GIFT`（V1）**仍为零条**：可能是大航海事件更稀疏，也可能是命令名已变。`_JP` 未见 | `cmd.rs`、§10.3、§10.6 |
 
 ---
 

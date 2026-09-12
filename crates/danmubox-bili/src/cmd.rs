@@ -284,21 +284,62 @@ fn gift_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> 
 }
 
 /// 醒目留言。金额与标识字段名待实测校准。
+/// 醒目留言。字段于 2026-09-12 用真实样本逐项核对（`docs/protocol.md` §10.3）。
+///
+/// **金额单位是元，不是金瓜子**：样本 `price = 30` 正是 B 站 SC 的最低档，
+/// 同一载荷的 `rate = 1000` 给出换算（1 元 = 1000 金瓜子）。
+/// 因此 `Message.amount` 对 SC 存的是**元**，与礼物（金瓜子）不同口径——
+/// 契约 §5 对此的措辞是「礼物金瓜子或 SC 金额」，两套单位并存是既定设计。
 fn superchat(room_id: i64, value: &Value) -> Option<Message> {
     let data = value.get("data")?;
-    let mut message = Message::new(room_id, MessageKind::Superchat, danmubox_core::now_ms());
+    let ts_ms = data
+        .get("ts")
+        .or_else(|| data.get("start_time"))
+        .and_then(Value::as_i64)
+        .filter(|sec| *sec > 0)
+        .map(|sec| sec * 1000)
+        .unwrap_or_else(danmubox_core::now_ms);
+    let mut message = Message::new(room_id, MessageKind::Superchat, ts_ms);
     message.content = data
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
     message.uid = data.get("uid").and_then(Value::as_i64).unwrap_or(0);
+    // 昵称两处都有（实测同名）：优先 `uinfo.base.name`，回落 `user_info.uname`。
     message.uname = data
-        .get("user_info")
-        .and_then(|u| u.get("uname"))
+        .pointer("/uinfo/base/name")
+        .or_else(|| data.pointer("/user_info/uname"))
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // 元。
+    message.amount = data.get("price").and_then(Value::as_i64).unwrap_or(0);
+    // SC 标识（样本为数字 id）；举报与去重都用得上。
+    message.upstream_id = data
+        .get("id")
+        .map(|id| id.to_string().trim_matches('"').to_string())
+        .unwrap_or_default();
+    message.medal_level = data
+        .pointer("/medal_info/medal_level")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    message.medal_name = data
+        .pointer("/medal_info/medal_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    message.guard_level = data
+        .pointer("/user_info/guard_level")
+        .or_else(|| data.pointer("/medal_info/guard_level"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    // 房管标记：SC 载荷自带 `user_info.manager`（实测样本为 0）。
+    message.is_admin = data
+        .pointer("/user_info/manager")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        == 1;
     Some(message)
 }
 
@@ -668,6 +709,51 @@ mod tests {
             assert!(message(7, &payload, &c).is_none(), "坏载荷必须丢弃");
         }
         assert_eq!(c.snapshot().malformed_dropped, 2, "能解码但无礼物子消息的不计 malformed");
+    }
+
+    #[test]
+    fn superchat_uses_the_measured_fields() {
+        // 形状取自真实样本（人名与房间号换成中性值）。
+        let payload = json!({
+            "cmd": "SUPER_CHAT_MESSAGE",
+            "data": {
+                "message": "很好的一段留言",
+                "price": 30,
+                "rate": 1000,
+                "time": 60,
+                "id": 18968196,
+                "ts": 1_789_179_382,
+                "uid": 92322643,
+                "uinfo": {"base": {"name": "留言的人"}},
+                "user_info": {"uname": "留言的人", "guard_level": 0, "manager": 0},
+                "medal_info": {"medal_level": 10, "medal_name": "粉丝团", "guard_level": 3}
+            }
+        });
+        let m = message(7, &payload, &counters()).expect("必须解出 SC");
+        assert_eq!(m.kind, MessageKind::Superchat);
+        assert_eq!(m.content, "很好的一段留言");
+        assert_eq!(m.uname, "留言的人");
+        assert_eq!(m.amount, 30, "SC 的金额单位是元，不是金瓜子");
+        assert_eq!(m.ts, 1_789_179_382_000, "ts 是秒级");
+        assert_eq!(m.upstream_id, "18968196");
+        assert_eq!(m.medal_level, 10);
+        assert_eq!(m.medal_name, "粉丝团");
+        assert_eq!(m.guard_level, 0, "user_info 优先于 medal_info");
+        assert!(!m.is_admin);
+    }
+
+    #[test]
+    fn superchat_falls_back_and_survives_missing_fields() {
+        // 缺 ts / 缺 uinfo / 缺 medal_info 都不得丢掉整条 SC。
+        let payload = json!({
+            "cmd": "SUPER_CHAT_MESSAGE",
+            "data": {"message": "只有正文", "uid": 5, "user_info": {"uname": "甲"}}
+        });
+        let m = message(7, &payload, &counters()).expect("缺字段也要解出来");
+        assert_eq!(m.content, "只有正文");
+        assert_eq!(m.uname, "甲", "uinfo 缺失时回落 user_info.uname");
+        assert_eq!(m.amount, 0);
+        assert!(m.ts > 0, "缺时间戳时回落本地时间");
     }
 
     #[test]

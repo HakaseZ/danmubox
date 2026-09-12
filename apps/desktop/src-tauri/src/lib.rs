@@ -8,17 +8,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use danmubox_bili::{
-    BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender, BiliWallet,
+    BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
     QrState,
-    AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource, RoomCatalog,
-    SessionState, WalletProvider,
+    AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource, RoomAdmin,
+    RoomCatalog, SessionState, WalletProvider,
 };
 use danmubox_core::{
-    config_path, data_dir, prefs_path, ConfigStore, Counters, Emote, Event, EventBus, FollowedRoom,
-    HistoryQuery, Message, MessageKind, Prefs, ReportReason, Room, RoomRuntime, RoomSession,
-    SendOutcome,
+    config_path, data_dir, prefs_path, BlacklistedUser, ConfigStore, Counters, Emote, Event,
+    EventBus, FollowedRoom, HistoryQuery, Message, MessageKind, Prefs, ReportReason, Room,
+    RoomRuntime, RoomSession, SendOutcome,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
@@ -412,6 +412,117 @@ async fn emotes_list(state: State<'_, AppState>, room_id: i64) -> ApiResult<Vec<
         .map_err(ApiError::from)
 }
 
+/// 主站「我的表情」（契约 §7）：当前账号在**主站**拥有的表情包（`upower_` 家族）。
+///
+/// 与 `emotes_list` 不是同一套上游：后者是直播间的通用 / 房间 / 粉丝牌 / 大航海，
+/// 这里取的是主站表情面板。未登录时上游会退化为免费表情包，照常返回。
+#[tauri::command]
+async fn emotes_owned(state: State<'_, AppState>) -> ApiResult<Vec<Emote>> {
+    let provider = BiliEmotes::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    provider.owned().await.map_err(ApiError::from)
+}
+
+/// 禁言一名观众（契约 §7）。`hour`：`-1` 永久 / `0` 本场直播 / 其余小时数。
+///
+/// 只有请求者本人是该房间房管时才成立；非房管的 code 原样带回，不翻译。
+#[tauri::command]
+async fn admin_mute(
+    state: State<'_, AppState>,
+    room_id: i64,
+    uid: i64,
+    hour: i64,
+    msg: Option<String>,
+) -> ApiResult<()> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin
+        .mute(room_id, uid, hour, msg.as_deref())
+        .await
+        .map_err(ApiError::from)
+}
+
+/// 解除禁言（契约 §7）。
+#[tauri::command]
+async fn admin_unmute(state: State<'_, AppState>, room_id: i64, uid: i64) -> ApiResult<()> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin
+        .unmute(room_id, uid)
+        .await
+        .map_err(ApiError::from)
+}
+
+/// 房间黑名单（契约 §7）。
+#[tauri::command]
+async fn admin_blacklist_list(
+    state: State<'_, AppState>,
+    room_id: i64,
+) -> ApiResult<Vec<BlacklistedUser>> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin.blacklist(room_id).await.map_err(ApiError::from)
+}
+
+/// 加入黑名单（契约 §7）。
+#[tauri::command]
+async fn admin_blacklist_add(
+    state: State<'_, AppState>,
+    room_id: i64,
+    uid: i64,
+) -> ApiResult<()> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin
+        .blacklist_add(room_id, uid)
+        .await
+        .map_err(ApiError::from)
+}
+
+/// 移出黑名单（契约 §7）。
+#[tauri::command]
+async fn admin_blacklist_del(
+    state: State<'_, AppState>,
+    room_id: i64,
+    uid: i64,
+) -> ApiResult<()> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin
+        .blacklist_del(room_id, uid)
+        .await
+        .map_err(ApiError::from)
+}
+
+/// 屏蔽词列表（契约 §7）。
+#[tauri::command]
+async fn admin_keywords_list(state: State<'_, AppState>, room_id: i64) -> ApiResult<Vec<String>> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin.keywords(room_id).await.map_err(ApiError::from)
+}
+
+/// 新增屏蔽词（契约 §7）。上游一次只收一个关键词。
+#[tauri::command]
+async fn admin_keywords_add(
+    state: State<'_, AppState>,
+    room_id: i64,
+    words: String,
+) -> ApiResult<()> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin
+        .keyword_add(room_id, &words)
+        .await
+        .map_err(ApiError::from)
+}
+
+/// 删除屏蔽词（契约 §7）。
+#[tauri::command]
+async fn admin_keywords_del(
+    state: State<'_, AppState>,
+    room_id: i64,
+    word: String,
+) -> ApiResult<()> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin
+        .keyword_del(room_id, &word)
+        .await
+        .map_err(ApiError::from)
+}
+
 #[tauri::command]
 async fn chat_report(
     state: State<'_, AppState>,
@@ -445,6 +556,35 @@ async fn profiles_switch(
     let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     let session = auth.switch_profile(&name).await.map_err(ApiError::from)?;
     reconnect_all(&state);
+    Ok(session)
+}
+
+/// 新建一个 profile 并设为当前（契约 §7）。
+///
+/// 新 profile 的凭据为空，因此返回的是游客态；随后由扫码 / 手填写入。
+/// 名字非法或重复返回 `BAD_REQUEST`（**不覆盖**已有 profile）。
+/// 当前身份变了，已连接房间必须按新身份重连——理由同 `profiles_switch`。
+#[tauri::command]
+async fn profiles_create(state: State<'_, AppState>, name: String) -> ApiResult<SessionState> {
+    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    let before = state.store.active_name();
+    let session = auth.create_profile(&name).await.map_err(ApiError::from)?;
+    if state.store.active_name() != before {
+        reconnect_all(&state);
+    }
+    Ok(session)
+}
+
+/// 删除一个 profile（契约 §7）。不许删掉最后一个；删的若是当前 profile，
+/// 当前指向会切到剩下的第一个，因此同样需要重连。
+#[tauri::command]
+async fn profiles_remove(state: State<'_, AppState>, name: String) -> ApiResult<SessionState> {
+    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    let before = state.store.active_name();
+    let session = auth.remove_profile(&name).await.map_err(ApiError::from)?;
+    if state.store.active_name() != before {
+        reconnect_all(&state);
+    }
     Ok(session)
 }
 
@@ -736,6 +876,8 @@ pub fn run() {
             session_status,
             profiles_list,
             profiles_switch,
+            profiles_create,
+            profiles_remove,
             session_logout,
             session_qr_start,
             session_qr_poll,
@@ -750,6 +892,15 @@ pub fn run() {
             chat_report,
             report_reasons,
             emotes_list,
+            emotes_owned,
+            admin_mute,
+            admin_unmute,
+            admin_blacklist_list,
+            admin_blacklist_add,
+            admin_blacklist_del,
+            admin_keywords_list,
+            admin_keywords_add,
+            admin_keywords_del,
             follow_list,
             wallet_balance,
             open_url,

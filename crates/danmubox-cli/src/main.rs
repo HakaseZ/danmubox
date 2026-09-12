@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use danmubox_bili::{BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliSender, BiliWallet};
+use danmubox_bili::{BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliSender, BiliWallet};
 use danmubox_core::ports::{
-    AuthProvider, DanmakuSender, EmoteProvider, LiveSource, QrState, RoomCatalog, WalletProvider,
+    AuthProvider, DanmakuSender, EmoteProvider, LiveSource, QrState, RoomAdmin, RoomCatalog,
+    WalletProvider,
 };
 use danmubox_core::{
     config_path, prefs_path, ConfigStore, Event, EventBus, HistoryQuery, Prefs, RoomRuntime,
@@ -68,10 +69,16 @@ enum Command {
         #[arg(long)]
         emote: Option<String>,
     },
-    /// 列出凭据文件中的 profiles；`--use` 切换当前 profile
+    /// 列出凭据文件中的 profiles；`--use` 切换、`--create` 新建、`--remove` 删除
     Profiles {
         #[arg(long = "use")]
         use_profile: Option<String>,
+        /// 新建一个空 profile 并设为当前（凭据随后靠扫码或手填）
+        #[arg(long)]
+        create: Option<String>,
+        /// 删除一个 profile（不许删掉最后一个）
+        #[arg(long)]
+        remove: Option<String>,
     },
     /// 打印电池余额（需登录）
     Wallet,
@@ -79,6 +86,13 @@ enum Command {
     Follow,
     /// 打印房间可用的表情包（需登录）
     Emotes {
+        /// 房间号 / 短号 / URL
+        room: String,
+    },
+    /// 打印主站「我的表情」（`upower_` 家族；未登录时上游退化为免费表情包）
+    EmotesOwned,
+    /// 只读核对房管列表接口：禁言 / 黑名单 / 屏蔽词（需登录；非房管时打印上游错误码）
+    AdminLists {
         /// 房间号 / 短号 / URL
         room: String,
     },
@@ -111,7 +125,11 @@ async fn main() -> Result<()> {
             );
             print_session(&store).await?;
         }
-        Command::Profiles { use_profile } => profiles(&store, use_profile).await?,
+        Command::Profiles {
+            use_profile,
+            create,
+            remove,
+        } => profiles(&store, use_profile, create, remove).await?,
         Command::Send {
             room,
             text,
@@ -122,6 +140,8 @@ async fn main() -> Result<()> {
         Command::Wallet => wallet(&store).await?,
         Command::Follow => follow(&store).await?,
         Command::Emotes { room } => emotes(&store, &room).await?,
+        Command::EmotesOwned => emotes_owned(&store).await?,
+        Command::AdminLists { room } => admin_lists(&store, &room).await?,
     }
     Ok(())
 }
@@ -138,8 +158,13 @@ async fn follow(store: &Arc<ConfigStore>) -> Result<()> {
     println!("# 关注的直播间：{} 个", rooms.len());
     for room in &rooms {
         println!(
-            "  room_id={:<10} live_status={} 分组={:?} {}",
-            room.room_id, room.live_status, room.group_name, room.uname
+            "  room_id={:<10} live_status={} 开播时刻={} 在线={} 分组={:?} {}",
+            room.room_id,
+            room.live_status,
+            room.live_start_at,
+            room.online,
+            room.group_name,
+            room.uname
         );
     }
     Ok(())
@@ -171,6 +196,53 @@ async fn emotes(store: &Arc<ConfigStore>, room: &str) -> Result<()> {
         for emote in items.iter().take(8) {
             println!("      {:<12} unique={:<22} {}", emote.text, emote.emoticon_unique, emote.url);
         }
+    }
+    Ok(())
+}
+
+/// 主站「我的表情」：核对唯一键（`upower_` + text）与图片 url 尾段。
+async fn emotes_owned(store: &Arc<ConfigStore>) -> Result<()> {
+    let provider = BiliEmotes::new(Arc::clone(store))?;
+    let emotes = provider.owned().await.context("拉取主站表情失败")?;
+    println!("# 主站「我的表情」：{} 个", emotes.len());
+    for emote in &emotes {
+        let tail = emote.url.rsplit('/').next().unwrap_or("");
+        println!(
+            "  {:<24} unique={:<30} {}",
+            emote.text, emote.emoticon_unique, tail
+        );
+    }
+    Ok(())
+}
+
+/// 房管列表接口的只读核对：路径、参数与响应形状的实测入口。
+async fn admin_lists(store: &Arc<ConfigStore>, room: &str) -> Result<()> {
+    let live = BiliLive::with_store(Arc::clone(store))?;
+    let resolved = live.resolve_room(room).await?;
+    let admin = BiliAdmin::new(Arc::clone(store))?;
+    println!("# 房管列表（房间 {}）", resolved.room_id);
+
+    match admin.silent_list(resolved.room_id).await {
+        Ok(list) => {
+            println!("禁言名单 {} 条", list.len());
+            for user in list {
+                println!("  uid={} {} {}", user.uid, user.uname, user.face);
+            }
+        }
+        Err(err) => println!("禁言名单失败：{err}"),
+    }
+    match admin.blacklist(resolved.room_id).await {
+        Ok(list) => {
+            println!("黑名单 {} 条", list.len());
+            for user in list {
+                println!("  uid={} {} {}", user.uid, user.uname, user.face);
+            }
+        }
+        Err(err) => println!("黑名单失败：{err}"),
+    }
+    match admin.keywords(resolved.room_id).await {
+        Ok(words) => println!("屏蔽词 {} 个：{}", words.len(), words.join(" / ")),
+        Err(err) => println!("屏蔽词失败：{err}"),
     }
     Ok(())
 }
@@ -411,8 +483,25 @@ async fn login(store: &Arc<ConfigStore>, timeout_secs: u64) -> Result<()> {
     }
 }
 
-async fn profiles(store: &Arc<ConfigStore>, use_profile: Option<String>) -> Result<()> {
+async fn profiles(
+    store: &Arc<ConfigStore>,
+    use_profile: Option<String>,
+    create: Option<String>,
+    remove: Option<String>,
+) -> Result<()> {
     let auth = BiliAuth::new(Arc::clone(store))?;
+    if let Some(name) = create {
+        let state = auth.create_profile(&name).await?;
+        println!("# 已新建 profile `{name}` 并设为当前（凭据为空，请扫码或手填）");
+        println!("{}", session_json(&state)?);
+        return Ok(());
+    }
+    if let Some(name) = remove {
+        let state = auth.remove_profile(&name).await?;
+        println!("# 已删除 profile `{name}`");
+        println!("{}", session_json(&state)?);
+        return Ok(());
+    }
     if let Some(name) = use_profile {
         let state = auth.switch_profile(&name).await?;
         println!("# 已切换到 profile `{name}`");

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, type ReactVirtualizer } from "@tanstack/react-virtual";
 
 import { MessageRow } from "./MessageRow";
 import type { MenuPoint } from "./ContextMenu";
@@ -12,6 +12,23 @@ interface Props {
   anchorUid?: number;
   prefs: Prefs;
   onMenu: (message: Message, at: MenuPoint) => void;
+}
+
+/**
+ * 贴底：交给虚拟列表自己定位（`scrollToIndex(align: "end")`）。
+ *
+ * 不要换成「`el.scrollTop = el.scrollHeight`」——内容高度还没测准（虚拟列表先估后测）时，
+ * 这么赋值会把 scrollTop 往回**夹**，onScroll 随即把它读成「用户往上滚」，
+ * 于是跟随被判成暂停、再也不贴底（踩过两次：60 条连发后列表停在离底 826/1086px 处）。
+ *
+ * 末行与容器底边的呼吸空间（= 容器下内边距）不由这里负责，由高度块的 `flexShrink: 0` 保证：
+ * 块不被压扁，容器下内边距才不会被挤出可滚区域。
+ */
+function pinToBottom(
+  virtualizer: ReactVirtualizer<HTMLDivElement, Element>,
+  count: number,
+) {
+  if (count > 0) virtualizer.scrollToIndex(count - 1, { align: "end" });
 }
 
 /** 聊天流。虚拟滚动 + 自动跟随/暂停规则见 docs/ui.md §2、§3。 */
@@ -37,16 +54,14 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
     getItemKey: (index) => rows[index].message.local_id,
   });
 
-  // 跟随最新：仅在 following 且未悬停时把视口钉在末尾。
-  // 这里必须用 `virtualizer.scrollToIndex(align: "end")`，**不能**换成 `el.scrollTop = el.scrollHeight`：
-  // 虚拟列表的高度先按 `estimateSize` 估、再由实测修正，直接滚到 scrollHeight 会在修正后差出一截
-  // （实测：60 条连发后列表停在离底很远的地方，onScroll 随即把 following 判成 false，整条跟随链断掉）。
-  // 代价是末行**底边**对齐容器底边，容器下内边距被滚出视野（最新一条紧贴输入区/面板边框，实测差 0.2px）；
-  // 那是「贴底」的正常样子，不是被遮挡。
+  // 跟随最新：仅在 following 且未悬停时把视口钉在末尾（`pinToBottom` 说明了为什么不是
+  // `scrollToIndex(align: "end")`）。也不能换成「直接滚到 scrollHeight 后不管」：
+  // 虚拟列表的高度先按 `estimateSize` 估、再由实测修正，滚完若没人再贴一次就会差出一截——
+  // 所以下面的 ResizeObserver 同时盯着容器与内容块，任何高度变化都会重新贴底。
   useEffect(() => {
     if (!following || rows.length === 0) return;
     if (pauseOnHover && hovered) return;
-    virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
+    pinToBottom(virtualizer, rows.length);
   }, [rows.length, following, hovered, pauseOnHover, virtualizer]);
 
   // 聊天区是唯一生长区：表情/短语/筛选面板向上展开时它变矮。
@@ -60,7 +75,7 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
     const observer = new ResizeObserver(() => {
       const { following: pinned, count } = stateRef.current;
       if (!pinned || count === 0) return;
-      virtualizer.scrollToIndex(count - 1, { align: "end" });
+      pinToBottom(virtualizer, count);
     });
     observer.observe(el);
     if (content) observer.observe(content);
@@ -109,6 +124,10 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
             height: `${virtualizer.getTotalSize()}px`,
             width: "100%",
             position: "relative",
+            // 不许被 flex 压扁：滚动容器是 flex 列，默认 `flex-shrink: 1` 会把这块高度块
+            // 缩到视口那么高，于是虚拟行**溢出**它、并把容器下内边距挤出可滚区域——
+            // 贴底时末行就紧贴输入区/面板边框（实测 0.2px）。保持原高，那段内边距才留在末行下方。
+            flexShrink: 0,
           }}
         >
           {virtualizer.getVirtualItems().map((item) => (
@@ -140,7 +159,7 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
           data-testid="db-bottom-anchor"
           onClick={() => {
             setFollowing(true);
-            virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
+            pinToBottom(virtualizer, rows.length);
           }}
         >
           回到最新

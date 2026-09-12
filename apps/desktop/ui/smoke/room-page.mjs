@@ -625,6 +625,27 @@ const MOCK = `(function () {
       Math.abs(rect(composerEl).height - composerBefore) < 1 &&
       before.height - after.height > 50;
     out.layoutNewestNotCovered = !!newestAfter && rect(newestAfter).bottom <= rect(panel).top + 1;
+    // 容器下内边距的计算值：既是「贴底时的呼吸空间」，也是下面几条断言的右值。
+    // 不写死 8px：它属于排版令牌（app.module.css），RowRedesign 调它时断言自动跟着走。
+    out.layoutScrollerPaddingBottomPx =
+      Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+    // 贴底时的呼吸空间：末行底边 ↔ 面板（= 滚动容器）顶边的间距必须 == 那个内边距
+    out.layoutNewestPanelGapPx = newestAfter
+      ? Math.round((rect(panel).top - rect(newestAfter).bottom) * 10) / 10
+      : null;
+    out.layoutNewestGapIsPadding = out.layoutNewestPanelGapPx !== null &&
+      Math.abs(out.layoutNewestPanelGapPx - out.layoutScrollerPaddingBottomPx) <= 1;
+    // 贴底时的精确几何：为什么最新一条会紧贴容器底边（而不是留出容器下内边距）？
+    // scrollHeight - scrollTop - clientHeight = 0 表示已经滚到物理最大位置；
+    // 若此时末行底边仍在内容块底边之下（msgListBottomGapPx 为负），说明行高溢出了虚拟高度块。
+    out.layoutScrollBottomGapPx = Math.round(
+      (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight) * 10,
+    ) / 10;
+    out.layoutMsgListBottomGapPx = newestAfter
+      ? Math.round((rect(byTestId("db-msg-list")).bottom - rect(newestAfter).bottom) * 10) / 10
+      : null;
+    out.layoutLastRowHeightPx = newestAfter ? Math.round(rect(newestAfter).height * 10) / 10 : null;
+    out.layoutMsgListHeightPx = Math.round(rect(byTestId("db-msg-list")).height * 10) / 10;
     // 更硬的两条：视口仍在底部（跟随模式重新贴底），且渲染出的最后一行确实是最后一条消息
     out.layoutFollowingAtBottom =
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;
@@ -655,6 +676,20 @@ const MOCK = `(function () {
     // （db-bottom-anchor 只在 !following 时渲染，是 following 的对外可观察面）。
     out.layoutFollowingAfterPanelToggle = bottomGap(byTestId("db-chat-scroll")) < 8;
     out.layoutNoJumpButtonAfterPanelToggle = !byTestId("db-bottom-anchor");
+    // 面板收起后，列表下面是输入区：同一口径再量一次（末行底边 ↔ 输入区顶边 == 容器下内边距）
+    var afterCloseScroller = byTestId("db-chat-scroll");
+    var afterCloseBox = rect(afterCloseScroller);
+    var afterCloseRows = rows().filter(function (r) {
+      var box = rect(r);
+      return box.bottom <= afterCloseBox.bottom + 1 && box.top >= afterCloseBox.top - 1;
+    });
+    var afterCloseLast = afterCloseRows[afterCloseRows.length - 1] || null;
+    out.layoutNewestGapNoPanelPx = afterCloseLast
+      ? Math.round((rect(document.querySelector("textarea").parentElement).top -
+          rect(afterCloseLast).bottom) * 10) / 10
+      : null;
+    out.layoutNewestGapIsPaddingNoPanel = out.layoutNewestGapNoPanelPx !== null &&
+      Math.abs(out.layoutNewestGapNoPanelPx - out.layoutScrollerPaddingBottomPx) <= 1;
 
     // ---- 面板形态（窄屏）：限高（视口份额）+ 内容超出时**面板内部**滚动 + 关闭入口 + 热区 ≥ 40px，
     //      同时列表仍要剩下可观的高度（不遮最新一条，也不把列表挤成一条缝）

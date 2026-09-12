@@ -54,6 +54,8 @@ interface AppStore {
   report: (message: Message, reason: ReportReason) => Promise<boolean>;
   reportReasons: ReportReason[];
   loadReportReasons: () => Promise<void>;
+  /** 最近发送记录：仅会话内保留（需求 §2.2），不落盘。 */
+  recentSends: string[];
   loadEmotes: (roomId: number) => Promise<void>;
   loadFollowed: () => Promise<void>;
   loadBalance: () => Promise<void>;
@@ -73,6 +75,7 @@ export const useApp = create<AppStore>((set, get) => ({
   seeding: false,
   emotes: [],
   reportReasons: [],
+  recentSends: [],
   followed: [],
 
   async bootstrap() {
@@ -201,7 +204,11 @@ export const useApp = create<AppStore>((set, get) => ({
   async send(roomId, content, emote) {
     try {
       const result = await api.chatSend(roomId, content, emote);
-      set({ lastSend: result });
+      // 会话内的最近发送记录：发出去才记，失败的草稿仍留在输入框里等重试。
+      set((state) => ({
+        lastSend: result,
+        recentSends: [content, ...state.recentSends.filter((text) => text !== content)].slice(0, 8),
+      }));
       return result.outcome;
     } catch (error) {
       set({ error: describeError(error) });

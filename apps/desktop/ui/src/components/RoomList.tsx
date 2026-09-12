@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type {
   AppInfo,
@@ -40,6 +40,19 @@ export function RoomList({
     onAdd(value);
     setInput("");
   };
+
+  // 按关注分组展示（需求 §2.6）。后端已按「直播中置顶」排好序，
+  // 这里只做分组、保持组内相对顺序，因此每个分组里直播中的仍在前面。
+  const followedGroups = useMemo(() => {
+    const groups = new Map<string, FollowedRoom[]>();
+    for (const item of followed) {
+      const name = item.group_name.trim().length > 0 ? item.group_name : "未分组";
+      const list = groups.get(name);
+      if (list) list.push(item);
+      else groups.set(name, [item]);
+    }
+    return [...groups.entries()];
+  }, [followed]);
 
   return (
     <div className={styles.listPage}>
@@ -115,21 +128,26 @@ export function RoomList({
               尚未拉取，或接口未实测通过（见 docs/protocol.md 的 A28）
             </div>
           ) : (
-            followed.map((item) => (
-              <div
-                key={item.room_id}
-                className={styles.followItem}
-                onClick={() => onOpenFollowed(item.room_id)}
-              >
-                <span className={styles.roomCardMain}>
-                  {item.live_status === 1 && (
-                    <span className={styles.live}>● </span>
-                  )}
-                  {item.uname}
-                </span>
-                <span className={styles.roomMeta}>
-                  {item.group_name} {item.room_id}
-                </span>
+            followedGroups.map(([group, items]) => (
+              <div key={group} className={styles.followGroup}>
+                <div className={styles.followGroupName}>
+                  {group}（{items.length}）
+                </div>
+                {items.map((item) => (
+                  <div
+                    key={item.room_id}
+                    className={styles.followItem}
+                    onClick={() => onOpenFollowed(item.room_id)}
+                  >
+                    <span className={styles.roomCardMain}>
+                      {item.live_status === 1 && (
+                        <span className={styles.live}>● </span>
+                      )}
+                      {item.uname}
+                    </span>
+                    <span className={styles.roomMeta}>{item.room_id}</span>
+                  </div>
+                ))}
               </div>
             ))
           )}

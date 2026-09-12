@@ -28,6 +28,7 @@ interface Props {
   lastDetail?: string | null;
   logs: string[];
   emotes: Emote[];
+  recentSends: string[];
   balance?: number;
   onBack: () => void;
   onRefresh: () => void;
@@ -62,6 +63,7 @@ export function RoomView({
   lastDetail,
   logs,
   emotes,
+  recentSends,
   balance,
   onBack,
   onRefresh,
@@ -174,6 +176,7 @@ export function RoomView({
         lastOutcome={lastOutcome}
         lastDetail={lastDetail}
         emotes={emotes}
+        recentSends={recentSends}
         onSend={onSend}
         onOpenEmotes={() => void loadEmotes(room.room_id)}
       />

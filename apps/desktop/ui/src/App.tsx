@@ -20,6 +20,7 @@ export function App() {
   const notice = useApp((state) => state.notice);
   const seeding = useApp((state) => state.seeding);
   const emotes = useApp((state) => state.emotes);
+  const recentSends = useApp((state) => state.recentSends);
   const followed = useApp((state) => state.followed);
   const balance = useApp((state) => state.balance);
 
@@ -80,6 +81,7 @@ export function App() {
           lastDetail={lastSend?.detail}
           logs={logs}
           emotes={emotes}
+          recentSends={recentSends}
           balance={balance}
           onBack={closeRoom}
           onRefresh={() => void refresh(activeRoom.room_id)}

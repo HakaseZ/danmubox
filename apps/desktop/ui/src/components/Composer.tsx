@@ -16,6 +16,7 @@ interface Props {
   lastOutcome?: SendOutcome;
   lastDetail?: string | null;
   emotes: Emote[];
+  recentSends: string[];
   onSend: (content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
   onOpenEmotes: () => void;
 }
@@ -40,6 +41,7 @@ export function Composer({
   lastOutcome,
   lastDetail,
   emotes,
+  recentSends,
   onSend,
   onOpenEmotes,
 }: Props) {
@@ -158,6 +160,22 @@ export function Composer({
               </div>
             ))
           )}
+        </div>
+      )}
+
+      {draft.length === 0 && recentSends.length > 0 && (
+        <div className={styles.recent}>
+          <span className={styles.previewLabel}>最近</span>
+          {recentSends.slice(0, 4).map((text) => (
+            <button
+              key={text}
+              className={styles.recentItem}
+              title="点击填入输入框"
+              onClick={() => setDraft(text)}
+            >
+              {text.length > 12 ? `${text.slice(0, 12)}…` : text}
+            </button>
+          ))}
         </div>
       )}
 

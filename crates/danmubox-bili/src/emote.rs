@@ -57,6 +57,17 @@ use crate::http::BiliHttp;
 const EP_EMOTICONS: &str =
     "https://api.live.bilibili.com/xlive/web-ucenter/v2/emoticon/GetEmoticons";
 
+/// 主站「我的表情」面板（`docs/protocol.md` 附录 A35 结案，2026-09-12 实测）。
+/// `business=live` 返回 `-400`，只有 `reply` / `dynamic` 两个取值。
+const EP_EMOTE_OWNED: &str = "https://api.bilibili.com/x/emote/user/panel/web?business=reply";
+
+/// 主站表情的唯一键前缀。
+///
+/// 主站表情对象**没有** `emoticon_unique`，编号语义与直播那套不同；唯一键由
+/// `upower_` + 表情的 `text` 拼装。实测：接口返回的 `[Kirikosama_吃瓜]` 与弹幕里
+/// 收到的那条 `upower_[Kirikosama_吃瓜]` 完全一致（A35 结案）。
+const OWNED_UNIQUE_PREFIX: &str = "upower_";
+
 pub struct BiliEmotes {
     http: BiliHttp,
     store: Arc<ConfigStore>,
@@ -189,6 +200,75 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
     out
 }
 
+/// 主站「我的表情」响应 → 表情列表（纯函数，便于离线覆盖）。
+///
+/// 结构（2026-09-12 实测）：包在 `data.packages[]`，表情在每个包的 **`emote[]`**
+/// 字段里（**不是**直播那套的 `emoticons`）；每个表情有 `text`（完整名字，
+/// 形如 `[Kirikosama_吃瓜]`）与 `url`。
+///
+/// 主站表情对象**没有** `width` / `height` / `is_dynamic` / `in_player_area` /
+/// `bulge_display`：官方前端对这些量一律按 `width: c.width || 1`、`height: c.height || 1`
+/// 兜底（表情面板渲染），因此这里宽高取 `1`、其余标志取 `false`。它们只影响发送
+/// 表情弹幕时 `emoticonOptions` 里的尺寸/标志，不改变唯一键。
+pub fn map_owned_packages(value: &Value) -> Vec<Emote> {
+    let Some(packages) = value.pointer("/data/packages").and_then(Value::as_array) else {
+        tracing::debug!("主站表情响应没有 data.packages");
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for (pkg_index, package) in packages.iter().enumerate() {
+        let pkg_token = package
+            .get("id")
+            .and_then(scalar_string)
+            .unwrap_or_else(|| format!("pkg{pkg_index}"));
+        let empty = Vec::new();
+        let items = package
+            .get("emote")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
+        if items.is_empty() {
+            tracing::debug!(pkg_index, "主站表情包没有 emote 数组，跳过");
+            continue;
+        }
+
+        let mut seen: HashSet<String> = HashSet::new();
+        for (emote_index, item) in items.iter().enumerate() {
+            let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+            let url = item.get("url").and_then(Value::as_str).unwrap_or_default();
+            // 没有文本就拼不出唯一键、没有图片就发不出去，两者缺一都跳过。
+            if text.is_empty() || url.is_empty() {
+                tracing::debug!(pkg_index, emote_index, "主站表情缺 text 或 url，跳过");
+                continue;
+            }
+
+            let mut token = item
+                .get("id")
+                .and_then(scalar_string)
+                .unwrap_or_else(|| emote_index.to_string());
+            if !seen.insert(token.clone()) {
+                token = format!("{token}#{emote_index}");
+                seen.insert(token.clone());
+            }
+
+            out.push(Emote {
+                key: format!("{pkg_token}:{token}"),
+                package_kind: EmotePackage::Owned,
+                emoticon_unique: format!("{OWNED_UNIQUE_PREFIX}{text}"),
+                text: text.to_string(),
+                url: crate::asset::secure_url(url),
+                width: 1,
+                height: 1,
+                is_dynamic: false,
+                in_player_area: false,
+                bulge_display: false,
+                room_id: 0,
+            });
+        }
+    }
+    out
+}
+
 /// 包分类。
 ///
 /// 判定顺序（前两步来自房间 `某个在播房间（房间号不写入仓库）` 的实测样本，见 `docs/protocol.md` 附录 A26）：
@@ -306,6 +386,19 @@ impl EmoteProvider for BiliEmotes {
         }
         Ok(map_packages(room_id, &value))
     }
+
+    async fn owned(&self) -> Result<Vec<Emote>> {
+        // 刻意**不**要求登录：未登录时上游退化为免费表情包，照常返回即可
+        // （任务约定；主站接口本身不需要任何额外签名）。
+        let (value, _) = self.http.get_with_cookies(EP_EMOTE_OWNED).await?;
+
+        let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
+        if code != 0 {
+            // 未实测的码集合：保留原始 code，不赋予含义。
+            return Err(Error::Upstream(format!("emote/user/panel/web code={code}")));
+        }
+        Ok(map_owned_packages(&value))
+    }
 }
 
 #[cfg(test)]
@@ -349,6 +442,64 @@ mod tests {
         assert_eq!(emotes[1].url, "https://i/b.png");
         assert_eq!(emotes[0].package_kind, EmotePackage::Common);
         assert_eq!(emotes[0].room_id, 0, "通用表情不绑定房间（契约 §5）");
+    }
+
+    #[test]
+    fn owned_emotes_use_the_emote_array_and_upower_unique() {
+        let value = json!({
+            "code": 0,
+            "data": {"packages": [{
+                "id": 4022,
+                "text": "Kirikosama",
+                "type": 3,
+                "emote": [
+                    {"id": 364855, "text": "[Kirikosama_吃瓜]", "url": "http://i0.hdslb.com/bfs/emote/abc.png"},
+                    {"id": 364856, "text": "[Kirikosama_不要啊]", "url": "https://i0.hdslb.com/bfs/emote/def.png"}
+                ]
+            }]}
+        });
+        let emotes = map_owned_packages(&value);
+        assert_eq!(emotes.len(), 2);
+        assert_eq!(emotes[0].key, "4022:364855");
+        assert_eq!(emotes[0].package_kind, EmotePackage::Owned);
+        assert_eq!(emotes[0].emoticon_unique, "upower_[Kirikosama_吃瓜]");
+        assert_eq!(emotes[0].text, "[Kirikosama_吃瓜]");
+        assert_eq!(
+            emotes[0].url, "https://i0.hdslb.com/bfs/emote/abc.png",
+            "http 图必须升为 https"
+        );
+        assert_eq!(emotes[0].width, 1, "主站表情无宽高，按官方前端 ||1 兜底");
+        assert_eq!(emotes[0].height, 1);
+        assert_eq!(emotes[0].room_id, 0, "主站表情不绑定任何房间");
+        assert_ne!(emotes[0].key, emotes[1].key);
+        assert_ne!(
+            emotes[0].emoticon_unique, emotes[1].emoticon_unique,
+            "唯一键必须按 text 区分"
+        );
+    }
+
+    #[test]
+    fn owned_emotes_ignore_the_live_style_emoticons_field() {
+        // 直播那套的表情数组叫 `emoticons`，主站叫 `emote`；混用会静默拿到空列表，
+        // 因此这里把「串味」钉成断言。
+        let value = json!({
+            "data": {"packages": [{"id": 1, "emoticons": [{"text": "x", "url": "https://i/a.png"}]}]}
+        });
+        assert!(map_owned_packages(&value).is_empty());
+        assert!(map_owned_packages(&json!({"code": 0, "data": {}})).is_empty());
+        assert!(map_owned_packages(&json!({"code": 0})).is_empty());
+    }
+
+    #[test]
+    fn owned_emotes_skip_entries_without_text_or_url() {
+        let value = json!({"data": {"packages": [{"id": 9, "emote": [
+            {"id": 1, "url": "https://i/a.png"},
+            {"id": 2, "text": "[无图]"},
+            {"id": 3, "text": "[可用]", "url": "https://i/b.png"}
+        ]}]}});
+        let emotes = map_owned_packages(&value);
+        assert_eq!(emotes.len(), 1);
+        assert_eq!(emotes[0].emoticon_unique, "upower_[可用]");
     }
 
     #[test]

@@ -223,6 +223,19 @@ impl AuthProvider for BiliAuth {
         *self.nickname.lock().await = None;
         self.current_session().await
     }
+
+    async fn create_profile(&self, name: &str) -> Result<SessionState> {
+        // 新 profile 没有凭据，因此返回的是游客态——随后由扫码 / 手填写入。
+        self.store.create_profile(name)?;
+        *self.nickname.lock().await = None;
+        self.current_session().await
+    }
+
+    async fn remove_profile(&self, name: &str) -> Result<SessionState> {
+        self.store.remove_profile(name)?;
+        *self.nickname.lock().await = None;
+        self.current_session().await
+    }
 }
 
 #[cfg(test)]

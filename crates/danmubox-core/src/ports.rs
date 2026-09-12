@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::bus::{Cancel, MessageSink};
 use crate::error::Result;
-use crate::model::{Emote, FollowedRoom, Message, ReportReason, Room, RoomSession, SendOutcome};
+use crate::model::{
+    BlacklistedUser, Emote, FollowedRoom, Message, ReportReason, Room, RoomSession, SendOutcome,
+    SilentUser,
+};
 
 /// 登录态。**不含**任何 Cookie 值（`docs/contract.md` §7）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,6 +61,16 @@ pub trait AuthProvider: Send + Sync {
     async fn logout(&self) -> Result<()>;
     async fn profiles(&self) -> Result<Vec<String>>;
     async fn switch_profile(&self, name: &str) -> Result<SessionState>;
+
+    /// 新建一个空 profile 并把它设为当前 profile；凭据随后由扫码 / 手填入。
+    ///
+    /// 名字非法或重复返回 `BAD_REQUEST`——**绝不覆盖**已有 profile。
+    /// 新 profile 没有凭据，因此返回的会话是游客态。
+    async fn create_profile(&self, name: &str) -> Result<SessionState>;
+
+    /// 删除一个 profile。不许删掉最后一个（配置里始终留一个身份）；
+    /// 删的若是当前 profile，则把当前指向切到剩下的第一个。
+    async fn remove_profile(&self, name: &str) -> Result<SessionState>;
 }
 
 #[async_trait]
@@ -162,6 +175,50 @@ pub trait DanmakuReporter: Send + Sync {
 pub trait EmoteProvider: Send + Sync {
     /// 按我在该房间的身份（粉丝牌 / 大航海 / 房管）加载可用表情包。
     async fn emotes(&self, room_id: i64, session: &RoomSession) -> Result<Vec<Emote>>;
+
+    /// **主站「我的表情」**：当前账号拥有的表情包（`upower_` 家族）。
+    ///
+    /// 与 `emotes` 不是同一套上游：那套是直播间的通用 / 房间 / 粉丝牌 / 大航海，
+    /// 而这套来自主站表情面板。弹幕里能收到 `upower_` 表情、直播表情接口却取不到，
+    /// 只能靠这条路径把它们补进选择器（`docs/protocol.md` 附录 A35）。
+    /// 未登录时上游会退化为免费表情包，照常返回。
+    async fn owned(&self) -> Result<Vec<Emote>>;
+}
+
+/// 直播间管理（房管）能力。**只有请求者本人是该房间的房管时才成立**：
+/// 非房管时上游返回非 0 code，本层原样带回，不赋语义
+/// （`docs/protocol.md` 附录 A36）。
+///
+/// 纪律：任何写操作都**不得以真实观众为目标**做验证（`AGENT.md` §8.15）。
+#[async_trait]
+pub trait RoomAdmin: Send + Sync {
+    /// 当前禁言名单（只读）。
+    async fn silent_list(&self, room_id: i64) -> Result<Vec<SilentUser>>;
+
+    /// 禁言一名观众。`hour`：`-1` 永久 / `0` 本场直播 / 其余为小时数；
+    /// `msg` 是触发禁言的那条弹幕原文（上游可选）。
+    async fn mute(&self, room_id: i64, uid: i64, hour: i64, msg: Option<&str>) -> Result<()>;
+
+    /// 解除禁言。
+    async fn unmute(&self, room_id: i64, uid: i64) -> Result<()>;
+
+    /// 房间黑名单（只读）。
+    async fn blacklist(&self, room_id: i64) -> Result<Vec<BlacklistedUser>>;
+
+    /// 把一名观众加入黑名单。
+    async fn blacklist_add(&self, room_id: i64, uid: i64) -> Result<()>;
+
+    /// 把一名观众移出黑名单。
+    async fn blacklist_del(&self, room_id: i64, uid: i64) -> Result<()>;
+
+    /// 屏蔽词列表（只读）。
+    async fn keywords(&self, room_id: i64) -> Result<Vec<String>>;
+
+    /// 新增一个屏蔽词。上游一次只收一个 `keyword`；需要多个时由调用方逐个传。
+    async fn keyword_add(&self, room_id: i64, word: &str) -> Result<()>;
+
+    /// 删除一个屏蔽词。
+    async fn keyword_del(&self, room_id: i64, word: &str) -> Result<()>;
 }
 
 #[async_trait]

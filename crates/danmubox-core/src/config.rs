@@ -126,6 +126,36 @@ impl std::fmt::Debug for AppConfig {
 
 pub const DEFAULT_PROFILE: &str = "default";
 
+/// profile 名允许的最大长度。
+const PROFILE_NAME_MAX: usize = 32;
+
+/// 校验 profile 名。
+///
+/// 只用 `[A-Za-z0-9_-]`：名字既是 `config.toml` 里的表键（`[profiles.<name>]`），
+/// 也是界面上可输入、可对比的标识。放行空白与引号等字符会让 TOML 往返需要转义，
+/// 也让「同名 / 名字里只有空格」这类输入无法给出清晰结论，因此在入口收敛。
+fn validate_profile_name(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(Error::BadRequest("profile 名不能为空".into()));
+    }
+    if trimmed.len() > PROFILE_NAME_MAX {
+        return Err(Error::BadRequest(format!(
+            "profile 名不能超过 {PROFILE_NAME_MAX} 个字符"
+        )));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(Error::BadRequest(
+            "profile 名只能包含字母、数字、下划线与连字符".into(),
+        ));
+    }
+    // 收敛两端的空白：`"  work  "` 与 `"work"` 视为同一个名字，避免造出看不见的重名。
+    Ok(trimmed.to_string())
+}
+
 /// 凭据文件的内存态 + 落盘点。适配器通过它读取当前 Cookie，
 /// 因此切换 profile 后无需重建 HTTP 客户端。
 pub struct ConfigStore {
@@ -207,6 +237,48 @@ impl ConfigStore {
             return Err(Error::NotFound(format!("profile `{name}` 不存在")));
         }
         config.active_profile = name.to_string();
+        self.persist(&config)
+    }
+
+    /// 新建一个空 profile 并把它设为当前 profile（凭据随后由扫码或手填入）。
+    ///
+    /// 名字重复、非法时返回 `BAD_REQUEST`——**绝不覆盖**已有 profile 的凭据。
+    /// 新 profile 的凭据字段全空，因此调用后即为游客态，直到登录流程写回凭据。
+    pub fn create_profile(&self, name: &str) -> Result<()> {
+        let name = validate_profile_name(name)?;
+        let mut config = self.snapshot();
+        if config.profiles.contains_key(&name) {
+            return Err(Error::BadRequest(format!("profile `{name}` 已存在")));
+        }
+        config.profiles.insert(name.clone(), Profile::default());
+        config.active_profile = name;
+        self.persist(&config)
+    }
+
+    /// 删除一个 profile。
+    ///
+    /// 两条护栏：不能删掉最后一个 profile（配置里至少要留一个有效身份）；
+    /// 删的若是当前 profile，则把当前指向切到剩下的第一个，保证
+    /// `active_profile` 始终指向一个存在的条目。
+    pub fn remove_profile(&self, name: &str) -> Result<()> {
+        let mut config = self.snapshot();
+        if !config.profiles.contains_key(name) {
+            return Err(Error::NotFound(format!("profile `{name}` 不存在")));
+        }
+        if config.profiles.len() <= 1 {
+            return Err(Error::BadRequest("不能删除最后一个 profile".into()));
+        }
+        config.profiles.remove(name);
+        if config.active_profile == name {
+            // BTreeMap 的 key 顺序确定，切换目标可复现。
+            let next = config
+                .profiles
+                .keys()
+                .next()
+                .cloned()
+                .expect("至少剩一个 profile");
+            config.active_profile = next;
+        }
         self.persist(&config)
     }
 
@@ -452,6 +524,90 @@ mod tests {
             store.set_active("nope").unwrap_err().code(),
             "NOT_FOUND",
             "切到不存在的 profile 必须报 NOT_FOUND"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn creating_a_profile_adds_it_and_makes_it_current() {
+        let dir = temp_dir("create");
+        let path = dir.join("config.toml");
+        let store = ConfigStore::load(path.clone()).unwrap();
+        store
+            .upsert_active(profile(&[
+                ("sessdata", "S"),
+                ("bili_jct", "J"),
+                ("dede_user_id", "1"),
+            ]))
+            .unwrap();
+        assert!(store.is_logged_in());
+
+        store.create_profile("work").unwrap();
+        assert_eq!(store.active_name(), "work");
+        assert!(
+            store.active().unwrap().sessdata.is_empty(),
+            "新 profile 的凭据必须留空，等登录流程填入"
+        );
+        assert!(!store.is_logged_in(), "空凭据即游客态");
+        assert_eq!(store.names(), vec!["default".to_string(), "work".to_string()]);
+
+        let reloaded = ConfigStore::load(path.clone()).unwrap();
+        assert_eq!(reloaded.active_name(), "work");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("sessdata = \"S\""), "不得覆盖已有 profile 的凭据");
+
+        assert_eq!(
+            store.create_profile("work").unwrap_err().code(),
+            "BAD_REQUEST",
+            "重名必须拒绝，不得覆盖"
+        );
+        for bad in ["", "   ", "a b", "a/b", "中文名", &"x".repeat(33)] {
+            assert_eq!(
+                store.create_profile(bad).unwrap_err().code(),
+                "BAD_REQUEST",
+                "{bad:?} 必须拒绝"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_a_profile_keeps_one_and_repairs_the_pointer() {
+        let dir = temp_dir("remove");
+        let path = dir.join("config.toml");
+        let store = ConfigStore::load(path.clone()).unwrap();
+        store
+            .upsert_active(profile(&[
+                ("sessdata", "S"),
+                ("bili_jct", "J"),
+                ("dede_user_id", "1"),
+            ]))
+            .unwrap();
+        store.create_profile("work").unwrap();
+        store.set_active("default").unwrap();
+
+        store.remove_profile("work").unwrap();
+        assert_eq!(store.names(), vec!["default".to_string()]);
+        assert_eq!(store.active_name(), "default", "删非当前项不动指针");
+
+        assert_eq!(
+            store.remove_profile("default").unwrap_err().code(),
+            "BAD_REQUEST",
+            "不能删掉最后一个 profile"
+        );
+        assert_eq!(
+            store.remove_profile("ghost").unwrap_err().code(),
+            "NOT_FOUND"
+        );
+
+        store.create_profile("work").unwrap();
+        store.set_active("default").unwrap();
+        store.remove_profile("default").unwrap();
+        assert_eq!(store.active_name(), "work", "删当前项要切到剩下的条目");
+        assert_eq!(
+            ConfigStore::load(path.clone()).unwrap().active_name(),
+            "work",
+            "切换必须落盘"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -167,6 +167,9 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
         }
     }
 
+    // 房管标记：历史条目直接带 `isadmin`（实时 DANMU_MSG 没有等价字段——
+    // 其 `info[0][15].user` 与 `extra` 里都查过，没有房管项，见 A5）。
+    message.is_admin = item.get("isadmin").and_then(Value::as_i64).unwrap_or(0) != 0;
     message.is_history = true;
     Some(message)
 }
@@ -309,6 +312,18 @@ mod tests {
         let messages = map_history(7, &value);
         assert_eq!(messages[0].content, "谢谢[小电视_赞]");
         assert!(messages[0].emote_url.is_empty(), "混排正文不得被整段替换成图片");
+    }
+
+    #[test]
+    fn history_carries_the_admin_flag() {
+        // 历史条目自带 `isadmin`；实时 DANMU_MSG 没有等价字段（A5）。
+        let value = json!({"data": {"room": [
+            {"text": "房管发言", "uid": 1, "timeline": "2026-09-12 08:49:32", "isadmin": 1},
+            {"text": "普通发言", "uid": 2, "timeline": "2026-09-12 08:49:33", "isadmin": 0}
+        ]}});
+        let messages = map_history(7, &value);
+        assert!(messages[0].is_admin, "isadmin=1 必须是房管");
+        assert!(!messages[1].is_admin);
     }
 
     #[test]

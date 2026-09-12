@@ -71,7 +71,7 @@ danmubox/
 | 端口 | 职责 |
 |---|---|
 | `AuthProvider` | 登录态、凭据读写、扫码流程、buvid3；`create_profile(name)`（新建空 profile 并设为当前，名字 `[A-Za-z0-9_-]{1,32}`，非法/重名 → `BAD_REQUEST`，不覆盖已有）、`remove_profile(name)`（不许删最后一个 → `BAD_REQUEST`；不存在 → `NOT_FOUND`；删当前项则当前指向切到剩下的条目） |
-| `LiveSource` | 房间解析、建立/断开连接、事件流 |
+| `LiveSource` | 房间解析、建立/断开连接、事件流；`room_identity(room_id) -> RoomSession`（本人在该房间的身份，取自官方进房接口；未登录返回全零身份而不报错） |
 | `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5）。`emote: Option<&EmoteToken>` 非空时发送**表情弹幕**；`reply: Option<&ReplyTarget>` 非空时带上 @ / 回复字段（见 `protocol.md` §11.6） |
 | `DanmakuReporter` | 举报弹幕；`reasons()` 取上游固定理由清单（官方客户端按文案反查 `reason_id` 后与文案一起上报） |
 | `EmoteProvider` | 按身份加载表情包库；`owned()` 取主站「我的表情」（未登录时为上游免费表情包） |
@@ -180,6 +180,10 @@ sessdata = ""
 | `amount` | i64 | 礼物金瓜子或 SC 金额，非交易类为 0 |
 | `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。存整份而非只存图片地址，是为了让界面能把它**再发出去** |
 | `face` | string | 发言者头像 URL（`info[0][15].user.base.face`，历史条目同层）；取不到为空串，界面自行降级 |
+| `medal_color_start` | string | 粉丝牌起始色（上游 `user.medal.v2_medal_color_start`），带 alpha 的 CSS 十六进制串（如 `#3FB4F699`）；无牌/缺失为空串 |
+| `medal_color_end` | string | 同上（`v2_medal_color_end`） |
+| `medal_color_border` | string | 同上（`v2_medal_color_border`） |
+| `medal_color_text` | string | 同上（`v2_medal_color_text`）。**空串不是颜色**，界面必须自备兜底色，不得拿黑色顶替 |
 | `upstream_id` | string | **上游弹幕标识，举报必需**（来源待实测，见 `protocol.md` 附录） |
 
 > **徽标（REQUIREMENTS.md 需求）**：主播 = `uid == Room.anchor_uid` 派生；房管 = `Message.is_admin`；大航海 = `Message.guard_level`（`1` 总督 / `2` 提督 / `3` 舰长）。`is_anchor` 不设独立字段——能推导就不存。
@@ -275,6 +279,7 @@ Frontend → Rust 命令（`invoke`）：
 | `session_status` | 登录态（不含 Cookie 值），含当前 `active_profile` |
 | `session_qr_start` / `session_qr_poll` | 扫码登录 |
 | `emotes_owned` | 主站「我的表情」（用户拥有的表情包）；`package_kind` 为 `owned`，唯一键 = `"upower_" + 表情 text` |
+| `room_session` | 返回该房间**当前会话**里的本人身份（`RoomSession`）。房间无活跃会话（未连接/已关闭）→ 返回该 room 的全零身份而**不报错**（与 `history_query` 同风格）。身份在会话建立时并发取一次并缓存，同时经既有 `danmubox://session` 事件推送 |
 | `admin_mute` / `admin_unmute` | 禁言 / 解除（`room_id`、`uid`、`hour`：`-1` 永久、`0` 本场） |
 | `admin_blacklist_list` / `_add` / `_del` | 直播间黑名单（列表 / 加入 / 移除） |
 | `admin_keywords_list` / `_add` / `_del` | 直播间屏蔽词（列表 / 添加 / 删除） |
@@ -291,7 +296,7 @@ Frontend → Rust 命令（`invoke`）：
 | `chat_report` | 举报弹幕，理由取自上一步的清单（`{id, reason}`） |
 | `report_reasons` | 举报理由清单（上游固定 7 条） |
 | `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)` |
-| `emotes_list` | 按身份加载表情包库 |
+| `emotes_list` | 按**真实会话身份**加载表情包库（上游据此下发可用包；此前传零身份，会缺粉丝牌与大航海那几包） |
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令） |
 | `wallet_balance` | 电池余额 |
 | `prefs_get` / `prefs_set` | 偏好读写 |

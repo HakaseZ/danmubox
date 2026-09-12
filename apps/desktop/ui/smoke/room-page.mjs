@@ -221,10 +221,25 @@ const MOCK = `(function () {
         case "prefs_set": Object.assign(prefs, args.patch); return Promise.resolve(Object.assign({}, prefs));
         case "follow_list": window.__followCalls += 1; return Promise.resolve(followed.slice());
         case "history_query": return Promise.resolve([history]);
-        case "emotes_list": return Promise.resolve([
-          { key: "common:1", emoticon_unique: "official_1", width: 20, height: 20, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "common", text: "[大笑]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 0 },
-          { key: "room:1", emoticon_unique: "room_5440_1", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "room", text: "[房间专属]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 5440 }
-        ]);
+        case "emotes_list": return Promise.resolve(
+          // 通用包给足一屏放不下的量（真站「通用」有几十个）：这样「表情格自己滚、面板头与
+          // 分组 tab 不动」才验得到，否则永远只是「刚好放得下」。
+          (function () {
+            var many = [];
+            for (var ci = 1; ci <= 72; ci += 1) {
+              many.push({ key: "common:" + ci, emoticon_unique: "official_" + ci, width: 20, height: 20, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "common", text: "[通用" + ci + "]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 0 });
+            }
+            return many;
+          })().concat([
+            { key: "room:1", emoticon_unique: "room_5440_1", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "room", text: "[房间专属]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 5440 },
+            // 大航海包：一条 locked（当前身份用不了）一条可用 —— 置灰要**置灰但照常列出**，
+            // 同一屏里能对照出「哪个被灰了」（契约 §5 Emote.locked）。
+            { key: "guard:1", emoticon_unique: "guard_unlocked", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "guard", text: "[舰长可用]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%232980b9'/></svg>", room_id: 5440, locked: false },
+            { key: "guard:2", emoticon_unique: "guard_locked", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "guard", text: "[提督专属]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%238e44ad'/></svg>", room_id: 5440, locked: true },
+            // 字段缺失（老后端）的那条：必须按「可用」显示，不许整面板变灰
+            { key: "guard:3", emoticon_unique: "guard_nofield", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "guard", text: "[字段缺失]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%234ade80'/></svg>", room_id: 5440 }
+          ])
+        );
         case "report_reasons": return Promise.resolve([{ id: 1, reason: "垃圾广告" }]);
         // 主站「我的表情」：用户点名要的那条必须能从面板发回去（issue #8）。
         case "emotes_owned": return Promise.resolve([
@@ -279,8 +294,10 @@ const MOCK = `(function () {
     input.click();
     return true;
   };
+  // 只认工具行里的按钮：面板里也有带「表情」二字的按钮（「我的表情」tab 在文档序上更靠前），
+  // 按 document.querySelectorAll 取首个会点错。
   var clickTool = function (label) {
-    var b = buttonWith(null, label);
+    var b = buttonWith(byTestId("db-composer-tools"), label);
     if (!b) return false;
     b.click();
     return true;
@@ -322,7 +339,7 @@ const MOCK = `(function () {
   };
 
   window.__smoke_run = async function () {
-    // 视口：390×844（窄屏，竖屏手机比例）与 1440×900（宽屏）各跑一遍。
+    // 视口：360×844（窄屏，取窗口最小宽度；竖屏是默认形态）与 1440×900（宽屏）各跑一遍。
     // 视口专属的断言只写进对应视口的快照（narrow_* / wide_*），
     // 否则「宽屏的面板在文档流里」这类口径会在窄屏那边假失败。
     var NARROW = window.innerWidth <= 520;
@@ -370,7 +387,11 @@ const MOCK = `(function () {
 
     // 铺 2 条实时弹幕 + 互动 + 系统（step3 需要历史行与实时行同时在场）
     window.__emit("danmubox://message", window.__mk("danmaku", "这是实时弹幕"));
-    window.__emit("danmubox://message", window.__mk("interact", ""));
+    // 进场行的自动摘除定时器 = 这条消息的 ts + 8s（store.scheduleInteractHide）。
+    // 后面「面板展开不弹走视口」那条断言必须先等它落定：摘掉一行会把下面整体顶上去一行高。
+    var interactMsg = window.__mk("interact", "");
+    window.__interactAt = interactMsg.ts;
+    window.__emit("danmubox://message", interactMsg);
     window.__emit("danmubox://message", window.__mk("system", "标题或分区变更"));
     window.__emit("danmubox://room_stats", { room_id: 5440, online: 12345, watched: 345678 });
     await sleep(600);
@@ -445,7 +466,7 @@ const MOCK = `(function () {
       reply_to_uid: 778, reply_to_uname: "另一个被回复的人", reply_uname_color: ""
     }));
     // 排版样本（issue #8 的「一条弹幕要像一个整体」）：
-    // ① 长正文：在 390 与 1440 两个视口都会折行，用来量折行后的首字位置；
+    // ① 长正文：在 360 与 1440 两个视口都会折行，用来量折行后的首字位置；
     // ② 带徽标 + 昵称 + 正文的行：用来量「徽标组→昵称」与「昵称→正文」两道间距。
     window.__emit("danmubox://message", window.__mk("danmaku",
       "折行样本：" + "身份属于人名，正文属于内容，两者之间要分开；折行之后每一行都要与首行文字左对齐，而不是回到头像下面。".repeat(3)));
@@ -457,6 +478,26 @@ const MOCK = `(function () {
     }));
     window.__emit("danmubox://message", window.__mk("danmaku", "本房间的大航海弹幕", false, {
       guard_level: 3
+    }));
+    // 弹幕自己的颜色**只属于正文**（用户 #2 的根因）：一条真彩色、一条普通白。
+    // 上游给普通弹幕的颜色就是 16777215（白），名字吃这条颜色时白字人名在浅色主题下就是「看不见」。
+    window.__emit("danmubox://message", window.__mk("danmaku", "红字弹幕正文", false, {
+      color: 0xff0000, uname: "红字观众"
+    }));
+    window.__emit("danmubox://message", window.__mk("danmaku", "白字弹幕正文", false, {
+      color: 16777215, uname: "白字观众"
+    }));
+    // 表情弹幕：身份簇 / 头像 / 表情图三者对齐的样本（用户 #1/#2 的「发表情时错开」）。
+    // ① 行内表情 ② 独占一行的大表情（bulge）——旧版在 ② 上错开 32px（身份簇被拽到图片底边）。
+    var faceUrl = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><rect width='32' height='32' fill='%2300aeec'/></svg>";
+    var emoteUrl = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>";
+    window.__emit("danmubox://message", window.__mk("danmaku", "行内表情样本", false, {
+      face: faceUrl, uname: "表情君",
+      emote: { emoticon_unique: "official_1", url: emoteUrl, width: 20, height: 20, is_dynamic: false, in_player_area: false, bulge_display: false }
+    }));
+    window.__emit("danmubox://message", window.__mk("danmaku", "大表情样本", false, {
+      face: faceUrl, uname: "大表情君",
+      emote: { emoticon_unique: "official_bulge", url: emoteUrl, width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: true }
     }));
     // 头像（Message.face）：有头像画图、没头像不渲染、加载失败退化成首字符占位
     window.__emit("danmubox://message", window.__mk("danmaku", "带头像的弹幕", false, {
@@ -591,6 +632,109 @@ const MOCK = `(function () {
       (avatarRect.top + avatarRect.height / 2) <
         (wrapRowRect.top + wrapRowRect.height / 2) - 4;
 
+    // ---- 头像钉首行盒 + 身份簇与正文同一个起点（用户 #1/#2：发表情时「错开」）
+    // 量的是两条**表情弹幕**：行内表情与大表情（bulge）。旧版在这两行上分别错开 1.8px / 32px。
+    var emoteRows = rows().filter(function (r) {
+      return !!r.querySelector('[data-testid="db-msg-body"] img');
+    });
+    var firstLineTops = function (row) {
+      var col = row.querySelector('[data-testid="db-msg-avatar-col"]');
+      var identity = row.querySelector('[data-testid="db-msg-identity"]');
+      var body = row.querySelector('[data-testid="db-msg-body"]');
+      if (!col || !identity || !body) return null;
+      var round = function (v) { return Math.round(v * 10) / 10; };
+      return { avatarTop: round(rect(col).top), identityTop: round(rect(identity).top), bodyTop: round(rect(body).top) };
+    };
+    out.rowEmoteFirstLineTops = emoteRows.map(firstLineTops);
+    out.rowIdentityOnFirstLineBox = emoteRows.length >= 2 && emoteRows.every(function (row) {
+      var t = firstLineTops(row);
+      return !!t && Math.abs(t.identityTop - t.avatarTop) < 1.5 &&
+        Math.abs(t.identityTop - t.bodyTop) < 1.5;
+    });
+    // 反面对照：大表情那一行折不了行（图是块级），头像按「行容器 flex-start + 行容器居中」会明显更低
+    out.rowAvatarNotDroppedByTallEmote = emoteRows.length >= 2 && emoteRows.every(function (row) {
+      var t = firstLineTops(row);
+      return !!t && Math.abs(t.avatarTop - Math.min(t.avatarTop, t.bodyTop)) < 1.5;
+    });
+
+    // ---- 尺度：头像 / 徽标 / 表情图同出一条基准（用户 #3）
+    // 基准 = 正文行盒高（--row-line）；三者应分别是 0.9 / 0.9 / 1.1 倍。
+    var bodyForScale = byTestId("db-msg-body");
+    var lineBoxPx = bodyForScale ? parseFloat(getComputedStyle(bodyForScale).lineHeight) : NaN;
+    var avatarImgEl = avatarOf(withFace);
+    var badgeForScale = byTestId("db-msg-badges") ? byTestId("db-msg-badges").children[0] : null;
+    var emoteImgEl = emoteRows[0] ? emoteRows[0].querySelector('[data-testid="db-msg-body"] img') : null;
+    var sizeOf = function (el) { return el ? Math.round(rect(el).height * 10) / 10 : null; };
+    out.rowScale = {
+      line: lineBoxPx,
+      avatar: sizeOf(avatarImgEl),
+      badge: sizeOf(badgeForScale),
+      emote: sizeOf(emoteImgEl)
+    };
+    out.rowScaleCoherent = !isNaN(lineBoxPx) &&
+      out.rowScale.avatar !== null && out.rowScale.badge !== null && out.rowScale.emote !== null &&
+      Math.abs(out.rowScale.avatar - out.rowScale.badge) < 0.6 &&
+      Math.abs(out.rowScale.avatar / lineBoxPx - 0.9) < 0.06 &&
+      Math.abs(out.rowScale.emote / lineBoxPx - 1.1) < 0.06;
+
+    // ---- 昵称不吃弹幕颜色，颜色只落正文（用户 #2）
+    var redRow = rowWith("红字弹幕正文");
+    var redNameEl = redRow ? redRow.querySelector('[data-testid="db-msg-name"]') : null;
+    var redBodyEl = redRow ? redRow.querySelector('[data-testid="db-msg-body"]') : null;
+    var paintOf = function (el) {
+      return el ? (el.getAttribute("style") || "") + "|" + getComputedStyle(el).color : "";
+    };
+    out.rowNameNotPaintedByDanmakuColor = !!redNameEl &&
+      paintOf(redNameEl).indexOf("255, 0, 0") < 0 &&
+      paintOf(redNameEl).indexOf("#ff0000") < 0;
+    out.rowBodyPaintedByDanmakuColor = !!redBodyEl &&
+      paintOf(redBodyEl).indexOf("rgb(255, 0, 0)") >= 0;
+    var whiteRow = rowWith("白字弹幕正文");
+    var whiteBodyEl = whiteRow ? whiteRow.querySelector('[data-testid="db-msg-body"]') : null;
+    // 16777215 是上游给普通弹幕的「白」= 未指定：不许照搬到正文（浅色主题下正文会瞎）
+    out.rowDefaultWhiteTreatedAsUnset = !!whiteBodyEl &&
+      (whiteBodyEl.getAttribute("style") || "") === "" &&
+      getComputedStyle(whiteBodyEl).color !== "rgb(255, 255, 255)";
+
+    // ---- 同一个颜色规则在**两种主题**下都要能读（用户报的「用户名是白色、看不见」发生在浅色主题）
+    // 直接拨文档属性（app 的主题最终也落在这个属性上），量完立刻拨回去。
+    var themeBefore = document.documentElement.getAttribute("data-theme");
+    document.documentElement.setAttribute("data-theme", "light");
+    await sleep(250);
+    var lightRed = rowWith("红字弹幕正文");
+    var lightWhite = rowWith("白字弹幕正文");
+    var lightNameColor = lightRed
+      ? getComputedStyle(lightRed.querySelector('[data-testid="db-msg-name"]')).color
+      : "";
+    var lightBodyColor = lightRed
+      ? getComputedStyle(lightRed.querySelector('[data-testid="db-msg-body"]')).color
+      : "";
+    var lightWhiteBodyColor = lightWhite
+      ? getComputedStyle(lightWhite.querySelector('[data-testid="db-msg-body"]')).color
+      : "";
+    var lightPageBg = getComputedStyle(document.body).backgroundColor;
+    out.rowLightNameReadable = lightNameColor.length > 0 &&
+      lightNameColor !== "rgb(255, 255, 255)" && lightNameColor !== lightPageBg;
+    out.rowLightBodyKeepsDanmakuColor = lightBodyColor === "rgb(255, 0, 0)";
+    out.rowLightDefaultWhiteTreatedAsUnset = lightWhiteBodyColor.length > 0 &&
+      lightWhiteBodyColor !== "rgb(255, 255, 255)" && lightWhiteBodyColor !== lightPageBg;
+    out.rowLightColors = [lightNameColor, lightBodyColor, lightWhiteBodyColor, lightPageBg];
+    if (themeBefore === null) document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", themeBefore);
+    await sleep(150);
+
+    // ---- 行尾「⋯」删掉（用户 #5：与右键菜单重复）；房间头那一个保留
+    out.rowMenuTriggerGone = rows().length > 0 && rows().every(function (r) { return !buttonWith(r, "⋯"); });
+    out.headerMenuTriggerKept = !!buttonWith(byTestId("db-room-header"), "⋯");
+
+    // ---- 工具行只剩三个面板入口：表情 / 短语 / 筛选（用户 #7：「最近」整条链路删掉）
+    var toolLabels = [].slice.call(byTestId("db-composer-tools").querySelectorAll("button"))
+      .map(function (b) { return b.innerText.trim(); });
+    out.toolsPanelButtons = toolLabels;
+    out.toolsOnlyThreePanels = ["表情", "短语", "筛选"].every(function (t) {
+      return toolLabels.indexOf(t) >= 0;
+    }) && toolLabels.indexOf("最近") < 0;
+
     // ---- layout 弹幕列表是唯一生长区；面板向上展开不遮挡最新弹幕
     var scroller = byTestId("db-chat-scroll");
     var before = rect(scroller);
@@ -650,16 +794,80 @@ const MOCK = `(function () {
     out.layoutFollowingAtBottom =
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;
     out.layoutLastRowIsNewest = !!newestAfter && newestAfter.innerText.indexOf("无头像的弹幕") >= 0;
-    // 通用表情与非通用表情的尺寸分级（issue #8：非通用放大）
-    out.layoutEmoteSizes = [].slice.call(panel.querySelectorAll("button img")).map(function (img) {
-      return {
-        height: Math.round(img.getBoundingClientRect().height),
-        big: img.parentElement.className.indexOf("pickerItemBig") >= 0
-      };
-    });
-    var commonH = out.layoutEmoteSizes.filter(function (x) { return !x.big; })[0];
-    var bigH = out.layoutEmoteSizes.filter(function (x) { return x.big; })[0];
+    // ---- 表情面板 = 分组 tab（用户 #6：不再把五组纵向堆进一个滚动区）
+    var emoteTabsOf = function () {
+      return [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-tab"]'));
+    };
+    var emoteGroupsOf = function () {
+      return [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-group"]'));
+    };
+    var emoteItemSizes = function () {
+      return [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-item"] img')).map(function (img) {
+        return {
+          height: Math.round(img.getBoundingClientRect().height),
+          big: img.parentElement.className.indexOf("pickerItemBig") >= 0
+        };
+      });
+    };
+    var tabOf = function (kind) {
+      return emoteTabsOf().filter(function (b) { return b.getAttribute("data-kind") === kind; })[0];
+    };
+    out.panelEmoteTabs = emoteTabsOf().map(function (b) { return b.innerText.trim(); });
+    out.panelEmoteTabCount = emoteTabsOf().length;
+    // 一屏只画一组：tab 的代价是「非通用放大档」不能在同一个快照里量，必须切过去量
+    out.panelEmoteOneGroupAtATime = emoteGroupsOf().length === 1 &&
+      emoteGroupsOf()[0].getAttribute("data-kind") === "common";
+    out.panelEmoteTabSelectedOne = emoteTabsOf().filter(function (b) {
+      return b.getAttribute("aria-selected") === "true";
+    }).length === 1;
+    var commonSizes = emoteItemSizes();
+    var roomTab = tabOf("room");
+    if (roomTab) {
+      roomTab.click();
+      await sleep(300);
+      out.panelEmoteTabSwitchWorks = emoteGroupsOf().length === 1 &&
+        emoteGroupsOf()[0].getAttribute("data-kind") === "room";
+    }
+    var bigSizes = emoteItemSizes();
+    var commonH = commonSizes.filter(function (x) { return !x.big; })[0];
+    var bigH = bigSizes.filter(function (x) { return x.big; })[0];
+    out.layoutEmoteSizes = commonSizes;
+    out.layoutEmoteSizesBig = bigSizes;
     out.layoutNonCommonEmoteBigger = !!commonH && !!bigH && bigH.height >= commonH.height * 1.4;
+
+    // ---- 无权限的表情：置灰、但不隐藏、不禁用（用户 #6；契约 §5 Emote.locked）
+    var guardTab = tabOf("guard");
+    if (guardTab) {
+      guardTab.click();
+      await sleep(300);
+      var lockedItems = [].slice.call(byTestId("db-panel")
+        .querySelectorAll('[data-testid="db-emote-item"][data-locked="true"]'));
+      var freeItems = [].slice.call(byTestId("db-panel")
+        .querySelectorAll('[data-testid="db-emote-item"][data-locked="false"]'));
+      // 替身里：舰长可用 / 提督专属(locked) / 字段缺失(无 locked 字段)
+      out.panelLockedEmoteListed = lockedItems.length === 1;
+      out.panelLockedEmoteDimmed = lockedItems.length === 1 && (function () {
+        var cs = getComputedStyle(lockedItems[0]);
+        return parseFloat(cs.opacity) < 0.8 && cs.filter.indexOf("grayscale") >= 0;
+      })();
+      // 灰归灰，尺寸不许缩——缩了就分不清是哪一个了
+      out.panelLockedEmoteSameSize = lockedItems.length === 1 && freeItems.length >= 1 &&
+        Math.abs(rect(lockedItems[0].querySelector("img")).height -
+          rect(freeItems[0].querySelector("img")).height) < 0.6;
+      // 置灰是提示不是闸门：照样点得动、照样插进草稿（真正拦的是上游发送侧）
+      lockedItems[0].click();
+      await sleep(200);
+      out.panelLockedEmoteSelectable =
+        document.querySelector("textarea").value.indexOf("[提督专属]") >= 0;
+      typeIntoArea(document.querySelector("textarea"), "");
+      await sleep(150);
+      // 字段缺失（老后端）那条必须按「可用」处理，不许跟着整面板变灰
+      out.panelMissingLockedTreatedAsUsable = freeItems.length === 2;
+      if (tabOf("common")) {
+        tabOf("common").click();
+        await sleep(200);
+      }
+    }
     // 面板还开着就先把快照写进去、并多停 1.5s：跑脚本的进程据此抓一张「面板已展开」的截图
     snap();
     await sleep(1500);
@@ -703,7 +911,27 @@ const MOCK = `(function () {
       put("panelInFlow", getComputedStyle(narrowPanel).position !== "fixed");
       put("panelHeightPx", Math.round(narrowPanelRect.height));
       put("panelCappedToViewportShare", narrowPanelRect.height <= window.innerHeight * 0.5 + 1);
-      put("panelScrollsInternally", getComputedStyle(narrowPanel).overflowY === "auto");
+      // 会滚的是**面板内部的那一块**（表情格）：面板整体不滚，所以面板头与分组 tab 常驻。
+      // 这个字段的意思没变——「内容超出在面板内部滚动，不去吃列表空间」——只是换了量哪个元素。
+      var narrowGrid = byTestId("db-emote-group");
+      put("panelScrollsInternally", !!narrowGrid &&
+        getComputedStyle(narrowGrid).overflowY === "auto" &&
+        narrowGrid.scrollHeight > narrowGrid.clientHeight + 1);
+      // 分组 tab 不许被表情格滚走（用户 #6：tab 是切组的唯一入口）
+      var tabsBoxBefore = rect(byTestId("db-emote-tabs"));
+      if (narrowGrid) {
+        narrowGrid.scrollTop = narrowGrid.scrollHeight;
+        await sleep(250);
+      }
+      var tabsBoxAfter = rect(byTestId("db-emote-tabs"));
+      put("panelTabsStayVisible", !!tabsBoxBefore && !!tabsBoxAfter &&
+        Math.abs(tabsBoxAfter.top - tabsBoxBefore.top) < 1 &&
+        tabsBoxAfter.top >= narrowPanelRect.top - 1 &&
+        tabsBoxAfter.bottom <= narrowPanelRect.bottom + 1);
+      if (narrowGrid) {
+        narrowGrid.scrollTop = 0;
+        await sleep(150);
+      }
       put("panelListStillTall", narrowScrollerRect.height >= 240);
       put("panelListHeightPx", Math.round(narrowScrollerRect.height));
       put("panelRowHeightPx", rows().length > 1
@@ -728,6 +956,13 @@ const MOCK = `(function () {
     // 位置变化。跟随模式下重新贴底是**有意**的（见 MessageList 的 ResizeObserver），
     // 所以这里量的是「用户自己滚上去看历史」时的行为。
     var stableScroll = byTestId("db-chat-scroll");
+    // 先等列表**静止**：进场行的自动摘除会少掉一行，上面少一行会把下面整体顶上去整整一行高
+    // （实测 29px）——那是「自动消失」的既定行为，不是面板把视口弹走了。判据必须用
+    // 「发出时刻 + 8s」这个时钟，**不能**用「列表里还在不在那一行」：列表这会儿滚在中间，
+    // 那一行根本不在渲染窗口里，rowWith 看不见它，等它等于没等。
+    var settleWait = (window.__interactAt || 0) + 8000 + 250 - Date.now();
+    if (settleWait > 0) await sleep(settleWait);
+    await sleep(400);
     stableScroll.scrollTop = Math.round((stableScroll.scrollHeight - stableScroll.clientHeight) * 0.55);
     await sleep(300);
     out.layoutPausedBeforePanel = stableScroll.scrollHeight - stableScroll.scrollTop - stableScroll.clientHeight > 8;
@@ -760,8 +995,18 @@ const MOCK = `(function () {
     await sleep(400);
     var emotePanel = byTestId("db-panel");
     out.ownedGroupShown = !!emotePanel && emotePanel.innerText.indexOf("我的表情") >= 0;
-    var ownedPicker = emotePanel
-      ? emotePanel.querySelector('button[title="[Kirikosama_吃瓜]"]')
+    // tab 化之后「我的表情」不默认在场：先切过去，再找那一格
+    var ownedTab = emotePanel
+      ? [].slice.call(emotePanel.querySelectorAll('[data-testid="db-emote-tab"]')).filter(function (b) {
+          return b.getAttribute("data-kind") === "owned";
+        })[0]
+      : null;
+    if (ownedTab) {
+      ownedTab.click();
+      await sleep(300);
+    }
+    var ownedPicker = byTestId("db-panel")
+      ? byTestId("db-panel").querySelector('button[title="[Kirikosama_吃瓜]"]')
       : null;
     out.ownedEmoteShown = !!ownedPicker;
     if (ownedPicker) {
@@ -785,6 +1030,9 @@ const MOCK = `(function () {
       lastChatSend.args.emote.emoticon_unique === "upower_[Kirikosama_吃瓜]";
     out.ownedEmoteSendContent = !!lastChatSend && lastChatSend.args.content === "[Kirikosama_吃瓜]";
     out.ownedEmoteDraftCleared = document.querySelector("textarea").value === "";
+    // 发送成功不再占一行说「上次发送：已发出」（用户 #4：没意义且不协调）——弹幕已经出现在列表里
+    out.sendHintAbsentOnSuccess = !byTestId("db-send-hint") &&
+      text().indexOf("上次发送") < 0;
     snap();
 
     // ---- menu 右键菜单
@@ -923,6 +1171,37 @@ const MOCK = `(function () {
     buttonWith(byTestId("db-panel"), "添加").click();
     await sleep(300);
     out.phraseAdded = window.__prefs["composer.phrases"].join(",") === "晚上好" && !!buttonWith(byTestId("db-panel"), "晚上好");
+
+    // ---- 「加一条」是固定的一行：短语再多也顶不掉它，聊天输入框也还在（用户 #8）
+    var phraseAddRow = byTestId("db-phrase-add");
+    var phraseAddInput = phraseAddRow ? phraseAddRow.querySelector("input") : null;
+    out.phraseAddRowShown = !!phraseAddInput;
+    var addTopBefore = phraseAddInput ? Math.round(rect(phraseAddInput).top * 10) / 10 : null;
+    var panelTopBefore = Math.round(rect(byTestId("db-panel")).top * 10) / 10;
+    for (var extra = 0; extra < 5; extra += 1) {
+      if (!phraseAddInput) break;
+      typeInto(phraseAddInput, "追加短语" + extra);
+      await sleep(120);
+      buttonWith(byTestId("db-panel"), "添加").click();
+      await sleep(220);
+    }
+    var addRowAfter = byTestId("db-phrase-add");
+    var addInputAfter = addRowAfter ? addRowAfter.querySelector("input") : null;
+    var panelBox = rect(byTestId("db-panel"));
+    var addBox = rect(addInputAfter);
+    var chatAreaEl = document.querySelector("textarea");
+    var chatBox = rect(chatAreaEl);
+    out.phraseAddRowY = addTopBefore;
+    out.phraseAddRowYAfter = addInputAfter ? Math.round(addBox.top * 10) / 10 : null;
+    // 判据是「相对面板顶的偏移不变」：窄屏下面板向上长，绝对位置本来就会跟着动
+    out.phraseAddRowStaysPut = addTopBefore !== null && panelTopBefore !== null && !!addInputAfter &&
+      Math.abs((addBox.top - panelBox.top) - (addTopBefore - panelTopBefore)) < 1;
+    out.phraseAddRowInsidePanel = !!addInputAfter &&
+      addBox.top >= panelBox.top - 1 && addBox.bottom <= panelBox.bottom + 1;
+    out.phraseAddRowWideEnough = !!addInputAfter && addBox.width >= 120;
+    // 聊天输入框：仍然完整落在视口里，且被面板**顶到下面**而不是被它盖住 / 挤没
+    out.phraseChatInputStillVisible = chatBox.bottom <= window.innerHeight + 1 &&
+      chatBox.height >= 38 && chatBox.top >= panelBox.bottom - 1;
     clickTool("短语");
     await sleep(200);
 

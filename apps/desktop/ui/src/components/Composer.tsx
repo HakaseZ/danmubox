@@ -19,6 +19,7 @@ interface Props {
   lastOutcome?: SendOutcome;
   lastDetail?: string | null;
   emotes: Emote[];
+  seenEmotes: Emote[];
   recentSends: string[];
   /** 行菜单里点的 @ / 回复，点一次应用一次（token 变则重放）。 */
   pendingAction?: { kind: "mention" | "reply"; message: Message; token: number } | null;
@@ -56,6 +57,7 @@ export function Composer({
   lastOutcome,
   lastDetail,
   emotes,
+  seenEmotes,
   recentSends,
   pendingAction,
   prefs,
@@ -101,11 +103,14 @@ export function Composer({
       guard: [],
       admin: [],
     };
-    for (const emote of emotes) groups[emote.package_kind].push(emote);
+    // 接口给的包 + 从弹幕学到的表情；同一个唯一键只出现一次（接口优先）。
+    const known = new Set(emotes.map((emote) => emote.emoticon_unique));
+    const merged = [...emotes, ...seenEmotes.filter((emote) => !known.has(emote.emoticon_unique))];
+    for (const emote of merged) groups[emote.package_kind].push(emote);
     return PACKAGE_ORDER.map((kind) => [kind, groups[kind]] as const).filter(
       ([, items]) => items.length > 0,
     );
-  }, [emotes]);
+  }, [emotes, seenEmotes]);
 
   // 输入区预览：把草稿里能对上的表情名换成图片，让用户看清「这条发出去长什么样」。
   // 上游按**内容**识别表情弹幕（收包侧 `info[1]` 就是表情名，是服务端补的 `info[0][13]`），

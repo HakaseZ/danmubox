@@ -61,6 +61,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const api = {
   appInfo: () => call<AppInfo>("app_info"),
   sessionStatus: () => call<SessionState>("session_status"),
+  profilesList: () => call<string[]>("profiles_list"),
+  profilesSwitch: (name: string) => call<SessionState>("profiles_switch", { name }),
+  sessionLogout: () => call<SessionState>("session_logout"),
 
   roomsList: () => call<RoomView[]>("rooms_list"),
   roomsAdd: (input: string) => call<RoomView>("rooms_add", { input }),

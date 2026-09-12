@@ -29,6 +29,8 @@ interface Props {
   lastDetail?: string | null;
   logs: string[];
   emotes: Emote[];
+  /** 从收到的弹幕里学到的表情，补进选择器（见 filtering.collectSeenEmotes）。 */
+  seenEmotes: Emote[];
   recentSends: string[];
   balance?: number;
   onBack: () => void;
@@ -69,6 +71,7 @@ export function RoomView({
   lastDetail,
   logs,
   emotes,
+  seenEmotes,
   recentSends,
   balance,
   onBack,
@@ -223,6 +226,7 @@ export function RoomView({
         lastOutcome={lastOutcome}
         lastDetail={lastDetail}
         emotes={emotes}
+        seenEmotes={seenEmotes}
         recentSends={recentSends}
         pendingAction={pendingAction}
         prefs={prefs}

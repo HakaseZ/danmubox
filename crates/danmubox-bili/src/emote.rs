@@ -44,7 +44,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use danmubox_core::ports::EmoteProvider;
-use danmubox_core::{ConfigStore, Emote, EmotePackage, Error, Result, RoomSession};
+use danmubox_core::{ConfigStore, Emote, EmotePackage, EmoteRef, Error, Result, RoomSession};
 use serde_json::Value;
 
 use crate::http::BiliHttp;
@@ -70,6 +70,33 @@ impl BiliEmotes {
 ///
 /// 展平全部包裹；`key` 由「包标识 + 表情标识」拼成，保证包内唯一。
 /// 字段缺失一律容错：标识缺失退化为下标，文本 / 链接缺失填空串。
+/// 从**弹幕载荷里的表情对象**解析出 `EmoteRef`（实时 `DANMU_MSG` 的 `info[0][13]`
+/// 与历史条目的 `emoticon` 是同一套字段，实测确认）。
+///
+/// 存在的意义：上游有些表情家族（如 `upower_` 的 UP 主专属表情）**不在直播表情接口里**，
+/// 只能从收到的弹幕学到；界面据此把它们补进表情选择器，用户才能把它们发回来。
+pub fn emote_ref_from_object(emote: &Value) -> Option<EmoteRef> {
+    let url = emote.get("url").and_then(Value::as_str)?;
+    if url.is_empty() {
+        return None;
+    }
+    let geom = |key: &str| emote.get(key).and_then(Value::as_i64).unwrap_or(0);
+    let flag = |key: &str| emote.get(key).and_then(Value::as_i64).unwrap_or(0) != 0;
+    Some(EmoteRef {
+        emoticon_unique: emote
+            .get("emoticon_unique")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        url: crate::asset::secure_url(url),
+        width: geom("width"),
+        height: geom("height"),
+        is_dynamic: flag("is_dynamic"),
+        in_player_area: flag("in_player_area"),
+        bulge_display: flag("bulge_display"),
+    })
+}
+
 pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
     let Some(packages) = package_array(value) else {
         tracing::debug!("表情响应未找到包裹列表（路径未实测）");

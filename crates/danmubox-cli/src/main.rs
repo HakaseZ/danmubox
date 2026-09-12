@@ -291,10 +291,9 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
                         // 表情弹幕标出来：这是核对「历史回填的表情」与「表情发送是否生效」的依据
                         // （见 docs/protocol.md 附录 A31 / A32）。
                         let flags = if message.is_history { "历史" } else { "" };
-                        let emote = if message.emote_url.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" [表情 {}]", message.emote_url)
+                        let emote = match &message.emote {
+                            Some(e) => format!(" [表情 {} {}]", e.emoticon_unique, e.url),
+                            None => String::new(),
                         };
                         println!(
                             "[{}{}] uid={} {}: {}{}",

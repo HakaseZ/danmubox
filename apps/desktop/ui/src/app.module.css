@@ -544,6 +544,12 @@
   font-size: 11px;
 }
 
+/* 账号切换（契约 §7）：profiles 多于一个时才可切换 */
+.profilePick {
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
 .followItem {
   display: flex;
   align-items: center;

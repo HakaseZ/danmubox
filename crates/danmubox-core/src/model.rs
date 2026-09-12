@@ -78,10 +78,13 @@ pub struct Message {
     /// 同一次连击的每条礼物共用它，界面据此聚合展示（`docs/protocol.md` §10.2）。
     #[serde(default)]
     pub combo_id: String,
-    /// 表情弹幕的图片地址（已规范化为 https）；非表情弹幕为空串。
-    /// 上游把表情信息放在 `DANMU_MSG` 的 `info[0][13]`，非表情时该槽位是空对象。
+    /// 表情弹幕的表情信息；非表情弹幕为 `None`。
+    ///
+    /// 存的是**整份**表情信息（而不只是图片地址），因为界面要能把它**再发出去**——
+    /// 上游有些表情家族（如 `upower_` 的 UP 主专属表情）不在直播表情接口里，
+    /// 只能从收到的弹幕里学到。见 `docs/protocol.md` 附录 A35。
     #[serde(default)]
-    pub emote_url: String,
+    pub emote: Option<EmoteRef>,
     pub upstream_id: String,
 }
 
@@ -104,7 +107,7 @@ impl Message {
             is_history: false,
             amount: 0,
             combo_id: String::new(),
-            emote_url: String::new(),
+            emote: None,
             upstream_id: String::new(),
         }
     }
@@ -121,6 +124,20 @@ pub enum SendOutcome {
     MedalRequired,
     Muted,
     Failed,
+}
+
+/// 弹幕里携带的表情（发送与渲染共用同一份信息）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmoteRef {
+    /// 上游唯一键（`emoticon_unique`）——**发送表情弹幕时 `msg` 传的就是它**。
+    pub emoticon_unique: String,
+    /// 图片地址（已规范化为 https）。
+    pub url: String,
+    pub width: i64,
+    pub height: i64,
+    pub is_dynamic: bool,
+    pub in_player_area: bool,
+    pub bulge_display: bool,
 }
 
 /// 举报理由（上游 `dMReport/ForReason` 给的固定清单，官方客户端按文案反查 `id` 后一并上报）。

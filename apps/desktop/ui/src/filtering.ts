@@ -1,7 +1,7 @@
 // 显示层的纯逻辑：过滤、合并相似、徽标派生、时间格式化。
 // 这些规则来自 docs/ui.md 与 docs/contract.md §8 的偏好键，放这里便于单测。
 
-import type { Message, Prefs } from "./types";
+import type { Emote, Message, Prefs } from "./types";
 
 export interface Badges {
   anchor: boolean;
@@ -69,6 +69,35 @@ export const DOT_CLASS: Record<string, string> = {
 export function formatPopularity(value: number): string {
   if (value >= 10000) return `${(value / 10000).toFixed(1)}万`;
   return String(value);
+}
+
+/**
+ * 从收到的弹幕里收集见过的表情，供表情选择器补全。
+ *
+ * 为什么需要：上游有些表情家族（如 `upower_` 的 UP 主专属表情）**不在直播表情接口里**，
+ * 只能从弹幕学到。收下来了却选不到，用户就没法把它们发回去。
+ */
+export function collectSeenEmotes(messages: Message[]): Emote[] {
+  const seen = new Map<string, Emote>();
+  for (const message of messages) {
+    const emote = message.emote;
+    if (!emote || emote.url.length === 0 || emote.emoticon_unique.length === 0) continue;
+    if (seen.has(emote.emoticon_unique)) continue;
+    seen.set(emote.emoticon_unique, {
+      key: `seen:${emote.emoticon_unique}`,
+      emoticon_unique: emote.emoticon_unique,
+      package_kind: "room",
+      text: message.content,
+      url: emote.url,
+      room_id: message.room_id,
+      width: emote.width,
+      height: emote.height,
+      is_dynamic: emote.is_dynamic,
+      in_player_area: emote.in_player_area,
+      bulge_display: emote.bulge_display,
+    });
+  }
+  return [...seen.values()];
 }
 
 export interface DisplayRow {

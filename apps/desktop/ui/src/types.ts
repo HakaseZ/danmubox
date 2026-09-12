@@ -26,8 +26,8 @@ export interface Message {
   amount: number;
   /** 礼物连击标识；非连击类为空串（界面据此聚合）。 */
   combo_id: string;
-  /** 表情弹幕的图片地址（已是 https）；非表情弹幕为空串。 */
-  emote_url: string;
+  /** 表情弹幕的表情信息（渲染与「发回去」共用）；非表情弹幕为 null。 */
+  emote?: EmoteRef | null;
   upstream_id: string;
 }
 
@@ -45,6 +45,16 @@ export interface RoomView extends Room {
 }
 
 export type ConnState = "connecting" | "connected" | "disconnected" | "error";
+
+export interface EmoteRef {
+  emoticon_unique: string;
+  url: string;
+  width: number;
+  height: number;
+  is_dynamic: boolean;
+  in_player_area: boolean;
+  bulge_display: boolean;
+}
 
 export interface ReplyTarget {
   mid: number;

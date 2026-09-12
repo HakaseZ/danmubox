@@ -89,12 +89,12 @@ export function MessageRow({
           {message.uname}:
         </span>
       )}
-      {message.emote_url.length > 0 ? (
+      {message.emote ? (
         // 表情弹幕：正文就是表情名，只显示文字会让人以为「表情没渲染」，
         // 因此改画图（标题与 alt 都保留表情名——图加载不出来时浏览器回退显示 alt）。
         <img
           className={`${styles.contentEmote} ${highlight ?? ""}`}
-          src={message.emote_url}
+          src={message.emote.url}
           alt={message.content}
           title={message.content}
         />

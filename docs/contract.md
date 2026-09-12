@@ -219,6 +219,11 @@ sessdata = ""
 
 `Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `admin`；`room` = UP 主大表情与房间专属表情）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
+`EmoteRef`（弹幕携带的表情，规范性）：`emoticon_unique` / `url`（已规范化）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display`。
+
+> 为什么存整份而不只存图片地址：上游有些表情家族（`upower_` 的 UP 主专属表情）**不在直播表情接口里**，
+> 只能从收到的弹幕学到。存全了，界面才能把它们补进选择器、让用户**再发出去**（`protocol.md` A35）。
+
 `ReportReason`（举报理由，规范性）：`id` / `reason`。取自上游 `dMReport/ForReason`，界面只让用户从清单里选。
 
 `FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name`。**展示排序：`live_status == 1` 置顶**（REQUIREMENTS.md 需求）。

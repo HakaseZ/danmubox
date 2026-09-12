@@ -178,11 +178,7 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
     // 因此这一支无法像历史条目那样核对「正文是否就是这个表情」。
     // 观测到的实时表情弹幕正文就是表情本身（如 `info[1] == "这个好耶"`），故按整条画图处理。
     if let Some(emote) = meta.and_then(|m| m.get(13)).and_then(Value::as_object) {
-        if let Some(url) = emote.get("url").and_then(Value::as_str) {
-            if !url.is_empty() {
-                message.emote_url = crate::asset::secure_url(url);
-            }
-        }
+        message.emote = crate::emote::emote_ref_from_object(&Value::Object(emote.clone()));
     }
 
     // 房管：经典槽位 `info[2][2]`。尚无正向样本，见 `docs/protocol.md` 附录 A 的校准项。
@@ -554,11 +550,14 @@ mod tests {
         });
         let message = message(7, &payload, &counters()).expect("必须解出弹幕");
         assert_eq!(message.content, "这个好耶", "正文仍是表情名");
+        let emote = message.emote.expect("必须带出表情信息");
         assert_eq!(
-            message.emote_url,
+            emote.url,
             "https://i0.hdslb.com/bfs/live/2ce08b31618d3ad0d34877bf949ef0089a0438b7.png",
             "表情图必须升级到 https，否则在客户端里根本加载不出来"
         );
+        assert_eq!(emote.emoticon_unique, "official_345");
+        assert_eq!((emote.width, emote.height), (200, 60));
     }
 
     #[test]
@@ -573,7 +572,7 @@ mod tests {
             ]
         });
         let message = message(7, &payload, &counters()).expect("必须解出弹幕");
-        assert!(message.emote_url.is_empty(), "空槽位不得产出表情地址");
+        assert!(message.emote.is_none(), "空槽位不得产出表情");
     }
 
     #[test]
@@ -588,7 +587,7 @@ mod tests {
             ]
         });
         let message = message(7, &payload, &counters()).expect("必须解出弹幕");
-        assert!(message.emote_url.is_empty(), "空 url 不得当成表情");
+        assert!(message.emote.is_none(), "空 url 不得当成表情");
     }
 
     #[test]

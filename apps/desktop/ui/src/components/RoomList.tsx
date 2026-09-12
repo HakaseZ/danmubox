@@ -12,6 +12,9 @@ interface Props {
   rooms: RoomViewData[];
   info?: AppInfo;
   session?: SessionState;
+  profiles: string[];
+  onSwitchProfile: (name: string) => void;
+  onLogout: () => void;
   followed: FollowedRoom[];
   onAdd: (input: string) => void;
   onOpen: (roomId: number) => void;
@@ -25,6 +28,9 @@ export function RoomList({
   rooms,
   info,
   session,
+  profiles,
+  onSwitchProfile,
+  onLogout,
   followed,
   onAdd,
   onOpen,
@@ -59,8 +65,29 @@ export function RoomList({
       <h1>弹幕框</h1>
       <div className={styles.subtitle}>
         {session?.logged_in
-          ? `已登录：${session.nickname || session.uid}（profile ${session.active_profile}）`
+          ? `已登录：${session.nickname || session.uid}`
           : "游客态：可接收弹幕，发送需先登录"}
+        {/* 账号切换（契约 §7）；后端会在切换后用新凭据重连各房间 */}
+        <select
+          className={styles.profilePick}
+          title="切换账号（后端会用新凭据重连各房间）"
+          value={session?.active_profile ?? ""}
+          disabled={!session?.logged_in || profiles.length < 2}
+          onChange={(event) => onSwitchProfile(event.target.value)}
+        >
+          {(profiles.length > 0 ? profiles : [session?.active_profile ?? ""])
+            .filter((name) => name.length > 0)
+            .map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+        </select>
+        {session?.logged_in && (
+          <button onClick={onLogout} title="清空当前 profile 的凭据">
+            登出
+          </button>
+        )}
         {info ? ` · v${info.version}` : ""}
       </div>
 

@@ -58,8 +58,13 @@ interface AppStore {
     reply?: ReplyTarget,
   ) => Promise<SendOutcome | undefined>;
   report: (message: Message, reason: ReportReason) => Promise<boolean>;
+  /** 凭据文件里的 profiles（契约 §7）；切换后后端会用新凭据重连各房间。 */
+  profiles: string[];
   reportReasons: ReportReason[];
   loadReportReasons: () => Promise<void>;
+  loadProfiles: () => Promise<void>;
+  switchProfile: (name: string) => Promise<void>;
+  logout: () => Promise<void>;
   /** 用系统浏览器打开用户主页（需求 §2.3：点昵称跳用户主页）。 */
   openProfile: (uid: number) => Promise<void>;
   /** 最近发送记录：仅会话内保留（需求 §2.2），不落盘。 */
@@ -83,6 +88,7 @@ export const useApp = create<AppStore>((set, get) => ({
   seeding: false,
   emotes: [],
   reportReasons: [],
+  profiles: [],
   recentSends: [],
   followed: [],
 
@@ -249,6 +255,32 @@ export const useApp = create<AppStore>((set, get) => ({
   async openProfile(uid) {
     try {
       await api.openUrl(`https://space.bilibili.com/${uid}`);
+    } catch (error) {
+      set({ error: describeError(error) });
+    }
+  },
+
+  async loadProfiles() {
+    try {
+      set({ profiles: await api.profilesList() });
+    } catch (error) {
+      set({ error: describeError(error) });
+    }
+  },
+
+  async switchProfile(name) {
+    try {
+      set({ session: await api.profilesSwitch(name) });
+      // 后端已让各房间用新凭据重连，这里把房间与会话状态重新拉一遍。
+      set({ rooms: await api.roomsList() });
+    } catch (error) {
+      set({ error: describeError(error) });
+    }
+  },
+
+  async logout() {
+    try {
+      set({ session: await api.sessionLogout() });
     } catch (error) {
       set({ error: describeError(error) });
     }

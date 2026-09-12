@@ -160,10 +160,8 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
             .or_else(|| emote.get("emoji"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if let Some(url) = emote.get("url").and_then(Value::as_str) {
-            if !url.is_empty() && emote_text == message.content {
-                message.emote_url = crate::asset::secure_url(url);
-            }
+        if emote_text == message.content {
+            message.emote = crate::emote::emote_ref_from_object(&Value::Object(emote.clone()));
         }
     }
 
@@ -294,8 +292,8 @@ mod tests {
         let messages = map_history(7, &value);
         assert_eq!(messages.len(), 1);
         assert_eq!(
-            messages[0].emote_url,
-            "https://i0.hdslb.com/bfs/live/x.png",
+            messages[0].emote.as_ref().map(|e| e.url.as_str()),
+            Some("https://i0.hdslb.com/bfs/live/x.png"),
             "历史里的表情同样要升级为 https，否则在客户端里加载不出来"
         );
         assert_eq!(messages[0].content, "这个好耶");
@@ -311,7 +309,7 @@ mod tests {
         }]}});
         let messages = map_history(7, &value);
         assert_eq!(messages[0].content, "谢谢[小电视_赞]");
-        assert!(messages[0].emote_url.is_empty(), "混排正文不得被整段替换成图片");
+        assert!(messages[0].emote.is_none(), "混排正文不得被整段替换成图片");
     }
 
     #[test]
@@ -333,7 +331,7 @@ mod tests {
             "emoticon": {"emoticon_unique": "", "url": ""}
         }]}});
         let messages = map_history(7, &value);
-        assert!(messages[0].emote_url.is_empty(), "空 url 不得当成表情");
+        assert!(messages[0].emote.is_none(), "空 url 不得当成表情");
     }
 
     #[test]

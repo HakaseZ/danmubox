@@ -424,6 +424,46 @@ async fn chat_report(
         .map_err(ApiError::from)
 }
 
+/// 列出凭据文件里的 profiles（契约 §7）。
+#[tauri::command]
+async fn profiles_list(state: State<'_, AppState>) -> ApiResult<Vec<String>> {
+    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    auth.profiles().await.map_err(ApiError::from)
+}
+
+/// 切换当前 profile（契约 §7：切换后**以新凭据重连**）。
+///
+/// 重连是必须的：WS 认证包里的 uid 取自连接建立时的 profile，
+/// 已有连接不会因为文件换了 profile 而自动换身份——不重连就会出现
+/// 「界面显示新账号、连接其实还是旧账号」。
+#[tauri::command]
+async fn profiles_switch(
+    state: State<'_, AppState>,
+    name: String,
+) -> ApiResult<SessionState> {
+    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    let session = auth.switch_profile(&name).await.map_err(ApiError::from)?;
+    reconnect_all(&state);
+    Ok(session)
+}
+
+/// 登出：清空当前 profile 的凭据（契约 §7）。
+#[tauri::command]
+async fn session_logout(state: State<'_, AppState>) -> ApiResult<SessionState> {
+    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    auth.logout().await.map_err(ApiError::from)?;
+    reconnect_all(&state);
+    auth.session().await.map_err(ApiError::from)
+}
+
+/// 让所有已连接房间用当前凭据重连（切号 / 登出后调用）。
+fn reconnect_all(state: &State<'_, AppState>) {
+    let rooms = state.rooms.lock().expect("rooms poisoned");
+    for runtime in rooms.runtimes.values() {
+        runtime.reconnect();
+    }
+}
+
 /// 举报理由清单：上游固定 7 条，官方客户端按文案反查 `reason_id` 后一并上报。
 #[tauri::command]
 async fn report_reasons(state: State<'_, AppState>) -> ApiResult<Vec<ReportReason>> {
@@ -651,6 +691,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             session_status,
+            profiles_list,
+            profiles_switch,
+            session_logout,
             rooms_list,
             rooms_add,
             rooms_remove,

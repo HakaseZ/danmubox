@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 
 import { RoomList } from "./components/RoomList";
 import { DOT, RoomView } from "./components/RoomView";
-import { toDisplayRows } from "./filtering";
+import { collectSeenEmotes, toDisplayRows } from "./filtering";
 import { useApp } from "./store";
 import styles from "./app.module.css";
 
@@ -21,6 +21,10 @@ export function App() {
   const seeding = useApp((state) => state.seeding);
   const emotes = useApp((state) => state.emotes);
   const recentSends = useApp((state) => state.recentSends);
+  const profiles = useApp((state) => state.profiles);
+  const loadProfiles = useApp((state) => state.loadProfiles);
+  const switchProfile = useApp((state) => state.switchProfile);
+  const logout = useApp((state) => state.logout);
   const followed = useApp((state) => state.followed);
   const balance = useApp((state) => state.balance);
 
@@ -60,6 +64,14 @@ export function App() {
         : theme;
     document.documentElement.dataset.theme = resolved;
   }, [prefs]);
+
+  useEffect(() => {
+    // profiles 列表是静态的（除非手改配置文件），进房间列表时取一次即可。
+    if (session?.logged_in && profiles.length === 0) void loadProfiles();
+  }, [session?.logged_in, profiles.length, loadProfiles]);
+
+  // 从收到的弹幕里学到的表情（直播接口不给的那一族），补进表情选择器。
+  const seenEmotes = useMemo(() => collectSeenEmotes(messages), [messages]);
 
   const rows = useMemo(
     () => (prefs ? toDisplayRows(messages, prefs) : []),
@@ -102,6 +114,7 @@ export function App() {
           lastDetail={lastSend?.detail}
           logs={logs}
           emotes={emotes}
+          seenEmotes={seenEmotes}
           recentSends={recentSends}
           balance={balance}
           onBack={closeRoom}
@@ -123,6 +136,9 @@ export function App() {
           followed={followed}
           onAdd={(input) => void addRoom(input)}
           onOpen={(roomId) => void openRoom(roomId)}
+          profiles={profiles}
+          onSwitchProfile={(name) => void switchProfile(name)}
+          onLogout={() => void logout()}
           onRemove={(roomId) => void removeRoom(roomId)}
           onRefreshFollowed={() => void loadFollowed()}
           onOpenFollowed={(roomId) => void addRoom(String(roomId))}

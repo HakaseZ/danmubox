@@ -34,6 +34,11 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
   });
 
   // 跟随最新：仅在 following 且未悬停时把视口钉在末尾。
+  // 这里必须用 `virtualizer.scrollToIndex(align: "end")`，**不能**换成 `el.scrollTop = el.scrollHeight`：
+  // 虚拟列表的高度先按 `estimateSize` 估、再由实测修正，直接滚到 scrollHeight 会在修正后差出一截
+  // （实测：60 条连发后列表停在离底很远的地方，onScroll 随即把 following 判成 false，整条跟随链断掉）。
+  // 代价是末行**底边**对齐容器底边，容器下内边距被滚出视野（最新一条紧贴输入区/面板边框，实测差 0.2px）；
+  // 那是「贴底」的正常样子，不是被遮挡。
   useEffect(() => {
     if (!following || rows.length === 0) return;
     if (pauseOnHover && hovered) return;

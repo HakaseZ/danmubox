@@ -59,6 +59,11 @@
 
 ### Added
 
+- **舰长标只看「本房间」的舰长身份**（issue #12）：`Message.guard_level` 改为取弹幕的
+  `info[7]`（发送者**在本房间**的大航海等级）。此前拿粉丝牌上的 `guard_level` 兜底，
+  于是「戴着他房间舰长牌」的人也被画上了本房间的舰长标；`user.guard` 实测恒为 `null`，
+  不能当来源。粉丝牌**自身**的舰长标记另开 `Message.medal_guard_level`（官方只用它
+  给牌面做样式区分）。协议依据 `docs/protocol.md` 附录 A39。
 - **本人在房间的身份可查**（契约 §7 `room_session`、§3 `LiveSource::room_identity`）：
   进房时取一次本人粉丝牌 / 大航海 / 是否房管（官方进房接口 `getInfoByUser`），
   既可以直接读，也经既有 `danmubox://session` 事件推送——房管菜单的可见性由此有了

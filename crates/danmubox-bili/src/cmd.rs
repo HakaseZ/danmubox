@@ -159,10 +159,14 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
     message.map(Dispatch::Message)
 }
 
-/// 单条弹幕。取值路径均于 2026-09-11 用真实流量核对（`docs/protocol.md` §10.1）：
+/// 单条弹幕。取值路径均用真实流量核对（`docs/protocol.md` §10.1 与附录 A）：
 /// 内容 `info[1]`；颜色 `info[0][3]`；时间戳 `info[0][4]`（毫秒）；
+/// **本房间**大航海等级 `info[7]`（数字，不是数组）；
 /// 明文用户对象 `info[0][15].user`；粉丝牌 `…user.medal.{level,name,guard_level}`；
-/// 举报标识 `info[0][15].extra`（JSON 字符串）的 `id_str`。
+///
+/// 两个易混点（都有实测依据，见 A39）：
+/// `user.medal.guard_level` 是**牌子**所属房间的舰长标记，不是本房间的舰长标；
+/// `user.guard` 在 180 条真实弹幕里恒为 `null`，别拿它当主要来源。
 fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
     let info = value.get("info")?.as_array()?;
     let content = info.get(1)?.as_str().unwrap_or_default();
@@ -216,10 +220,20 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
         message.medal_color_end = color("v2_medal_color_end");
         message.medal_color_border = color("v2_medal_color_border");
         message.medal_color_text = color("v2_medal_color_text");
-        message.guard_level = user
-            .pointer("/guard/level")
+        // 舰长标只认**本房间**的大航海等级：官方前端的弹幕解析取的就是这个槽位
+        // （`info[7]`，一个数字）。**不能**拿 `user.medal.guard_level` 兜底——
+        // 「别的房间的舰长」戴的是那个房间的舰长牌，用牌子画标就是张冠李戴。
+        // 实测 180 条真实弹幕（附录 A39）：`user.guard` 恒为 `null`，真正区分
+        // 「本房间舰长」与「戴他房间舰长牌」的只有 `info[7]`。
+        message.guard_level = info
+            .get(7)
             .and_then(Value::as_i64)
-            .or_else(|| user.pointer("/medal/guard_level").and_then(Value::as_i64))
+            .or_else(|| user.pointer("/guard/level").and_then(Value::as_i64))
+            .unwrap_or(0);
+        // 粉丝牌自己的舰长标记：官方只用它给**牌面**做样式区分，不是舰长标。
+        message.medal_guard_level = user
+            .pointer("/medal/guard_level")
+            .and_then(Value::as_i64)
             .unwrap_or(0);
     }
 
@@ -387,9 +401,15 @@ fn superchat(room_id: i64, value: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // 与 DANMU_MSG 同理：`user_info.guard_level` 是本房间的大航海等级，
+    // `medal_info.guard_level` 只是那块牌子的属性——两者不得互相兜底，
+    // 否则「别的房间的舰长」会被画成本房间的舰长。
     message.guard_level = data
         .pointer("/user_info/guard_level")
-        .or_else(|| data.pointer("/medal_info/guard_level"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    message.medal_guard_level = data
+        .pointer("/medal_info/guard_level")
         .and_then(Value::as_i64)
         .unwrap_or(0);
     // 房管标记：SC 载荷自带 `user_info.manager`（实测样本为 0）。
@@ -570,7 +590,11 @@ mod tests {
                  }],
                 "亏爆57米",
                 [123456789012345i64, "观众甲", 0, 0, 0, 10000, 1, ""],
-                [24, "粉丝牌", "主播甲", 7654321, 1725515, "", 0, 1725515, 1725515, 5414290, 0, 1]
+                [24, "粉丝牌", "主播甲", 7654321, 1725515, "", 0, 1725515, 1725515, 5414290, 0, 1],
+                [10, 0, 0, 1],
+                [0, ""],
+                0,
+                3
             ]
         });
         let message = message(7654321, &payload, &counters()).expect("必须解出弹幕");
@@ -583,7 +607,8 @@ mod tests {
         assert_eq!(message.ts, 1_789_134_601_006, "毫秒时间戳在 info[0][4]");
         assert_eq!(message.medal_level, 24);
         assert_eq!(message.medal_name, "粉丝牌");
-        assert_eq!(message.guard_level, 3);
+        assert_eq!(message.guard_level, 3, "本房间的大航海等级取 info[7]");
+        assert_eq!(message.medal_guard_level, 3, "粉丝牌自身的舰长标记单独带出");
         assert_eq!(message.medal_color_start, "#3FB4F699");
         assert_eq!(message.medal_color_end, "#3FB4F699");
         assert_eq!(message.medal_color_border, "#3FB4F699");
@@ -593,6 +618,50 @@ mod tests {
             "举报标识取自 extra.id_str"
         );
         assert!(!message.is_admin);
+    }
+
+    #[test]
+    fn guard_badge_ignores_medals_from_other_rooms() {
+        // 实测形态（180 条真实弹幕，附录 A39）：戴着他房间舰长牌的人
+        // `medal.guard_level = 3` 但 `info[7] = 0`；本房间舰长才 `info[7] = 3`。
+        // 舰长标只看后者——拿牌子兜底就会把别的房间的身份按到本房间头上。
+        let other_room = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1, 1, 0, "x", 0, 0, 0, "", 0, "{}", "{}",
+                 {"user": {"uid": 7, "base": {"name": "外房间舰长"},
+                           "guard": null, "medal": {"level": 30, "name": "别家牌", "guard_level": 3}}}],
+                "早上好",
+                [7, "外房间舰长", 0, 0, 0, 10000, 1, ""],
+                [30, "别家牌", "别家主播", 999, 1, "", 0, 1, 1, 2, 0, 1],
+                [10, 0, 0, 1],
+                [0, ""],
+                0,
+                0
+            ]
+        });
+        let m = message(7, &other_room, &counters()).expect("必须解出弹幕");
+        assert_eq!(m.guard_level, 0, "别的房间的舰长不得画本房间的舰长标");
+        assert_eq!(m.medal_guard_level, 3, "牌子自身的舰长标记仍要带出，供牌面样式用");
+
+        let this_room = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1, 1, 0, "x", 0, 0, 0, "", 0, "{}", "{}",
+                 {"user": {"uid": 8, "base": {"name": "本房间舰长"},
+                           "medal": {"level": 30, "name": "本家牌", "guard_level": 3}}}],
+                "晚上好",
+                [8, "本房间舰长", 0, 0, 0, 10000, 1, ""],
+                [30, "本家牌", "本房间主播", 7, 1, "", 0, 1, 1, 2, 0, 1],
+                [10, 0, 0, 1],
+                [0, ""],
+                0,
+                3
+            ]
+        });
+        let m = message(7, &this_room, &counters()).expect("必须解出弹幕");
+        assert_eq!(m.guard_level, 3, "本房间舰长要画标");
+        assert_eq!(m.medal_guard_level, 3);
     }
 
     #[test]
@@ -942,7 +1011,11 @@ mod tests {
         assert_eq!(m.upstream_id, "18968196");
         assert_eq!(m.medal_level, 10);
         assert_eq!(m.medal_name, "粉丝团");
-        assert_eq!(m.guard_level, 0, "user_info 优先于 medal_info");
+        assert_eq!(m.guard_level, 0, "SC 的舰长标只看 user_info（本房间）");
+        assert_eq!(
+            m.medal_guard_level, 3,
+            "medal_info 的 guard_level 是牌子属性，单独带出、不参与舰长标"
+        );
         assert!(!m.is_admin);
     }
 

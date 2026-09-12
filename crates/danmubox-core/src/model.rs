@@ -85,7 +85,19 @@ pub struct Message {
     pub medal_color_border: String,
     #[serde(default)]
     pub medal_color_text: String,
+    /// 发送者**在本房间**的大航海等级：0 无 / 1 总督 / 2 提督 / 3 舰长。
+    ///
+    /// 只认本房间的身份（`docs/protocol.md` 附录 A39）。**不得**拿粉丝牌上的
+    /// `guard_level` 兜底：「别的房间的舰长」戴的是那个房间的舰长牌，
+    /// 用牌子来画舰长标就是把别的房间的身份按到本房间头上。
     pub guard_level: i64,
+    /// 发送者**粉丝牌自身**的舰长标记（上游 `user.medal.guard_level`）。
+    ///
+    /// 与 `guard_level` 是两回事：它表示「这块牌子来自某个房间的舰长」，
+    /// 官方前端只用它做**粉丝牌**的样式区分（牌面留白与描边），
+    /// **不**用它画舰长标。两者都留，界面才不会混用。
+    #[serde(default)]
+    pub medal_guard_level: i64,
     pub is_admin: bool,
     /// 是否来自**进场回填**的历史弹幕（上游 `dM/gethistory`，上限 10+10，
     /// 见 `docs/protocol.md` 附录 A30）。实时推来的消息恒为 `false`。
@@ -129,6 +141,7 @@ impl Message {
             medal_color_border: String::new(),
             medal_color_text: String::new(),
             guard_level: 0,
+            medal_guard_level: 0,
             is_admin: false,
             is_history: false,
             amount: 0,

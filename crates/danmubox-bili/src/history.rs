@@ -167,7 +167,14 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
     message.medal_color_end = color("v2_medal_color_end");
     message.medal_color_border = color("v2_medal_color_border");
     message.medal_color_text = color("v2_medal_color_text");
+    // 顶层 `guard_level` 就是**本房间**的大航海等级（官方前端的历史解析同样取它），
+    // 与实时弹幕的 `info[7]` 同义；粉丝牌自己的舰长标记另取 `user.medal.guard_level`。
+    // 实测：历史里存在「顶层 0 但牌子是 3」的条目——那正是别的房间的舰长。
     message.guard_level = item.get("guard_level").and_then(Value::as_i64).unwrap_or(0);
+    message.medal_guard_level = item
+        .pointer("/user/medal/guard_level")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     message.is_admin = item.get("isadmin").and_then(Value::as_i64).unwrap_or(0) != 0;
     message.upstream_id = item
         .get("id_str")
@@ -277,7 +284,7 @@ mod tests {
                         "timeline": "2026-09-12 08:49:32",
                         "isadmin": 0,
                         "guard_level": 0,
-                        "id_str": "bbb"
+                        "id_str": "bbb",
                     },
                     {
                         "text": "前一条",
@@ -289,6 +296,7 @@ mod tests {
                         "id_str": "aaa",
                         "user": {"base": {"face": "https://f/h.png"}, "medal": {
                             "name": "牌子", "level": 21,
+                            "guard_level": 3,
                             "v2_medal_color_start": "#919298CC",
                             "v2_medal_color_end": "#919298CC",
                             "v2_medal_color_border": "#919298CC",
@@ -307,7 +315,15 @@ mod tests {
         assert_eq!(messages[0].room_id, 7);
         assert_eq!(messages[0].uid, 11);
         assert!(messages[0].is_admin, "房管弹幕靠 isadmin 字段标注");
-        assert_eq!(messages[0].guard_level, 3);
+        assert_eq!(messages[0].guard_level, 3, "顶层 guard_level 是本房间的舰长等级");
+        assert_eq!(
+            messages[0].medal_guard_level, 3,
+            "粉丝牌自身的舰长标记另取 user.medal.guard_level"
+        );
+        assert_eq!(
+            messages[1].medal_guard_level, 0,
+            "没有粉丝牌就没有牌子的舰长标记"
+        );
         assert_eq!(messages[0].medal_level, 21);
         assert_eq!(messages[0].medal_name, "牌子");
         assert_eq!(messages[0].medal_color_start, "#919298CC");

@@ -184,6 +184,11 @@ pub fn map_blacklisted(value: &Value) -> Vec<BlacklistedUser> {
 }
 
 /// 屏蔽词响应 → `String[]`（实测字段名 `data.keyword_list`）。
+///
+/// 实测（2026-09-12，真实房管权限下加/删一个测试词）：**条目是对象，不是字符串**——
+/// `{is_anchor, keyword, name, uid}`，词在 `keyword` 上，`name`/`uid` 是添加者
+/// （官方前端面板也这么解）。此前只按字符串解，一个**非空**列表会被静默解析成
+/// 空列表；两种形态都收。
 pub fn map_keywords(value: &Value) -> Vec<String> {
     value
         .pointer("/data/keyword_list")
@@ -191,7 +196,11 @@ pub fn map_keywords(value: &Value) -> Vec<String> {
         .map(|items| {
             items
                 .iter()
-                .filter_map(Value::as_str)
+                .filter_map(|item| match item {
+                    Value::String(word) => Some(word.as_str()),
+                    Value::Object(_) => item.get("keyword").and_then(Value::as_str),
+                    _ => None,
+                })
                 .filter(|word| !word.is_empty())
                 .map(str::to_string)
                 .collect()
@@ -436,9 +445,21 @@ mod tests {
     }
 
     #[test]
-    fn keywords_read_keyword_list() {
-        let value = json!({"code": 0, "data": {"keyword_list": ["刷屏", "广告"], "max_limit": 50}});
-        assert_eq!(map_keywords(&value), vec!["刷屏", "广告"]);
+    fn keywords_read_the_object_items_of_the_real_response() {
+        // 真实响应（2026-09-12，加完测试词后立刻读回）：`keyword_list` 是**对象数组**，
+        // 词在 `keyword` 上，`name`/`uid` 是添加者。按字符串解会静默得到空列表。
+        let value = json!({
+            "code": 0,
+            "data": {"keyword_list": [
+                {"is_anchor": 0, "keyword": "danmubox-selftest", "name": "房管", "uid": 7}
+            ], "max_limit": 1000}
+        });
+        assert_eq!(map_keywords(&value), vec!["danmubox-selftest"]);
+
+        // 字符串形态（未观测到的旧形态）同样收，不丢词。
+        let strings = json!({"data": {"keyword_list": ["刷屏", "广告"]}});
+        assert_eq!(map_keywords(&strings), vec!["刷屏", "广告"]);
+
         assert!(map_keywords(&json!({"code": 100007, "data": {"keyword_list": [], "max_limit": 0}})).is_empty());
         assert!(map_keywords(&json!({})).is_empty());
     }

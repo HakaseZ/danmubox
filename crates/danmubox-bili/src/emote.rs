@@ -84,15 +84,21 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
             .and_then(Value::as_str)
             .unwrap_or_default();
         let pkg_type = package.get("pkg_type").and_then(Value::as_i64).unwrap_or(1);
-        let kind = classify_package(pkg_name, pkg_type);
+        let empty = Vec::new();
+        let package_items = package
+            .get("emoticons")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
+        let kind = classify_package(pkg_name, pkg_type, package_items);
         let pkg_token = pkg_id
             .clone()
             .unwrap_or_else(|| format!("pkg{pkg_index}"));
 
-        let Some(items) = package.get("emoticons").and_then(Value::as_array) else {
+        if package_items.is_empty() {
             tracing::debug!(pkg_index, "表情包缺少表情数组，跳过");
             continue;
-        };
+        }
+        let items = package_items;
 
         let mut seen: HashSet<String> = HashSet::new();
         for (emote_index, item) in items.iter().enumerate() {
@@ -143,28 +149,51 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
 
 /// 包分类。
 ///
-/// 判定顺序：先按包名的身份关键字（房管 / 大航海 / 粉丝牌——**这三分之一仍未实测**，
-/// 手上没有对应样本），未命中再看 `pkg_type`：
+/// 判定顺序（前两步来自房间 `15122413` 的实测样本，见 `docs/protocol.md` 附录 A26）：
 ///
-/// | `pkg_type` | 实测样本 | 分类 |
-/// |---|---|---|
-/// | `1` | 「通用表情」（`pkg_id = 1`） | `Common` |
-/// | `2` | 「UP主大表情」（`pkg_id = 327`）、「房间专属表情」（`pkg_id = 100327`） | `Room` |
+/// 1. **包名关键字**：房管 / 大航海 / 粉丝牌——这三类**仍无独立样本**，靠名字兜底；
+/// 2. **表情自身的解锁字段**：任一表情 `unlock_need_level > 0` 或 `identity ∈ 1..=4`，
+///    说明这包是按粉丝牌档位分的；
+/// 3. `pkg_type == 2` → 房间专属；否则通用。
 ///
-/// 注意 `pkg_perm` / `unlock_identity` / `unlock_need_gift` 在实测的这三个包里**取值都相同**，
-/// 因此不能用来区分分类（见 `docs/protocol.md` 附录 A26）。
-fn classify_package(pkg_name: &str, pkg_type: i64) -> EmotePackage {
+/// 实测三个包（`pkg_type` / 表情侧字段 / 分类）：
+///
+/// | 包 | `pkg_type` | 表情侧 | 分类 |
+/// |---|---|---|---|
+/// | 通用表情 | `1` | `identity=99`、`unlock_need_level=0` | `Common` |
+/// | UP主大表情 | `2` | `identity=1..4`、`unlock_need_level=1` | `Medal` |
+/// | 房间专属表情 | `2` | `identity=99`、`unlock_need_level=0` | `Room` |
+///
+/// **包级**的 `pkg_perm` / `unlock_identity` / `unlock_need_gift` 在三个包里取值完全相同，
+/// 不能用来区分；判据在**表情级**字段上。
+fn classify_package(pkg_name: &str, pkg_type: i64, emoticons: &[Value]) -> EmotePackage {
     if pkg_name.contains("房管") || pkg_name.contains("管理") {
-        EmotePackage::Admin
-    } else if pkg_name.contains("舰")
+        return EmotePackage::Admin;
+    }
+    if pkg_name.contains("舰")
         || pkg_name.contains("航海")
         || pkg_name.contains("提督")
         || pkg_name.contains("总督")
     {
-        EmotePackage::Guard
-    } else if pkg_name.contains("粉丝") || pkg_name.contains("勋章") {
-        EmotePackage::Medal
-    } else if pkg_type == 2 {
+        return EmotePackage::Guard;
+    }
+    if pkg_name.contains("粉丝") || pkg_name.contains("勋章") {
+        return EmotePackage::Medal;
+    }
+
+    let medal_scoped = emoticons.iter().any(|emote| {
+        emote
+            .get("unlock_need_level")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            > 0
+            || matches!(emote.get("identity").and_then(Value::as_i64), Some(1..=4))
+    });
+    if medal_scoped {
+        return EmotePackage::Medal;
+    }
+
+    if pkg_type == 2 {
         EmotePackage::Room
     } else {
         EmotePackage::Common
@@ -319,23 +348,43 @@ mod tests {
 
     #[test]
     fn package_kind_name_heuristics_still_win() {
-        // 身份类分类靠包名关键字，仍未实测（手上无对应样本）。
-        assert_eq!(classify_package("粉丝勋章", 2), EmotePackage::Medal);
-        assert_eq!(classify_package("舰长专属", 2), EmotePackage::Guard);
-        assert_eq!(classify_package("大航海表情", 2), EmotePackage::Guard);
-        assert_eq!(classify_package("房管表情", 2), EmotePackage::Admin);
-        assert_eq!(classify_package("管理组", 2), EmotePackage::Admin);
+        // 身份类分类靠包名关键字，仍未独立实测（手上没有这类包）。
+        let none: Vec<Value> = Vec::new();
+        assert_eq!(classify_package("粉丝勋章", 2, &none), EmotePackage::Medal);
+        assert_eq!(classify_package("舰长专属", 2, &none), EmotePackage::Guard);
+        assert_eq!(classify_package("大航海表情", 2, &none), EmotePackage::Guard);
+        assert_eq!(classify_package("房管表情", 2, &none), EmotePackage::Admin);
+        assert_eq!(classify_package("管理组", 2, &none), EmotePackage::Admin);
     }
 
     #[test]
-    fn pkg_type_two_is_room_scoped() {
-        // 实测房间 15122413 的三个包：pkg_type=1 是通用，两个 pkg_type=2 都是房间相关。
-        assert_eq!(classify_package("通用表情", 1), EmotePackage::Common);
-        assert_eq!(classify_package("UP主大表情", 2), EmotePackage::Room);
-        assert_eq!(classify_package("房间专属表情", 2), EmotePackage::Room);
-        // 名字不认识且没有 pkg_type 时回落 Common（缺字段按 1 处理）。
-        assert_eq!(classify_package("", 1), EmotePackage::Common);
-        assert_eq!(classify_package("神秘包裹", 1), EmotePackage::Common);
+    fn real_packages_of_room_15122413_are_classified_by_emote_fields() {
+        // 实测样本：三个包的包级 pkg_perm/unlock_identity/unlock_need_gift 完全相同，
+        // 只有表情级字段能区分——UP主大表情其实是粉丝牌档位包。
+        let common = json!([{"identity": 99, "unlock_need_level": 0}]);
+        let medal = json!([
+            {"identity": 4, "perm": 1, "unlock_need_level": 1, "unlock_need_gift": 31164},
+            {"identity": 2, "perm": 0, "unlock_need_level": 1}
+        ]);
+        let room = json!([{"identity": 99, "unlock_need_level": 0}]);
+
+        assert_eq!(
+            classify_package("通用表情", 1, &common.as_array().cloned().unwrap()),
+            EmotePackage::Common
+        );
+        assert_eq!(
+            classify_package("UP主大表情", 2, &medal.as_array().cloned().unwrap()),
+            EmotePackage::Medal,
+            "有 unlock_need_level / identity 档位的是粉丝牌包"
+        );
+        assert_eq!(
+            classify_package("房间专属表情", 2, &room.as_array().cloned().unwrap()),
+            EmotePackage::Room
+        );
+        // 无表情可看时按 pkg_type 回落。
+        let none: Vec<Value> = Vec::new();
+        assert_eq!(classify_package("神秘包裹", 2, &none), EmotePackage::Room);
+        assert_eq!(classify_package("神秘包裹", 1, &none), EmotePackage::Common);
     }
 
     #[tokio::test]

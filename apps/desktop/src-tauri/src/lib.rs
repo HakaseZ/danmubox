@@ -11,6 +11,7 @@ use danmubox_bili::{
     BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
+    QrState,
     AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource, RoomCatalog,
     SessionState, WalletProvider,
 };
@@ -464,6 +465,51 @@ fn reconnect_all(state: &State<'_, AppState>) {
     }
 }
 
+/// 扫码登录的第一步：取回二维码内容并在本地编成 SVG（离线，不联网渲染）。
+#[derive(serde::Serialize)]
+struct QrLogin {
+    /// 轮询用的票据。
+    key: String,
+    /// 二维码里实际编码的 URL（也一并返回，便于给用户一个「在浏览器打开」的退路）。
+    url: String,
+    /// 二维码本体：SVG 源码，界面自己包成 data URI 显示。
+    svg: String,
+}
+
+#[tauri::command]
+async fn session_qr_start(state: State<'_, AppState>) -> ApiResult<QrLogin> {
+    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    let challenge = auth.begin_qr().await.map_err(ApiError::from)?;
+    let code = qrcode::QrCode::new(challenge.url.as_bytes())
+        .map_err(|error| ApiError::from(danmubox_core::Error::Upstream(format!("二维码编码失败：{error}"))))?;
+    let svg = code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(240, 240)
+        .build();
+    Ok(QrLogin { key: challenge.key, url: challenge.url, svg })
+}
+
+#[derive(serde::Serialize)]
+struct QrPoll {
+    /// 归一化后的扫码状态，界面据此提示用户。
+    state: QrState,
+    /// 每次轮询一并带上会话，确认那一次界面就能直接切过去。
+    session: SessionState,
+}
+
+/// 扫码登录的轮询：状态 + 当前会话。确认后按契约让各房间以新凭据重连。
+#[tauri::command]
+async fn session_qr_poll(state: State<'_, AppState>, key: String) -> ApiResult<QrPoll> {
+    let auth = BiliAuth::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    let qr_state = auth.poll_qr(&key).await.map_err(ApiError::from)?;
+    if qr_state == QrState::Confirmed {
+        // 登录态在这一步才写盘，房间连接还是旧的，必须重连。
+        reconnect_all(&state);
+    }
+    let session = auth.session().await.map_err(ApiError::from)?;
+    Ok(QrPoll { state: qr_state, session })
+}
+
 /// 举报理由清单：上游固定 7 条，官方客户端按文案反查 `reason_id` 后一并上报。
 #[tauri::command]
 async fn report_reasons(state: State<'_, AppState>) -> ApiResult<Vec<ReportReason>> {
@@ -694,6 +740,8 @@ pub fn run() {
             profiles_list,
             profiles_switch,
             session_logout,
+            session_qr_start,
+            session_qr_poll,
             rooms_list,
             rooms_add,
             rooms_remove,

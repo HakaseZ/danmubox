@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  QrLogin,
+  QrPoll,
   ApiError,
   AppInfo,
   ChatSendResult,
@@ -64,6 +66,8 @@ export const api = {
   profilesList: () => call<string[]>("profiles_list"),
   profilesSwitch: (name: string) => call<SessionState>("profiles_switch", { name }),
   sessionLogout: () => call<SessionState>("session_logout"),
+  sessionQrStart: () => call<QrLogin>("session_qr_start"),
+  sessionQrPoll: (key: string) => call<QrPoll>("session_qr_poll", { key }),
 
   roomsList: () => call<RoomView[]>("rooms_list"),
   roomsAdd: (input: string) => call<RoomView>("rooms_add", { input }),

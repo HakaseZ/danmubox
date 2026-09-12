@@ -724,6 +724,7 @@ dependencies = [
  "async-trait",
  "danmubox-bili",
  "danmubox-core",
+ "qrcode",
  "serde",
  "serde_json",
  "tauri",

@@ -1,3 +1,4 @@
+import { QrLogin } from "./QrLogin";
 import { useMemo, useState } from "react";
 
 import type {
@@ -83,6 +84,9 @@ export function RoomList({
               </option>
             ))}
         </select>
+        {/* 扫码入口两种状态都给：登录态下扫码 = 重新登录（覆盖当前 profile 的凭据），
+            这正是凭据失效时该走的路。 */}
+        <QrLogin />
         {session?.logged_in && (
           <button onClick={onLogout} title="清空当前 profile 的凭据">
             登出

@@ -544,6 +544,37 @@
   font-size: 11px;
 }
 
+/* 扫码登录面板（契约 §7）：二维码由后端离线渲染 */
+.qrPanel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #333;
+  border-radius: 8px;
+  width: fit-content;
+}
+
+.qrPanel img {
+  width: 200px;
+  height: 200px;
+  background: #fff;
+  padding: 6px;
+  border-radius: 4px;
+}
+
+.qrHint {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.qrActions {
+  display: flex;
+  gap: 6px;
+}
+
 /* 账号切换（契约 §7）：profiles 多于一个时才可切换 */
 .profilePick {
   font-size: 12px;

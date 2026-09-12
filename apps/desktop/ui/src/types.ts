@@ -56,6 +56,21 @@ export interface EmoteRef {
   bulge_display: boolean;
 }
 
+/** 扫码状态机的归一化取值（后端 `QrState`，serde 小写）。 */
+export type QrState = "pending" | "scanned" | "confirmed" | "expired";
+
+export interface QrLogin {
+  key: string;
+  url: string;
+  /** 二维码本体：SVG 源码（后端离线生成），界面包成 data URI 显示。 */
+  svg: string;
+}
+
+export interface QrPoll {
+  state: QrState;
+  session: SessionState;
+}
+
 export interface ReplyTarget {
   mid: number;
   uname: string;

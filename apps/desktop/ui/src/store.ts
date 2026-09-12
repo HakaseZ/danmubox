@@ -16,6 +16,8 @@ import type {
   Prefs,
   RoomView,
   SendOutcome,
+  QrLogin,
+  QrState,
   SessionState,
 } from "./types";
 
@@ -60,11 +62,17 @@ interface AppStore {
   report: (message: Message, reason: ReportReason) => Promise<boolean>;
   /** 凭据文件里的 profiles（契约 §7）；切换后后端会用新凭据重连各房间。 */
   profiles: string[];
+  /** 扫码登录：进行中的二维码（null 表示未在扫码）。 */
+  qr: QrLogin | null;
+  qrError: string | null;
   reportReasons: ReportReason[];
   loadReportReasons: () => Promise<void>;
   loadProfiles: () => Promise<void>;
   switchProfile: (name: string) => Promise<void>;
   logout: () => Promise<void>;
+  startQrLogin: () => Promise<void>;
+  cancelQrLogin: () => void;
+  pollQrLogin: () => Promise<QrState | null>;
   /** 用系统浏览器打开用户主页（需求 §2.3：点昵称跳用户主页）。 */
   openProfile: (uid: number) => Promise<void>;
   /** 最近发送记录：仅会话内保留（需求 §2.2），不落盘。 */
@@ -89,6 +97,8 @@ export const useApp = create<AppStore>((set, get) => ({
   emotes: [],
   reportReasons: [],
   profiles: [],
+  qr: null,
+  qrError: null,
   recentSends: [],
   followed: [],
 
@@ -257,6 +267,35 @@ export const useApp = create<AppStore>((set, get) => ({
       await api.openUrl(`https://space.bilibili.com/${uid}`);
     } catch (error) {
       set({ error: describeError(error) });
+    }
+  },
+
+  async startQrLogin() {
+    try {
+      set({ qr: await api.sessionQrStart(), qrError: null });
+    } catch (error) {
+      set({ qrError: describeError(error) });
+    }
+  },
+
+  cancelQrLogin() {
+    set({ qr: null, qrError: null });
+  },
+
+  async pollQrLogin() {
+    const qr = get().qr;
+    if (!qr) return null;
+    try {
+      const { state, session } = await api.sessionQrPoll(qr.key);
+      if (state === "confirmed") {
+        // 后端在这一步已写盘并让房间重连，界面把会话/账号/房间重新拉一遍。
+        set({ qr: null, qrError: null, session, profiles: await api.profilesList() });
+        set({ rooms: await api.roomsList() });
+      }
+      return state;
+    } catch (error) {
+      set({ qrError: describeError(error) });
+      return null;
     }
   },
 

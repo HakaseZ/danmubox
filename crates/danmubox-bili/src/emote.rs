@@ -147,7 +147,7 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
 
 /// 包分类。
 ///
-/// 判定顺序（前两步来自房间 `15122413` 的实测样本，见 `docs/protocol.md` 附录 A26）：
+/// 判定顺序（前两步来自房间 `某个在播房间（房间号不写入仓库）` 的实测样本，见 `docs/protocol.md` 附录 A26）：
 ///
 /// 1. **包名关键字**：房管 / 大航海 / 粉丝牌——这三类**仍无独立样本**，靠名字兜底；
 /// 2. **表情自身的解锁字段**：任一表情 `unlock_need_level > 0` 或 `identity ∈ 1..=4`，
@@ -299,21 +299,21 @@ mod tests {
 
     #[test]
     fn room_scoped_packages_carry_the_room_id() {
-        // 实测形态：房间 15122413 的 UP主大表情/房间专属表情，pkg_type=2、唯一键 room_<房间号>_<id>。
+        // 实测形态：某个在播房间（房间号不写入仓库） 的 UP主大表情/房间专属表情，pkg_type=2、唯一键 room_<房间号>_<id>。
         let value = json!({
             "data": {"data": [{
                 "pkg_id": 327,
                 "pkg_name": "UP主大表情",
                 "pkg_type": 2,
                 "emoticons": [
-                    {"emoticon_unique": "room_15122413_847", "emoji": "再来亿把", "url": "https://i/r.png"}
+                    {"emoticon_unique": "room_7654321_847", "emoji": "再来亿把", "url": "https://i/r.png"}
                 ]
             }]}
         });
-        let emotes = map_packages(15122413, &value);
+        let emotes = map_packages(7654321, &value);
         assert_eq!(emotes.len(), 1);
         assert_eq!(emotes[0].package_kind, EmotePackage::Room);
-        assert_eq!(emotes[0].room_id, 15122413, "房间专属必须绑定房间号");
+        assert_eq!(emotes[0].room_id, 7654321, "房间专属必须绑定房间号");
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn real_packages_of_room_15122413_are_classified_by_emote_fields() {
+    fn real_packages_are_classified_by_emote_fields() {
         // 实测样本：三个包的包级 pkg_perm/unlock_identity/unlock_need_gift 完全相同，
         // 只有表情级字段能区分——UP主大表情其实是粉丝牌档位包。
         let common = json!([{"identity": 99, "unlock_need_level": 0}]);

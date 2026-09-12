@@ -152,7 +152,7 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
     }
 
     // 表情弹幕：`info[0][13]` 是**对象**时才有表情信息（非表情弹幕该槽位是字符串 `"{}"`，
-    // 实测自房间 15122413 / 21987615 的真实弹幕）。此时 `info[1]` 的正文就是表情名，
+    // 实测自两个在播房间（房间号不写入仓库）。此时 `info[1]` 的正文就是表情名，
     // 只显示文字会让人以为「表情没渲染」，所以把图片地址一并带回。
     if let Some(emote) = meta.and_then(|m| m.get(13)).and_then(Value::as_object) {
         if let Some(url) = emote.get("url").and_then(Value::as_str) {
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn emote_danmaku_carries_the_image_url_over_https() {
-        // 实测样本（房间 21987615 的真实弹幕）：正文是表情名，表情信息在 info[0][13]，
+        // 实测样本（某个在播房间（房间号不写入仓库） 的真实弹幕）：正文是表情名，表情信息在 info[0][13]，
         // 且上游给的是 http 地址——客户端在安全上下文里会拦掉，必须升级成 https。
         let payload = json!({
             "cmd": "DANMU_MSG",

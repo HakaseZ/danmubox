@@ -69,7 +69,7 @@
 
 ### Fixed
 
-- **表情图片全都不显示**（面板与弹幕两处，同一个根因）：上游返回的表情图地址混着 `http://`，而客户端跑在安全上下文里（Tauri 的 `localhost` 页面 + macOS ATS），http 子资源被拦——WebKit 还不往控制台打警告，所以日志里一条线索都没有。实测两套地址返回同一张图，因此统一升级为 https（新增 `danmubox-bili::asset::secure_url`）。
+- **表情图片全都不显示，显示成一个问号**（面板与弹幕两处，同一个根因）：上游图片 CDN 有**防盗链**——来源不是 bilibili 时返回 403（本地页面的 `Referer` 同样被拒，不带 Referer 才放行）。浏览器拿到这个「不像图片的响应」后以 ORB（Opaque Response Blocking）拦掉，最终只剩一个问号，且**控制台与日志都没有任何线索**。修法：页面声明 `<meta name="referrer" content="no-referrer">`。实测：修复前面板 69 张图 0 张加载、全部 `ERR_BLOCKED_BY_ORB`；修复后 39/39 加载、全部 200。另把上游混用的 `http://` 地址统一升为 https（`danmubox-bili::asset::secure_url`）——实测两套地址返回同一张图，升级无损、顺带消除混合内容风险，**但它不是本次的根因**。
 - **弹幕里的表情只显示名字**：`DANMU_MSG` 的表情信息在 `info[0][13]`（是对象时才有；非表情弹幕该槽位是字符串 `"{}"`），此前完全没解析。现带入 `Message.emote_url` 并画图。
 - **上游 HTTP 心跳的传输层失败**：20 分钟真实长连中出现偶发 `error sending request`
   （同机 `curl` 连续 200，差异在连接复用——心跳间隔 60s 大于上游空闲连接存活时间，

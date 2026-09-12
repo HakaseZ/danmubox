@@ -91,6 +91,15 @@
 
 ### Calibration
 
+- **A35 结案：`upower_` 那一族的来源找到了**。它是主站「我的表情」面板——
+  `GET https://api.bilibili.com/x/emote/user/panel/web?business=reply`（Cookie 认证），
+  返回**用户名下拥有**的表情包（充电 / UP 主专属那类）。实测包「Kirikosama」20 个表情，
+  表情 `text` 即完整名字 `[Kirikosama_吃瓜]`，图片 url 尾段与实测收到的那条完全一致
+  → 唯一键 = `upower_` + `text`（主站表情对象没有 `emoticon_unique`，需自行拼装）。
+  此前只能「从收到的弹幕里学」，现在可以整包列出。（`business=live` 返回 `-400`，只支持 reply/dynamic。）
+- **房管接口的位置也定了**：禁言三件套在社区文档 `docs/live/silent_user_manage.md`
+  （`AddSilentUser` / `GetSilentUserList` / `del_room_block_user`），均需 `csrf` = Cookie 的 `bili_jct`。
+
 - **`unknown_cmd` 计数器被已知命令污染**：`ONLINE_RANK_V3`（protobuf 高能榜）在一次 40 秒观察里出现 43 条，
   却落进「未处理命令」计数——那个计数器是用来发现真的没归类过的命令的。连同
   `PLAYURL_RELOAD` / `PLAYURL_RELOAD_MASTER`（载荷只有 `room_id`/`playurl`/`reload_option`）一起归入

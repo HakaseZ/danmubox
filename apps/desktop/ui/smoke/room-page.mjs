@@ -22,7 +22,9 @@
 //   step4  系统通知开关
 //   step5  互动行 8 秒后自动消失
 //   step6  关掉自动消失后互动行常驻
-//   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级
+//   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级；
+//          内容不足视口时整体贴底；头像列永远占位（昵称三列纵向对齐）；粉丝牌真彩色与兜底色
+//   emotes 主站「我的表情」分组可见、能选中、发出去带的是唯一键
 //   menu   右键出菜单（复制 / ＠TA / 回复 / 屏蔽 / 主页 / 举报）并能关掉
 //   time   时间戳默认不渲染；开关打开后每行一列且等宽（纵向对齐）
 //   gift   礼物栏在输入区下方、全宽、可折叠，展开不改变弹幕宽度
@@ -35,6 +37,8 @@ import { pathToFileURL } from "node:url";
 const MOCK = `(function () {
   var listeners = {};
   var calls = [];
+  // 带参数的调用记录（看请求形状，如 chat_send 的表情唯一键）；calls 只有命令名，保持原样。
+  var callsWithArgs = [];
   var nextId = 1;
   var prefs = {
     "ui.font_scale": 1, "ui.theme": "system", "ui.auto_scroll": true,
@@ -77,6 +81,7 @@ const MOCK = `(function () {
   var history = msg("danmaku", "这是进场回填的历史弹幕", true);
   window.__smoke_next = function () { return msg; };
   window.__calls = calls;
+  window.__callsWithArgs = callsWithArgs;
   window.__prefs = prefs;
   window.__followCalls = 0;
   window.__mk = msg;
@@ -98,6 +103,7 @@ const MOCK = `(function () {
     invoke: function (cmd, args) {
       calls.push(cmd);
       args = args || {};
+      callsWithArgs.push({ cmd: cmd, args: args });
       switch (cmd) {
         case "app_info": return Promise.resolve({ version: "0.0.0-smoke", data_dir: "/tmp", config_path: "/tmp/config.toml", logged_in: true });
         case "session_status": return Promise.resolve(session);
@@ -117,6 +123,24 @@ const MOCK = `(function () {
           { key: "room:1", emoticon_unique: "room_5440_1", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "room", text: "[房间专属]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 5440 }
         ]);
         case "report_reasons": return Promise.resolve([{ id: 1, reason: "垃圾广告" }]);
+        // 主站「我的表情」：用户点名要的那条必须能从面板发回去（issue #8）。
+        case "emotes_owned": return Promise.resolve([
+          { key: "owned:1", emoticon_unique: "upower_[Kirikosama_吃瓜]", width: 1, height: 1, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "owned", text: "[Kirikosama_吃瓜]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23e67e22'/></svg>", room_id: 0 }
+        ]);
+        case "chat_send": return Promise.resolve({ room_id: args.roomId, content: args.content, outcome: "ok", detail: null });
+        // 房内身份（房管权限前置）+ 房管只读三块 + 写操作（替身只记调用，不动真上游）。
+        case "room_session": return Promise.resolve({ room_id: args.roomId, my_medal_level: 0, my_medal_name: "", my_guard_level: 0, is_admin: window.__admin });
+        case "admin_silent_list": return window.__adminFail
+          ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
+          : Promise.resolve([{ uid: 900, uname: "被禁言的观众", face: "" }]);
+        case "admin_blacklist_list": return Promise.resolve([{ uid: 901, uname: "黑名单观众", face: "" }]);
+        case "admin_keywords_list": return Promise.resolve(["刷屏", "广告"]);
+        case "admin_mute":
+        case "admin_unmute":
+        case "admin_blacklist_add":
+        case "admin_blacklist_del":
+        case "admin_keywords_add":
+        case "admin_keywords_del": return Promise.resolve(null);
         case "wallet_balance": return Promise.resolve(150);
         case "rooms_connect": return Promise.resolve(null);
         case "plugin:event|listen": (listeners[args.event] = listeners[args.event] || []).push(args.handler); return Promise.resolve(nextId);
@@ -298,6 +322,39 @@ const MOCK = `(function () {
     await sleep(1500);
     clickTool("表情");
     await sleep(200);
+
+    // ---- emotes 主站「我的表情」：分组可见、选得到、发出去带的是唯一键（issue #8）
+    out.emotesOwnedCalled = calls.indexOf("emotes_owned") >= 0;
+    clickTool("表情");
+    await sleep(400);
+    var emotePanel = byTestId("db-panel");
+    out.ownedGroupShown = !!emotePanel && emotePanel.innerText.indexOf("我的表情") >= 0;
+    var ownedPicker = emotePanel
+      ? emotePanel.querySelector('button[title="[Kirikosama_吃瓜]"]')
+      : null;
+    out.ownedEmoteShown = !!ownedPicker;
+    if (ownedPicker) {
+      ownedPicker.click();
+      await sleep(250);
+    }
+    out.ownedEmoteInserted = document.querySelector("textarea").value === "[Kirikosama_吃瓜]";
+    // 预览把表情名换成图片，说明「我的表情」确实在接口那一侧（学到的表情只是补漏）
+    var sendPreview = byTestId("db-send-preview");
+    out.ownedEmotePreviewImage = !!sendPreview &&
+      [].slice.call(sendPreview.querySelectorAll("img")).some(function (img) {
+        return img.alt === "[Kirikosama_吃瓜]";
+      });
+    buttonWith(null, "发送").click();
+    await sleep(400);
+    var chatSends = callsWithArgs.filter(function (c) { return c.cmd === "chat_send"; });
+    var lastChatSend = chatSends[chatSends.length - 1];
+    // 表情弹幕上游收到的 msg 就是 emoticon_unique（crates/danmubox-bili/src/send.rs），
+    // 因此这两条断言等于「上游会收到 upower_[Kirikosama_吃瓜]」。
+    out.ownedEmoteSendUnique = !!lastChatSend && !!lastChatSend.args.emote &&
+      lastChatSend.args.emote.emoticon_unique === "upower_[Kirikosama_吃瓜]";
+    out.ownedEmoteSendContent = !!lastChatSend && lastChatSend.args.content === "[Kirikosama_吃瓜]";
+    out.ownedEmoteDraftCleared = document.querySelector("textarea").value === "";
+    snap();
 
     // ---- menu 右键菜单
     var target = rows()[rows().length - 1];

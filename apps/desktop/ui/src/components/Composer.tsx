@@ -24,6 +24,10 @@ interface Props {
   lastOutcome?: SendOutcome;
   lastDetail?: string | null;
   emotes: Emote[];
+  /** 主站「我的表情」（`emotes_owned`）：与接口给的按房间包同侧，排在「通用」之后。 */
+  ownedEmotes: Emote[];
+  /** 「我的表情」上次拉取失败的原因；面板里显示并提供重试（不阻塞输入框）。 */
+  ownedError?: string;
   seenEmotes: Emote[];
   recentSends: string[];
   /** 行菜单里点的 @ / 回复，点一次应用一次（token 变则重放）。 */
@@ -36,6 +40,8 @@ interface Props {
     reply?: ReplyTarget,
   ) => Promise<SendOutcome | undefined>;
   onOpenEmotes: () => void;
+  /** 面板里「我的表情」加载失败后的重试入口。 */
+  onRetryOwned: () => void;
   onNotice: (text: string) => void;
 }
 
@@ -50,8 +56,14 @@ const OUTCOME_CLASS: Record<SendOutcome, string | undefined> = {
   failed: styles.sendFail,
 };
 
-/** 表情分组展示顺序。 */
-const PACKAGE_ORDER: EmotePackage[] = ["common", "room", "medal", "guard"];
+/** 表情分组展示顺序：接口给的包在前（通用 → 我的表情 → 本房间 → 粉丝牌 → 大航海）。 */
+const PACKAGE_ORDER: EmotePackage[] = [
+  "common",
+  "owned",
+  "room",
+  "medal",
+  "guard",
+];
 
 /** 内置颜文字与快捷短语（需求 §2.2 的「快捷短语 / 颜文字」）。 */
 const KAOMOJI: string[] = [
@@ -71,6 +83,8 @@ export function Composer({
   lastOutcome,
   lastDetail,
   emotes,
+  ownedEmotes,
+  ownedError,
   seenEmotes,
   recentSends,
   pendingAction,
@@ -78,6 +92,7 @@ export function Composer({
   onPrefs,
   onSend,
   onOpenEmotes,
+  onRetryOwned,
   onNotice,
 }: Props) {
   const [draft, setDraft] = useState("");
@@ -113,35 +128,54 @@ export function Composer({
 
   const customPhrases = prefs["composer.phrases"] ?? [];
 
-  // 按来源分组展示（通用 / 本房间 / 粉丝牌 / 大航海），见 docs/ui.md §6.3。
+  // 接口给的包（`emotes_list` 的按房间包 + 主站「我的表情」）是**权威**的一侧：
+  // 同一个 `emoticon_unique` 只保留接口给的那条。「我的表情」并进这一侧之后，
+  // 从弹幕学到的同类表情会被自动去重（接口优先、学到的补漏）。
+  const interfaceEmotes = useMemo(() => {
+    const known = new Set<string>();
+    const out: Emote[] = [];
+    for (const emote of [...emotes, ...ownedEmotes]) {
+      if (known.has(emote.emoticon_unique)) continue;
+      known.add(emote.emoticon_unique);
+      out.push(emote);
+    }
+    return out;
+  }, [emotes, ownedEmotes]);
+
+  // 接口包 + 从弹幕学到的表情（去重后）；面板分组与「将发送」预览都走这一份，
+  // 否则学到的表情能在面板里选、预览里却显示成文字。
+  const allEmotes = useMemo(() => {
+    const known = new Set(interfaceEmotes.map((emote) => emote.emoticon_unique));
+    return [
+      ...interfaceEmotes,
+      ...seenEmotes.filter((emote) => !known.has(emote.emoticon_unique)),
+    ];
+  }, [interfaceEmotes, seenEmotes]);
+
+  // 按来源分组展示（通用 / 我的表情 / 本房间 / 粉丝牌 / 大航海），见 docs/ui.md §6.3。
   const grouped = useMemo(() => {
     const groups: Record<EmotePackage, Emote[]> = {
       common: [],
+      owned: [],
       room: [],
       medal: [],
       guard: [],
     };
-    // 接口给的包 + 从弹幕学到的表情；同一个唯一键只出现一次（接口优先）。
-    const known = new Set(emotes.map((emote) => emote.emoticon_unique));
-    const merged = [
-      ...emotes,
-      ...seenEmotes.filter((emote) => !known.has(emote.emoticon_unique)),
-    ];
     const query = emoteQuery.trim().toLowerCase();
-    for (const emote of merged) {
+    for (const emote of allEmotes) {
       if (query.length > 0 && !emote.text.toLowerCase().includes(query)) continue;
       groups[emote.package_kind].push(emote);
     }
     return PACKAGE_ORDER.map((kind) => [kind, groups[kind]] as const).filter(
       ([, items]) => items.length > 0,
     );
-  }, [emotes, seenEmotes, emoteQuery]);
+  }, [allEmotes, emoteQuery]);
 
   // 输入区预览：把草稿里能对上的表情名换成图片，让用户看清「这条发出去长什么样」。
   const preview = useMemo(() => {
-    if (draft.length === 0 || emotes.length === 0) return null;
+    if (draft.length === 0 || allEmotes.length === 0) return null;
     // 长名优先，避免短名吃掉长名的前缀。
-    const candidates = emotes
+    const candidates = allEmotes
       .filter((emote) => emote.text.length > 0 && emote.url.length > 0)
       .sort((a, b) => b.text.length - a.text.length);
     const parts: { text: string; emote?: Emote }[] = [];
@@ -164,7 +198,7 @@ export function Composer({
     }
     if (buffer.length > 0) parts.push({ text: buffer });
     return matched > 0 ? parts : null;
-  }, [draft, emotes]);
+  }, [draft, allEmotes]);
 
   /** 在光标处插入（面板点选与 @ 都走这里），插完把光标放到插入内容之后。 */
   const insertAtCaret = (text: string) => {
@@ -286,6 +320,18 @@ export function Composer({
               onChange={(event) => setEmoteQuery(event.target.value)}
             />
           </div>
+          {/* 「我的表情」拉失败只在面板里提示并可重试：输入框与已加载的分组照常可用 */}
+          {ownedError !== undefined && (
+            <div className={styles.panelError} data-testid="db-owned-error">
+              <span>我的表情加载失败：{ownedError}</span>
+              <button
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={onRetryOwned}
+              >
+                重试
+              </button>
+            </div>
+          )}
           {grouped.length === 0 ? (
             <div className={styles.empty}>
               {emoteQuery.trim().length > 0
@@ -458,7 +504,7 @@ export function Composer({
       )}
 
       {preview && (
-        <div className={styles.preview} style={panelFont}>
+        <div className={styles.preview} data-testid="db-send-preview" style={panelFont}>
           <span className={styles.previewLabel}>将发送</span>
           {preview.map((part, index) =>
             part.emote ? (

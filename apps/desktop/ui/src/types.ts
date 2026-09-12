@@ -163,7 +163,7 @@ export interface ApiError {
   message: string;
 }
 
-export type EmotePackage = "common" | "room" | "medal" | "guard";
+export type EmotePackage = "common" | "owned" | "room" | "medal" | "guard";
 
 export interface EmoteToken {
   emoticon_unique: string;
@@ -208,6 +208,7 @@ export interface FollowedRoom {
 
 export const EMOTE_PACKAGE_LABEL: Record<EmotePackage, string> = {
   common: "通用",
+  owned: "我的表情",
   room: "本房间",
   medal: "粉丝牌",
   guard: "大航海",

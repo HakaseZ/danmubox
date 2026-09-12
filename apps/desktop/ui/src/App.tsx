@@ -20,6 +20,8 @@ export function App() {
   const notice = useApp((state) => state.notice);
   const seeding = useApp((state) => state.seeding);
   const emotes = useApp((state) => state.emotes);
+  const ownedEmotes = useApp((state) => state.ownedEmotes);
+  const ownedError = useApp((state) => state.ownedError);
   const recentSends = useApp((state) => state.recentSends);
   const profiles = useApp((state) => state.profiles);
   const loadProfiles = useApp((state) => state.loadProfiles);
@@ -116,6 +118,8 @@ export function App() {
           lastDetail={lastSend?.detail}
           logs={logs}
           emotes={emotes}
+          ownedEmotes={ownedEmotes}
+          ownedError={ownedError}
           seenEmotes={seenEmotes}
           recentSends={recentSends}
           balance={balance}

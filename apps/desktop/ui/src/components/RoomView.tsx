@@ -29,6 +29,10 @@ interface Props {
   lastDetail?: string | null;
   logs: string[];
   emotes: Emote[];
+  /** 主站「我的表情」，与 `emotes` 同侧并进选择器（见 Composer）。 */
+  ownedEmotes: Emote[];
+  /** 「我的表情」上次拉取失败的原因（面板里给可重试提示）。 */
+  ownedError?: string;
   /** 从收到的弹幕里学到的表情，补进选择器（见 filtering.collectSeenEmotes）。 */
   seenEmotes: Emote[];
   recentSends: string[];
@@ -84,6 +88,8 @@ export function RoomView({
   lastDetail,
   logs,
   emotes,
+  ownedEmotes,
+  ownedError,
   seenEmotes,
   recentSends,
   balance,
@@ -117,6 +123,7 @@ export function RoomView({
   // 所以下面的 effect 只会在登录态变化时触发。经 props 传内联闭包会导致每次渲染都重跑（曾因此死循环）。
   const loadBalance = useApp((store) => store.loadBalance);
   const loadEmotes = useApp((store) => store.loadEmotes);
+  const loadOwnedEmotes = useApp((store) => store.loadOwnedEmotes);
   const reportReasons = useApp((store) => store.reportReasons);
   const loadReportReasons = useApp((store) => store.loadReportReasons);
   const openProfile = useApp((store) => store.openProfile);
@@ -132,6 +139,12 @@ export function RoomView({
   useEffect(() => {
     if (loggedIn) void loadEmotes(room.room_id);
   }, [loggedIn, loadEmotes, room.room_id]);
+
+  // 主站「我的表情」与房间无关（room_id=0），进房间且会话就绪后拉一次即可；
+  // 拉成功之后 store 会跳过重复请求，面板打开时若上次失败才会再试（见 Composer）。
+  useEffect(() => {
+    if (loggedIn) void loadOwnedEmotes();
+  }, [loggedIn, loadOwnedEmotes]);
 
   useEffect(() => {
     if (reportTarget) void loadReportReasons();
@@ -357,13 +370,20 @@ export function RoomView({
         lastOutcome={lastOutcome}
         lastDetail={lastDetail}
         emotes={emotes}
+        ownedEmotes={ownedEmotes}
+        ownedError={ownedError}
         seenEmotes={seenEmotes}
         recentSends={recentSends}
         pendingAction={pendingAction}
         prefs={prefs}
         onPrefs={onPrefs}
         onSend={onSend}
-        onOpenEmotes={() => void loadEmotes(room.room_id)}
+        onOpenEmotes={() => {
+          // 面板打开：按房间包每次刷新（身份可能变过），「我的表情」只在上次失败时重试。
+          void loadEmotes(room.room_id);
+          void loadOwnedEmotes(true);
+        }}
+        onRetryOwned={() => void loadOwnedEmotes(true)}
         onNotice={onNotice}
       />
 

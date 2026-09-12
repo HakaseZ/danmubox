@@ -43,6 +43,12 @@ interface AppStore {
   seeding: boolean;
 
   emotes: Emote[];
+  /** 主站「我的表情」（`emotes_owned`）：与房间无关，选中器里排在「通用」之后。 */
+  ownedEmotes: Emote[];
+  /** 「我的表情」是否已尝试拉取过（成功后不再打扰上游）。 */
+  ownedLoaded: boolean;
+  /** 「我的表情」上一次拉取失败的原因；成功后清空（面板里给可重试提示）。 */
+  ownedError?: string;
   followed: FollowedRoom[];
   balance?: number;
 
@@ -85,6 +91,11 @@ interface AppStore {
   /** 最近发送记录：仅会话内保留（需求 §2.2），不落盘。 */
   recentSends: string[];
   loadEmotes: (roomId: number) => Promise<void>;
+  /**
+   * 拉主站「我的表情」。`retryFailedOnly` 为 true 时只在**上次失败**后才重试
+   * （表情面板打开时用），避免每次开面板都打一次上游。
+   */
+  loadOwnedEmotes: (retryFailedOnly?: boolean) => Promise<void>;
   loadFollowed: () => Promise<void>;
   loadBalance: () => Promise<void>;
   updatePrefs: (patch: Partial<Prefs>) => Promise<void>;
@@ -135,6 +146,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
   logs: [],
   seeding: false,
   emotes: [],
+  ownedEmotes: [],
+  ownedLoaded: false,
   reportReasons: [],
   profiles: [],
   qr: null,
@@ -441,6 +454,22 @@ export const useApp = create<AppStore>((set, get, store) => ({
       set({ emotes: await api.emotesList(roomId) });
     } catch (error) {
       set({ error: describeError(error) });
+    }
+  },
+
+  async loadOwnedEmotes(retryFailedOnly = false) {
+    // 主站「我的表情」与房间无关（`room_id=0`），一次成功之后不再打扰上游；
+    // 面板打开时传 true，只在**上次失败**后重试一次。失败只记在 `ownedError`，
+    // 由面板显示并提供重试，绝不阻塞输入框（docs/ui.md §6.3）。
+    if (get().ownedLoaded && !(retryFailedOnly && get().ownedError !== undefined)) return;
+    try {
+      set({
+        ownedEmotes: await api.emotesOwned(),
+        ownedLoaded: true,
+        ownedError: undefined,
+      });
+    } catch (error) {
+      set({ ownedLoaded: true, ownedError: describeError(error) });
     }
   },
 

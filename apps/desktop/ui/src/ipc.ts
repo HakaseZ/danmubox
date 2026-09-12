@@ -106,6 +106,9 @@ export const api = {
   reportReasons: () => call<ReportReason[]>("report_reasons"),
 
   emotesList: (roomId: number) => call<Emote[]>("emotes_list", { roomId }),
+  /** 主站「我的表情」（契约 §7）：与房间无关，`package_kind="owned"`、`room_id=0`。 */
+  emotesOwned: () => call<Emote[]>("emotes_owned"),
+
   followList: () => call<FollowedRoom[]>("follow_list"),
   walletBalance: () => call<number>("wallet_balance"),
 

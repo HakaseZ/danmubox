@@ -622,6 +622,19 @@
   margin-bottom: 8px;
 }
 
+/* 「我的表情」拉取失败的提示行：不阻塞输入框，只在这里给原因与重试 */
+.panelError {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--danger, #d93025) 12%, transparent);
+  border-radius: 4px;
+}
+
 .pickerTitle {
   font-size: 12px;
   color: var(--fg-dim);

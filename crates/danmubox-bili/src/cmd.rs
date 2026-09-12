@@ -31,8 +31,23 @@ const COUNTER_CMDS: [&str; 6] = [
     "ONLINE_RANK_V2",
 ];
 
-/// 已知但与当前订阅房间无关、或纯客户端提示的命令：丢弃且不计为未知。
-const IGNORED_CMDS: [&str; 2] = ["STOP_LIVE_ROOM_LIST", "HOT_ROOM_NOTIFY"];
+/// 已知但与当前订阅房间无关、或纯客户端提示的命令：丢弃且**不计为未知**。
+///
+/// 判据是载荷（实测样本，见 `docs/protocol.md` 附录 A22），不是命令名：
+/// - `ONLINE_RANK_V3`：`data.pb` 是 protobuf 编码的高能榜，弹幕框不展示榜单。
+///   它出现频率很高（一次 40 秒的观察里 43 条），放在这里才不会把 `unknown_cmd` 淹掉——
+///   那个计数器是用来发现**真的没归类过**的命令的。
+/// - `PLAYURL_RELOAD(_MASTER)`：`data` 只有 `room_id` / `playurl` / `reload_option`，
+///   是播放器自己的事。
+/// - `STOP_LIVE_ROOM_LIST`：整站未开播房间清单，与当前房间无关。
+/// - `HOT_ROOM_NOTIFY`：推荐流阈值提示。
+const IGNORED_CMDS: [&str; 5] = [
+    "STOP_LIVE_ROOM_LIST",
+    "HOT_ROOM_NOTIFY",
+    "ONLINE_RANK_V3",
+    "PLAYURL_RELOAD",
+    "PLAYURL_RELOAD_MASTER",
+];
 
 /// `dispatch` 的产出。多数命令产出一条消息；人气值走单独支路——
 /// 它高频、只影响界面上的一个数字，既不该进会话缓冲，也不该被当成消息。
@@ -72,6 +87,10 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
         "SUPER_CHAT_MESSAGE" | "SUPER_CHAT_MESSAGE_JP" => superchat(room_id, value),
         "INTERACT_WORD" => interact_json(room_id, value),
         "INTERACT_WORD_V2" => interact_v2(room_id, value, counters),
+        // 进场特效：名字走 `uinfo.base.name`（实测载荷里没有 `uname`，但有 `uinfo`），
+        // 因此能直接复用互动解析。文案由界面统一成「XX 进入直播间」——
+        // 载荷里那个 `copy_writing` 模板（`"<%昵称%> 来了"`）留给上网页端用，
+        // 两条进场路径的文案在这里保持一致。
         "ENTRY_EFFECT" => interact_json(room_id, value),
         "GUARD_BUY" | "USER_TOAST_MSG" => guard(room_id, value),
         other => {
@@ -664,6 +683,27 @@ mod tests {
         let payload = json!({"cmd": "INTERACT_WORD_V2", "data": {"pb": "!!!not-base64!!!"}});
         assert!(message(5, &payload, &c).is_none());
         assert_eq!(c.snapshot().malformed_dropped, 1);
+    }
+
+    #[test]
+    fn 已知且无关的命令不计入未知() {
+        // 载荷照抄实测样本的关键部分：V3 只有 pb（protobuf 高能榜），
+        // PLAYURL_RELOAD 只有播放地址。它们不是「未归类」，只是与我们无关。
+        for cmd in [
+            "ONLINE_RANK_V3",
+            "PLAYURL_RELOAD",
+            "PLAYURL_RELOAD_MASTER",
+            "STOP_LIVE_ROOM_LIST",
+        ] {
+            let payload = json!({"cmd": cmd, "data": {"pb": "CgtvbmxpbmVfcmFuaw==", "playurl": {}}});
+            let c = counters();
+            assert!(message(7, &payload, &c).is_none(), "{cmd} 不该产出消息");
+            assert_eq!(
+                c.snapshot().unknown_cmd,
+                0,
+                "{cmd} 是已知命令，不该污染 unknown_cmd"
+            );
+        }
     }
 
     #[test]

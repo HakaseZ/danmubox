@@ -79,6 +79,14 @@
   即「重新登录」，覆盖当前 profile 的凭据，正是凭据失效时的正路。
   上游链路用**临时配置文件**验证过（打印出真实二维码），全程未碰真实凭据。
 
+### Fixed
+
+- **`unknown_cmd` 计数器被已知命令污染**：`ONLINE_RANK_V3`（protobuf 高能榜）在一次 40 秒观察里出现 43 条，
+  却落进「未处理命令」计数——那个计数器是用来发现真的没归类过的命令的。连同
+  `PLAYURL_RELOAD` / `PLAYURL_RELOAD_MASTER`（载荷只有 `room_id`/`playurl`/`reload_option`）一起归入
+  「已知且无关」，判据是**载荷**而非命令名（`docs/protocol.md` 附录 A22）。
+- 顺带更正文档里一处过时结论：`ONLINE_RANK_COUNT` / `SEND_GIFT_V2` 早已归位，却被记成「尚未归类」。
+
 ### Calibration
 
 - **A18（`color` / `mode` 合法域）部分结案**。用「`code=-400 请求错误` = 参数层就拒了 / 后置 code = 过了参数层」

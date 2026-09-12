@@ -174,6 +174,9 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
     // 表情弹幕：`info[0][13]` 是**对象**时才有表情信息（非表情弹幕该槽位是字符串 `"{}"`，
     // 实测自两个在播房间（房间号不写入仓库）。此时 `info[1]` 的正文就是表情名，
     // 只显示文字会让人以为「表情没渲染」，所以把图片地址一并带回。
+    // 注意：实时表情对象里**没有文本字段**（实测样本只有 `emoticon_unique` / `url` / 尺寸），
+    // 因此这一支无法像历史条目那样核对「正文是否就是这个表情」。
+    // 观测到的实时表情弹幕正文就是表情本身（如 `info[1] == "这个好耶"`），故按整条画图处理。
     if let Some(emote) = meta.and_then(|m| m.get(13)).and_then(Value::as_object) {
         if let Some(url) = emote.get("url").and_then(Value::as_str) {
             if !url.is_empty() {

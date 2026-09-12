@@ -152,9 +152,16 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
     // 表情弹幕：历史条目的字段布局与实时 `DANMU_MSG` **不同**——实时在 `info[0][13]`，
     // 历史在顶层的 `emoticon` 对象里（`{emoticon_unique, text, url, width, height, is_dynamic, ...}`）。
     // 不处理这一支，回填进来的表情就只会显示成表情名（用户实测如此）。
+    // 只有当**整条正文就是这个表情**时才画图（实测样本的正文正是 `[小电视_赞]` 这类 token）。
+    // 正文里夹着别的字（如「谢谢[小电视_赞]」）时保持原文——整段替换会吞掉正文。
     if let Some(emote) = item.get("emoticon").and_then(Value::as_object) {
+        let emote_text = emote
+            .get("text")
+            .or_else(|| emote.get("emoji"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if let Some(url) = emote.get("url").and_then(Value::as_str) {
-            if !url.is_empty() {
+            if !url.is_empty() && emote_text == message.content {
                 message.emote_url = crate::asset::secure_url(url);
             }
         }
@@ -289,6 +296,19 @@ mod tests {
             "历史里的表情同样要升级为 https，否则在客户端里加载不出来"
         );
         assert_eq!(messages[0].content, "这个好耶");
+    }
+
+    #[test]
+    fn history_text_with_extra_words_keeps_the_text() {
+        // 表情只是正文的一部分时不画图——整段替换会把「谢谢」吞掉。
+        let value = json!({"data": {"room": [{
+            "text": "谢谢[小电视_赞]", "uid": 22, "timeline": "2026-09-12 08:49:32",
+            "dm_type": 1,
+            "emoticon": {"text": "[小电视_赞]", "url": "https://i0.hdslb.com/bfs/emote/x.png"}
+        }]}});
+        let messages = map_history(7, &value);
+        assert_eq!(messages[0].content, "谢谢[小电视_赞]");
+        assert!(messages[0].emote_url.is_empty(), "混排正文不得被整段替换成图片");
     }
 
     #[test]

@@ -766,6 +766,34 @@ mod tests {
     }
 
     #[test]
+    fn danmaku_admin_flag_comes_from_info_2_2() {
+        // 2026-09-12 实测：同一用户在**他担任房管**的房间发弹幕 info[2][2]=1，
+        // 在另两个他不是房管的房间全为 0（跨房间对照，见 A5）。
+        let as_admin = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1_789_180_000_000i64, 977288551, 0, "x", 0, 0, 0, "", 0, "{}", "{}",
+                 {"user": {"uid": 7, "base": {"name": "房管"}, "medal": {"level": 0}}}],
+                "房管的弹幕",
+                [7, "房管", 1, 0, 0, 10000, 1, ""]
+            ]
+        });
+        let m = message(7, &as_admin, &counters()).expect("必须解出弹幕");
+        assert!(m.is_admin, "info[2][2] == 1 即房管");
+
+        let as_normal = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1_789_180_000_000i64, 977288551, 0, "x", 0, 0, 0, "", 0, "{}", "{}",
+                 {"user": {"uid": 7, "base": {"name": "普通"}, "medal": {"level": 0}}}],
+                "普通弹幕",
+                [7, "普通", 0, 0, 0, 10000, 1, ""]
+            ]
+        });
+        assert!(!message(7, &as_normal, &counters()).unwrap().is_admin);
+    }
+
+    #[test]
     fn guard_buy_uses_the_documented_fields() {
         // 形状取自社区文档的字段表（尚无真实样本，见 A33）。
         let payload = json!({

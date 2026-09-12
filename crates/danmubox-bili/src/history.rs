@@ -189,6 +189,20 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
             .unwrap_or_default()
             .to_string();
     }
+    // 与实时 `extra` 同名的三个字段（历史侧在同一个 `reply` 对象里）。
+    message.reply_type_enum = item
+        .pointer("/reply/reply_type_enum")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    message.show_reply = item
+        .pointer("/reply/show_reply")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    message.reply_uname_color = item
+        .pointer("/reply/reply_uname_color")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     message.is_admin = item.get("isadmin").and_then(Value::as_i64).unwrap_or(0) != 0;
     message.upstream_id = item
         .get("id_str")
@@ -299,7 +313,8 @@ mod tests {
                         "isadmin": 0,
                         "guard_level": 0,
                         "id_str": "bbb",
-                        "reply": {"reply_mid": 4242, "reply_uname": "被回复的人", "show_reply": true}
+                        "reply": {"reply_mid": 4242, "reply_uname": "被回复的人", "show_reply": true,
+                                  "reply_type_enum": 1, "reply_uname_color": "#FB7299"}
                     },
                     {
                         "text": "前一条",
@@ -339,6 +354,14 @@ mod tests {
         assert_eq!(messages[0].reply_to_uid, 0, "reply_mid=0 即不是回复");
         assert_eq!(messages[1].reply_to_uid, 4242, "回复关系在顶层 reply 对象里");
         assert_eq!(messages[1].reply_to_uname, "被回复的人");
+        assert_eq!(
+            messages[1].reply_type_enum, 1,
+            "历史侧的枚举与实时同名字段，原样带出"
+        );
+        assert!(messages[1].show_reply);
+        assert_eq!(messages[1].reply_uname_color, "#FB7299");
+        assert_eq!(messages[0].reply_type_enum, 0);
+        assert!(messages[0].reply_uname_color.is_empty());
         assert_eq!(
             messages[1].medal_guard_level, 0,
             "没有粉丝牌就没有牌子的舰长标记"

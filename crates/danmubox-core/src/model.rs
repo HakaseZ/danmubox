@@ -127,6 +127,25 @@ pub struct Message {
     /// 被回复者昵称；非回复为空串（上游 `reply_uname`）。
     #[serde(default)]
     pub reply_to_uname: String,
+    /// 上游的回复类型枚举（实时 `extra.reply_type_enum`，历史 `reply.reply_type_enum`）。
+    ///
+    /// 官方枚举是 `{NO_REPLY: 0, NORMAL_REPLY: 1, MATCH_REPLY: 2}`（官方前端产物里的定义）。
+    /// **实测只观测到 `0` 与 `1`**（`docs/protocol.md` 附录 A40）：`0` 恒伴随
+    /// `reply_to_uid == 0`，`1` 恒伴随 `reply_to_uid != 0` 且 `reply_uname` 非空。
+    /// `1` 究竟指「纯 @」还是「回复某条弹幕」**未实测**——收包载荷里没有任何指回
+    /// 被回复弹幕的 id（`extra` 的键集合已全量枚举），所以**不要**用它区分这两者。
+    #[serde(default)]
+    pub reply_type_enum: i64,
+    /// 上游的 `show_reply`。
+    ///
+    /// **实测在所有样本（包括完全没有回复关系的那些）里都是 `true`**，因此它当前
+    /// 不是一个可用的判别式；原样带出只为后续校准与调试。
+    #[serde(default)]
+    pub show_reply: bool,
+    /// 被 @ 者名字的颜色（上游 `reply_uname_color`，实测形如 `#FB7299`）；无关系时为空串。
+    /// 官方前端用它给「@昵称」上色，界面可用可不用。
+    #[serde(default)]
+    pub reply_uname_color: String,
     pub upstream_id: String,
 }
 
@@ -158,6 +177,9 @@ impl Message {
             emote: None,
             reply_to_uid: 0,
             reply_to_uname: String::new(),
+            reply_type_enum: 0,
+            show_reply: false,
+            reply_uname_color: String::new(),
             upstream_id: String::new(),
         }
     }

@@ -281,6 +281,22 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
                     .unwrap_or_default()
                     .to_string();
             }
+            // 这三个原样带出（语义与未知项见 `Message` 上的注释与附录 A40）：
+            // `reply_type_enum` 只观测到 0/1，`show_reply` 在所有样本里都是 true，
+            // 因此都**不能**用来区分「纯 @」与「回复某条弹幕」。
+            message.reply_type_enum = parsed
+                .get("reply_type_enum")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            message.show_reply = parsed
+                .get("show_reply")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            message.reply_uname_color = parsed
+                .get("reply_uname_color")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
         }
     }
 
@@ -711,11 +727,17 @@ mod tests {
         assert_eq!(m.reply_to_uid, 42424242);
         assert_eq!(m.reply_to_uname, "被回复的人");
         assert_eq!(m.upstream_id, "0123456789abcdef", "举报标识与回复同源");
+        // 实测：有关系的那几条 `reply_type_enum` 都是 1、`show_reply` 都是 true；
+        // 但 `1` 的语义（纯 @ 还是回复）未实测，故这两个字段只做**原样带出**的断言。
+        assert_eq!(m.reply_type_enum, 1);
+        assert!(m.show_reply);
+        assert_eq!(m.reply_uname_color, "#FB7299");
     }
 
     #[test]
-    fn non_reply_danmaku_leaves_the_reply_target_empty() {
-        // 常态：extra 里 reply_mid = 0（实测 179/180 如此），不得产出半截回复关系。
+    fn plain_danmaku_carries_no_reply_relation() {
+        // 无关系时的实测取值：`reply_mid=0`、`reply_type_enum=0`、`reply_uname_color=""`，
+        // 而 `show_reply` **仍然是 true** —— 所以它不能当判别式用。
         let extra = json!({
             "id_str": "0123456789abcdef",
             "reply_mid": 0,
@@ -737,7 +759,9 @@ mod tests {
         });
         let m = message(7, &payload, &counters()).expect("必须解出弹幕");
         assert_eq!(m.reply_to_uid, 0);
-        assert!(m.reply_to_uname.is_empty());
+        assert_eq!(m.reply_type_enum, 0);
+        assert!(m.show_reply, "实测无关系的消息 show_reply 也是 true");
+        assert!(m.reply_uname_color.is_empty());
     }
 
     #[test]

@@ -100,20 +100,49 @@ impl BiliAuth {
 
     async fn current_session(&self) -> Result<SessionState> {
         let active_profile = self.store.active_name();
-        match self.store.active() {
-            Some(profile) if profile.is_complete() => Ok(SessionState {
-                logged_in: true,
-                uid: profile.uid(),
-                nickname: self.nickname().await,
-                active_profile,
-            }),
+        let Some(profile) = self.store.active().filter(|p| p.is_complete()) else {
             // 游客态不发任何请求：不阻塞弹幕接收链路（`docs/roadmap.md` S2-AC1）。
-            _ => Ok(SessionState {
+            return Ok(SessionState {
                 logged_in: false,
                 uid: 0,
                 nickname: String::new(),
                 active_profile,
-            }),
+            });
+        };
+
+        // **字段齐全不等于凭据有效**。向 `nav` 求证一次——这是实测踩出来的：
+        // 失效的 SESSDATA 此前被当成"已登录"，于是 WS 认证发出后立刻被上游 reset
+        // （`Connection reset without closing handshake`），而那条失败被归进普通
+        // 连接错误，最终表现为「界面显示已登录、却永远连不上」（S2-AC5）。
+        match self.http.account_nickname().await {
+            Ok(Some(nickname)) => {
+                *self.nickname.lock().await = Some(nickname.clone());
+                Ok(SessionState {
+                    logged_in: true,
+                    uid: profile.uid(),
+                    nickname,
+                    active_profile,
+                })
+            }
+            Ok(None) => {
+                tracing::warn!(profile = %active_profile, "凭据已失效（nav 返回未登录）");
+                Ok(SessionState {
+                    logged_in: false,
+                    uid: 0,
+                    nickname: String::new(),
+                    active_profile,
+                })
+            }
+            Err(err) => {
+                // 网络错误不改变登录态：一次抖动不该把用户踢成游客。
+                tracing::warn!(%err, "校验登录态失败，沿用配置文件里的结论");
+                Ok(SessionState {
+                    logged_in: true,
+                    uid: profile.uid(),
+                    nickname: self.nickname().await,
+                    active_profile,
+                })
+            }
         }
     }
 }

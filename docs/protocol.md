@@ -737,6 +737,10 @@ stateDiagram-v2
 | 5 | 连续失败计数 +1；未达上限 → 进入 `Backoff`（按 §13.2 等待，重跑房间解析与 `getDanmuInfo`） |
 | 6 | 连续失败达 3 次 → 进入 `Failed`：房间状态置为 error，发 `danmubox://room` 事件，等待人工 `rooms_connect` |
 
+> **实测补充（2026-09-12）**：凭据失效时上游的表现是**握手后立刻 reset**（`Connection reset without closing handshake`），**不是** `op=8` 带非 0 code——因此单靠认证回应判不出失效，必须在**会话层**先向 `nav` 求证（见下）。
+>
+> 由此修掉一个真缺陷：`is_complete()` 只检查字段非空、不检查有效性，失效凭据因此被当成「已登录」，表现为**界面显示已登录却永远连不上**（正是本节想避免的状态）。现在 `current_session()` 会先向 `nav` 求证：`nav` 说未登录 → 会话置为未登录；网络错误不改变登录态（一次抖动不该把用户踢成游客）。
+>
 > 认证失败**不**降级为游客重连：静默降级会让用户以为已登录（发弹幕、完整字段）而实际不是。降级必须是显式用户选择。
 
 ### 13.4 重连期间的数据一致性
@@ -877,7 +881,7 @@ stateDiagram-v2
 | A11 | **已解决**：V2 载荷在 `data.pb`（非 `data`）；tag 1/2/5/6/7/8/22 与社区 schema 一致，但 tag 15 类型与 `activity_message` 位置被纠正，且 `timestamp_millisecond` 必须按 64 位声明 |
 | A14 | **已解决**：`ENTRY_EFFECT` 是 JSON；`data.uid` 为 UID，昵称在 `data.uinfo.base.name`（**没有** `data.uname`），展示文案在 `data.copy_writing` |
 | A15 | **部分解决**：认证回应与认证包同帧头（`protover=1`）；线上稳定观测到 `code=0` 表示成功。非 0 取值集合仍缺样本 |
-| A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态 | 需一条**已知房管**的发言样本 | **部分解决（2026-09-12）**：① **SC** 载荷自带 `user_info.manager`（实测样本）；② **历史条目**自带顶层 `isadmin`，且已用一条**已知房管**的发言证实其语义——在某个（房间号不写入仓库）由使用者担任房管的房间里，其本人与其同房间其他房管的条目 `isadmin=1`，非房管为 `0`，`history.rs` 的映射据此确认；③ **实时 `DANMU_MSG` 仍缺样本**——逐项查过实测载荷：`info[0][15].user` 的键为 `anon/base/bubble_box/dm_config/guard/guard_leader/medal/name_color/title/uhead_frame/uid/wealth`，`extra`（JSON 字符串）里也没有房管项。只剩社区约定的经典槽位 `info[2][2]` 待证实 | `cmd.rs`、`history.rs` |
+| A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态 | 需一条**已知房管**的发言样本 | **已解决（2026-09-12）**：**`info[2][2]` 就是房管标记**（1 = 房管，0 = 否）。判据是一次天然的跨房间对照——同一个用户在**他担任房管**的那个房间里发布的弹幕 `info[2][2]` 全为 `1`，在另两个**他不是房管**的房间发布的弹幕全为 `0`。另有两条独立来源：SC 载荷自带 `user_info.manager`；历史条目自带顶层 `isadmin`（后者亦经同一次对照证实）。三条来源现在都已落到实现里（`cmd.rs` / `history.rs`） | `cmd.rs`、`history.rs`、§10.1 |
 | A8 / A9 / A12 / A13 | **未解决**：本轮未出现礼物、SC、大航海样本，字段名仍待采集 |
 | A10 | **未解决**：`msg_type` 的枚举与文案映射仍缺对照样本 |
 | A19 | **部分解决**：`host_list[].host` 可直接拼 `wss://<host>/sub`，首节点连接成功 |

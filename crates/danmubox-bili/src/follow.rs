@@ -23,7 +23,8 @@
 //!   - 直播间标题：`title`（实测 2026-09-12：条目里同时有 `title` 与 `roomname`，
 //!     前者是本场直播标题，与 `getRoomPlayInfo` 的房间 `title` 一致）。
 //!   - 直播状态：`live_status` / `liveStatus`。
-//!   - 分组名：`group_name` / `groupName` / `tag_name` / `group`。
+//!   - 分组名：`group_name` / `groupName` / `group`。**不要**用 `tag_name`
+//!     ——它是逗号拼接的房间标签列表，不是分组（实测样本见 `map_item` 注释）。
 //!   - 本场开播时刻：`liveTime`（Unix 秒，实测 2026-09-12）——注意同响应里
 //!     还有 `live_time`（已开播秒数），两者是不同的量，不能混用。
 //!   - 在线人数：`online`（实测 2026-09-12）。
@@ -98,7 +99,12 @@ fn map_item(item: &Value) -> FollowedRoom {
         // （房间默认名），本字段取的是**本场直播标题**。
         title: str_field(item, &["title"]),
         live_status: int_field(item, &["live_status", "liveStatus"]) as i32,
-        group_name: str_field(item, &["group_name", "groupName", "tag_name", "group"]),
+        // 分组名：**不能**退而取 `tag_name`。本端点实测（2026-09-12，A28/A34）
+        // 不返回关注分组，而 `tag_name` 是逗号拼接的**房间标签列表**
+        // （真实样本：`,,上下滑tag房间,第三方推流,,,,天选时刻进行中`），
+        // 填进分组位会渲染成一串无意义文字（用户即据此报错）。
+        // 取不到就留空，界面自行隐藏该位。
+        group_name: str_field(item, &["group_name", "groupName", "group"]),
         // 开播时刻取 `liveTime`（Unix 秒）。**不要**误取 `live_time`：后者是
         // 「已开播秒数」，两者相加约等于当前时间（实测同一响应里
         // `liveTime=1789174974` 与 `live_time=12699` 同时存在）。

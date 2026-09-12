@@ -369,14 +369,23 @@ async function openChromium() {
   }
   let firstError = null;
   for (const bin of candidates) {
+    let browser = null;
     try {
-      const browser = await launchChromium(bin);
+      browser = await launchChromium(bin);
       await browser.selfCheck();
       log(`引擎 chromium：${bin}（出帧自检通过）`);
       return browser;
     } catch (error) {
       if (firstError === null) firstError = error;
       log(`候选浏览器不可用，换下一个：${bin} —— ${String(error).slice(0, 140)}`);
+      // 自检不过的这台**要当场收掉**：留着它跑完整轮就是白白多占一份内存，
+      // 而内存压力正是 WebKit 那侧渲染进程崩溃的诱因。
+      try {
+        browser?.kill();
+      } catch {
+        // 已经退了
+      }
+      reapDescendants();
     }
   }
   log(
@@ -403,6 +412,14 @@ async function openWebKit() {
       const page = await context.newPage();
       // 页面里的异常不许静默：WebKit 特有的失败（语法不支持、布局塌掉）先在这里现形
       page.on("pageerror", (error) => console.error(`[webkit] 页面异常：${error.message}`));
+      // 渲染进程整个挂掉时 Playwright 只抛一句 `Target crashed`（details.log 往往是空的）。
+      // 在那之前把 WebKit 自己的崩溃通知打出来，至少留下「确实是 WebContent 死了」这条线索。
+      page.on("crash", () =>
+        console.error(
+          "[webkit] 渲染进程崩溃（WebContent 挂了）：多为内存压力 —— " +
+            "同机并发跑另一个浏览器 / 另一轮冒烟时最常见；本条会被记进崩溃计数。",
+        ),
+      );
       page.on("console", (message) => {
         if (message.type() === "error") console.error(`[webkit] console.error：${message.text()}`);
       });
@@ -513,21 +530,25 @@ const browser = engine === "webkit" ? await openWebKit() : await openChromium();
 // 任何退出路径都要把自己起的浏览器带走 —— 包括断言失败、未捕获异常、Ctrl-C、
 // 以及外层 `timeout` 发的 SIGTERM（那条最容易漏，漏了就是留一堆进程给下一个人）
 let cleaned = false;
-const cleanup = () => {
+const cleanup = async () => {
   if (cleaned) return;
   cleaned = true;
   try {
-    browser.kill();
+    await browser.kill();
   } catch {
     // 浏览器已经退了
   }
   reapDescendants();
 };
-process.on("exit", cleanup);
+// `exit` / 信号处理里能用的只有同步代码：直接用「杀后代」这条同步路径兜底，
+// 它不依赖 browser.close() 的异步收尾（Target crashed 之类的异常路径也走得到）。
+process.on("exit", () => {
+  reapDescendants();
+});
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
     log(`收到 ${signal}，收尾`);
-    cleanup();
+    reapDescendants();
     process.exit(130);
   });
 }
@@ -541,6 +562,7 @@ try {
   let shotsTaken = 0;
   let shotsFailed = 0;
   let shotsBroken = false;
+  let crashCount = 0;
   const shootFor = (viewPage) => async (path) => {
     if (shotsBroken) {
       shotsFailed += 1;
@@ -562,19 +584,46 @@ try {
 
   const results = [];
   for (const viewport of VIEWPORTS) {
-    const viewPage = await browser.openPage(viewport.width, viewport.height);
-    try {
-      const snapshot = await runViewport({
-        viewPage,
-        shoot: shootFor(viewPage),
-        shotDir,
-        ...viewport,
-      });
-      console.log(JSON.stringify(snapshot, null, 2));
-      results.push({ viewport: viewport.name, snapshot });
-    } finally {
-      await viewPage.dispose();
+    let snapshot = null;
+    for (let attempt = 1; attempt <= 2 && snapshot === null; attempt += 1) {
+      const viewPage = await browser.openPage(viewport.width, viewport.height);
+      try {
+        snapshot = await runViewport({
+          viewPage,
+          shoot: shootFor(viewPage),
+          shotDir,
+          ...viewport,
+        });
+      } catch (error) {
+        // 渲染进程被打死（`Target crashed`）是**环境**问题：这台机器上并发跑第二轮冒烟时，
+        // 内存压力会让 WebKit 的 WebContent 进程被杀。换一张新页重试一次——崩溃的页已经死了，
+        // 重试不会掩盖产品 bug（真有问题会再崩一次，那就按失败报出来）。
+        const crashed = /crashed/i.test(String(error));
+        if (!crashed || attempt === 2) {
+          if (crashed) {
+            crashCount += 1;
+            log(
+              `✗ 视口 ${viewport.name} 两次都因渲染进程崩溃失败 —— 这是环境问题（内存压力），` +
+                "不是断言不成立；清掉并发跑的浏览器后重试本引擎。",
+            );
+          }
+          throw error;
+        }
+        crashCount += 1;
+        log(
+          `⚠ 视口 ${viewport.name} 的渲染进程崩溃（Target crashed），换一张新页重试：` +
+            `${String(error).slice(0, 120)}`,
+        );
+      } finally {
+        try {
+          await viewPage.dispose();
+        } catch {
+          // 崩溃后的页面关不掉是正常的
+        }
+      }
     }
+    console.log(JSON.stringify(snapshot, null, 2));
+    results.push({ viewport: viewport.name, snapshot });
   }
 
   const failures = [];
@@ -603,9 +652,10 @@ try {
               `${item.viewport} ${Object.values(item.snapshot).filter((v) => typeof v === "boolean").length} 条布尔断言 / ${Object.keys(item.snapshot).length} 项快照`,
           )
           .join(" + ") +
-        ` = ${total} 项快照，截图 ${shotsTaken} 张）`,
+        ` = ${total} 项快照，截图 ${shotsTaken} 张${crashCount > 0 ? `，渲染进程崩溃重试 ${crashCount} 次` : ""}）`,
     );
   }
 } finally {
-  cleanup();
+  // WebKit 的 close 是异步的：正常路径要 await，否则 node 可能先退出、把浏览器留成孤儿。
+  await cleanup();
 }

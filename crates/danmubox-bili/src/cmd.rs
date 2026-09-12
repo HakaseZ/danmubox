@@ -689,7 +689,7 @@ mod tests {
             "content": "奇怪",
             "id_str": "0123456789abcdef",
             "show_reply": true,
-            "reply_mid": 11425685,
+            "reply_mid": 42424242,
             "reply_uname": "被回复的人",
             "reply_uname_color": "#FB7299",
             "reply_type_enum": 1,
@@ -708,7 +708,7 @@ mod tests {
             ]
         });
         let m = message(7, &payload, &counters()).expect("必须解出弹幕");
-        assert_eq!(m.reply_to_uid, 11425685);
+        assert_eq!(m.reply_to_uid, 42424242);
         assert_eq!(m.reply_to_uname, "被回复的人");
         assert_eq!(m.upstream_id, "0123456789abcdef", "举报标识与回复同源");
     }

@@ -24,6 +24,8 @@ export function App() {
   const profiles = useApp((state) => state.profiles);
   const loadProfiles = useApp((state) => state.loadProfiles);
   const switchProfile = useApp((state) => state.switchProfile);
+  const createProfile = useApp((state) => state.createProfile);
+  const removeProfile = useApp((state) => state.removeProfile);
   const logout = useApp((state) => state.logout);
   const followed = useApp((state) => state.followed);
   const balance = useApp((state) => state.balance);
@@ -127,6 +129,7 @@ export function App() {
             if (await report(message, reason)) setNotice("举报已提交");
           }}
           onPrefs={(patch) => void updatePrefs(patch)}
+          onNotice={setNotice}
         />
       ) : (
         <RoomList
@@ -138,6 +141,8 @@ export function App() {
           onOpen={(roomId) => void openRoom(roomId)}
           profiles={profiles}
           onSwitchProfile={(name) => void switchProfile(name)}
+          onCreateProfile={(name) => void createProfile(name)}
+          onRemoveProfile={(name) => void removeProfile(name)}
           onLogout={() => void logout()}
           onRemove={(roomId) => void removeRoom(roomId)}
           onRefreshFollowed={() => void loadFollowed()}

@@ -1,7 +1,7 @@
 // 显示层的纯逻辑：过滤、合并相似、徽标派生、时间格式化。
 // 这些规则来自 docs/ui.md 与 docs/contract.md §8 的偏好键，放这里便于单测。
 
-import type { Emote, Message, Prefs } from "./types";
+import type { Emote, FollowedRoom, Message, Prefs } from "./types";
 
 export interface Badges {
   anchor: boolean;
@@ -28,6 +28,18 @@ export const GUARD_TITLE: Record<number, string> = {
   2: "提督",
   3: "舰长",
 };
+
+/**
+ * 粉丝牌底色相（本地设计，不是上游值）。
+ *
+ * 官方的牌面配色来自上游 `v2_medal_color_start/_end/_border`，契约 §5 只转发了牌名与等级，
+ * 因此这里按牌名派生一个稳定色相：不同主播颜色不同，同一主播每次一致。
+ */
+export function medalHue(name: string): number {
+  let hue = 0;
+  for (const ch of name) hue = (hue * 31 + (ch.codePointAt(0) ?? 0)) % 360;
+  return hue;
+}
 
 /** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 系统通知 → 粉丝牌 → 用户 → 关键词）。 */
 export function passesFilter(message: Message, prefs: Prefs): boolean {
@@ -108,6 +120,41 @@ export interface DisplayRow {
   count: number;
 }
 
+/** 关注列表每页条数（需求 §2.11 的分页；前端分页，后端一次拉全）。 */
+export const FOLLOW_PAGE_SIZE = 30;
+
+/**
+ * 关注列表排序（docs/ui.md §2.2，需求 §2.11）：
+ * 直播中置顶 → 最后开播时间近的在前 → 人气高的在前 → 房间号升序兜底。
+ *
+ * `live_start_at`（上游 `liveTime`，Unix 秒）与 `online` 缺失时按 0 参与比较，
+ * 退化成「直播中置顶 + 房间号升序」——不会因此乱序或抛错。
+ * 不改动入参，返回新数组。
+ */
+export function sortFollowedRooms(rooms: FollowedRoom[]): FollowedRoom[] {
+  return [...rooms].sort((a, b) => {
+    const live = Number(b.live_status === 1) - Number(a.live_status === 1);
+    if (live !== 0) return live;
+    const time = (b.live_start_at ?? 0) - (a.live_start_at ?? 0);
+    if (time !== 0) return time;
+    const online = (b.online ?? 0) - (a.online ?? 0);
+    if (online !== 0) return online;
+    return a.room_id - b.room_id;
+  });
+}
+
+/** 分页切片；`page` 从 1 开始，越界时夹回有效范围。 */
+export function paginate<T>(
+  items: T[],
+  page: number,
+  size = FOLLOW_PAGE_SIZE,
+): { items: T[]; page: number; pageCount: number } {
+  const pageCount = Math.max(1, Math.ceil(items.length / size));
+  const current = Math.min(Math.max(1, page), pageCount);
+  const start = (current - 1) * size;
+  return { items: items.slice(start, start + size), page: current, pageCount };
+}
+
 /**
  * 过滤 + 合并相似消息。合并规则：同一 uid、同一内容、且在 `ui.merge_window_ms`
  * 窗口内连续出现的消息合成一行，`count` 记录条数（docs/ui.md §8.4）。
@@ -152,6 +199,17 @@ export function formatClock(ts: number): string {
   const date = new Date(ts);
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/**
+ * 关注列表里的最后开播时间（本地时区 `MM-DD HH:mm`）。
+ * 上游给的是 Unix 秒；0 / 未给 = 未知，返回空串（界面不画「—」顶替）。
+ */
+export function formatLastLive(startAt?: number): string {
+  if (startAt === undefined || startAt <= 0) return "";
+  const date = new Date(startAt * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /** 弹幕颜色是十进制 RGB；0 表示未指定，用默认前景色。 */

@@ -21,6 +21,11 @@ export interface Message {
   medal_name: string;
   guard_level: number;
   is_admin: boolean;
+  /**
+   * 发送者头像 URL（契约 §5 新增字段，无则空串）。
+   * 界面按**可选**消费：引擎侧尚未落地时是 `undefined`，与空串同样处理（不渲染头像）。
+   */
+  face?: string;
   /** 进场回填的历史弹幕（上游最近 10+10 条），与实时弹幕区分展示。 */
   is_history: boolean;
   amount: number;
@@ -140,6 +145,8 @@ export interface Prefs {
   "ui.interact_auto_hide": boolean;
   /** 系统通知（开播 / 下播 / 标题变更 / 公告）显示开关。 */
   "ui.system_notice": boolean;
+  /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */
+  "ui.show_timestamp": boolean;
   /** 自定义短语（需求 §2.2）；颜文字是内置常量，不占偏好键。 */
   "composer.phrases": string[];
   "filter.keywords": string[];
@@ -190,6 +197,13 @@ export interface FollowedRoom {
   face: string;
   live_status: number;
   group_name: string;
+  /**
+   * 最后/本次开播的起始时间（上游 `GetWebList` 的 `liveTime`，Unix 秒；0/缺失 = 未知）。
+   * 排序用（docs/ui.md §2.2、契约 §5）。刻意不叫 `live_time`——上游同名字段是「已开播秒数」。
+   */
+  live_start_at?: number;
+  /** 人气/在线数（上游 `online`；缺失 = 未知）。 */
+  online?: number;
 }
 
 export const EMOTE_PACKAGE_LABEL: Record<EmotePackage, string> = {

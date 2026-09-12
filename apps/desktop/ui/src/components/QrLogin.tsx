@@ -15,14 +15,22 @@ const HINT: Record<QrState, string> = {
  * 扫码登录面板（契约 §7 的 `session_qr_start` / `session_qr_poll`）。
  *
  * 二维码由后端离线渲染成 SVG——不引任何第三方在线二维码服务（那等于把登录票据交给别人）。
+ *
+ * `startToken` 每自增一次就自动发起一次扫码：新建账号后「先建后扫」靠它接上去，
+ * 不另造登录入口（issue #1）。
  */
-export function QrLogin() {
+export function QrLogin({ startToken = 0 }: { startToken?: number }) {
   const qr = useApp((state) => state.qr);
   const qrError = useApp((state) => state.qrError);
   const startQrLogin = useApp((state) => state.startQrLogin);
   const cancelQrLogin = useApp((state) => state.cancelQrLogin);
   const pollQrLogin = useApp((state) => state.pollQrLogin);
   const [qrState, setQrState] = useState<QrState>("pending");
+
+  useEffect(() => {
+    if (startToken <= 0) return;
+    void startQrLogin();
+  }, [startToken, startQrLogin]);
 
   useEffect(() => {
     if (!qr) return;

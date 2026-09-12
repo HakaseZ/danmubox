@@ -65,6 +65,12 @@ export const api = {
   sessionStatus: () => call<SessionState>("session_status"),
   profilesList: () => call<string[]>("profiles_list"),
   profilesSwitch: (name: string) => call<SessionState>("profiles_switch", { name }),
+  /** 新建账号（多账号并存，需求 §2.1）：建好后该 profile 即为当前，接着走既有的扫码登录。 */
+  profilesCreate: (name: string) =>
+    call<SessionState>("profiles_create", { name }),
+  /** 删除账号；当前在用的与最后一个由界面拦住，不发给后端。 */
+  profilesRemove: (name: string) =>
+    call<SessionState>("profiles_remove", { name }),
   sessionLogout: () => call<SessionState>("session_logout"),
   sessionQrStart: () => call<QrLogin>("session_qr_start"),
   sessionQrPoll: (key: string) => call<QrPoll>("session_qr_poll", { key }),

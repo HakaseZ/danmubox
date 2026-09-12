@@ -70,6 +70,12 @@ interface AppStore {
   loadReportReasons: () => Promise<void>;
   loadProfiles: () => Promise<void>;
   switchProfile: (name: string) => Promise<void>;
+  /** 新建账号并切过去（需求 §2.1）；建好后用户接着扫码登录即可。 */
+  createProfile: (name: string) => Promise<void>;
+  /** 删除账号；后端改当前 profile 后要按新会话重拉房间与关注。 */
+  removeProfile: (name: string) => Promise<void>;
+  /** 会话变化后的统一善后（房间列表 / 关注列表跟着账号走）。 */
+  applySession: (session: SessionState) => Promise<void>;
   logout: () => Promise<void>;
   startQrLogin: () => Promise<void>;
   cancelQrLogin: () => void;
@@ -355,11 +361,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
     try {
       const { state, session } = await api.sessionQrPoll(qr.key);
       if (state === "confirmed") {
-        // 后端在这一步已写盘并让房间重连，界面把会话/账号/房间重新拉一遍。
-        set({ qr: null, qrError: null, session, profiles: await api.profilesList() });
-        set({ rooms: await api.roomsList() });
-        // 换了个账号，关注列表也随之换人：同样在会话就绪后自动拉一次。
-        if (session.logged_in) void get().loadFollowed();
+        // 后端在这一步已写盘并让房间重连，界面把会话/账号/房间/关注重新拉一遍。
+        set({ qr: null, qrError: null, profiles: await api.profilesList() });
+        await get().applySession(session);
       }
       return state;
     } catch (error) {
@@ -376,14 +380,39 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
+  async applySession(session) {
+    set({ session });
+    set({ rooms: await api.roomsList() });
+    // 关注跟着账号走：换了身份就按新身份重拉；未登录则清空，不留上一个人的列表。
+    if (session.logged_in) void get().loadFollowed();
+    else set({ followed: [] });
+  },
+
   async switchProfile(name) {
     try {
-      const session = await api.profilesSwitch(name);
-      set({ session });
-      // 后端已让各房间用新凭据重连，这里把房间与会话状态重新拉一遍。
-      set({ rooms: await api.roomsList() });
-      // 关注列表跟着账号走：换号后按新身份重新拉（与启动时同一套规则）。
-      if (session.logged_in) void get().loadFollowed();
+      // 后端已让各房间用新凭据重连，这里把会话、房间与关注重新拉一遍。
+      await get().applySession(await api.profilesSwitch(name));
+    } catch (error) {
+      set({ error: describeError(error) });
+    }
+  },
+
+  async createProfile(name) {
+    try {
+      // 先建后扫：新 profile 建好即成为当前，接着走既有的扫码流程写入凭据（需求 §2.1）。
+      await get().applySession(await api.profilesCreate(name));
+      set({ profiles: await api.profilesList() });
+    } catch (error) {
+      set({ error: describeError(error) });
+    }
+  },
+
+  async removeProfile(name) {
+    try {
+      await get().applySession(await api.profilesRemove(name));
+      set({ profiles: await api.profilesList() });
+      // 被删的可能正是当前 profile（后端会切到别个），二维码状态已无意义。
+      set({ qr: null, qrError: null });
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -391,7 +420,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async logout() {
     try {
-      set({ session: await api.sessionLogout() });
+      await get().applySession(await api.sessionLogout());
     } catch (error) {
       set({ error: describeError(error) });
     }

@@ -543,11 +543,8 @@ fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus) {
                 Ok(Event::Status(status)) => {
                     let _ = app.emit("danmubox://status", &status);
                 }
-                Ok(Event::Popularity { room_id, value }) => {
-                    let _ = app.emit(
-                        "danmubox://popularity",
-                        &serde_json::json!({ "room_id": room_id, "value": value }),
-                    );
+                Ok(Event::RoomStats(stats)) => {
+                    let _ = app.emit("danmubox://room_stats", &stats);
                 }
                 Ok(Event::Room(room)) => {
                     let _ = app.emit("danmubox://room", &room);

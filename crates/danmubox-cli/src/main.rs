@@ -311,9 +311,12 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
                         );
                     }
                 }
-                Ok(Event::Popularity { room_id, value }) => {
+                Ok(Event::RoomStats(stats)) => {
                     if !quiet {
-                        println!("# 人气值 room_id={room_id} value={value}");
+                        println!(
+                            "# 观众数 room_id={} 在线={:?} 看过={:?}",
+                            stats.room_id, stats.online, stats.watched
+                        );
                     }
                 }
                 Ok(Event::Status(status)) => {

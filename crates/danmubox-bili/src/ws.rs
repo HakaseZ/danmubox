@@ -264,20 +264,22 @@ impl BiliLive {
                             for item in decoded {
                                 match item {
                                     Decoded::Business(value) => {
-                                        // 人气值走单独支路：它不进会话缓冲，只更新界面数字。
+                                        // 观众数走单独支路：它不进会话缓冲，只更新界面数字。
                                         match cmd::dispatch(room_id, &value, &self.counters) {
                                             Some(cmd::Dispatch::Message(message)) => {
                                                 sink.publish_message(message)
                                             }
-                                            Some(cmd::Dispatch::Popularity(value)) => {
-                                                sink.publish_popularity(room_id, value)
-                                            }
+                                            Some(cmd::Dispatch::RoomStats {
+                                                online,
+                                                watched,
+                                            }) => sink.publish_room_stats(room_id, online, watched),
                                             None => {}
                                         }
                                     }
                                     Decoded::Popularity(value) => {
+                                        // `op=3` 心跳回应携带的是人气值（与 `POPULARITY_CHANGE`
+                                        // 同口径，见 A23）。界面不再展示人气值，因此只记日志。
                                         tracing::debug!(room_id, popularity = value, "人气值");
-                                        sink.publish_popularity(room_id, i64::from(value));
                                     }
                                     Decoded::VerifyReply(value) => {
                                         let code = value

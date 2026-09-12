@@ -24,6 +24,20 @@ pub struct StatusEvent {
     pub detail: String,
 }
 
+/// 房间观众数（`docs/contract.md` §5）。
+///
+/// 两个数各自随不同的上游命令到达，因此两侧都是可选的：未到达的一侧为 `None`，
+/// 消费方保留上一次的值即可，不需要在协议层拼出一个「完整快照」。
+/// 它们变化频繁但与连接状态无关，因此单独一个事件，不挤进 `Status`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomStats {
+    pub room_id: i64,
+    /// 在线人数（`ONLINE_RANK_COUNT` 的 `online_count`），协议 §10.7。
+    pub online: Option<i64>,
+    /// 累计看过（`WATCHED_CHANGE` 的 `num`），协议 §10.7。
+    pub watched: Option<i64>,
+}
+
 /// 事件总线上的事件。UI、会话缓冲、日志三个消费方共用同一份。
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -33,9 +47,8 @@ pub enum Event {
     RoomClosed(i64),
     Status(StatusEvent),
     Session(RoomSession),
-    /// 人气值（`op=3` 心跳回应携带，协议 §10.7 记录的主要来源）。
-    /// 它变化频繁但与连接状态无关，因此单独一个事件，不挤进 `Status`。
-    Popularity { room_id: i64, value: i64 },
+    /// 房间观众数变化（在线人数 / 累计看过）。
+    RoomStats(RoomStats),
 }
 
 /// 广播总线。慢消费者由 `broadcast` 自行丢弃旧值，不阻塞上游。
@@ -171,9 +184,13 @@ impl MessageSink {
         }));
     }
 
-    /// 人气值：只影响界面上的一个数字，因此不经过会话缓冲，也不计入流量统计。
-    pub fn publish_popularity(&self, room_id: i64, value: i64) {
-        self.bus.publish(Event::Popularity { room_id, value });
+    /// 房间观众数：只影响界面上的两个数字，因此不经过会话缓冲，也不计入流量统计。
+    pub fn publish_room_stats(&self, room_id: i64, online: Option<i64>, watched: Option<i64>) {
+        self.bus.publish(Event::RoomStats(RoomStats {
+            room_id,
+            online,
+            watched,
+        }));
     }
 
     pub fn publish_room(&self, room: Room) {

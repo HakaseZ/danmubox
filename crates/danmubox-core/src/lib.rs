@@ -13,7 +13,7 @@ pub mod ports;
 pub mod prefs;
 pub mod session;
 
-pub use bus::{Cancel, ConnState, Counters, Event, EventBus, MessageSink, StatusEvent};
+pub use bus::{Cancel, ConnState, Counters, Event, EventBus, MessageSink, RoomStats, StatusEvent};
 pub use config::{AppConfig, ConfigStore, Profile};
 pub use error::{Error, Result};
 pub use model::{

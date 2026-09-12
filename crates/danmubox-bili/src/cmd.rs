@@ -21,14 +21,16 @@ const SYSTEM_CMDS: [(&str, &str); 5] = [
 ];
 
 /// 计数类命令：**不写入会话缓冲**（`docs/protocol.md` §10.7），
-/// 只更新房间内存计数。人气值的主要来源是 `POPULARITY_CHANGE`。
-const COUNTER_CMDS: [&str; 6] = [
+/// 只更新房间内存计数。其中 `ONLINE_RANK_COUNT` / `WATCHED_CHANGE` 携带的
+/// 两个观众数（在线人数 / 累计看过）要冒泡给界面，见 `Dispatch::RoomStats`。
+const COUNTER_CMDS: [&str; 7] = [
     "POPULARITY_CHANGE",
     "ROOM_REAL_TIME_MESSAGE_UPDATE",
     "WATCHED_CHANGE",
     "LIKE_INFO_V3_CLICK",
     "LIKE_INFO_V3_UPDATE",
     "ONLINE_RANK_V2",
+    "ONLINE_RANK_COUNT",
 ];
 
 /// 已知但与当前订阅房间无关、或纯客户端提示的命令：丢弃且**不计为未知**。
@@ -49,17 +51,21 @@ const IGNORED_CMDS: [&str; 5] = [
     "PLAYURL_RELOAD_MASTER",
 ];
 
-/// `dispatch` 的产出。多数命令产出一条消息；人气值走单独支路——
-/// 它高频、只影响界面上的一个数字，既不该进会话缓冲，也不该被当成消息。
+/// `dispatch` 的产出。多数命令产出一条消息；观众数走单独支路——
+/// 它们高频、只影响界面上的两个数字，既不该进会话缓冲，也不该被当成消息。
 ///
-/// `allow(large_enum_variant)`：`Message` 比 `i64` 大得多，但本枚举是**按值返回**的
+/// `allow(large_enum_variant)`：`Message` 比其它变体大得多，但本枚举是**按值返回**的
 /// 临时载体（从不进集合），尺寸不影响任何东西；按 lint 的建议装箱反而会给
 /// 每条弹幕多一次堆分配，那才是真的代价。
 #[allow(clippy::large_enum_variant)]
 pub enum Dispatch {
     Message(Message),
-    /// `POPULARITY_CHANGE` 携带的人气值（协议 §10.7）。
-    Popularity(i64),
+    /// 房间观众数：在线人数（`ONLINE_RANK_COUNT.online_count`）与
+    /// 累计看过（`WATCHED_CHANGE.num`），协议 §10.7。两者各自到达，未到达的一侧为 `None`。
+    RoomStats {
+        online: Option<i64>,
+        watched: Option<i64>,
+    },
 }
 
 /// 把一条业务 JSON 载荷映射为领域产出；不产生任何产出时返回 `None`。
@@ -96,18 +102,27 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
         other => {
             if COUNTER_CMDS.contains(&other) {
                 Counters::bump(&counters.counter_updates);
-                let popularity = value
-                    .pointer("/data/popularity")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or_default();
+                // 观众数是唯一要冒泡给界面的计数类数据：其余几类只是数字统计。
+                // 字段取自实测载荷（`docs/protocol.md` 附录 A22 补充）：
+                // `ONLINE_RANK_COUNT` 的 `online_count`、`WATCHED_CHANGE` 的 `num`。
+                let online = match other {
+                    "ONLINE_RANK_COUNT" => {
+                        value.pointer("/data/online_count").and_then(Value::as_i64)
+                    }
+                    _ => None,
+                };
+                let watched = match other {
+                    "WATCHED_CHANGE" => value.pointer("/data/num").and_then(Value::as_i64),
+                    _ => None,
+                };
                 tracing::debug!(
                     cmd = other,
-                    popularity,
+                    online,
+                    watched,
                     "计数类命令：只更新房间计数，不入缓冲"
                 );
-                // 人气值是唯一要冒泡给界面的计数类命令：其余几类只是数字统计。
-                if other == "POPULARITY_CHANGE" {
-                    return Some(Dispatch::Popularity(popularity));
+                if online.is_some() || watched.is_some() {
+                    return Some(Dispatch::RoomStats { online, watched });
                 }
                 None
             } else if IGNORED_CMDS.contains(&other) {
@@ -503,13 +518,11 @@ mod tests {
     }
 
     /// 测试里多数场景只关心「有没有产出消息」，用这个包一层；
-    /// 人气值支路由 `popularity_is_reported_separately` 单独覆盖。
+    /// 观众数支路由 `room_stats_bubble_without_entering_the_buffer` 单独覆盖。
     fn message(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> {
         match dispatch(room_id, value, counters) {
             Some(Dispatch::Message(message)) => Some(message),
-            Some(Dispatch::Popularity(value)) => {
-                panic!("期望消息，实际拿到人气值 {value}")
-            }
+            Some(Dispatch::RoomStats { .. }) => panic!("期望消息，实际拿到房间观众数"),
             None => None,
         }
     }
@@ -912,23 +925,44 @@ mod tests {
     }
 
     #[test]
-    fn popularity_is_reported_separately_from_messages() {
-        // 人气值高频且只影响界面上的一个数字：不进会话缓冲，也不能当成消息。
+    fn room_stats_bubble_without_entering_the_buffer() {
+        // 观众数高频且只影响界面上的两个数字：不进会话缓冲，也不能当成消息。
         let counters = counters();
-        let payload = json!({"cmd": "POPULARITY_CHANGE", "data": {"popularity": 12345}});
-        match dispatch(7, &payload, &counters) {
-            Some(Dispatch::Popularity(value)) => assert_eq!(value, 12345),
-            other => panic!("应产出人气值，实际是 {:?}", other.is_some()),
+        let online = json!({
+            "cmd": "ONLINE_RANK_COUNT",
+            "data": {"count": 3, "online_count": 12345}
+        });
+        match dispatch(7, &online, &counters) {
+            Some(Dispatch::RoomStats {
+                online: Some(12345),
+                watched: None,
+            }) => {}
+            other => panic!("应产出在线人数，实际是 {:?}", other.is_some()),
+        }
+        let watched = json!({
+            "cmd": "WATCHED_CHANGE",
+            "data": {"num": 456789, "text_small": "45.6万"}
+        });
+        match dispatch(7, &watched, &counters) {
+            Some(Dispatch::RoomStats {
+                online: None,
+                watched: Some(456789),
+            }) => {}
+            other => panic!("应产出累计看过，实际是 {:?}", other.is_some()),
         }
         assert_eq!(
             counters.snapshot().counter_updates,
-            1,
-            "人气值仍要计入计数类命令统计"
+            2,
+            "两个观众数命令仍要计入计数类统计"
         );
 
-        // 其余计数类命令不产出人气值。
-        let watched = json!({"cmd": "WATCHED_CHANGE", "data": {"popularity": 9}});
-        assert!(dispatch(7, &watched, &counters).is_none());
+        // 载荷里没有对应字段时不冒泡（界面保留上一次的值，不显示 0）。
+        let empty = json!({"cmd": "WATCHED_CHANGE", "data": {}});
+        assert!(dispatch(7, &empty, &counters).is_none());
+
+        // 其余计数类命令不产出观众数。
+        let popularity = json!({"cmd": "POPULARITY_CHANGE", "data": {"popularity": 9}});
+        assert!(dispatch(7, &popularity, &counters).is_none());
     }
 
     #[test]
@@ -940,6 +974,7 @@ mod tests {
             "LIKE_INFO_V3_CLICK",
             "LIKE_INFO_V3_UPDATE",
             "ONLINE_RANK_V2",
+            "ONLINE_RANK_COUNT",
             "ROOM_REAL_TIME_MESSAGE_UPDATE",
         ] {
             let produced = dispatch(1, &json!({"cmd": cmd, "data": {"popularity": 123}}), &c);
@@ -948,8 +983,12 @@ mod tests {
                 "{cmd} 按 protocol.md §10.7 不得产生消息"
             );
         }
-        assert_eq!(c.snapshot().counter_updates, 6);
-        assert_eq!(c.snapshot().unknown_cmd, 0, "已识别的计数命令不算未知");
+        assert_eq!(c.snapshot().counter_updates, 7);
+        assert_eq!(
+            c.snapshot().unknown_cmd,
+            0,
+            "已识别的计数命令（含 ONLINE_RANK_COUNT）不算未知"
+        );
     }
 
     #[test]

@@ -19,6 +19,15 @@ export interface Message {
   color: number;
   medal_level: number;
   medal_name: string;
+  /**
+   * 粉丝牌真彩色（契约 §5）：上游 `user.medal.v2_medal_color_*`，取值是带 alpha 的
+   * CSS 十六进制串（如 `#3FB4F699`）。**空串不是颜色**——缺失时界面用按牌名派生的
+   * 色相兜底（见 `filtering.medalColors`），不拿黑色顶替。
+   */
+  medal_color_start?: string;
+  medal_color_end?: string;
+  medal_color_border?: string;
+  medal_color_text?: string;
   guard_level: number;
   is_admin: boolean;
   /**

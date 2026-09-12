@@ -6,7 +6,7 @@ import {
   cssColor,
   formatClock,
   GUARD_TITLE,
-  medalHue,
+  medalColors,
   type DisplayRow,
 } from "../filtering";
 import type { Message, Prefs } from "../types";
@@ -25,7 +25,7 @@ interface Props {
 export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   const { message, count } = row;
   const badges = badgesFor(message, anchorUid);
-  const hue = medalHue(badges.medalName);
+  const medal = medalColors(message);
   const color = cssColor(message.color);
   const highlight = alertsOn(message, prefs) ? styles.highlight : undefined;
 
@@ -73,7 +73,11 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
         </span>
       )}
       {message.kind !== "system" && (
-        <Avatar url={message.face} name={message.uname} />
+        // 头像列永远占位：没有头像（face 为空串）时不画假图，但列宽照留，
+        // 否则这一行的徽标 / 昵称 / 正文会整体左移，三列对不齐（issue #8）。
+        <span className={styles.avatarCol} data-testid="db-msg-avatar-col">
+          <Avatar url={message.face} name={message.uname} />
+        </span>
       )}
       {message.kind !== "system" && (
         <span className={styles.badges}>
@@ -96,8 +100,11 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             <span
               className={`${styles.badge} ${styles.badgeMedal}`}
               style={{
-                // 牌面底色按牌名派生（见 filtering.medalHue）：上游真彩色未进契约
-                backgroundImage: `linear-gradient(45deg, hsl(${hue} 32% 50%), hsl(${hue} 34% 66%))`,
+                // 牌面配色优先用上游真彩色（契约 §5）；空串不是颜色，缺失时
+                // medalColors 已回退到按牌名派生的色相（docs/ui.md §4.2）。
+                backgroundImage: `linear-gradient(45deg, ${medal.start}, ${medal.end})`,
+                ...(medal.border ? { borderColor: medal.border } : null),
+                ...(medal.text ? { color: medal.text } : null),
               }}
             >
               <span className={styles.medalName}>{badges.medalName}</span>
@@ -107,7 +114,11 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
         </span>
       )}
       {message.kind !== "system" && message.uname.length > 0 && (
-        <span className={styles.name} style={color ? { color } : undefined}>
+        <span
+          className={styles.name}
+          data-testid="db-msg-name"
+          style={color ? { color } : undefined}
+        >
           {message.uname}:
         </span>
       )}

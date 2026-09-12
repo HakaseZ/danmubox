@@ -30,15 +30,42 @@ export const GUARD_TITLE: Record<number, string> = {
 };
 
 /**
- * 粉丝牌底色相（本地设计，不是上游值）。
+ * 粉丝牌底色相（**兜底**用，不是首选）。
  *
- * 官方的牌面配色来自上游 `v2_medal_color_start/_end/_border`，契约 §5 只转发了牌名与等级，
- * 因此这里按牌名派生一个稳定色相：不同主播颜色不同，同一主播每次一致。
+ * 官方的牌面配色来自上游 `v2_medal_color_start/_end/_border/_text`，契约 §5 已转发
+ * （`Message.medal_color_*`）；上游没给（空串）时才退回这里按牌名派生的稳定色相：
+ * 不同主播颜色不同，同一主播每次一致。
  */
 export function medalHue(name: string): number {
   let hue = 0;
   for (const ch of name) hue = (hue * 31 + (ch.codePointAt(0) ?? 0)) % 360;
   return hue;
+}
+
+/**
+ * 粉丝牌配色（docs/ui.md §4.2）：**优先**上游真彩色（契约 §5 `Message.medal_color_*`，
+ * 带 alpha 的 CSS 十六进制串），缺失时回退到按牌名派生的色相（本地设计：同一主播固定、
+ * 不同主播不同色）。
+ *
+ * 引擎保证缺失即**空串**，而空串不是颜色，所以每一档单独判空：起止色缺一个就整体回退，
+ * 描边与文字色各自回退到 CSS 里的默认值。
+ */
+export function medalColors(message: Message): {
+  start: string;
+  end: string;
+  border?: string;
+  text?: string;
+} {
+  const start = message.medal_color_start ?? "";
+  const end = message.medal_color_end ?? "";
+  const hue = medalHue(message.medal_name);
+  const solid = start.length > 0 && end.length > 0;
+  return {
+    start: solid ? start : `hsl(${hue} 32% 50%)`,
+    end: solid ? end : `hsl(${hue} 34% 66%)`,
+    border: message.medal_color_border || undefined,
+    text: message.medal_color_text || undefined,
+  };
 }
 
 /** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 系统通知 → 粉丝牌 → 用户 → 关键词）。 */

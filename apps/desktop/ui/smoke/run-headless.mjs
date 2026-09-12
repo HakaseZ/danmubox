@@ -153,6 +153,9 @@ try {
 
   let snapshot = null;
   let midShot = false;
+  let shortShot = false;
+  let adminShot = false;
+  let confirmShot = false;
   const shoot = async (path) => {
     const { data } = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(path, Buffer.from(data, "base64"));
@@ -169,6 +172,20 @@ try {
       if (!midShot && snapshot.layoutPanelShown) {
         midShot = true;
         await shoot(join(shotDir, "danmubox-ui-room.png"));
+      }
+      // 内容不足视口时贴底那一刻（issue #8 / A2 的视觉证据）
+      if (!shortShot && typeof snapshot.layoutShortContentBottomGap === "number") {
+        shortShot = true;
+        await shoot(join(shotDir, "danmubox-ui-short-content.png"));
+      }
+      // 房管面板三块列表与二次确认条各一张（issue #3 的视觉证据）
+      if (!adminShot && snapshot.adminPanelShown) {
+        adminShot = true;
+        await shoot(join(shotDir, "danmubox-ui-admin.png"));
+      }
+      if (!confirmShot && snapshot.adminMuteConfirmShown) {
+        confirmShot = true;
+        await shoot(join(shotDir, "danmubox-ui-admin-confirm.png"));
       }
       if (snapshot.done) break;
     }

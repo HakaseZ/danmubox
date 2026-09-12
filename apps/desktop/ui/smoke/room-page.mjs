@@ -246,6 +246,20 @@ const MOCK = `(function () {
     out.step3_interactAnimation = interact ? getComputedStyle(interact).animationName : null;
     snap();
 
+    // ---- 几何：内容不足视口高度时整体贴底（直播弹幕自下往上读，最新一条紧贴输入区）
+    // 此刻列表只有历史 1 条 + 实时 3 条，远未填满视口，正好测「富余空间去了哪」。
+    // 贴底时 未尾行.bottom 与滚动容器.bottom 之间只剩容器的 padding-bottom（8px）。
+    var scrollerShort = byTestId("db-chat-scroll");
+    var lastRowShort = rows()[rows().length - 1];
+    out.layoutShortContentBottomGap = lastRowShort
+      ? Math.round(scrollerShort.getBoundingClientRect().bottom - lastRowShort.getBoundingClientRect().bottom)
+      : null;
+    out.layoutShortContentPinnedBottom =
+      out.layoutShortContentBottomGap !== null && out.layoutShortContentBottomGap <= 12;
+    // 停一下让跑脚本的进程抓一张「内容不足视口时贴底」的截图
+    snap();
+    await sleep(900);
+
     // 再补 60 条，让列表真的会滚（后面的几何断言才有意义）
     for (var i = 0; i < 60; i += 1) {
       window.__emit("danmubox://message", window.__mk("danmaku", "实时弹幕 " + i));
@@ -254,6 +268,15 @@ const MOCK = `(function () {
     out.rowCount = rows().length;
     snap();
 
+    // 粉丝牌配色：上游真彩色优先；空串不是颜色，回退按牌名派生的色相（issue #6 / 契约 §5）
+    window.__emit("danmubox://message", window.__mk("danmaku", "带真彩牌弹幕", false, {
+      medal_level: 7, medal_name: "真彩牌",
+      medal_color_start: "#3FB4F699", medal_color_end: "#1E6FD9",
+      medal_color_border: "#FFFFFF", medal_color_text: "#FFFFFF"
+    }));
+    window.__emit("danmubox://message", window.__mk("danmaku", "无真彩牌弹幕", false, {
+      medal_level: 3, medal_name: "兜底牌"
+    }));
     // 头像（Message.face）：有头像画图、没头像不渲染、加载失败退化成首字符占位
     window.__emit("danmubox://message", window.__mk("danmaku", "带头像的弹幕", false, {
       face: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><rect width='32' height='32' fill='%2300aeec'/></svg>",
@@ -277,6 +300,34 @@ const MOCK = `(function () {
     out.avatarImageRendered = !!avatarOf(withFace) && avatarOf(withFace).tagName === "IMG";
     out.avatarAbsentWhenNoFace = !avatarOf(noFace);
     out.avatarFallbackOnError = !!avatarOf(badFace) && avatarOf(badFace).tagName === "SPAN";
+    // 头像列永远占位：三行的昵称左边缘必须一致（没头像的那行不许整体左移）
+    var nameLefts = [withFace, badFace, noFace].map(function (row) {
+      var name = row ? row.querySelector('[data-testid="db-msg-name"]') : null;
+      return name ? Math.round(name.getBoundingClientRect().left * 10) / 10 : null;
+    });
+    out.layoutNameLefts = nameLefts;
+    out.layoutAvatarColumnAligned =
+      nameLefts.every(function (v) { return v !== null && Math.abs(v - nameLefts[0]) < 0.6; });
+    // 粉丝牌配色：可观察面是行内 style 与计算样式（不依赖 CSS-module 类名）
+    var medalBadgeOf = function (needle) {
+      var row = rowWith(needle);
+      if (!row) return null;
+      var spans = [].slice.call(row.querySelectorAll("span"));
+      for (var i = 0; i < spans.length; i += 1) {
+        if ((spans[i].getAttribute("style") || "").indexOf("linear-gradient") >= 0) return spans[i];
+      }
+      return null;
+    };
+    var medalStyleText = function (badge) {
+      if (!badge) return "";
+      return (badge.getAttribute("style") || "") + "|" + getComputedStyle(badge).backgroundImage;
+    };
+    var trueMedalText = medalStyleText(medalBadgeOf("带真彩牌弹幕"));
+    var fallbackMedalText = medalStyleText(medalBadgeOf("无真彩牌弹幕"));
+    out.medalTrueColorApplied = trueMedalText.indexOf("#3FB4F699") >= 0 ||
+      trueMedalText.indexOf("63, 180, 246") >= 0;
+    out.medalFallbackGradientApplied = fallbackMedalText.indexOf("linear-gradient") >= 0 &&
+      fallbackMedalText !== trueMedalText;
 
     // ---- layout 弹幕列表是唯一生长区；面板向上展开不遮挡最新弹幕
     var scroller = byTestId("db-chat-scroll");

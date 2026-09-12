@@ -77,6 +77,7 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
       >
         <div
           data-testid="db-msg-list"
+          className={styles.msgList}
           style={{
             height: `${virtualizer.getTotalSize()}px`,
             width: "100%",

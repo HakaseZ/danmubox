@@ -262,20 +262,29 @@
 | 项 | 官方 | 本界面 |
 |---|---|---|
 | 徽标形状 | 胶囊：`border-radius: 8px`、`height: 15px`、`padding: 2px 6px 2px 2px`、12px 白字 | 同形，但尺寸用 em（`height: 1.35em` / `font-size: 0.79em` / `border-radius: 0.55em`）随 `ui.font_scale` 缩放 |
-| 描边 | `1px solid var(--borderColor)`（牌面同色系） | `1px solid color-mix(in srgb, #fff 45%, transparent)` |
+| 描边 | `1px solid var(--borderColor)`（牌面同色系） | 粉丝牌有 `medal_color_border` 时用它，否则 `1px solid color-mix(in srgb, #fff 45%, transparent)` |
 | 底色 | `linear-gradient(45deg, v2_medal_color_start, v2_medal_color_end)` | 主播 / 房管 / 大航海用本地 token 的同款 45° 渐变；粉丝牌见下 |
 | 等级格 | 右侧独立一格、宽度固定（1 位 `4px` / 3 位 `15px`），白字 | 右侧独立一格（`tabular-nums`，深色半透明底） |
 
-**粉丝牌配色**：官方牌面颜色来自上游 `v2_medal_color_start/_end/_border`，契约 §5 只转发 `medal_name` / `medal_level`，因此界面**按牌名派生一个稳定色相**（同一主播每次一致、不同主播不同色），并在 `style` 里给 45° 渐变。这是本地设计，**不是上游值**；要还原官方配色需先让契约转发那三件套（见 §13）。
+**粉丝牌配色**：契约 §5 转发了上游四件套 `Message.medal_color_start` / `_end` / `_border` / `_text`（`user.medal.v2_medal_color_*`，带 alpha 的 CSS 十六进制串，如 `#3FB4F699` / `#FFFFFF`），界面**优先用真彩色**：`start` / `end` 作 45° 渐变两端，`border` 作描边色，`text` 作牌面文字色。
+
+| 情况 | 渲染 |
+|---|---|
+| `medal_color_start` 与 `_end` 都非空 | 用上游真彩色做渐变 |
+| 任一为空串 | 退回**按牌名派生的稳定色相**（同一主播每次一致、不同主播不同色）——这是本地兜底，不是上游值 |
+| `medal_color_border` / `_text` 为空串 | 各自退回 CSS 默认（半透明白描边、白字），不拿黑色顶替 |
+
+**空串不是颜色**（引擎保证缺失即空串）：不得把空串当 `#000000` 渲染，也不得用它拼 `linear-gradient` 的色标。
 
 **头像**（需求 §2.6，`Message.face`）：
 
 | 情况 | 渲染 |
 |---|---|
 | `face` 非空 | 圆形缩略图（`1.35em`，随字号缩放），`alt=""`、`title=昵称`（装饰性图片，昵称已在旁边） |
-| `face` 为空串 | **不渲染**头像（上游没给就没有这一列，不画假图） |
+| `face` 为空串 | **不画图**（上游没给就没有头像），但**头像列照常占位**（`1.35em` 的空容器，`data-testid="db-msg-avatar-col"`）：否则这一行的徽标 / 昵称 / 正文会整体左移，三列与其它行对不齐（用户 2026-09-12：时间与列要对齐） |
 | 加载失败 | 退化成昵称首字符的圆形占位（居中大写，底色 `--bg-input`） |
 
+- 占位列的宽度是 `1.35em`，与有头像时一致；占位元素不带 `db-msg-avatar`，因此「没头像」与「头像加载失败」在 DOM 上仍可区分。
 - 点击昵称（含徽标区域）在系统浏览器打开该用户主页；`uid == 0`（游客/未知）时昵称不可点击。
 
 ### 4.3 字段使用
@@ -582,6 +591,7 @@
 4. 「回到最新」使用平滑滚动。
 5. `visibilitychange` 为 hidden 时不依赖 rAF（后台会被节流），改为 1s 定时批量写入 store，恢复可见时立即 flush 并对齐滚动。
 6. **可视高度变化要重新贴底**：弹出面板展开/收起、窗口缩放、礼物栏开合都会改聊天区高度（`ResizeObserver` 监听滚动容器）。跟随模式下重新定位到末尾，否则最新弹幕会被挤出视口（`docs/ui.md` §2.3 的「不遮挡最新弹幕」）；暂停状态下不动视口。
+7. **内容不足视口高度时整体贴底**：直播弹幕自下往上读，最新一条应紧贴输入区上方（官方聊天栏同样贴底），因此富余空间留在**顶部**、不留底部。实现是滚动容器 `display: flex; flex-direction: column`、内层虚拟高度块 `margin-top: auto`——**不用** `justify-content: flex-end`：在滚动容器上用 flex-end，内容一旦超过视口高度，顶部会被顶出可滚动区间（滚不回去，flex + overflow 的经典坑）。虚拟行是 `position: absolute` + `translateY` 定位，不受这层对齐影响。
 
 ### 7.3 滚动锚定
 
@@ -744,7 +754,7 @@
 | Android WebView 虚拟列表性能 | `overscan` 12（窄屏 8，§7.1） | 真机注入高频消息，观察滚动卡顿与内存增长 | 不达标时降至 `overscan` 8 |
 | `live_status == 2`（轮播）展示 | 列表与房间头显示「轮播中」 | 找一个轮播房间观察上游 `live_status` 取值与可否连收弹幕 | 校准 §2.2 与 §3.1 的状态映射 |
 | **关注列表的「最后开播时间」与「人气」** | 已实测（2026-09-12）：`GetWebList` 条目带 `liveTime`（Unix 秒；与同名的 `live_time`（**已开播秒数**）相加正好等于当前时间，靠这个关系确认了语义）与 `online`。契约 §5 已按 `live_start_at` / `online` 转发，界面据此排序（§2.2） | 登录态请求一次 `xfetter/GetWebList` 比对条目字段名与取值 | 已闭环；若上游改名需重新校准 |
-| **粉丝牌真彩色** | 契约 §5 只转发 `medal_name` / `medal_level`，**没有**上游的 `v2_medal_color_start/_end/_border/_text`；界面按牌名派生一个稳定色相（同一主播固定、不同主播不同色），并在 §4.2 标明是本地设计 | 用官方客户端观察同一房间不同主播的牌面配色，记录四元组；与上游原始载荷对照 | 要让牌面与官方一致，需先让契约转发这四个颜色字段，再回填 §4.2 |
+| **粉丝牌真彩色** | 已闭环（2026-09-12）：契约 §5 转发 `medal_color_start` / `_end` / `_border` / `_text`（上游 `v2_medal_color_*`，带 alpha 的 CSS 十六进制串），界面优先用真彩色；只在任一为空串时回退到按牌名派生的色相（本地兜底，见 §4.2） | 用官方客户端观察同一房间不同主播的牌面配色，记录四元组；与上游原始载荷对照 | 已闭环；若上游改名需重新校准 |
 
 ---
 

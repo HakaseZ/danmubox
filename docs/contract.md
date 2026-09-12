@@ -281,6 +281,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.merge_similar` | boolean | `true` | 是否合并相似消息 |
 | `ui.merge_window_ms` | integer | `8000` | 相似消息合并窗口 |
 | `ui.gift_panel_mode` | string | `"merged"` | `merged`（礼物混在弹幕栏）/ `separate`（独立礼物栏） |
+| `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；点一下插入输入框。颜文字是内置常量，不占用偏好键 |
 | `filter.keywords` | string[] | `[]` | 关键词列表 |
 | `filter.keywords_mode` | string | `"hide"` | `hide` 命中隐藏 / `only` 仅显示命中 |
 | `filter.keywords_alert` | boolean | `false` | 命中关键词时高亮并提示音 |

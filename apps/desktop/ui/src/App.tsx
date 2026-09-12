@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 
 import { RoomList } from "./components/RoomList";
-import { RoomView } from "./components/RoomView";
+import { DOT, RoomView } from "./components/RoomView";
 import { toDisplayRows } from "./filtering";
 import { useApp } from "./store";
 import styles from "./app.module.css";
@@ -70,6 +70,27 @@ export function App() {
 
   return (
     <div className={styles.shell}>
+      {/* 多房间标签页（需求 §2.8）：房间本来就能同时连接，这里只是给一个切换入口 */}
+      {rooms.length > 1 && (
+        <div className={styles.tabs}>
+          {rooms.map((room) => {
+            const state = status[room.room_id]?.state ?? "disconnected";
+            const title = room.title.length > 0 ? room.title : `房间 ${room.room_id}`;
+            return (
+              <button
+                key={room.room_id}
+                className={room.room_id === activeRoomId ? styles.tabActive : styles.tab}
+                title={`${title} · ${state}`}
+                onClick={() => void openRoom(room.room_id)}
+              >
+                <span className={`${styles.dot} ${DOT[state]}`} />
+                {title}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {activeRoom && prefs ? (
         <RoomView
           room={activeRoom}

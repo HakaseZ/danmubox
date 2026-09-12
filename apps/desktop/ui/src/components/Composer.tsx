@@ -6,6 +6,7 @@ import {
   type Emote,
   type EmotePackage,
   type Message,
+  type Prefs,
   type EmoteToken,
   type ReplyTarget,
   type SendOutcome,
@@ -21,6 +22,8 @@ interface Props {
   recentSends: string[];
   /** 行菜单里点的 @ / 回复，点一次应用一次（token 变则重放）。 */
   pendingAction?: { kind: "mention" | "reply"; message: Message; token: number } | null;
+  prefs: Prefs;
+  onPrefs: (patch: Partial<Prefs>) => void;
   onSend: (
     content: string,
     emote?: EmoteToken,
@@ -43,6 +46,10 @@ const OUTCOME_CLASS: Record<SendOutcome, string | undefined> = {
 /** 表情分组展示顺序。 */
 const PACKAGE_ORDER: EmotePackage[] = ["common", "room", "medal", "guard", "admin"];
 
+/// 内置颜文字与快捷短语（需求 §2.2 的「快捷短语 / 颜文字」）。
+/// 它们是固定常量，不进偏好；用户自己加的短语才存 `composer.phrases`。
+const KAOMOJI: string[] = ["233", "awsl", "yyds", "(￣▽￣)", "(・∀・)", "╮(╯▽╰)╭", "→_→", "666"];
+
 export function Composer({
   disabled,
   loggedIn,
@@ -51,6 +58,8 @@ export function Composer({
   emotes,
   recentSends,
   pendingAction,
+  prefs,
+  onPrefs,
   onSend,
   onOpenEmotes,
 }: Props) {
@@ -78,8 +87,12 @@ export function Composer({
   }, [pendingAction]);
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [phrasesOpen, setPhrasesOpen] = useState(false);
+  const [newPhrase, setNewPhrase] = useState("");
 
   // 按来源分组展示（通用 / 本房间 / 粉丝牌 / 大航海 / 房管），见 docs/ui.md §6.3。
+  const customPhrases = prefs["composer.phrases"] ?? [];
+
   const grouped = useMemo(() => {
     const groups: Record<EmotePackage, Emote[]> = {
       common: [],
@@ -198,6 +211,67 @@ export function Composer({
         </div>
       )}
 
+      {phrasesOpen && (
+        <div className={styles.phrases}>
+          <div className={styles.phrasesRow}>
+            <span className={styles.previewLabel}>颜文字</span>
+            {KAOMOJI.map((text) => (
+              <button
+                key={text}
+                className={styles.phraseItem}
+                onClick={() => setDraft((value) => value + text)}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+          <div className={styles.phrasesRow}>
+            <span className={styles.previewLabel}>自定义</span>
+            {customPhrases.length === 0 && (
+              <span className={styles.previewLabel}>（还没有，在右边加一个）</span>
+            )}
+            {customPhrases.map((text) => (
+              <button
+                key={text}
+                className={styles.phraseItem}
+                title="点一下插入；右键或按下面的 ✕ 删除"
+                onClick={() => setDraft((value) => value + text)}
+              >
+                {text}
+              </button>
+            ))}
+            <input
+              className={styles.phraseInput}
+              value={newPhrase}
+              placeholder="回车添加"
+              onChange={(event) => setNewPhrase(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                const text = newPhrase.trim();
+                if (text.length === 0 || customPhrases.includes(text)) {
+                  setNewPhrase("");
+                  return;
+                }
+                onPrefs({ "composer.phrases": [...customPhrases, text] });
+                setNewPhrase("");
+              }}
+            />
+            {customPhrases.length > 0 && (
+              <button
+                className={styles.phraseItem}
+                title="删掉最后一个自定义短语"
+                onClick={() =>
+                  onPrefs({ "composer.phrases": customPhrases.slice(0, -1) })
+                }
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {replyTo && (
         <div className={styles.replyBar}>
           <span className={styles.previewLabel}>
@@ -243,6 +317,13 @@ export function Composer({
       )}
 
       <div className={styles.composer}>
+        <button
+          disabled={disabled || !loggedIn}
+          title="快捷短语与颜文字"
+          onClick={() => setPhrasesOpen((open) => !open)}
+        >
+          短语
+        </button>
         <button
           disabled={disabled || !loggedIn}
           title="表情包库"

@@ -104,6 +104,8 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             None,
             Some(&["merged", "separate"]),
         ),
+        // 自定义短语（需求 §2.2）。颜文字是内置常量，不进偏好。
+        spec("composer.phrases", Ty::StrArr, json!([]), None, None, None),
         spec("filter.keywords", Ty::StrArr, json!([]), None, None, None),
         spec(
             "filter.keywords_mode",
@@ -310,10 +312,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spec_table_matches_contract_15_keys() {
-        assert_eq!(SPECS.len(), 15, "契约 §8 规定 15 个偏好键");
+    fn spec_table_matches_contract_keys() {
+        // 数量与契约 §8 的表逐行对应：加/删偏好键必须同时改这里与契约。
+        assert_eq!(SPECS.len(), 16, "契约 §8 规定 16 个偏好键");
         let effective = Prefs::new().effective();
-        assert_eq!(effective.as_object().unwrap().len(), 15);
+        assert_eq!(effective.as_object().unwrap().len(), 16);
     }
 
     #[test]

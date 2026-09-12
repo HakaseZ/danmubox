@@ -108,6 +108,8 @@ export interface Prefs {
   "ui.merge_similar": boolean;
   "ui.merge_window_ms": number;
   "ui.gift_panel_mode": "merged" | "separate";
+  /** 自定义短语（需求 §2.2）；颜文字是内置常量，不占偏好键。 */
+  "composer.phrases": string[];
   "filter.keywords": string[];
   "filter.keywords_mode": "hide" | "only";
   "filter.keywords_alert": boolean;

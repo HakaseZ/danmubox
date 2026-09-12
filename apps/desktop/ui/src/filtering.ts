@@ -54,6 +54,14 @@ export function alertsOn(message: Message, prefs: Prefs): boolean {
     .some((word) => message.content.includes(word));
 }
 
+/** 连接状态对应的圆点样式（房间头与多房间标签页共用）。 */
+export const DOT_CLASS: Record<string, string> = {
+  connecting: "_dotConnecting",
+  connected: "_dotConnected",
+  disconnected: "_dotDisconnected",
+  error: "_dotError",
+};
+
 /**
  * 人气值的展示格式：过万折成「x.x万」（官方客户端同款习惯）。
  * 数值口径见 docs/protocol.md §10.7。

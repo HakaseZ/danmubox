@@ -43,7 +43,8 @@ interface Props {
   onPrefs: (patch: Partial<Prefs>) => void;
 }
 
-const DOT: Record<ConnState, string> = {
+/** 连接状态 → 圆点样式（房间头部与多房间标签页共用）。 */
+export const DOT: Record<ConnState, string> = {
   connected: styles.dotConnected,
   connecting: styles.dotConnecting,
   disconnected: styles.dotDisconnected,
@@ -198,6 +199,8 @@ export function RoomView({
         emotes={emotes}
         recentSends={recentSends}
         pendingAction={pendingAction}
+        prefs={prefs}
+        onPrefs={onPrefs}
         onSend={onSend}
         onOpenEmotes={() => void loadEmotes(room.room_id)}
       />

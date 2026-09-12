@@ -1,5 +1,37 @@
 /* 布局与组件样式：布局与交互的规则来源是 docs/ui.md。 */
 
+/* 多房间标签页（需求 §2.8） */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab,
+.tabActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 180px;
+  padding: 3px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--fg-dim);
+}
+
+.tabActive {
+  background: var(--bg-elevated);
+  color: var(--fg);
+}
+
 .shell {
   display: flex;
   flex-direction: column;
@@ -342,6 +374,33 @@
 
 .previewLabel {
   flex: none;
+}
+
+/* 快捷短语与颜文字面板（需求 §2.2） */
+.phrases {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 14px;
+  border-top: 1px dashed var(--border);
+}
+
+.phrasesRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.phraseItem {
+  font-size: 12px;
+  padding: 1px 6px;
+}
+
+.phraseInput {
+  width: 120px;
+  font-size: 12px;
+  padding: 1px 6px;
 }
 
 /* 回复某条弹幕时的引用条（需求 §2.2） */

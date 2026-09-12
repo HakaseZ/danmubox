@@ -57,6 +57,9 @@ enum Command {
         /// 颜色（十进制 RGB，默认白色）
         #[arg(long)]
         color: Option<i64>,
+        /// 以表情弹幕发送：给出表情的唯一键（`emotes` 子命令会打印）。给出后 `text` 仅用于日志。
+        #[arg(long)]
+        emote: Option<String>,
     },
     /// 列出凭据文件中的 profiles；`--use` 切换当前 profile
     Profiles {
@@ -101,7 +104,12 @@ async fn main() -> Result<()> {
             print_session(&store).await?;
         }
         Command::Profiles { use_profile } => profiles(&store, use_profile).await?,
-        Command::Send { room, text, color } => send(&store, &room, &text, color).await?,
+        Command::Send {
+            room,
+            text,
+            color,
+            emote,
+        } => send(&store, &room, &text, color, emote).await?,
         Command::Wallet => wallet(&store).await?,
         Command::Follow => follow(&store).await?,
         Command::Emotes { room } => emotes(&store, &room).await?,
@@ -152,18 +160,58 @@ async fn emotes(store: &Arc<ConfigStore>, room: &str) -> Result<()> {
     for (kind, items) in &by_kind {
         println!("  [{kind}] {} 个", items.len());
         for emote in items.iter().take(8) {
-            println!("      {}  -> {}", emote.text, emote.url);
+            println!("      {:<12} unique={:<22} {}", emote.text, emote.emoticon_unique, emote.url);
         }
     }
     Ok(())
 }
 
-async fn send(store: &Arc<ConfigStore>, room: &str, text: &str, color: Option<i64>) -> Result<()> {
+async fn send(
+    store: &Arc<ConfigStore>,
+    room: &str,
+    text: &str,
+    color: Option<i64>,
+    emote_unique: Option<String>,
+) -> Result<()> {
     let live = BiliLive::with_store(Arc::clone(store))?;
     let resolved = live.resolve_room(room).await?;
     let sender = BiliSender::new(Arc::clone(store))?;
+    // 表情弹幕：按唯一键在该房间的表情包里找出来，转成上游要求的 token。
+    let token = match emote_unique {
+        None => None,
+        Some(unique) => {
+            let provider = BiliEmotes::new(Arc::clone(store))?;
+            let session = RoomSession {
+                room_id: resolved.room_id,
+                ..Default::default()
+            };
+            let list = provider
+                .emotes(resolved.room_id, &session)
+                .await
+                .context("拉取表情包失败")?;
+            let found = list
+                .iter()
+                .find(|e| e.emoticon_unique == unique || e.key == unique)
+                .with_context(|| format!("该房间没有唯一键为 {unique} 的表情"))?;
+            println!(
+                "# 以表情弹幕发送：{}（唯一键 {}）",
+                found.text, found.emoticon_unique
+            );
+            Some(danmubox_core::ports::EmoteToken {
+                emoticon_unique: found.emoticon_unique.clone(),
+                emoji: found.text.clone(),
+                url: found.url.clone(),
+                width: found.width,
+                height: found.height,
+                is_dynamic: found.is_dynamic,
+                in_player_area: found.in_player_area,
+                bulge_display: found.bulge_display,
+            })
+        }
+    };
+
     let report = sender
-        .send(resolved.room_id, text, color, None)
+        .send(resolved.room_id, text, color, None, token.as_ref())
         .await
         .context("发送失败")?;
     println!("# 房间 {} 发送结果：{:?}", resolved.room_id, report.outcome);

@@ -6,6 +6,7 @@ import { api, describeError, subscribeEvents } from "./ipc";
 import type {
   AppInfo,
   ChatSendResult,
+  EmoteToken,
   ConnState,
   Emote,
   FollowedRoom,
@@ -46,7 +47,7 @@ interface AppStore {
   connect: (roomId: number) => Promise<void>;
   disconnect: (roomId: number) => Promise<void>;
   refresh: (roomId: number) => Promise<void>;
-  send: (roomId: number, content: string) => Promise<SendOutcome | undefined>;
+  send: (roomId: number, content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
   report: (message: Message, reason: string) => Promise<boolean>;
   loadEmotes: (roomId: number) => Promise<void>;
   loadFollowed: () => Promise<void>;
@@ -186,9 +187,9 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
 
-  async send(roomId, content) {
+  async send(roomId, content, emote) {
     try {
-      const result = await api.chatSend(roomId, content);
+      const result = await api.chatSend(roomId, content, emote);
       set({ lastSend: result });
       return result.outcome;
     } catch (error) {

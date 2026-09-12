@@ -101,15 +101,36 @@ impl SendReport {
     }
 }
 
+/// 发送一条**表情弹幕**所需的全部字段，取值直接来自表情包接口（`Emote`）。
+///
+/// 官方 web 客户端的发送载荷（`msg/send`）是：`msg = emoticon_unique`、`dm_type = 1`、
+/// `emoticonOptions = { width, height, inPlayerArea, url, emoji, isDynamic,
+/// bulgeDisplay, emoticonUnique }`——见 `docs/protocol.md` §11.4。
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EmoteToken {
+    pub emoticon_unique: String,
+    pub emoji: String,
+    pub url: String,
+    pub width: i64,
+    pub height: i64,
+    pub is_dynamic: bool,
+    pub in_player_area: bool,
+    pub bulge_display: bool,
+}
+
 #[async_trait]
 pub trait DanmakuSender: Send + Sync {
     /// 发送弹幕；被吞的两种情形由上游响应判定（`docs/contract.md` §5）。
+    ///
+    /// `emote` 为 `Some` 时发送**表情弹幕**（此时 `content` 仅用于日志与节流判重）。
     async fn send(
         &self,
         room_id: i64,
         content: &str,
         color: Option<i64>,
         mode: Option<i64>,
+        emote: Option<&EmoteToken>,
     ) -> Result<SendReport>;
 }
 

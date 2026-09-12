@@ -11,6 +11,7 @@ import type {
   Message,
   Prefs,
   RoomView as RoomViewData,
+  EmoteToken,
   SendOutcome,
   SessionState,
 } from "../types";
@@ -30,7 +31,7 @@ interface Props {
   onBack: () => void;
   onRefresh: () => void;
   onDisconnect: () => void;
-  onSend: (content: string) => Promise<SendOutcome | undefined>;
+  onSend: (content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
   onReport: (message: Message, reason: string) => Promise<void>;
   onPrefs: (patch: Partial<Prefs>) => void;
 }
@@ -83,6 +84,12 @@ export function RoomView({
   useEffect(() => {
     if (loggedIn) void loadBalance();
   }, [loggedIn, loadBalance]);
+
+  // 进房间就把表情加载好：输入区的「将发送」预览要靠它把表情名换成图片，
+  // 若等到用户打开面板才加载，打字时就没有可匹配的表情（预览会静默失效）。
+  useEffect(() => {
+    if (loggedIn) void loadEmotes(room.room_id);
+  }, [loggedIn, loadEmotes, room.room_id]);
 
   const giftRows = separateGifts
     ? rows.filter((row) =>

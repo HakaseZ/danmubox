@@ -559,6 +559,37 @@ resp.msg / resp.message == "k"     → blocked_room
 
 > `blocked_platform` / `blocked_room` 的判定规则来自一个可复现的社区实现；**阶段 1 必须用真实发送复核后写死**（见 A16 / A17）。在复核前，仅按上表字符判定，不得对具体 `code` 数值编造语义。
 
+### 11.4 表情弹幕的发送载荷（照抄官方实现）
+
+普通文本弹幕与表情弹幕走**同一个** `POST /msg/send`，区别只在字段。官方 web 客户端
+（其前端产物里的表情面板发送路径）构造的载荷是：
+
+```js
+{ msg: emoticon_unique,          // ★ 传的是表情**唯一键**，不是表情名
+  color, mode,
+  dm_type: 1,                    // ★ 标记为表情弹幕
+  emoticonOptions: {             // ★ 表情的几何与展示信息
+    width, height, inPlayerArea, url, emoji, isDynamic,
+    bulgeDisplay, emoticonUnique },
+  bubble, reportParams }
+```
+
+| 字段 | 取值来源 |
+|---|---|
+| `msg` | `Emote.emoticon_unique`（如 `official_345`、`room_<房间号>_<id>`） |
+| `dm_type` | 固定 `1` |
+| `emoticonOptions` | 同一条表情在表情包接口里的 `width` / `height` / `in_player_area` / `url` / `emoji` / `is_dynamic` / `bulge_display` / `emoticon_unique` |
+
+> **实测教训（2026-09-12，用户实测）**：只把表情名当普通文本发出去，上游不会渲染成表情——
+> 曾据此假设「上游按内容识别表情」，被实测否定。识别依据是 `msg` 传唯一键 + `dm_type = 1`。
+
+**待实测校准**：官方前端把整个对象交给它自己的请求器，本实现按 **JSON 字符串**放进表单
+（见附录 A31）；若上游不接受，症状同样是「发送成功但不是表情」。
+
+**可发送性**：官方客户端发之前会查 `emoticonDanmakuPermCheck`——`perm === 1` 直接放行；
+否则按 `identity` 给出解锁条件（`identity === 4` 时是「加入主播的粉丝团」，其余按大航海档位）。
+即 `perm = 0` 的表情不是不能点，而是**未解锁**。
+
 ---
 
 ## 12. 分发与内存缓冲边界
@@ -821,6 +852,7 @@ stateDiagram-v2
 | A28 | 关注列表接口 | 端点路径、分页参数名与页大小上限、响应信封、`room_id`/`uname`/`face`/`live_status`/分组名的真实字段名、`live_status` 口径 | 登录态下拉取并比对原始响应 | **部分实测（2026-09-11）**：端点 `GET /xlive/web-ucenter/v1/xfetter/GetWebList`——**原猜测的 `/xlive/web-interface/v1/relation/getUserFollowList` 不成立**；分页 `page`/`page_size` 实测可用；信封 `data.{rooms, list, count, not_living_num}`，**没有 `has_more`**（终止条件改为「本页条数 == page_size」）。**仍未知**：`rooms` 与 `list` 哪个是房间列表、以及条目字段名——该账号关注数为 0，两者皆空数组；实现取 `data.list`，待有非空关注时复核 | `follow.rs`、`follow_list` |
 | A29 | 电池余额口径 | 端点路径、数值字段名（电池 / 金瓜子 / 银瓜子）、三者之间的关系与单位 | 登录态下请求一次，并与官方「电池」页显示值对照 | **已实测（2026-09-11）**：端点 `GET /xlive/revenue/v1/wallet/myWallet`——**此前四个候选（`revenue/v1|v2`、`app-ucenter`、`pay` 下的 `getUserWallet`）实测全部 404**；返回 `data.gold`（金瓜子）/`silver`/`bp`，**没有独立的「电池」字段**。口径：**电池 = gold / 100**，依据社区文档「金瓜子数量 / 100 = 电池数量」，并用同账号交叉验证（`gold=15000` ↔ 15 元 ↔ 150 电池）。`wallet_balance` 实测返回 **150** | `wallet.rs`、`wallet_balance` |
 | A30 | 进场回填的历史弹幕 | 能否在进房间时取到最近若干条；上限；字段；**调用前提** | 官方页面前端产物里检索 `dM/` 路径，并在在播房间上实测计数 | **已实测并已实现（2026-09-12）**：`GET /xlive/web-room/v1/dM/gethistory?roomid=<真实房间号>&room_type=<0|1>`（官方页面两个取值都观测到过）。`data.room` **恰好 10 条**（普通用户）+ `data.admin` **至多 10 条**（房管）= 最多 20；`limit` / `page_size` / `size` / `ps` / `page` / `offset` / `last_id` 实测均不加量——**不可翻页**。`timeline` 是**北京时间**秒级 `yyyy-MM-dd HH:mm:ss`（实测：UTC 00:49 时返回 08:49）。**调用前提（关键）**：需要完整的会话 Cookie——带完整 cookie 实测 **3/3 稳定**返回 10+10；只带 `buvid3` 时 **3/3 全空**；完全不带头时 2/3 空。**坑**：取不到时是 `code=0` + 空数组，**与「真的没有弹幕」无法区分**，调用方不得当成错误。字段含 `text` / `uid` / `nickname` / `timeline` / `isadmin` / `guard_level` / `id_str` / `user.medal.{name,level}`；**无文字颜色字段**（`color` 取 0）。实现见 `contract.md` §4.3、`ui.md` §4.7 |
+| A31 | 表情弹幕发送载荷的**编码** | 官方实现把 `emoticonOptions` 整体交给其请求器，本实现按 JSON 字符串放入表单——该编码未经上游确认 | 在公开测试房间 `1` 用 `--emote <唯一键>` 发一条，随即在本连接的弹幕流里核对回声是否带 `info[0][13]`（带上即为表情） | **待实测**：确认后回填 §11.4 并去掉本行；若上游拒绝，改为展平字段名（`emoticonOptions[width]` 等）逐项试 | `send.rs` |
 
 ---
 

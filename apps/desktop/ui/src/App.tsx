@@ -84,7 +84,7 @@ export function App() {
           onBack={closeRoom}
           onRefresh={() => void refresh(activeRoom.room_id)}
           onDisconnect={() => void disconnect(activeRoom.room_id)}
-          onSend={(content) => send(activeRoom.room_id, content)}
+          onSend={(content, emote) => send(activeRoom.room_id, content, emote)}
           onReport={async (message, reason) => {
             if (await report(message, reason)) setNotice("举报已提交");
           }}

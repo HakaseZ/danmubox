@@ -106,8 +106,26 @@ export interface ApiError {
 
 export type EmotePackage = "common" | "room" | "medal" | "guard" | "admin";
 
+export interface EmoteToken {
+  emoticon_unique: string;
+  emoji: string;
+  url: string;
+  width: number;
+  height: number;
+  is_dynamic: boolean;
+  in_player_area: boolean;
+  bulge_display: boolean;
+}
+
 export interface Emote {
   key: string;
+  /** 上游唯一键；发送表情弹幕时上游要的就是它（见 docs/protocol.md §11.4）。 */
+  emoticon_unique: string;
+  width: number;
+  height: number;
+  is_dynamic: boolean;
+  in_player_area: boolean;
+  bulge_display: boolean;
   package_kind: EmotePackage;
   text: string;
   url: string;

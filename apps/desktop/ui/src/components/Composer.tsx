@@ -5,6 +5,7 @@ import {
   SEND_OUTCOME_TEXT,
   type Emote,
   type EmotePackage,
+  type EmoteToken,
   type SendOutcome,
 } from "../types";
 import styles from "../app.module.css";
@@ -15,7 +16,7 @@ interface Props {
   lastOutcome?: SendOutcome;
   lastDetail?: string | null;
   emotes: Emote[];
-  onSend: (content: string) => Promise<SendOutcome | undefined>;
+  onSend: (content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
   onOpenEmotes: () => void;
 }
 
@@ -43,6 +44,9 @@ export function Composer({
   onOpenEmotes,
 }: Props) {
   const [draft, setDraft] = useState("");
+  // 被点选的表情：名字会重名（实测「贴贴」同时存在于通用包与房间包），
+  // 因此发送时必须按「点的是哪一个」来判定，而不是拿草稿去反推。
+  const [pickedEmote, setPickedEmote] = useState<Emote | null>(null);
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -61,14 +65,63 @@ export function Composer({
     );
   }, [emotes]);
 
+  // 输入区预览：把草稿里能对上的表情名换成图片，让用户看清「这条发出去长什么样」。
+  // 上游按**内容**识别表情弹幕（收包侧 `info[1]` 就是表情名，是服务端补的 `info[0][13]`），
+  // 所以「插入名字」与「插入表情」在协议上是同一件事——这里只是把它显示出来。
+  const preview = useMemo(() => {
+    if (draft.length === 0 || emotes.length === 0) return null;
+    // 长名优先，避免短名吃掉长名的前缀。
+    const candidates = emotes
+      .filter((emote) => emote.text.length > 0 && emote.url.length > 0)
+      .sort((a, b) => b.text.length - a.text.length);
+    const parts: { text: string; emote?: Emote }[] = [];
+    let buffer = "";
+    let matched = 0;
+    for (let i = 0; i < draft.length; ) {
+      const hit = candidates.find((emote) => draft.startsWith(emote.text, i));
+      if (hit) {
+        if (buffer.length > 0) {
+          parts.push({ text: buffer });
+          buffer = "";
+        }
+        parts.push({ text: hit.text, emote: hit });
+        matched += 1;
+        i += hit.text.length;
+      } else {
+        buffer += draft[i];
+        i += 1;
+      }
+    }
+    if (buffer.length > 0) parts.push({ text: buffer });
+    return matched > 0 ? parts : null;
+  }, [draft, emotes]);
+
   const submit = async () => {
     const content = draft.trim();
     if (content.length === 0 || busy) return;
+    // 草稿与点选的表情完全一致时才按表情发送：这样「点了表情直接发」得到的是表情弹幕，
+    // 而任何编辑都退回普通文本，不会把用户没想发的东西发成表情。
+    const asEmote =
+      pickedEmote && content === pickedEmote.text
+        ? {
+            emoticon_unique: pickedEmote.emoticon_unique,
+            emoji: pickedEmote.text,
+            url: pickedEmote.url,
+            width: pickedEmote.width,
+            height: pickedEmote.height,
+            is_dynamic: pickedEmote.is_dynamic,
+            in_player_area: pickedEmote.in_player_area,
+            bulge_display: pickedEmote.bulge_display,
+          }
+        : undefined;
     setBusy(true);
-    const outcome = await onSend(content);
+    const outcome = await onSend(content, asEmote);
     setBusy(false);
     // 只有确实发出去（或被吞）才清空草稿；失败保留内容便于重试。
-    if (outcome !== undefined && outcome !== "failed") setDraft("");
+    if (outcome !== undefined && outcome !== "failed") {
+      setDraft("");
+      setPickedEmote(null);
+    }
   };
 
   return (
@@ -89,7 +142,10 @@ export function Composer({
                       key={emote.key}
                       className={styles.pickerItem}
                       title={emote.text}
-                      onClick={() => setDraft((value) => value + emote.text)}
+                      onClick={() => {
+                        setDraft((value) => value + emote.text);
+                        setPickedEmote(emote);
+                      }}
                     >
                       {emote.url.length > 0 ? (
                         <img src={emote.url} alt={emote.text} />
@@ -101,6 +157,25 @@ export function Composer({
                 </div>
               </div>
             ))
+          )}
+        </div>
+      )}
+
+      {preview && (
+        <div className={styles.preview}>
+          <span className={styles.previewLabel}>将发送</span>
+          {preview.map((part, index) =>
+            part.emote ? (
+              <img
+                key={`${index}-${part.text}`}
+                className={styles.previewEmote}
+                src={part.emote.url}
+                alt={part.text}
+                title={part.text}
+              />
+            ) : (
+              <span key={`${index}-${part.text}`}>{part.text}</span>
+            ),
           )}
         </div>
       )}

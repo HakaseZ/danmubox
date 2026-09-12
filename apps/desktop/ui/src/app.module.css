@@ -328,6 +328,27 @@
 
 /* ---------------------------------------------------------------- 表情与举报 */
 
+/* 输入区上方的「将发送」预览：草稿里对得上的表情名在这里显示成图片（docs/ui.md §6.3）。 */
+.preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 14px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  border-top: 1px dashed var(--border);
+}
+
+.previewLabel {
+  flex: none;
+}
+
+.previewEmote {
+  height: 22px;
+  vertical-align: middle;
+}
+
 .picker {
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);

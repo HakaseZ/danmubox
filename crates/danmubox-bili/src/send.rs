@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use danmubox_core::ports::{DanmakuSender, SendReport};
+use danmubox_core::ports::{DanmakuSender, EmoteToken, SendReport};
 use danmubox_core::{ConfigStore, Error, Result, SendOutcome};
 use serde_json::Value;
 
@@ -137,6 +137,7 @@ impl DanmakuSender for BiliSender {
         content: &str,
         color: Option<i64>,
         mode: Option<i64>,
+        emote: Option<&EmoteToken>,
     ) -> Result<SendReport> {
         let profile = self
             .store
@@ -160,17 +161,16 @@ impl DanmakuSender for BiliSender {
 
         let (img_key, sub_key) = self.http.wbi_keys().await?;
         let mixin = wbi::mixin_key(&img_key, &sub_key);
-        let params = vec![
-            ("roomid".to_string(), room_id.to_string()),
-            ("msg".to_string(), content.to_string()),
-            ("color".to_string(), color.unwrap_or(16_777_215).to_string()),
-            ("fontsize".to_string(), "25".to_string()),
-            ("mode".to_string(), mode.unwrap_or(1).to_string()),
-            ("rnd".to_string(), now.elapsed().as_nanos().to_string()),
-            ("csrf".to_string(), profile.bili_jct.clone()),
-            ("csrf_token".to_string(), profile.bili_jct.clone()),
-            ("wts".to_string(), unix_seconds().to_string()),
-        ];
+        let params = build_params(
+            room_id,
+            content,
+            color,
+            mode,
+            emote,
+            &profile.bili_jct,
+            &format!("{}", now.elapsed().as_nanos()),
+            unix_seconds(),
+        );
         let body = wbi::signed_query(&params, &mixin);
 
         let value = self.http.post_form(EP_MSG_SEND, &body).await?;
@@ -191,6 +191,63 @@ impl DanmakuSender for BiliSender {
         }
         Ok(report)
     }
+}
+
+/// 组装 `msg/send` 的参数。抽成纯函数是为了能脱离网络直接断言载荷形状——
+/// 「发出去但不是表情」这类问题肉眼看不出来，只能靠断言钉住。
+///
+/// 表情分支照抄官方实现：`msg = emoticon_unique`、`dm_type = 1`、附 `emoticonOptions`。
+#[allow(clippy::too_many_arguments)]
+fn build_params(
+    room_id: i64,
+    content: &str,
+    color: Option<i64>,
+    mode: Option<i64>,
+    emote: Option<&EmoteToken>,
+    csrf: &str,
+    rnd: &str,
+    wts: u64,
+) -> Vec<(String, String)> {
+    let mut params = vec![
+        ("roomid".to_string(), room_id.to_string()),
+        (
+            "msg".to_string(),
+            match emote {
+                Some(token) => token.emoticon_unique.clone(),
+                None => content.to_string(),
+            },
+        ),
+        ("color".to_string(), color.unwrap_or(16_777_215).to_string()),
+        ("fontsize".to_string(), "25".to_string()),
+        ("mode".to_string(), mode.unwrap_or(1).to_string()),
+        ("rnd".to_string(), rnd.to_string()),
+        ("csrf".to_string(), csrf.to_string()),
+        ("csrf_token".to_string(), csrf.to_string()),
+        ("wts".to_string(), wts.to_string()),
+    ];
+    if let Some(token) = emote {
+        params.push(("dm_type".to_string(), "1".to_string()));
+        params.push(("emoticonOptions".to_string(), emote_options(token)));
+    }
+    params
+}
+
+/// 官方发送载荷里的 `emoticonOptions`（字段名照抄官方实现，camelCase）。
+///
+/// **编码方式待实测**：官方前端把整个对象交给它自己的请求器，本实现按 JSON 字符串
+/// 放进表单；若上游不接受，会表现为「发送成功但不是表情」，见 `docs/protocol.md` §11.4。
+fn emote_options(token: &EmoteToken) -> String {
+    serde_json::json!({
+        "width": token.width,
+        "height": token.height,
+        "inPlayerArea": i64::from(token.in_player_area),
+        "url": token.url,
+        "emoji": token.emoji,
+        "isDynamic": i64::from(token.is_dynamic),
+        "bulgeDisplay": i64::from(token.bulge_display),
+        "emoticonUnique": token.emoticon_unique,
+    })
+    .to_string()
 }
 
 fn unix_seconds() -> u64 {
@@ -275,6 +332,54 @@ mod tests {
                 .is_none(),
             "空内容不算回显"
         );
+    }
+
+    fn token() -> EmoteToken {
+        EmoteToken {
+            emoticon_unique: "official_345".into(),
+            emoji: "这个好耶".into(),
+            url: "https://i0.hdslb.com/bfs/live/x.png".into(),
+            width: 200,
+            height: 60,
+            is_dynamic: true,
+            in_player_area: true,
+            bulge_display: false,
+        }
+    }
+
+    fn param<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        params.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn plain_send_carries_no_emote_fields() {
+        let params = build_params(7, "普通弹幕", None, None, None, "csrf", "1", 1);
+        assert_eq!(param(&params, "msg"), Some("普通弹幕"));
+        assert_eq!(param(&params, "dm_type"), None, "普通弹幕不得带 dm_type");
+        assert_eq!(param(&params, "emoticonOptions"), None);
+    }
+
+    #[test]
+    fn emote_send_sends_the_unique_key_not_the_name() {
+        // 用户实测：发名字会被上游当成普通文本。官方实现发的是 emoticon_unique。
+        let params = build_params(7, "这个好耶", None, None, Some(&token()), "csrf", "1", 1);
+        assert_eq!(
+            param(&params, "msg"),
+            Some("official_345"),
+            "表情弹幕的 msg 必须是唯一键，不是表情名"
+        );
+        assert_eq!(param(&params, "dm_type"), Some("1"), "必须标记为表情弹幕");
+        let options: serde_json::Value =
+            serde_json::from_str(param(&params, "emoticonOptions").expect("要有 emoticonOptions"))
+                .expect("emoticonOptions 必须是合法 JSON");
+        assert_eq!(options["emoticonUnique"], "official_345");
+        assert_eq!(options["emoji"], "这个好耶");
+        assert_eq!(options["width"], 200);
+        assert_eq!(options["height"], 60);
+        assert_eq!(options["isDynamic"], 1, "布尔要按官方实现转成 0/1");
+        assert_eq!(options["inPlayerArea"], 1);
+        assert_eq!(options["bulgeDisplay"], 0);
+        assert_eq!(options["url"], "https://i0.hdslb.com/bfs/live/x.png");
     }
 
     #[test]

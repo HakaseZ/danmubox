@@ -9,6 +9,7 @@ import type {
   AppInfo,
   ChatSendResult,
   Emote,
+  EmoteToken,
   FollowedRoom,
   Message,
   Prefs,
@@ -72,8 +73,8 @@ export const api = {
   historyQuery: (roomId: number, query: HistoryQuery = {}) =>
     invoke<Message[]>("history_query", { roomId, query }),
 
-  chatSend: (roomId: number, content: string, color?: number) =>
-    invoke<ChatSendResult>("chat_send", { roomId, content, color }),
+  chatSend: (roomId: number, content: string, emote?: EmoteToken, color?: number) =>
+    invoke<ChatSendResult>("chat_send", { roomId, content, emote, color }),
 
   /** 举报一条弹幕。理由取值尚未实测，先按不透明字符串传递。 */
   chatReport: (message: Message, reason: string) =>

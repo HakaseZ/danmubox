@@ -321,10 +321,11 @@ async fn chat_send(
     room_id: i64,
     content: String,
     color: Option<i64>,
+    emote: Option<danmubox_core::ports::EmoteToken>,
 ) -> ApiResult<ChatSendResult> {
     let sender = BiliSender::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     let report = sender
-        .send(room_id, &content, color, None)
+        .send(room_id, &content, color, None, emote.as_ref())
         .await
         .map_err(ApiError::from)?;
 

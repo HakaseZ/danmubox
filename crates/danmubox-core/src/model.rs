@@ -167,8 +167,18 @@ pub enum EmotePackage {
 pub struct Emote {
     pub key: String,
     pub package_kind: EmotePackage,
+    /// 上游唯一键（`emoticon_unique`，如 `official_345` / `room_<房间号>_<id>`）。
+    /// 发送表情弹幕时 **`msg` 传的就是它**（官方实现如此，见 `docs/protocol.md` §11.4）。
+    pub emoticon_unique: String,
+    /// 表情字符（`emoji`），仅用于展示与搜索。
     pub text: String,
     pub url: String,
+    /// 以下四项与 `is_dynamic` / `bulge_display` 一起构成官方发送载荷里的 `emoticonOptions`。
+    pub width: i64,
+    pub height: i64,
+    pub is_dynamic: bool,
+    pub in_player_area: bool,
+    pub bulge_display: bool,
     pub room_id: i64,
 }
 

@@ -120,8 +120,20 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
                 .map(|unique| unique.starts_with("room_"))
                 .unwrap_or(false);
 
+            let geom = |key: &str| item.get(key).and_then(Value::as_i64).unwrap_or(0);
+            let flag = |key: &str| item.get(key).and_then(Value::as_i64).unwrap_or(0) != 0;
             out.push(Emote {
                 key: format!("{pkg_token}:{token}"),
+                emoticon_unique: item
+                    .get("emoticon_unique")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                width: geom("width"),
+                height: geom("height"),
+                is_dynamic: flag("is_dynamic"),
+                in_player_area: flag("in_player_area"),
+                bulge_display: flag("bulge_display"),
                 package_kind: kind,
                 // 真实字段是 `emoji`（表情字符本身，如「啊」）；`descript` 常为空串，
                 // `text` 字段**不存在**（实测自 38 个表情的响应）。

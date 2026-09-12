@@ -72,7 +72,7 @@ danmubox/
 |---|---|
 | `AuthProvider` | 登录态、凭据读写、扫码流程、buvid3 |
 | `LiveSource` | 房间解析、建立/断开连接、事件流 |
-| `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5） |
+| `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5）。`emote: Option<&EmoteToken>` 非空时发送**表情弹幕** |
 | `DanmakuReporter` | 举报弹幕 |
 | `EmoteProvider` | 按身份加载表情包库 |
 | `RoomCatalog` | 关注列表、直播状态、房间元信息 |
@@ -177,6 +177,7 @@ sessdata = ""
 | `amount` | i64 | 礼物金瓜子或 SC 金额，非交易类为 0 |
 | `emote_url` | string | 表情弹幕的图片地址（**已规范化为 https**）；非表情弹幕为空串 |
 | `upstream_id` | string | **上游弹幕标识，举报必需**（来源待实测，见 `protocol.md` 附录） |
+| `emote_url` | string | 表情弹幕的图片地址（已规范化）；非表情为空串 |
 
 > **徽标（REQUIREMENTS.md 需求）**：主播 = `uid == Room.anchor_uid` 派生；房管 = `Message.is_admin`；大航海 = `Message.guard_level`（`1` 总督 / `2` 提督 / `3` 舰长）。`is_anchor` 不设独立字段——能推导就不存。
 
@@ -216,7 +217,7 @@ sessdata = ""
 
 > 与 `Message.medal_level` 区分：后者是**发送者**的牌，前者是**我**在这个房间的牌。表情包库可用范围取决于这套身份。
 
-`Emote`（表情，规范性）：`key` / `package_kind`（`common` / `room` / `medal` / `guard` / `admin`；`room` = UP 主大表情与房间专属表情）/ `text` / `url` / `room_id`（房间专属时非 0）。
+`Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `admin`；`room` = UP 主大表情与房间专属表情）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
 `FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name`。**展示排序：`live_status == 1` 置顶**（REQUIREMENTS.md 需求）。
 
@@ -250,7 +251,7 @@ Frontend → Rust 命令（`invoke`）：
 | `rooms_connect` / `rooms_disconnect` | 连接控制 |
 | `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |
 | `history_query` | 查询**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`） |
-| `chat_send` | 发弹幕，返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现 |
+| `chat_send` | 发弹幕（可带 `emote`）——`emote` 非空时按表情弹幕发送（`docs/protocol.md` §11.4），返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现 |
 | `chat_report` | 举报弹幕 |
 | `emotes_list` | 按身份加载表情包库 |
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令） |

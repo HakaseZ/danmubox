@@ -128,6 +128,22 @@ export function Composer({
 
   const customPhrases = prefs["composer.phrases"] ?? [];
 
+  /**
+   * 发送时的 @ 目标：**从草稿文本派生**，不额外保存一份「目标状态」。
+   *
+   * 否则就是用户 #13a 的情形：`@张三 ` 被从文本框里删掉之后目标仍然在，
+   * 于是发出一条文本里看不见、上游却带 at 字段的弹幕。派生之后两者不可能不一致——
+   * 文本里没有这个 token，就不带 `reply_mid` / `reply_uname`。
+   *
+   * 认两种写法：`@名字 `（插入时补的那个空格还在）与 `@名字` 收尾；只有前缀相同
+   * （如 `@张三丰`）不算，避免把别人的 @ 认成这一个。
+   */
+  const mentionTarget = useMemo(() => {
+    if (!mention) return null;
+    const token = `@${mention.uname}`;
+    return draft.includes(`${token} `) || draft.endsWith(token) ? mention : null;
+  }, [mention, draft]);
+
   // 接口给的包（`emotes_list` 的按房间包 + 主站「我的表情」）是**权威**的一侧：
   // 同一个 `emoticon_unique` 只保留接口给的那条。「我的表情」并进这一侧之后，
   // 从弹幕学到的同类表情会被自动去重（接口优先、学到的补漏）。
@@ -287,10 +303,11 @@ export function Composer({
           }
         : undefined;
     // 回复优先于 @：回复本身就带上了被回复者，官方载荷里也是一组字段。
+    // @ 目标走 `mentionTarget`（从草稿派生）：文本里删掉了 @ 名字就不带上。
     const reply = replyTo
       ? { mid: replyTo.uid, uname: replyTo.uname, dmid: replyTo.upstream_id }
-      : mention
-        ? { mid: mention.mid, uname: mention.uname, dmid: "" }
+      : mentionTarget
+        ? { mid: mentionTarget.mid, uname: mentionTarget.uname, dmid: "" }
         : undefined;
     setBusy(true);
     const outcome = await onSend(content, asEmote, reply);
@@ -495,11 +512,21 @@ export function Composer({
       )}
 
       {replyTo && (
-        <div className={styles.replyBar}>
+        <div className={styles.replyBar} data-testid="db-reply-bar">
           <span className={styles.previewLabel}>
             回复 {replyTo.uname}：{replyTo.content.slice(0, 30)}
           </span>
           <button onClick={() => setReplyTo(null)}>取消回复</button>
+        </div>
+      )}
+
+      {/* @ 目标的提示：它是**派生**出来的（文本里还有 @名字 才显示），
+          所以显示的与发出去的永远一致；取消方式就是删掉文本里那个 @名字（issue #13a）。 */}
+      {mentionTarget && (
+        <div className={styles.replyBar} data-testid="db-mention-hint">
+          <span className={styles.previewLabel}>
+            将 @{mentionTarget.uname} · 删掉文本里的 @{mentionTarget.uname} 即取消
+          </span>
         </div>
       )}
 

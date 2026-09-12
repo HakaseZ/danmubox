@@ -26,6 +26,7 @@
 //          内容不足视口时整体贴底；头像列永远占位（昵称三列纵向对齐）；粉丝牌真彩色与兜底色
 //   emotes 主站「我的表情」分组可见、能选中、发出去带的是唯一键
 //   menu   右键出菜单（复制 / ＠TA / 回复 / 屏蔽 / 主页 / 举报）并能关掉
+//   mention＠ 目标与文本同源：文本里的 @名字 被删掉后发送就不带目标；回复的引用条照旧带目标
 //   time   时间戳默认不渲染；开关打开后每行一列且等宽（纵向对齐）
 //   gift   礼物栏在输入区下方、全宽、可折叠，展开不改变弹幕宽度
 //   admin  房管权限前置（是房管才可用 / 不是则置灰并说明）、写操作二次确认与请求形状、
@@ -195,6 +196,19 @@ const MOCK = `(function () {
     var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
     setter.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  // textarea 用的是另一个原型上的 setter：直接改 .value 不会触发 React 的 onChange
+  var typeIntoArea = function (area, value) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+    setter.call(area, value);
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  var lastSendCall = function () {
+    var all = callsWithArgs.filter(function (c) { return c.cmd === "chat_send"; });
+    return all[all.length - 1];
+  };
+  var openRowMenu = function (row) {
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
   };
   var pickGiftMode = function () {
     var panel = byTestId("db-panel");
@@ -424,6 +438,48 @@ const MOCK = `(function () {
     document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     await sleep(200);
     out.menuClosed = !byTestId("db-context-menu");
+    snap();
+
+    // ---- mention ＠ 与文本同源（issue #13a）：文本里没有 @名字 就不许带目标
+    var mentionRow = rowWith("无头像的弹幕");
+    openRowMenu(mentionRow);
+    await sleep(250);
+    buttonWith(byTestId("db-context-menu"), "＠TA").click();
+    await sleep(300);
+    out.mentionInsertedIntoCaret = document.querySelector("textarea").value.indexOf("@无头像 ") >= 0;
+    out.mentionHintShown = !!byTestId("db-mention-hint");
+    buttonWith(null, "发送").click();
+    await sleep(400);
+    var sendWithMention = lastSendCall();
+    out.mentionSendCarriesTarget = !!sendWithMention && !!sendWithMention.args.reply &&
+      sendWithMention.args.reply.uname === "无头像" && sendWithMention.args.reply.mid > 0;
+    // 再 @ 一次，然后把文本里的 @名字 换掉再发：目标必须跟着消失
+    openRowMenu(mentionRow);
+    await sleep(250);
+    buttonWith(byTestId("db-context-menu"), "＠TA").click();
+    await sleep(300);
+    typeIntoArea(document.querySelector("textarea"), "你好呀");
+    await sleep(200);
+    out.mentionHintGoneAfterEdit = !byTestId("db-mention-hint");
+    buttonWith(null, "发送").click();
+    await sleep(400);
+    var sendWithoutMention = lastSendCall();
+    out.mentionTargetDroppedWithText = !!sendWithoutMention &&
+      sendWithoutMention.args.content === "你好呀" && !sendWithoutMention.args.reply;
+
+    // 回复是显式的引用条（可见、可取消），不靠文本，因此照旧带目标
+    openRowMenu(mentionRow);
+    await sleep(250);
+    buttonWith(byTestId("db-context-menu"), "回复").click();
+    await sleep(300);
+    out.replyBarShown = !!byTestId("db-reply-bar");
+    typeIntoArea(document.querySelector("textarea"), "收到");
+    await sleep(150);
+    buttonWith(null, "发送").click();
+    await sleep(400);
+    var sendWithReply = lastSendCall();
+    out.replySendCarriesTarget = !!sendWithReply && !!sendWithReply.args.reply &&
+      sendWithReply.args.reply.dmid.length > 0 && sendWithReply.args.content === "收到";
     snap();
 
     // ---- time 时间戳（默认关 → 打开后等宽对齐）

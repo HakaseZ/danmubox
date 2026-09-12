@@ -305,7 +305,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
       set({ error: describeError(error) });
       return;
     }
-    // 开关拨动时立刻对齐当前列表：打开→按剩余停留时间安排摘除；关掉→撤销所有安排。
+    // 只有这个开关本身变了才动定时器：其它偏好改动不能顺手撤销已排好的摘除
+    // （无头冒烟实测：拨一下「系统通知」就会让列表里的互动消息永久留下）。
+    if (patch["ui.interact_auto_hide"] === undefined) return;
     clearInteractTimers();
     const roomId = get().activeRoomId;
     if (patch["ui.interact_auto_hide"] === true && roomId !== undefined) {

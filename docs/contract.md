@@ -217,7 +217,7 @@ sessdata = ""
 
 > 与 `Message.medal_level` 区分：后者是**发送者**的牌，前者是**我**在这个房间的牌。表情包库可用范围取决于这套身份。
 
-`Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `admin`；`room` = UP 主大表情与房间专属表情）/ `text` / `url` / `room_id`（房间专属时非 0）。
+`Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard`；`room` = UP 主大表情与房间专属表情。**没有 `admin`**——房管没有表情分类，见 `protocol.md` A26）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
 `EmoteRef`（弹幕携带的表情，规范性）：`emoticon_unique` / `url`（已规范化）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display`。
 

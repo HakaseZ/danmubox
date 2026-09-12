@@ -16,7 +16,12 @@
 //!
 //! # 不得编造的部分
 //!
-//! - 包裹分类（通用 / 粉丝牌 / 大航海 / 房管）的**真实**判定依据未实测。
+//! - 包裹分类（通用 / 房间 / 粉丝牌 / 大航海）的**真实**判定依据未实测。
+//!
+//! **没有「房管」这一类**（2026-09-12，项目所有者确认）：官方前端的表情权限判定
+//! `emoticonDanmakuPermCheck` 也只有「粉丝团」与「1/2/3 总督/提督/舰长」两个分支，
+//! 全部「房管」命中都在禁言 / 拉黑 / 任命语境里。房管身份只体现为弹幕徽标（`is_admin`）。
+//! 本模块曾据此凭空造出 `EmotePackage::Admin`，已删除。
 //!   `classify_package` 只按**包名的子串**做启发式判断（下节写明），判不出即回落
 //!   `Common` 并打 `debug` 日志。分类含义本身取自 `docs/contract.md` §5，无需猜测。
 //! - 未实测的错误码不映射到任何业务含义，一律进 `Error::Upstream`。
@@ -30,7 +35,7 @@
 //!
 //! # 参数 `session` 的用途
 //!
-//! `session`（我在该房间的粉丝牌 / 大航海 / 房管）本期**只用于日志**。假设上游按
+//! `session`（我在该房间的粉丝牌 / 大航海）本期**只用于日志**。假设上游按
 //! 房间与登录态下发**已过滤**的可用包裹，因此本模块**不做二次过滤**——若这个假设
 //! 不成立（例如上游返回超集），校准后再按 `session` 补过滤。
 //!
@@ -188,7 +193,7 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
 ///
 /// 判定顺序（前两步来自房间 `某个在播房间（房间号不写入仓库）` 的实测样本，见 `docs/protocol.md` 附录 A26）：
 ///
-/// 1. **包名关键字**：房管 / 大航海 / 粉丝牌——这三类**仍无独立样本**，靠名字兜底；
+/// 1. **包名关键字**：大航海 / 粉丝牌——这两类**仍无独立样本**，靠名字兜底；
 /// 2. **表情自身的解锁字段**：任一表情 `unlock_need_level > 0` 或 `identity ∈ 1..=4`，
 ///    说明这包是按粉丝牌档位分的；
 /// 3. `pkg_type == 2` → 房间专属；否则通用。
@@ -204,9 +209,6 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
 /// **包级**的 `pkg_perm` / `unlock_identity` / `unlock_need_gift` 在三个包里取值完全相同，
 /// 不能用来区分；判据在**表情级**字段上。
 fn classify_package(pkg_name: &str, pkg_type: i64, emoticons: &[Value]) -> EmotePackage {
-    if pkg_name.contains("房管") || pkg_name.contains("管理") {
-        return EmotePackage::Admin;
-    }
     if pkg_name.contains("舰")
         || pkg_name.contains("航海")
         || pkg_name.contains("提督")
@@ -403,8 +405,9 @@ mod tests {
         assert_eq!(classify_package("粉丝勋章", 2, &none), EmotePackage::Medal);
         assert_eq!(classify_package("舰长专属", 2, &none), EmotePackage::Guard);
         assert_eq!(classify_package("大航海表情", 2, &none), EmotePackage::Guard);
-        assert_eq!(classify_package("房管表情", 2, &none), EmotePackage::Admin);
-        assert_eq!(classify_package("管理组", 2, &none), EmotePackage::Admin);
+        // 「房管」不构成分类：房管没有表情包（项目所有者确认 + 官方前端无该分支）。
+        // 万一上游真发了这种名字的包，按房间专属处理即可——不为此单开一类。
+        assert_eq!(classify_package("房管表情", 2, &none), EmotePackage::Room);
     }
 
     #[test]

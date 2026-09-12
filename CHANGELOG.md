@@ -81,6 +81,16 @@
 
 ### Fixed
 
+- **删掉凭空造出的「房管」表情分类**。项目所有者确认：**房管没有表情分类**。
+  这与两条证据一致——官方前端的表情权限判定 `emoticonDanmakuPermCheck` 只有「粉丝团」与
+  「1/2/3 总督/提督/舰长」两个分支，无房管；扫 5 个公开房间也只见通用与房间专属表情。
+  房管身份**只体现为弹幕徽标**（`info[2][2]` → `Message.is_admin`，见 A5）。
+  处置：删除 `EmotePackage::Admin`、分类器里的房管分支、「房管」分组标签，
+  并更正 `REQUIREMENTS.md` §2.2 里同样写错的「（通用 / 粉丝牌 / 大航海 / 房管）」一句。
+  万一上游真发来名字含「房管」的包，按房间专属归类，不为其单开一类。
+
+### Calibration
+
 - **`unknown_cmd` 计数器被已知命令污染**：`ONLINE_RANK_V3`（protobuf 高能榜）在一次 40 秒观察里出现 43 条，
   却落进「未处理命令」计数——那个计数器是用来发现真的没归类过的命令的。连同
   `PLAYURL_RELOAD` / `PLAYURL_RELOAD_MASTER`（载荷只有 `room_id`/`playurl`/`reload_option`）一起归入

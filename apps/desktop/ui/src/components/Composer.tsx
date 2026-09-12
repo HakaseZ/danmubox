@@ -45,7 +45,7 @@ const OUTCOME_CLASS: Record<SendOutcome, string | undefined> = {
 };
 
 /** 表情分组展示顺序。 */
-const PACKAGE_ORDER: EmotePackage[] = ["common", "room", "medal", "guard", "admin"];
+const PACKAGE_ORDER: EmotePackage[] = ["common", "room", "medal", "guard"];
 
 /// 内置颜文字与快捷短语（需求 §2.2 的「快捷短语 / 颜文字」）。
 /// 它们是固定常量，不进偏好；用户自己加的短语才存 `composer.phrases`。
@@ -101,8 +101,7 @@ export function Composer({
       room: [],
       medal: [],
       guard: [],
-      admin: [],
-    };
+        };
     // 接口给的包 + 从弹幕学到的表情；同一个唯一键只出现一次（接口优先）。
     const known = new Set(emotes.map((emote) => emote.emoticon_unique));
     const merged = [...emotes, ...seenEmotes.filter((emote) => !known.has(emote.emoticon_unique))];

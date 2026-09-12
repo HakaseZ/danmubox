@@ -192,7 +192,6 @@ pub enum EmotePackage {
     Room,
     Medal,
     Guard,
-    Admin,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

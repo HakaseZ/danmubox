@@ -151,7 +151,7 @@ export interface ApiError {
   message: string;
 }
 
-export type EmotePackage = "common" | "room" | "medal" | "guard" | "admin";
+export type EmotePackage = "common" | "room" | "medal" | "guard";
 
 export interface EmoteToken {
   emoticon_unique: string;
@@ -192,7 +192,6 @@ export const EMOTE_PACKAGE_LABEL: Record<EmotePackage, string> = {
   room: "本房间",
   medal: "粉丝牌",
   guard: "大航海",
-  admin: "房管",
 };
 
 /** 发送结果的用户可见文案（docs/ui.md §6.5）。 */

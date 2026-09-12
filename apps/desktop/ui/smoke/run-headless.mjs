@@ -15,11 +15,18 @@
 //
 // 两个视口各跑一遍同一份场景，断言与截图在两引擎间逐字相同：1440×900（桌面）与
 // 360×844（窗口最小宽度 = 可达面边界）。退出码 0 = 两个视口里所有「期望为 true」的断言都为 true。
+//
+// **同一台机上冒烟必须串行**：一次只让一个浏览器跑。并发时内存压力会先杀掉 WebKit 的
+// WebContent 进程，表现是 `page.evaluate: Target crashed`，而且**看起来像「某一段场景必崩」**
+// ——这个假象骗过两个人。崩溃会换新页重试一次并记账（重跑整个场景），两次都崩才报失败。
+//
+// `--from-snapshot <file>`：不起浏览器，只判定一份已有快照（给宿主引擎那条链路用，
+// 见 `smoke/wkwebview-host.swift` 与 docs/ui.md §15）。
 // 换 Chrome：CHROME_BIN=/path/to/chrome node smoke/run-headless.mjs
 // 截图目录：SMOKE_SHOT_DIR（默认系统临时目录）。两个引擎要指到**不同**目录，否则同名截图互相覆盖。
 
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -520,6 +527,30 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height }) {
 
 /* ================================================================================ 入口 */
 
+// `--from-snapshot <file>`：不起浏览器，只按**同一套断言**判定一份已有快照。
+// 宿主引擎那条链路（`smoke/wkwebview-host.swift` 跑系统 WKWebView）就是这么判的，
+// 免得「旁证」和「主闸门」各有一套口径。
+const snapshotFlag = process.argv.indexOf("--from-snapshot");
+if (snapshotFlag >= 0) {
+  const file = process.argv[snapshotFlag + 1];
+  const snapshot = JSON.parse(readFileSync(file, "utf8"));
+  console.log(JSON.stringify(snapshot, null, 2));
+  const failures = [];
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (typeof value !== "boolean") continue;
+    if (value !== !EXPECTED_FALSE.has(key)) failures.push(key);
+  }
+  if (failures.length > 0) {
+    console.error("\n断言不成立（宿主引擎快照 " + file + "）：" + failures.join(", "));
+    process.exit(1);
+  }
+  const booleans = Object.values(snapshot).filter((v) => typeof v === "boolean").length;
+  console.error(
+    `\n宿主引擎快照 ${file}：${booleans} 条布尔断言 / ${Object.keys(snapshot).length} 项快照，全部成立`,
+  );
+  process.exit(0);
+}
+
 const engine = parseEngine(process.argv.slice(2), process.env);
 const shotDir = process.env.SMOKE_SHOT_DIR ?? tmpdir();
 
@@ -611,7 +642,9 @@ try {
         }
         crashCount += 1;
         log(
-          `⚠ 视口 ${viewport.name} 的渲染进程崩溃（Target crashed），换一张新页重试：` +
+          `⚠ 视口 ${viewport.name} 第 ${attempt} 次尝试：渲染进程崩溃（Target crashed）。` +
+            "单次崩溃 ≠ 该场景必崩（并发跑浏览器时内存压力先杀 WebKit 的 WebContent），" +
+            "换一张新页**重跑整个场景**（断言一起重跑，不是只补截图）：" +
             `${String(error).slice(0, 120)}`,
         );
       } finally {

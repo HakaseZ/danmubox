@@ -958,6 +958,22 @@ node smoke/run-headless.mjs --engine webkit    # WebKit（宿主引擎）：Play
 
 **运行器自己不添乱**（2026-09-12 补）：① **每一步都有超时** —— 每个 CDP 调用、连调试端口、导航、起浏览器各有一档上限，超时即报错并说清卡在哪条命令（曾经出现过「机器同时挂着十几个残留浏览器、渲染进程不产帧」的状态：进程活着、端口连得上，但命令永不回复，脚本于是「一行输出都没有」地挂死）；② **退出必收自己的浏览器** —— 正常退出、断言失败、未捕获异常、`SIGINT`/`SIGTERM`/`SIGHUP` 都会杀掉自己起的进程组与全部后代，启动前还会清掉上一次的孤儿（只认我们自己的标记、且只杀 ppid==1 的遗留物，不碰用户自己的 Chrome）——不清理的话，验证本身就会把环境搞坏（那次漏了 19 个，机器内存只剩 28MB）；③ **浏览器候选依次自检** —— `CHROME_BIN` → omp 自带的 Chrome for Testing → 系统 Chrome，起一台就拍一张 `about:blank` 验它**真的会产帧**，不合格就换下一个（浏览器能不能渲染是环境事实，不是常量）；④ **截图是证据不是断言** —— 产不出帧时告警并跳过，不把一轮好好的断言跑死（末尾会汇总张数）。
 
+**同一台机上冒烟必须串行：一次只让一个浏览器跑**（不管是谁在跑）。并发跑两份浏览器时，内存压力下**系统会先杀掉 WebKit 的 WebContent 进程** —— 表现是 `page.evaluate: Target crashed`，而且**会伪装成「某一段场景必崩」**：今天这个假象骗了两个人（一个以为是表情面板那段代码，一个以为是自己的改动）。2026-09-12 实测：同一份夹具同一次运行里，第一次崩、换一张新页重试就把表情面板 / 房管 / 账号全部跑过 —— 所以**单次崩溃不等于该场景必崩**。
+
+配套的两条硬规矩：① **崩溃要重试，但要有上限（1 次）并记账** —— 日志写清「第几次尝试、是首次还是重试」，重试必须**重跑整个场景**（断言一起重跑，不是只补截图），两次都崩才报失败，且失败信息要说明「这是环境问题（内存压力），不是断言不成立」；② **跨进程的等待都要有超时**（见上一条「运行器自己不添乱」），否则一次环境抖动就会变成「脚本挂了、什么都不说」。
+
+**宿主引擎的旁证链路**：Playwright 的 WebKit 只是 WebKit 的一个构建，**系统 WKWebView 才是宿主本尊**（Tauri 在 macOS 上用的就是它）。因此另有一条零构建差异的链路，跑的是同一个冒烟页、同一份快照：
+
+```bash
+cd apps/desktop/ui
+npm run build && node smoke/room-page.mjs            # 生成冒烟页（默认 /tmp/danmubox-ui-smoke.html）
+swift smoke/wkwebview-host.swift /tmp/danmubox-ui-smoke.html "$TMPDIR/wk-host" 1440 900 wide
+swift smoke/wkwebview-host.swift /tmp/danmubox-ui-smoke.html "$TMPDIR/wk-host" 360 844 narrow   # 可达面边界值
+node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"                      # 同一套断言判定
+```
+
+它的已知局限（所以它是旁证、不是主闸门）：没有显示会话时 rAF 被节流，**按时间推进的断言会假失败**（跟随贴底那几条），几何 / 尺寸 / 溢出 / 截图仍然可靠；每次只跑一个视口。时序类结论一律以 `run-headless.mjs --engine webkit` 为准。
+
 **两个引擎**：Chromium 与 WebKit 各跑一遍同一份场景代码、同一套断言（不是两套脚本），视口也一样。为什么要两个：**应用跑在 macOS 的 WKWebView 里，Chromium 的绿只证明「在 Chromium 里成立」**。两边的差别是真实存在的（`@property` 注册自定义属性、网格的 `minmax()`、`em` 的求值时机），但也**不要**把所有问题都归给引擎——见下面 2026-09-12 的第二个反例。跑 WebKit 需要一次性的 `npm i -D playwright && npx playwright install webkit`（后者约 80MB，落在 `~/Library/Caches/ms-playwright`）。
 
 **判据：视口是产品的可达面，不是测试的自由参数。** 凡新增「只在某些视口成立」的行为，必须同时确认**用户能到达那个视口**——

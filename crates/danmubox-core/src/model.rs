@@ -83,8 +83,11 @@ pub struct Message {
     /// 存的是**整份**表情信息（而不只是图片地址），因为界面要能把它**再发出去**——
     /// 上游有些表情家族（如 `upower_` 的 UP 主专属表情）不在直播表情接口里，
     /// 只能从收到的弹幕里学到。见 `docs/protocol.md` 附录 A35。
+    // 装箱：绝大多数消息没有表情，内联会让 `Message` 大出一百多字节，
+    // 进而把 `Event` 这类以 `Message` 为变体的枚举顶过 clippy 的尺寸阈值。
+    // 装箱只在真有表情时分配一次，换取消息本体保持紧凑。
     #[serde(default)]
-    pub emote: Option<EmoteRef>,
+    pub emote: Option<Box<EmoteRef>>,
     pub upstream_id: String,
 }
 

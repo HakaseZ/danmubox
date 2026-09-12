@@ -178,7 +178,8 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
     // 因此这一支无法像历史条目那样核对「正文是否就是这个表情」。
     // 观测到的实时表情弹幕正文就是表情本身（如 `info[1] == "这个好耶"`），故按整条画图处理。
     if let Some(emote) = meta.and_then(|m| m.get(13)).and_then(Value::as_object) {
-        message.emote = crate::emote::emote_ref_from_object(&Value::Object(emote.clone()));
+        message.emote = crate::emote::emote_ref_from_object(&Value::Object(emote.clone()))
+            .map(Box::new);
     }
 
     // 房管：经典槽位 `info[2][2]`。尚无正向样本，见 `docs/protocol.md` 附录 A 的校准项。

@@ -161,7 +161,8 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
             .and_then(Value::as_str)
             .unwrap_or_default();
         if emote_text == message.content {
-            message.emote = crate::emote::emote_ref_from_object(&Value::Object(emote.clone()));
+            message.emote =
+                crate::emote::emote_ref_from_object(&Value::Object(emote.clone())).map(Box::new);
         }
     }
 

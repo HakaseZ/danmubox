@@ -148,6 +148,18 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+
+    // 表情弹幕：历史条目的字段布局与实时 `DANMU_MSG` **不同**——实时在 `info[0][13]`，
+    // 历史在顶层的 `emoticon` 对象里（`{emoticon_unique, text, url, width, height, is_dynamic, ...}`）。
+    // 不处理这一支，回填进来的表情就只会显示成表情名（用户实测如此）。
+    if let Some(emote) = item.get("emoticon").and_then(Value::as_object) {
+        if let Some(url) = emote.get("url").and_then(Value::as_str) {
+            if !url.is_empty() {
+                message.emote_url = crate::asset::secure_url(url);
+            }
+        }
+    }
+
     message.is_history = true;
     Some(message)
 }
@@ -246,6 +258,47 @@ mod tests {
         assert_eq!(messages[0].upstream_id, "aaa", "举报需要上游标识");
         assert_eq!(messages[0].kind, MessageKind::Danmaku);
         assert!(messages[1].medal_level == 0 && messages[1].medal_name.is_empty());
+    }
+
+    #[test]
+    fn history_emote_danmaku_carries_the_image_url() {
+        // 历史条目的表情在顶层 `emoticon` 对象里（与实时弹幕的 `info[0][13]` 不同布局）。
+        let value = json!({
+            "data": {"room": [{
+                "text": "这个好耶",
+                "uid": 22,
+                "nickname": "观众乙",
+                "timeline": "2026-09-12 08:49:32",
+                "dm_type": 1,
+                "emoticon": {
+                    "id": 0,
+                    "emoticon_unique": "official_345",
+                    "text": "这个好耶",
+                    "url": "http://i0.hdslb.com/bfs/live/x.png",
+                    "is_dynamic": 1,
+                    "height": 60,
+                    "width": 200
+                }
+            }]}
+        });
+        let messages = map_history(7, &value);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].emote_url,
+            "https://i0.hdslb.com/bfs/live/x.png",
+            "历史里的表情同样要升级为 https，否则在客户端里加载不出来"
+        );
+        assert_eq!(messages[0].content, "这个好耶");
+    }
+
+    #[test]
+    fn history_entry_without_emote_stays_text() {
+        let value = json!({"data": {"room": [{
+            "text": "普通弹幕", "uid": 22, "timeline": "2026-09-12 08:49:32",
+            "emoticon": {"emoticon_unique": "", "url": ""}
+        }]}});
+        let messages = map_history(7, &value);
+        assert!(messages[0].emote_url.is_empty(), "空 url 不得当成表情");
     }
 
     #[test]

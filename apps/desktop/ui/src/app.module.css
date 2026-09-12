@@ -327,6 +327,20 @@
   color: var(--fg-dim);
 }
 
+/* 「回复 @昵称」标记：弱化、定宽截断（完整名字在 title 里），不抢正文（issue #13b） */
+.replyTo {
+  flex: none;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9em;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--fg-dim) 14%, transparent);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
 .badges {
   display: inline-flex;
   gap: 3px;

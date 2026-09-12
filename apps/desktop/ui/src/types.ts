@@ -29,6 +29,15 @@ export interface Message {
   medal_color_border?: string;
   medal_color_text?: string;
   guard_level: number;
+  /**
+   * 发送者**粉丝牌自身**所属房间的舰长标记（契约 §5）：只用于牌面样式，
+   * **不得**拿来画本房间的舰长标——那会把别的房间的身份按到本房间头上（用户 #12）。
+   */
+  medal_guard_level: number;
+  /** 被回复者 uid；`0` = 这条不是回复（契约 §5）。 */
+  reply_to_uid: number;
+  /** 被回复者昵称；非回复为空串。 */
+  reply_to_uname: string;
   is_admin: boolean;
   /**
    * 发送者头像 URL（契约 §5 新增字段，无则空串）。

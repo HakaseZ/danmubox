@@ -6,9 +6,9 @@
 // 换浏览器：CHROME_BIN=/path/to/chrome node smoke/run-headless.mjs
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { buildSmokeHtml } from "./room-page.mjs";
 
@@ -157,6 +157,8 @@ try {
   let adminShot = false;
   let confirmShot = false;
   const shoot = async (path) => {
+    // SMOKE_SHOT_DIR 指到还不存在的目录时别用 ENOENT 报错（那种失败很难看出是路径问题）
+    mkdirSync(dirname(path), { recursive: true });
     const { data } = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(path, Buffer.from(data, "base64"));
     console.error("截图 " + path);

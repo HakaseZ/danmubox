@@ -122,6 +122,13 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
           {message.uname}:
         </span>
       )}
+      {message.kind !== "system" && message.reply_to_uid !== 0 && message.reply_to_uname.length > 0 && (
+        // 「回复了谁」看得到（用户 #13b）：显示在被回复者该出现的位置——昵称之后、正文之前。
+        // 长昵称按 `.replyTo` 截断，完整名字在 title 里。
+        <span className={styles.replyTo} data-testid="db-msg-reply" title={`回复 @${message.reply_to_uname}`}>
+          回复 @{message.reply_to_uname}
+        </span>
+      )}
       {message.emote ? (
         // 表情弹幕：正文就是表情名，只显示文字会让人以为「表情没渲染」，
         // 因此改画图（标题与 alt 都保留表情名——图加载不出来时浏览器回退显示 alt）。

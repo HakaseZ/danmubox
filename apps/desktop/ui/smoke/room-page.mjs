@@ -23,7 +23,8 @@
 //   step5  互动行 8 秒后自动消失
 //   step6  关掉自动消失后互动行常驻
 //   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级；
-//          内容不足视口时整体贴底；头像列永远占位（昵称三列纵向对齐）；粉丝牌真彩色与兜底色
+//          内容不足视口时整体贴底；头像列永远占位（昵称三列纵向对齐）；粉丝牌真彩色与兜底色；
+//          回复关系可见；舰长标只认本房间的 guard_level
 //   emotes 主站「我的表情」分组可见、能选中、发出去带的是唯一键
 //   menu   右键出菜单（复制 / ＠TA / 回复 / 屏蔽 / 主页 / 举报）并能关掉
 //   mention＠ 目标与文本同源：文本里的 @名字 被删掉后发送就不带目标；回复的引用条照旧带目标
@@ -60,6 +61,7 @@ const MOCK = `(function () {
       local_id: nextLocal, room_id: 5440, kind: kind, ts: Date.now(),
       uid: 500 + nextLocal, uname: kind === "interact" ? "进场观众" + nextLocal : "观众" + nextLocal,
       content: content, color: 0, medal_level: 0, medal_name: "", guard_level: 0,
+      medal_guard_level: 0, reply_to_uid: 0, reply_to_uname: "",
       is_admin: false, face: "", is_history: !!isHistory, amount: 0, combo_id: "",
       emote: null, upstream_id: "smoke-" + nextLocal
     };
@@ -298,6 +300,16 @@ const MOCK = `(function () {
     window.__emit("danmubox://message", window.__mk("danmaku", "无真彩牌弹幕", false, {
       medal_level: 3, medal_name: "兜底牌"
     }));
+    // 回复关系（issue #13b）与「舰长标只认本房间」（issue #12）的样本行
+    window.__emit("danmubox://message", window.__mk("danmaku", "这条是回复", false, {
+      reply_to_uid: 777, reply_to_uname: "被回复的人"
+    }));
+    window.__emit("danmubox://message", window.__mk("danmaku", "他房间的牌子弹幕", false, {
+      medal_level: 7, medal_name: "外间牌", medal_guard_level: 3, guard_level: 0
+    }));
+    window.__emit("danmubox://message", window.__mk("danmaku", "本房间的大航海弹幕", false, {
+      guard_level: 3
+    }));
     // 头像（Message.face）：有头像画图、没头像不渲染、加载失败退化成首字符占位
     window.__emit("danmubox://message", window.__mk("danmaku", "带头像的弹幕", false, {
       face: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><rect width='32' height='32' fill='%2300aeec'/></svg>",
@@ -349,6 +361,25 @@ const MOCK = `(function () {
       trueMedalText.indexOf("63, 180, 246") >= 0;
     out.medalFallbackGradientApplied = fallbackMedalText.indexOf("linear-gradient") >= 0 &&
       fallbackMedalText !== trueMedalText;
+    // 回复关系可见（issue #13b）：只有真正的回复才画「回复 @昵称」
+    var replyRow = rowWith("这条是回复");
+    var replyLabel = replyRow ? replyRow.querySelector('[data-testid="db-msg-reply"]') : null;
+    out.replyLabelShown = !!replyLabel && replyLabel.innerText.indexOf("被回复的人") >= 0;
+    var plainRow = rowWith("无头像的弹幕");
+    out.replyLabelAbsentWhenNotReply = !!plainRow &&
+      !plainRow.querySelector('[data-testid="db-msg-reply"]');
+    // 舰长标只认本房间的 guard_level：戴着别的房间舰长牌（medal_guard_level=3）不亮舰长标（issue #12）
+    // 判据看**徽标元素本身**的文本（正文里出现「舰长」两字不算）
+    var hasGuardBadge = function (row) {
+      if (!row) return false;
+      return [].slice.call(row.querySelectorAll("span")).some(function (s) {
+        return s.innerText.trim() === "舰长";
+      });
+    };
+    var outsideGuardRow = rowWith("他房间的牌子弹幕");
+    var roomGuardRow = rowWith("本房间的大航海弹幕");
+    out.guardBadgeNotFromMedalGuardLevel = !!outsideGuardRow && !hasGuardBadge(outsideGuardRow);
+    out.guardBadgeShownForRoomGuard = hasGuardBadge(roomGuardRow);
 
     // ---- layout 弹幕列表是唯一生长区；面板向上展开不遮挡最新弹幕
     var scroller = byTestId("db-chat-scroll");

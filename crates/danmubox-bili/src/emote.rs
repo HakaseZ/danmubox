@@ -191,16 +191,29 @@ fn classify_package(pkg_name: &str, pkg_type: i64, emoticons: &[Value]) -> Emote
         return EmotePackage::Medal;
     }
 
-    let medal_scoped = emoticons.iter().any(|emote| {
+    // 表情级解锁判据。`identity` 的语义取自**官方客户端自己的解锁文案映射**
+    // （`emoticonDanmakuPermCheck`）：`identity === 4` → 「加入主播的粉丝团」；
+    // `identity` 1/2/3 → 「开通主播的总督/提督/舰长」。因此：
+    //   有 identity 4 或有等级门槛 → 粉丝牌包；
+    //   只有 identity 1..=3          → 大航海包；
+    //   两者都没有（identity 99）    → 按 `pkg_type` 分通用 / 房间。
+    // 一个包可能同时含粉丝团与大航海门槛的表情（实测样本即如此），此时按粉丝牌归类。
+    let identities: Vec<i64> = emoticons
+        .iter()
+        .filter_map(|emote| emote.get("identity").and_then(Value::as_i64))
+        .collect();
+    let has_medal_tier = emoticons.iter().any(|emote| {
         emote
             .get("unlock_need_level")
             .and_then(Value::as_i64)
             .unwrap_or(0)
             > 0
-            || matches!(emote.get("identity").and_then(Value::as_i64), Some(1..=4))
     });
-    if medal_scoped {
+    if has_medal_tier || identities.contains(&4) {
         return EmotePackage::Medal;
+    }
+    if identities.iter().any(|id| (1..=3).contains(id)) {
+        return EmotePackage::Guard;
     }
 
     if pkg_type == 2 {
@@ -365,6 +378,30 @@ mod tests {
         assert_eq!(classify_package("大航海表情", 2, &none), EmotePackage::Guard);
         assert_eq!(classify_package("房管表情", 2, &none), EmotePackage::Admin);
         assert_eq!(classify_package("管理组", 2, &none), EmotePackage::Admin);
+    }
+
+    #[test]
+    fn guard_tier_identities_map_to_the_guard_group() {
+        // 官方 emoticonDanmakuPermCheck 的文案映射：identity 1/2/3 = 总督/提督/舰长。
+        // 只有大航海门槛、没有粉丝团门槛的包，应归「大航海」而不是「粉丝牌」。
+        let guard_only = json!([
+            {"identity": 1, "perm": 1, "unlock_need_level": 0},
+            {"identity": 3, "perm": 1, "unlock_need_level": 0}
+        ]);
+        assert_eq!(
+            classify_package("舰长表情", 2, &guard_only.as_array().cloned().unwrap()),
+            EmotePackage::Guard
+        );
+
+        // 同时含粉丝团（identity 4）与大航海档位时，按粉丝牌归类（实测样本即如此）。
+        let mixed = json!([
+            {"identity": 4, "perm": 1, "unlock_need_level": 1},
+            {"identity": 2, "perm": 0, "unlock_need_level": 1}
+        ]);
+        assert_eq!(
+            classify_package("UP主大表情", 2, &mixed.as_array().cloned().unwrap()),
+            EmotePackage::Medal
+        );
     }
 
     #[test]

@@ -579,24 +579,36 @@
 }
 
 /* 正文块：身份簇（第 1 列）与正文（第 2 列）共用一个网格。
-   第 1 列取 `max-content` 但同时允许收缩到 0：身份簇再长（长昵称 + 三个徽标 +
-   回复标记）也不会把正文挤没，只会把昵称截断（`.name` 自己带 ellipsis）。 */
+   身份簇的宽度上限写在**簇自己**身上（`.identity` 的 `max-width: --identity-max-w`），
+   第 1 列仍是 `minmax(0, max-content)`：内容短的行不会被平白推开，只有「身份簇比上限还宽」时才收窄，
+   收窄的那部分由昵称自己的省略号承担（见 `.name`）。用户 2026-09-12 报的
+   「文字全挤在右边，没有办法往左边用户名、身份牌等下方自动换行」正是没有这条上限时发生的：
+   宽 360 的窗口里身份簇吃掉 182.7px（占正文块的 56%），正文只剩 112.4px。
+   ⚠ 上限**不能用轨道上的百分比**表达：`minmax(0, 50%)` 会被网格的 maximize-tracks 撑满 50%，
+   于是每一行的正文起点都被推到行的中间（用真实夹具在 1440 实测：正文起点 225.6 → **734.4px**）；
+   第 1 列的下限仍是 0，极窄时它先让路，不把行撑出去。 */
 .text {
   flex: 1;
   min-width: 0;
   display: grid;
+  /* 身份簇的宽度上限（宽屏与 `.name` 的 14em 同档）；窄屏在文件末尾的 @media 里收窄 */
+  --identity-max-w: 14em;
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
   align-items: start;
 }
 
 /* 身份簇：徽标组 + 昵称 + 回复标记。身份属于人名，是一个整体而不是独立一栏，
-   因此簇内只用 --sp-1（贴），簇与正文之间才用 --sp-2（分）。 */
+   因此簇内只用 --sp-1（贴），簇与正文之间才用 --sp-2（分）。
+   `max-width` 按内容收窄（不是把列撑到上限）：内容短的行照旧从名字后面直接起正文。
+   `overflow: hidden`：被上限收窄时簇**在自己的列里**截断昵称，不越出列去压住正文的首字。 */
 .identity {
   grid-column: 1;
   display: inline-flex;
   align-items: baseline;
   gap: var(--sp-1);
   min-width: 0;
+  max-width: var(--identity-max-w);
+  overflow: hidden;
 }
 
 /* 互动/进场消息：显示一会儿就淡出（`ui.interact_auto_hide` 打开时）。
@@ -634,7 +646,10 @@
 }
 
 .name {
-  flex: none;
+  /* 昵称是身份簇里**唯一允许收缩**的一格：列宽被 50% 上限收窄时它就地省略（`min-width: 0`
+     是内联弹性项能收在内容宽度以下的前提），徽标组则保持自己的宽度不被压扁。 */
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: var(--fs-3);
   /* 人名用弱化色、**不**吃弹幕自身颜色：普通弹幕的颜色是白色，套到人名上
      在浅色主题里等于隐形（用户实测「用户名是白色、看不见」） */
@@ -957,6 +972,29 @@
   overflow-y: hidden;
 }
 
+/* 大表情那一档的图片盒（= 2.2 × `--fs-7`，由 `.picker` 给出）。**必须注册成 <length>**：
+   自定义属性在**使用处**才按那里的字号解析，同一个 `calc(var(--fs-7) * 2.2)` 到了格子里
+   会按格子自己的字号（`--fs-7`）再乘一次，于是「网格区高度」与「格子里的图」差 1.3 倍。
+   注册之后它在 `.picker` 那一层就算成 px 再继承下去，两处永远是同一个数
+   （与 `--row-line` 同一个理由，见文件头那条注释；不认 `@property` 的老引擎退化成 em，
+   只是行高偏移这种外观问题，不会把尺寸算成 0 / 无穷大）。 */
+@property --emote-size-big {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 40px;
+}
+
+/* 表情面板的**网格区高度 = 两行大表情**（用户 2026-09-12：「既然表情包做了滚动，展开只展示
+   2 行（大表情的 2 行，以此高度为标准）就行」）。
+   三个量都在**面板这一层**算：行高 = 图片盒 + 格子上下内边距（--sp-1），网格高 = 两行 + 一道行距。
+   这样「格子里的图」与「网格区多高」永远是同一个数，不会各写一个 2.2em 然后对不齐。
+   高度写死（不是 max-height）：换分组时面板高度不跳，滚动条该出就出。 */
+.picker {
+  --emote-size-big: calc(var(--fs-7) * 2.2);
+  --emote-row-h-big: calc(var(--emote-size-big) + var(--sp-1) * 2);
+  --emote-grid-h: calc(var(--emote-row-h-big) * 2 + var(--sp-1));
+}
+
 .phrasesBody {
   flex: 1;
   min-height: 0;
@@ -983,13 +1021,6 @@
   font-size: var(--fs-2);
   font-weight: 600;
   color: var(--fg-dim);
-}
-
-.panelSearch {
-  flex: 1;
-  max-width: 220px;
-  font-size: var(--fs-2);
-  padding: var(--sp-1) var(--sp-2);
 }
 
 /* 房管面板（issue #3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表 */
@@ -1070,12 +1101,15 @@
 
 /* 表情面板主体：左边一条**竖向 tab 轨道**，右边表情网格（用户 2026-09-12：
    「给表情的全是按钮，根本框不住表情图标，可以直接仿照官方实现」）。
-   两列各自滚：轨道自己滚、网格自己滚，面板头与轨道因此都不动。 */
+   两列各自滚：轨道自己滚、网格自己滚，面板头与轨道因此都不动。
+   `align-items: flex-start`：两列**各自决定自己的高度**——网格区是固定的两行大表情
+   （见 .picker 的 --emote-grid-h），不被轨道那一列的高度带着走。 */
 .emoteBody {
   flex: 1;
   min-height: 0;
   min-width: 0;
   display: flex;
+  align-items: flex-start;
   gap: var(--sp-2);
 }
 
@@ -1139,11 +1173,12 @@
 }
 
 /* 表情格：等宽格子（一行放几个由宽度定），格子里的图居中。
-   它是表情面板里**唯一会滚的部分**（面板头与分组 tab 常驻），见上一条注释。 */
+   它是表情面板里**唯一会滚的部分**（面板头与分组 tab 常驻），见上一条注释。
+   高度固定成**两行大表情**（--emote-grid-h，见 .picker）：超出的部分滚动。 */
 .emoteGrid {
   flex: 1;
   min-width: 0;
-  min-height: 0;
+  height: var(--emote-grid-h);
   overflow-y: auto;
   display: grid;
   /* 列宽下限 4.5em：**按通用表情的长宽比定的**。通用表情是 200×60 的横条（实测），
@@ -1162,6 +1197,10 @@
   /* 表情尺寸走自定义属性：基础档与「非通用放大档」只差这一个值，
      不再靠两条 height 声明的先后顺序决定谁生效 */
   --emote-size: 1.5em;
+  box-sizing: border-box;
+  /* 格子高度**显式给死**（图片盒 + 上下内边距），不靠内容撑：这样「网格区 = 两行大表情」
+     这个等式两边量的是同一件事（改前靠内容撑时，按钮那 1px 边框会让实测值多出 2px）。 */
+  height: calc(var(--emote-size) + var(--sp-1) * 2);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1189,16 +1228,17 @@
   vertical-align: middle;
 }
 
-/* 通用以外（本房间 / 粉丝牌 / 大航海）的表情放大：那几族本来就大，缩成通用那么大看不清 */
+/* 通用以外（本房间 / 粉丝牌 / 大航海）的表情放大：那几族本来就大，缩成通用那么大看不清。
+   图片盒取**面板算好的绝对值**（--emote-size-big 已注册成 <length>，在这里就是 px）。 */
 .pickerItemBig {
-  --emote-size: 2.2em;
+  --emote-size: var(--emote-size-big);
   font-size: var(--fs-7);
 }
 
 /* 无权限的表情：**置灰，但不隐藏、不缩尺寸、不禁用**（用户 #6）。
    `grayscale` 只去色，形状与轮廓照旧——灰得能认出是哪一个；透明度降到 0.45
-   降权但仍可读。真正的闸门在上游发送侧，所以这一格仍然点得动（点了会插入草稿，
-   发不发得出去由上游判定），`title` 把这件事说清楚。 */
+   降权但仍可读。真正的闸门在上游发送侧，所以这一格仍然点得动（点一下就直接发出去，
+   能不能发由上游判定），`title` 把这件事说清楚。 */
 .pickerItemLocked {
   filter: grayscale(1);
   opacity: 0.45;
@@ -1294,18 +1334,28 @@
 
 /* 弹幕里的表情图：尺寸走 `--emote`（= 1.1 × 行盒），随 `ui.font_scale` 联动（docs/ui.md §4.1）。
    它是正文块里的**行内**元素，与文字同一个行盒——表情与文字不会各站一个基线。
+   **宽高都给死（见方）+ `object-fit: contain`**：上游 CDN 的表情是原图直出，尺寸各档不同
+   （实测：通用表情 200×60 的横条、房间 / 粉丝牌表情 162×162 的方图）。只写 `height`
+   的话宽度会按原图比例算出来 —— 200×60 的那条会变成 3.33 倍宽（实测 23.1px 高 / 77px 宽），
+   盒子跟着原图走。这与「512×512 头像顶爆主页」「表情撑出面板格子」是同一个错误，
+   **第三次**出现在弹幕行里；共用组件的尺寸不许依赖原图尺寸（docs/ui.md §4.1）。
    上下各给一个负外边距，把「比行盒高的那 10%」从行盒里扣掉：图仍然画那么大，
    但行盒（以及逐行间距）保持 `--row-line`，一行表情不会把整列表撑得忽高忽低。 */
 .contentEmote {
+  width: var(--emote);
   height: var(--emote);
+  object-fit: contain;
   margin-block: calc((var(--row-line) - var(--emote)) / 2);
   vertical-align: middle;
 }
 
-/* 官方把「大表情」（bulge）画两倍大并加圆角；这一档尺寸太大，独占一行 */
+/* 官方把「大表情」（bulge）画两倍大并加圆角；这一档尺寸太大，独占一行。
+   宽高同样给死（见方）：这一档的上游样本也是 162×162，但比例不许再被当成前提。 */
 .contentEmoteBulge {
   display: block;
+  width: calc(var(--emote) * 2);
   height: calc(var(--emote) * 2);
+  object-fit: contain;
   border-radius: var(--r-1);
 }
 
@@ -1524,6 +1574,13 @@
 @media (max-width: 520px) {
   .listPage {
     padding: var(--sp-3);
+  }
+
+  /* 身份簇的上限在窄屏收到 10em（14px 字号下 140px，约正文块的一半）：正文因此至少拿到
+     另一半宽度折行（用户 2026-09-12：「文字全挤在右边」）。用**长度**而不是百分比，
+     理由见 `.text` 上那段注释（百分比轨道会被 maximize-tracks 撑满，把正文推到行中间）。 */
+  .text {
+    --identity-max-w: 10em;
   }
 
   /* 头部：在线 / 看过 / 电池不缩字号、不隐字段，改为换行；标题仍可截断 */

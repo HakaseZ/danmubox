@@ -1,0 +1,300 @@
+{
+  "_note": "弹幕行的真实上游载荷（DANMU_MSG，只读固化自 2026-09-12 应用真实运行的 debug 日志）。结构与字段原样保留，**不允许手写**：手写夹具正是「图比格子宽 / 正文被挤」这类 bug 逃过验证的根因（同 emotes.json 的口径）。两条都是**完整原始记录**（`info` 全部 18 个槽位 + `extra` 原样），冒烟的场景与断言一律从这里派生。",
+  "sources": [
+    {
+      "key": "text",
+      "kind": "DANMU_MSG",
+      "why": "用户 2026-09-12 贴的那条弹幕（正文「糖分会促进胰岛素分泌，导致油脂分泌变多」）：身份簇（粉丝牌 + 昵称）与正文的分栏口径就是在这条上被报「文字全挤在右边」。带粉丝牌 16 级与昵称，因此身份簇的真实宽度也在这条里。",
+      "captured_from": "应用真实运行日志（debug 级 `原始业务载荷`），2026-09-12 13:06:35Z",
+      "sanitized": [
+        "昵称 / 粉丝牌名 / 主播名 → **等长掩码**（CJK 与全角 → 全角 ＊，ASCII → x）：宽度与原名字一致，所以「身份簇多宽、正文被挤到哪」这类排版特征脱敏后仍然量得准，而真实昵称一个字都不留",
+        "info[0][5]（发送者 uid）与 info[0][7]（校验位哈希）→ <redacted>",
+        "info[2][0]（uid）→ <redacted>",
+        "info[3][3]（房间号）与 info[3][12]（up 主 uid）→ <redacted>",
+        "info[0][15].user.{uid} 与 user.medal.{ruid} → <redacted>（0 是「没有」的语义值，原样保留）",
+        "info[0][15].user.base.face 等 CDN 地址只脱敏哈希段（域名与路径形状保留）",
+        "extra 里的 user_hash / id_str → <redacted>（extra 是 JSON 字符串，脱敏后按同结构序列化回去）"
+      ]
+    },
+    {
+      "key": "emoticon",
+      "kind": "DANMU_MSG",
+      "why": "真实**表情包弹幕**：整条就是一张表情（`info[0][13].emoticon_unique` 非空、`info[1]` 是表情名「摸摸K头」、尺寸 162×162、`dm_type=1`、`bulge_display=1`），没有可排版的用户正文。同一天日志里 35 个 `emoticon_unique` 与 `info[1]` 一一对应（同一个表情恒定同一个名字、同一份尺寸），尺寸**全部** 162×162 —— 这是「一条弹幕一张表情」的取证。",
+      "captured_from": "应用真实运行日志（debug 级 `原始业务载荷`），2026-09-12 05:54:31Z",
+      "sanitized": [
+        "昵称 → **等长掩码**（同 text 那一条的口径）",
+        "info[0][5]（发送者 uid）与 info[0][7]（校验位哈希）→ <redacted>",
+        "info[2][0]（uid）→ <redacted>",
+        "info[0][13].emoticon_unique 的房间号段 → room_<redacted>_53352（结构保留，房间号不入库）",
+        "info[0][13].url 与 user.base.face 只脱敏哈希段"
+      ]
+    }
+  ],
+  "text": {
+    "cmd": "DANMU_MSG",
+    "dm_v2": "",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789218394899,
+        "<redacted>",
+        0,
+        "<redacted>",
+        0,
+        0,
+        0,
+        "",
+        0,
+        "{}",
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":0,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"糖分会促进胰岛素分泌，导致油脂分泌变多\",\"user_hash\":\"<redacted>\",\"emoticon_unique\":\"\",\"bulge_display\":0,\"recommend_score\":2,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":null,\"is_audited\":false,\"id_str\":\"<redacted>\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "https://i0.hdslb.com/bfs/face/<redacted>.jpg",
+              "is_mystery": false,
+              "name": "＊＊xxxxx＊＊＊＊＊",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "https://i0.hdslb.com/bfs/face/<redacted>.jpg",
+                "name": "＊＊xxxxx＊＊＊＊＊"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": {
+              "color": 12478086,
+              "color_border": 12478086,
+              "color_end": 12478086,
+              "color_start": 12478086,
+              "guard_icon": "",
+              "guard_level": 0,
+              "honor_icon": "",
+              "id": 2211,
+              "is_light": 1,
+              "level": 16,
+              "name": "x＊",
+              "ruid": "<redacted>",
+              "score": 775,
+              "typ": 0,
+              "user_receive_count": 0,
+              "v2_medal_color_border": "#C770A499",
+              "v2_medal_color_end": "#C770A499",
+              "v2_medal_color_level": "#C770A4E6",
+              "v2_medal_color_start": "#C770A499",
+              "v2_medal_color_text": "#FFFFFF"
+            },
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": "<redacted>",
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "糖分会促进胰岛素分泌，导致油脂分泌变多",
+      [
+        "<redacted>",
+        "<redacted>",
+        0,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [
+        16,
+        "x＊",
+        "＊＊＊＊＊＊",
+        "<redacted>",
+        12478086,
+        "",
+        0,
+        12478086,
+        12478086,
+        12478086,
+        0,
+        1,
+        "<redacted>"
+      ],
+      [
+        16,
+        0,
+        6406234,
+        ">50000",
+        0
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "<redacted>",
+        "ts": 1789218394
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      130,
+      [
+        6
+      ],
+      null
+    ]
+  },
+  "emoticon": {
+    "cmd": "DANMU_MSG",
+    "dm_v2": "",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789192470894,
+        "<redacted>",
+        0,
+        "<redacted>",
+        0,
+        0,
+        0,
+        "",
+        1,
+        {
+          "bulge_display": 1,
+          "emoticon_unique": "room_<redacted>_53352",
+          "height": 162,
+          "in_player_area": 1,
+          "is_dynamic": 0,
+          "url": "http://i0.hdslb.com/bfs/live/<redacted>.png",
+          "width": 162
+        },
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":1,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"摸摸K头\",\"user_hash\":\"<redacted>\",\"emoticon_unique\":\"room_<redacted>_53352\",\"bulge_display\":1,\"recommend_score\":0,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":null,\"is_audited\":false,\"id_str\":\"<redacted>\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "https://i1.hdslb.com/bfs/face/<redacted>.jpg",
+              "is_mystery": false,
+              "name": "xxxxxxxxx",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "https://i1.hdslb.com/bfs/face/<redacted>.jpg",
+                "name": "xxxxxxxxx"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": null,
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": "<redacted>",
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "摸摸K头",
+      [
+        "<redacted>",
+        "<redacted>",
+        1,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [],
+      [
+        20,
+        0,
+        6406234,
+        ">50000",
+        1
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "<redacted>",
+        "ts": 1789192470
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      528,
+      [
+        27
+      ],
+      null
+    ]
+  }
+}

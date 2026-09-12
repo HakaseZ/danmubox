@@ -210,6 +210,114 @@ const ROW_EMOTE_SAMPLES = {
   bulge: FIXTURE_EMOTES.live.find((emote) => emote.bulge_display === true),
 };
 
+/**
+ * 弹幕行的**真实载荷**（`DANMU_MSG`，见该文件自己的 `_note`）：用户 2026-09-12 报的那条正文行
+ * 与一条真实表情包弹幕。冒烟里这两行**不许手写** —— 手写的「测试主播 / 64×64 表情」正是
+ * 「表情把格子撑破」这类 bug 逃过验证的根因（同 emotes.json 的口径）。
+ */
+const ROW_FIXTURE = JSON.parse(
+  readFileSync(new URL("./fixtures/danmaku-rows.json", import.meta.url), "utf8"),
+);
+
+/** 真实 CDN 图的**内联替身**：固有尺寸与真图一样（头像原图直出，见 app.module.css 的 512 事故）。 */
+function inlineImage(width, height, fill) {
+  return (
+    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='" +
+    width +
+    "' height='" +
+    height +
+    "'><rect width='" +
+    width +
+    "' height='" +
+    height +
+    "' fill='" +
+    fill +
+    "'/></svg>"
+  );
+}
+
+/**
+ * 一条 `DANMU_MSG` 载荷 → `Message`：取值路径**照搬** `crates/danmubox-bili/src/cmd.rs::danmaku`
+ * —— 正文 `info[1]`、颜色 `info[0][3]`、时间戳 `info[0][4]`、本房间舰长 `info[7]`、
+ * 用户 `info[0][15].user`（粉丝牌取 `medal.{level,name,v2_medal_color_*}`）、
+ * 表情 `info[0][13]`（**对象**才算，字符串 `"{}"` 不算）、`extra`（JSON 字符串）里的
+ * `id_str` 与回复关系。
+ *
+ * 只有两类值不照搬：① 图床地址换成本地替身（真图在 i0.hdslb.com，离线跑不到，
+ * 但**固有尺寸必须一致**——162×162 的方图只给 height 就会「看起来没问题」）；
+ * ② 夹具里被脱敏成 `<redacted>` 的字段（uid 等）按「上游没给」处理，与 Rust 侧的
+ * `unwrap_or(0)` / `unwrap_or_default()` 同一语义。
+ */
+function messageFromDanmakuPayload(payload, roomId = 5440) {
+  const info = payload.info;
+  const meta = Array.isArray(info[0]) ? info[0] : [];
+  const slot = meta[15] ?? {};
+  const user = slot.user ?? {};
+  let extra = {};
+  try {
+    extra = JSON.parse(slot.extra ?? "{}");
+  } catch {
+    extra = {};
+  }
+  const num = (value) => (typeof value === "number" ? value : 0);
+  const str = (value) => (typeof value === "string" && value !== "<redacted>" ? value : "");
+  const pointer = (root, path) =>
+    path.split("/").reduce((node, key) => (node == null ? undefined : node[key]), root);
+  // 表情：`info[0][13]` 是对象、且有非空 url 时才算（非表情弹幕这一格是字符串 "{}"）
+  const rawEmote = meta[13];
+  const emote =
+    rawEmote && typeof rawEmote === "object" && typeof rawEmote.url === "string" && rawEmote.url
+      ? {
+          emoticon_unique: rawEmote.emoticon_unique ?? "",
+          // 上游给 http，实现侧会升到 https（crates/danmubox-bili/src/asset.rs），这里照搬
+          url: inlineImage(rawEmote.width ?? 0, rawEmote.height ?? 0, "%23c08a2e"),
+          width: num(rawEmote.width),
+          height: num(rawEmote.height),
+          is_dynamic: num(rawEmote.is_dynamic) !== 0,
+          in_player_area: num(rawEmote.in_player_area) !== 0,
+          bulge_display: num(rawEmote.bulge_display) !== 0,
+        }
+      : null;
+  const rawFace = str(user.base?.face);
+  return {
+    local_id: 1,
+    room_id: roomId,
+    kind: "danmaku",
+    ts: num(meta[4]) || Date.now(),
+    uid: num(user.uid),
+    uname: str(pointer(user, "base/name")),
+    // 头像原图直出（512 见方）：替身保持同样的固有尺寸，否则「没给宽高就顶爆」量不出来
+    face: rawFace.length > 0 ? inlineImage(512, 512, "%2300aeec") : "",
+    content: typeof info[1] === "string" ? info[1] : "",
+    color: num(meta[3]),
+    medal_level: num(pointer(user, "medal/level")),
+    medal_name: str(pointer(user, "medal/name")),
+    medal_color_start: str(pointer(user, "medal/v2_medal_color_start")),
+    medal_color_end: str(pointer(user, "medal/v2_medal_color_end")),
+    medal_color_border: str(pointer(user, "medal/v2_medal_color_border")),
+    medal_color_text: str(pointer(user, "medal/v2_medal_color_text")),
+    medal_guard_level: num(pointer(user, "medal/guard_level")),
+    guard_level: num(info[7]),
+    is_admin: num(info[2]?.[2]) === 1,
+    reply_to_uid: num(extra.reply_mid),
+    reply_to_uname: str(extra.reply_uname),
+    reply_type_enum: num(extra.reply_type_enum),
+    show_reply: extra.show_reply === true,
+    reply_uname_color: str(extra.reply_uname_color),
+    emote,
+    is_history: false,
+    amount: 0,
+    combo_id: "",
+    upstream_id: str(extra.id_str),
+  };
+}
+
+/** 夹具里那两条真实弹幕（用户报的正文行 + 一条真实表情包弹幕）。 */
+const ROW_FIXTURES = {
+  text: messageFromDanmakuPayload(ROW_FIXTURE.text),
+  emoticon: messageFromDanmakuPayload(ROW_FIXTURE.emoticon),
+};
+
 /** 把值嵌进 MOCK 模板字符串：反引号与 `${` 必须先转义，否则场景代码会提前结束。 */
 function embed(value) {
   return JSON.stringify(value).replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
@@ -217,6 +325,7 @@ function embed(value) {
 const MOCK = `(function () {
   var EMOTES = ${embed(FIXTURE_EMOTES)};
   var ROW_EMOTES = ${embed(ROW_EMOTE_SAMPLES)};
+  var ROW_FIXTURES = ${embed(ROW_FIXTURES)};
   var listeners = {};
   var calls = [];
   // 带参数的调用记录（看请求形状，如 chat_send 的表情唯一键）；calls 只有命令名，保持原样。
@@ -816,6 +925,19 @@ const MOCK = `(function () {
       face: "",
       uname: "无头像"
     }));
+    // 真实夹具的两行（用户 2026-09-12 报的那条正文行 + 一条真实表情包弹幕）：
+    // 消息对象由 Node 侧从 smoke/fixtures/danmaku-rows.json 按 cmd.rs 的口径派生，这里只负责发。
+    // local_id 必须由本地计数器分配 —— store 只接受比末尾更大的 local_id（契约 §5），
+    // 所以先借 __mk 拿一个号，再把夹具字段盖上去（local_id 除外）。
+    var fixtureMessage = function (fixture) {
+      var m = window.__mk("danmaku", fixture.content, false);
+      var allocated = m.local_id;
+      for (var key in fixture) if (key !== "local_id") m[key] = fixture[key];
+      m.local_id = allocated;
+      return m;
+    };
+    window.__emit("danmubox://message", fixtureMessage(ROW_FIXTURES.text));
+    window.__emit("danmubox://message", fixtureMessage(ROW_FIXTURES.emoticon));
     await sleep(600);
     var withFace = rowWith("带头像的弹幕");
     var badFace = rowWith("坏头像的弹幕");
@@ -832,6 +954,123 @@ const MOCK = `(function () {
       return name ? Math.round(name.getBoundingClientRect().left * 10) / 10 : null;
     });
     out.layoutNameLefts = nameLefts;
+    // ---- 真实夹具派生行的排版取证（用户 2026-09-12：「文字全挤在右边，没法往用户名 / 身份牌
+    //      下方换行」，并判断「是之前调表情的格式导致的」）。
+    // 量四件事：① 行可用宽度与正文列宽度；② 正文起点 x 与折行行数（Range 按**行盒**返回矩形）；
+    // ③ 行内表情图的**渲染盒**与**原图尺寸**（渲染盒跟着原图走 = 第三次同款错误）；
+    // ④ 行 / 正文列有没有横向溢出。
+    var f1 = function (v) { return Math.round(v * 10) / 10; };
+    var fixtureMetricsOf = function (row) {
+      if (!row) return null;
+      var body = row.querySelector('[data-testid="db-msg-body"]');
+      var identity = row.querySelector('[data-testid="db-msg-identity"]');
+      var img = body ? body.querySelector("img") : null;
+      var rowBox = rect(row);
+      var bodyBox = rect(body);
+      var lines = [];
+      if (body) {
+        var range = document.createRange();
+        range.selectNodeContents(body);
+        lines = [].slice.call(range.getClientRects());
+      }
+      var imgBox = rect(img);
+      var imgStyle = img ? getComputedStyle(img) : null;
+      return {
+        rowW: f1(rowBox ? rowBox.width : 0),
+        bodyLeft: f1(bodyBox ? bodyBox.left : 0),
+        bodyW: f1(bodyBox ? bodyBox.width : 0),
+        identityW: identity ? f1(rect(identity).width) : null,
+        lines: lines.length,
+        firstLineLeft: lines.length > 0 ? f1(lines[0].left) : null,
+        lastLineLeft: lines.length > 0 ? f1(lines[lines.length - 1].left) : null,
+        imgW: imgBox ? f1(imgBox.width) : null,
+        imgH: imgBox ? f1(imgBox.height) : null,
+        // 原图尺寸：渲染盒若与它同进同退，说明尺寸还是被原图牵着走
+        imgNaturalW: img ? img.naturalWidth : null,
+        imgNaturalH: img ? img.naturalHeight : null,
+        imgCssW: imgStyle ? imgStyle.width : null,
+        imgCssH: imgStyle ? imgStyle.height : null,
+        imgFit: imgStyle ? imgStyle.objectFit : null,
+        rowOverflowPx: f1(Math.max(0, row.scrollWidth - row.clientWidth)),
+        bodyOverflowPx: body ? f1(Math.max(0, body.scrollWidth - body.clientWidth)) : null
+      };
+    };
+    var fixtureTextRow = rowWith(ROW_FIXTURES.text.content);
+    // 表情包弹幕那一条没有可搜索的正文文本（正文被画成了图），按**图的 alt** 找它：
+    // alt 就是表情名，也就是这条弹幕的「正文」。
+    var fixtureEmoteRow = rows().filter(function (r) {
+      var img = r.querySelector('[data-testid="db-msg-body"] img');
+      return !!img && img.alt === ROW_FIXTURES.emoticon.content;
+    })[0];
+    out.fixtureTextRow = fixtureMetricsOf(fixtureTextRow);
+    out.fixtureEmoteRow = fixtureMetricsOf(fixtureEmoteRow);
+    out.fixtureRowsRendered = !!fixtureTextRow && !!fixtureEmoteRow;
+    // 正文不许越出自己那一列（「挤到右边 / 撑出去」的判据）：行与正文列都不得横向溢出
+    out.fixtureTextNoOverflow = !!out.fixtureTextRow &&
+      out.fixtureTextRow.rowOverflowPx === 0 && out.fixtureTextRow.bodyOverflowPx === 0;
+    // 正文列必须拿到**至少一半**可用宽度：身份簇再长也不许把正文挤成一条缝
+    // （改前实测 360 宽：身份簇列 182.7px / 正文列 112.4px —— 用户看到的「文字全挤在右边」）。
+    // 量的是**列**：第 1 列的宽 = 正文起点 − 正文块起点 − 正文自己那道 --sp-2 外边距
+    // （身份簇的盒子会被上限截断，拿它的盒子量会低估列宽）。
+    var fixtureBodyEl = fixtureTextRow
+      ? fixtureTextRow.querySelector('[data-testid="db-msg-body"]')
+      : null;
+    var fixtureBlockEl = fixtureBodyEl ? fixtureBodyEl.parentElement : null;
+    var fixtureBlockBox = rect(fixtureBlockEl);
+    var bodyMarginLeft = fixtureBodyEl
+      ? parseFloat(getComputedStyle(fixtureBodyEl).marginLeft) || 0
+      : 0;
+    out.fixtureTextIdentityColPx = fixtureBlockBox && out.fixtureTextRow
+      ? f1(out.fixtureTextRow.bodyLeft - fixtureBlockBox.left - bodyMarginLeft)
+      : null;
+    out.fixtureTextBlockPx = fixtureBlockBox ? f1(fixtureBlockBox.width) : null;
+    out.fixtureTextIdentityColumnShare =
+      out.fixtureTextIdentityColPx !== null && out.fixtureTextBlockPx !== null &&
+      out.fixtureTextBlockPx > 0
+        ? f1(out.fixtureTextIdentityColPx / out.fixtureTextBlockPx)
+        : null;
+    out.fixtureTextColumnKeepsHalf = out.fixtureTextIdentityColumnShare !== null &&
+      out.fixtureTextIdentityColumnShare <= 0.5 + 0.01;
+    // 「能换行」在**窄屏**上量（360 = 窗口最小宽度，也就是可达面的边界）：折成 ≥2 个行盒，
+    // 且每行与首行左对齐（悬挂缩进）——不是被挤到右侧去。宽屏下这条正文一行放得下，不要求折行。
+    out.fixtureTextWrapsWhenNarrow = !NARROW || (!!out.fixtureTextRow &&
+      out.fixtureTextRow.lines >= 2 &&
+      Math.abs(out.fixtureTextRow.lastLineLeft - out.fixtureTextRow.firstLineLeft) < 1);
+    // 行内表情图的**盒子**不许跟着原图走：同一个尺寸档里，200×60 的横条（通用表情样本，
+    // 取自 emotes.json 的真实尺寸）与 162×162 的方图（夹具里的表情包弹幕）必须渲染成同一个盒。
+    // 只给 height 的话宽度会按原图比例算出来 —— 改前实测：横条那条 23.1px 高 / 77px 宽。
+    // 样本行按**图的 alt** 找（它的正文被画成了图，innerText 里没有那条文本）。
+    var inlineSampleRow = rows().filter(function (r) {
+      var img = r.querySelector('[data-testid="db-msg-body"] img');
+      return !!img && img.alt === "行内表情样本";
+    })[0];
+    var inlineSampleImg = inlineSampleRow
+      ? inlineSampleRow.querySelector('[data-testid="db-msg-body"] img')
+      : null;
+    var inlineSampleBody = inlineSampleRow
+      ? inlineSampleRow.querySelector('[data-testid="db-msg-body"]')
+      : null;
+    var lineBoxPxHere = inlineSampleBody
+      ? parseFloat(getComputedStyle(inlineSampleBody).lineHeight)
+      : NaN;
+    var inlineSampleBox = rect(inlineSampleImg);
+    out.rowInlineEmoteBox = inlineSampleBox
+      ? { w: f1(inlineSampleBox.width), h: f1(inlineSampleBox.height), naturalW: inlineSampleImg.naturalWidth,
+          naturalH: inlineSampleImg.naturalHeight, fit: getComputedStyle(inlineSampleImg).objectFit }
+      : null;
+    out.rowInlineEmoteBoxSquare = !!inlineSampleBox && !isNaN(lineBoxPxHere) &&
+      Math.abs(inlineSampleBox.width - inlineSampleBox.height) < 0.6 &&
+      Math.abs(inlineSampleBox.height - lineBoxPxHere * 1.1) < 0.6;
+    // 夹具那条表情包弹幕（bulge：2 倍档）：同样是**见方 + contain** 的显式盒
+    out.fixtureEmoteImgExplicitBox = !!out.fixtureEmoteRow && !isNaN(lineBoxPxHere) &&
+      out.fixtureEmoteRow.imgFit === "contain" && out.fixtureEmoteRow.imgW !== null &&
+      Math.abs(out.fixtureEmoteRow.imgW - out.fixtureEmoteRow.imgH) < 0.6 &&
+      Math.abs(out.fixtureEmoteRow.imgH - lineBoxPxHere * 1.1 * 2) < 0.6;
+    out.fixtureEmoteImgInsideColumn = !!out.fixtureEmoteRow &&
+      out.fixtureEmoteRow.imgW !== null &&
+      out.fixtureEmoteRow.imgW <= out.fixtureEmoteRow.bodyW + 1 &&
+      out.fixtureEmoteRow.rowOverflowPx === 0;
+
     out.layoutAvatarColumnAligned =
       nameLefts.every(function (v) { return v !== null && Math.abs(v - nameLefts[0]) < 0.6; });
     // 粉丝牌配色：可观察面是行内 style 与计算样式（不依赖 CSS-module 类名）
@@ -981,7 +1220,6 @@ const MOCK = `(function () {
       Math.abs(out.rowScale.avatar / lineBoxPx - 0.9) < 0.06 &&
       Math.abs(out.rowScale.emote / lineBoxPx - 1.1) < 0.06;
 
-
     // ---- 昵称不吃弹幕颜色，颜色只落正文（用户 #2）
     var redRow = rowWith("红字弹幕正文");
     var redNameEl = redRow ? redRow.querySelector('[data-testid="db-msg-name"]') : null;
@@ -1113,9 +1351,12 @@ const MOCK = `(function () {
     out.layoutLastRowHeightPx = newestAfter ? Math.round(rect(newestAfter).height * 10) / 10 : null;
     out.layoutMsgListHeightPx = Math.round(rect(byTestId("db-msg-list")).height * 10) / 10;
     // 更硬的两条：视口仍在底部（跟随模式重新贴底），且渲染出的最后一行确实是最后一条消息
+    // （此刻最后一条是**真实夹具里那条表情包弹幕**，所以按它的表情图 alt 认）
     out.layoutFollowingAtBottom =
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;
-    out.layoutLastRowIsNewest = !!newestAfter && newestAfter.innerText.indexOf("无头像的弹幕") >= 0;
+    out.layoutLastRowIsNewest = !!newestAfter &&
+      [].slice.call(newestAfter.querySelectorAll('[data-testid="db-msg-body"] img'))
+        .some(function (img) { return img.alt === ROW_FIXTURES.emoticon.content; });
     // ---- 表情面板 = **竖向 tab 轨道 + 表情网格**（用户 2026-09-12：「给表情的全是按钮，
     //      根本框不住表情图标，可以直接仿照官方实现」）。
     // 表情全部来自固化的真实载荷（「smoke/fixtures/emotes.json」）：通用那 38 条是 200×60 的横条、
@@ -1208,6 +1449,21 @@ const MOCK = `(function () {
 
     var commonMetrics = emoteMetrics();
     var commonSizes = commonMetrics;
+    // ---- 「上方的搜索也没必要」（用户 2026-09-12）：面板里**不再有输入框**
+    out.panelNoSearch = !!panel && panel.querySelectorAll("input").length === 0;
+    // ---- 「既然表情包做了滚动，展开只展示 2 行（大表情的 2 行，以此高度为标准）就行」：
+    //      网格区高度 = 两行**大表情**（那几族本来就是最大的一档）+ 一道行距，内容超出滚动。
+    var gridEl = byTestId("db-emote-group");
+    var gridStyle = getComputedStyle(gridEl);
+    out.panelEmoteGridHeightPx = f1(rect(gridEl).height);
+    out.panelEmoteGridKind = gridEl.getAttribute("data-kind");
+    out.panelEmoteGridScrollHeightPx = gridEl.scrollHeight;
+    // 网格是面板里**唯一会滚的部分**（固定高度 + overflow-y: auto）；
+    // 「内容真的超出」在窄屏量：38 条通用表情在 360 宽下必然塞不进两行（宽屏一行放得下就是放得下）。
+    out.panelEmoteGridScrollable = gridStyle.overflowY === "auto";
+    if (NARROW) {
+      put("panelEmoteGridOverflows", gridEl.scrollHeight > gridEl.clientHeight + 1);
+    }
     var roomTab = tabOf("room");
     if (roomTab) {
       roomTab.click();
@@ -1223,6 +1479,15 @@ const MOCK = `(function () {
     out.layoutEmoteSizes = commonSizes;
     out.layoutEmoteSizesBig = bigSizes;
     out.layoutNonCommonEmoteBigger = !!commonH && !!bigH && bigH.height >= commonH.height * 1.4;
+    // ---- 网格区高度 = **两行大表情** + 一道行距（用户 2026-09-12 的第 3 条）。
+    //      大表情那一档的高度从**格子**量（--emote-size-big 注册成 <length>，格子与网格区
+    //      因此用的是同一个绝对值；不注册的话格子会再乘一次自己的字号、差 1.3 倍）。
+    var bigRowH = Math.max.apply(null, bigMetrics.map(function (m) { return m.cellH; }));
+    var gridRowGap = parseFloat(getComputedStyle(gridEl).rowGap) || 0;
+    out.panelEmoteBigRowHeightPx = f1(bigRowH);
+    out.panelEmoteGridRowGapPx = f1(gridRowGap);
+    out.panelEmoteGridTwoBigRows = bigMetrics.length > 0 &&
+      Math.abs(rect(gridEl).height - (bigRowH * 2 + gridRowGap)) <= 1;
     // ---- 用户报的那条：表情**溢出了格子边框**。改前实测（WebKit，360×844，通用组）：
     //      格子 47.6 × 32，图 80.7 × 24.2 → 右边越出格子 33.1px。
     //      改后：图必须完整落在格子里（溢出 0），且宽高由 CSS 显式给出（「object-fit: contain」）。
@@ -1247,7 +1512,9 @@ const MOCK = `(function () {
     // ---- 无权限的表情：置灰、但不隐藏、不禁用（用户 #6；契约 §5 Emote.locked）
     // 真实载荷里 locked 的那一组是**粉丝牌**（「UP主大表情」：17 条 「perm」 全为 0），
     // 对照组用「本房间」那 10 条（「perm = 1」）——两族都是 162×162 的大表情，比尺寸才公平。
-    var medalText = EMOTES.live.filter(function (e) { return e.package_kind === "medal"; })[0].text;
+    var medalGroup = EMOTES.live.filter(function (e) { return e.package_kind === "medal"; });
+    var medalText = medalGroup[0].text;
+    var medalUnique = medalGroup[0].emoticon_unique;
     var lockedImgH = null;
     var lockedCount = 0;
     var medalTab = tabOf("medal");
@@ -1264,24 +1531,33 @@ const MOCK = `(function () {
       });
       // 尺寸要在**这一组还挂在文档里**的时候量：切走之后 React 会把它们卸载，脱链元素的 rect 全是 0
       lockedImgH = lockedItems.length > 0 ? rect(lockedItems[0].querySelector("img")).height : null;
-      // 置灰是提示不是闸门：照样点得动、照样插进草稿（真正拦的是上游发送侧）
+      // 置灰是提示不是闸门：照样点得动、照样**直接发出去**（真正拦的是上游发送侧）。
+      // 判据取 chat_send 的载荷：emoticon_unique 就是点中的那一个。
       lockedItems[0].click();
-      await sleep(200);
-      out.panelLockedEmoteSelectable =
-        document.querySelector("textarea").value.indexOf(medalText) >= 0;
-      typeIntoArea(document.querySelector("textarea"), "");
-      await sleep(150);
+      await sleep(350);
+      var lockedSends = callsWithArgs.filter(function (c) { return c.cmd === "chat_send"; });
+      var lockedSend = lockedSends[lockedSends.length - 1];
+      var stillMedal = medalTab.getAttribute("aria-selected") === "true";
+      out.panelLockedEmoteSelectable = !!lockedSend && !!lockedSend.args.emote &&
+        lockedSend.args.emote.emoticon_unique === medalUnique &&
+        lockedSend.args.content === medalText && stillMedal &&
+        document.querySelector("textarea").value === "";
     }
     // 对照：可用的那一组（本房间 10 条 「perm = 1」）不灰、尺寸与灰的那组一样
     // （「字段缺失的 perm 视为可用」那一条由 「crates/danmubox-bili/src/emote.rs」 的单测覆盖，
     //  界面这一侧只消费 「locked」 布尔值）。
+    // 这一组是 **11** 条：10 条来自接口，另 1 条是**从真实夹具那条表情包弹幕学到的**
+    // （collectSeenEmotes 把收到过的表情补进选择器，见 filtering.ts）。
     if (roomTab) {
       roomTab.click();
       await sleep(300);
       var freeItems = [].slice.call(byTestId("db-panel")
         .querySelectorAll('[data-testid="db-emote-item"][data-locked="false"]'));
-      out.panelUnlockedEmoteNotDimmed = freeItems.length === 10 && freeItems.every(function (el) {
+      out.panelUnlockedEmoteNotDimmed = freeItems.length === 11 && freeItems.every(function (el) {
         return parseFloat(getComputedStyle(el).opacity) >= 0.99;
+      });
+      out.panelLearnedEmoteListed = freeItems.some(function (el) {
+        return el.title.indexOf(ROW_FIXTURES.emoticon.content) >= 0;
       });
       out.panelLockedEmoteSameSize = lockedCount > 0 && lockedImgH !== null && freeItems.length > 0 &&
         Math.abs(lockedImgH - rect(freeItems[0].querySelector("img")).height) < 0.6;
@@ -1433,19 +1709,13 @@ const MOCK = `(function () {
       ? byTestId("db-panel").querySelector('button[title="' + ownedSample.text + '"]')
       : null;
     out.ownedEmoteShown = !!ownedPicker;
+    // ---- 「点选某个表情直接发送出去就行」（用户 2026-09-12）：**点一下就发**，没有第二步。
+    // 判据：点完立刻有一次 chat_send（带的就是点中那一个的唯一键），草稿一个字符都不动，
+    // 面板也不关（连发几个不必反复开面板）。
     if (ownedPicker) {
       ownedPicker.click();
-      await sleep(250);
+      await sleep(400);
     }
-    out.ownedEmoteInserted = document.querySelector("textarea").value === ownedSample.text;
-    // 预览把表情名换成图片，说明「我的表情」确实在接口那一侧（学到的表情只是补漏）
-    var sendPreview = byTestId("db-send-preview");
-    out.ownedEmotePreviewImage = !!sendPreview &&
-      [].slice.call(sendPreview.querySelectorAll("img")).some(function (img) {
-        return img.alt === ownedSample.text;
-      });
-    buttonWith(null, "发送").click();
-    await sleep(400);
     var chatSends = callsWithArgs.filter(function (c) { return c.cmd === "chat_send"; });
     var lastChatSend = chatSends[chatSends.length - 1];
     // 表情弹幕上游收到的 msg 就是 emoticon_unique（crates/danmubox-bili/src/send.rs），
@@ -1453,7 +1723,23 @@ const MOCK = `(function () {
     out.ownedEmoteSendUnique = !!lastChatSend && !!lastChatSend.args.emote &&
       lastChatSend.args.emote.emoticon_unique === ownedSample.emoticon_unique;
     out.ownedEmoteSendContent = !!lastChatSend && lastChatSend.args.content === ownedSample.text;
-    out.ownedEmoteDraftCleared = document.querySelector("textarea").value === "";
+    out.ownedEmoteSentOnClick = out.ownedEmoteSendUnique && out.ownedEmoteSendContent;
+    out.ownedEmoteNoSecondStep = document.querySelector("textarea").value === "" &&
+      !!byTestId("db-panel");
+    // 预览（「将发送」条）是**草稿**那一侧的功能：把表情名打进草稿仍会显示成图片
+    // （面板点选不再往草稿里插名字，这条路径与面板无关）。
+    typeIntoArea(document.querySelector("textarea"), ownedSample.text);
+    await sleep(250);
+    var sendPreview = byTestId("db-send-preview");
+    out.ownedEmotePreviewImage = !!sendPreview &&
+      [].slice.call(sendPreview.querySelectorAll("img")).some(function (img) {
+        return img.alt === ownedSample.text;
+      });
+    typeIntoArea(document.querySelector("textarea"), "");
+    await sleep(200);
+    // 面板**点选后不关**（上面那条断言），但后面几步要用满屏的列表，这里把它收起来。
+    clickTool("表情");
+    await sleep(250);
     // 发送成功不再占一行说「上次发送：已发出」（用户 #4：没意义且不协调）——弹幕已经出现在列表里
     out.sendHintAbsentOnSuccess = !byTestId("db-send-hint") &&
       text().indexOf("上次发送") < 0;

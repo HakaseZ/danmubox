@@ -88,15 +88,11 @@ export function Composer({
   onNotice,
 }: Props) {
   const [draft, setDraft] = useState("");
-  // 被点选的表情：名字会重名（实测「贴贴」同时存在于通用包与房间包），
-  // 因此发送时必须按「点的是哪一个」来判定，而不是拿草稿去反推。
-  const [pickedEmote, setPickedEmote] = useState<Emote | null>(null);
   // 回复某条弹幕时显示引用条；@ 某人只是把名字插进草稿，另记 uid 供发送时上报。
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [mention, setMention] = useState<{ mid: number; uname: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState<PanelKind | null>(null);
-  const [emoteQuery, setEmoteQuery] = useState("");
   // 表情分组 tab：null = 还没选过，显示第一组（顺序固定，见 PACKAGE_ORDER）。
   const [emoteTab, setEmoteTab] = useState<EmotePackage | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -165,6 +161,7 @@ export function Composer({
   }, [interfaceEmotes, seenEmotes]);
 
   // 按来源分组展示（通用 / 我的表情 / 本房间 / 粉丝牌 / 大航海），见 docs/ui.md §6.3。
+  // 面板里**没有搜索框**（用户 2026-09-12：「上方的搜索也没必要」）：分组就是唯一的浏览方式。
   const grouped = useMemo(() => {
     const groups: Record<EmotePackage, Emote[]> = {
       common: [],
@@ -173,18 +170,15 @@ export function Composer({
       medal: [],
       guard: [],
     };
-    const query = emoteQuery.trim().toLowerCase();
     for (const emote of allEmotes) {
-      if (query.length > 0 && !emote.text.toLowerCase().includes(query)) continue;
       groups[emote.package_kind].push(emote);
     }
     return PACKAGE_ORDER.map((kind) => [kind, groups[kind]] as const).filter(
       ([, items]) => items.length > 0,
     );
-  }, [allEmotes, emoteQuery]);
+  }, [allEmotes]);
 
-  // 当前 tab：选中的那一组还在（搜索可能把它整组过滤掉）就用它，否则回落到第一组。
-  // 派生的，不放进 state —— 搜索把当前组过滤空时不会留下一个「指向空气」的选中态。
+  // 当前 tab：选中的那一组还在就用它，否则回落到第一组（派生值，不留在 state 里）。
   const activeKind = grouped.some(([kind]) => kind === emoteTab)
     ? emoteTab
     : grouped[0]?.[0];
@@ -324,24 +318,40 @@ export function Composer({
     },
   ];
 
+  /**
+   * 点选表情 = **直接发送**（用户 2026-09-12：「发送表情包的时候有一个二次确认的过程，
+   * 其实没有必要，点选某个表情直接发送出去就行」）。
+   *
+   * 因此不再把表情名插进草稿、也不再要求用户再点一次「发送」：草稿与 @ 目标原样留着
+   * （它们属于文字那一侧），已经选了「回复」的话这一条表情就发成回复。面板不关 ——
+   * 连发几个表情不必反复开面板。表情名会重名（实测「贴贴」同时在通用包与房间包里），
+   * 发出去的是**点中的那一个**的 `emoticon_unique`，不拿草稿反推。
+   */
+  const sendEmote = async (emote: Emote) => {
+    if (disabled || busy) return;
+    const token: EmoteToken = {
+      emoticon_unique: emote.emoticon_unique,
+      emoji: emote.text,
+      url: emote.url,
+      width: emote.width,
+      height: emote.height,
+      is_dynamic: emote.is_dynamic,
+      in_player_area: emote.in_player_area,
+      bulge_display: emote.bulge_display,
+    };
+    const reply = replyTo
+      ? { mid: replyTo.uid, uname: replyTo.uname, dmid: replyTo.upstream_id }
+      : undefined;
+    setBusy(true);
+    const outcome = await onSend(emote.text, token, reply);
+    setBusy(false);
+    // 被这一条消耗掉的回复目标就清掉；失败保留（与文字发送同一口径：留着能重试）
+    if (replyTo && outcome !== undefined && outcome !== "failed") setReplyTo(null);
+  };
+
   const submit = async () => {
     const content = draft.trim();
     if (content.length === 0 || busy) return;
-    // 草稿与点选的表情完全一致时才按表情发送：这样「点了表情直接发」得到的是表情弹幕，
-    // 而任何编辑都退回普通文本，不会把用户没想发的东西发成表情。
-    const asEmote =
-      pickedEmote && content === pickedEmote.text
-        ? {
-            emoticon_unique: pickedEmote.emoticon_unique,
-            emoji: pickedEmote.text,
-            url: pickedEmote.url,
-            width: pickedEmote.width,
-            height: pickedEmote.height,
-            is_dynamic: pickedEmote.is_dynamic,
-            in_player_area: pickedEmote.in_player_area,
-            bulge_display: pickedEmote.bulge_display,
-          }
-        : undefined;
     // 回复优先于 @：回复本身就带上了被回复者，官方载荷里也是一组字段。
     // @ 目标走 `mentionTarget`（从草稿派生）：文本里删掉了 @ 名字就不带上。
     const reply = replyTo
@@ -350,12 +360,11 @@ export function Composer({
         ? { mid: mentionTarget.mid, uname: mentionTarget.uname, dmid: "" }
         : undefined;
     setBusy(true);
-    const outcome = await onSend(content, asEmote, reply);
+    const outcome = await onSend(content, undefined, reply);
     setBusy(false);
     // 只有确实发出去（或被吞）才清空草稿；失败保留内容便于重试。
     if (outcome !== undefined && outcome !== "failed") {
       setDraft("");
-      setPickedEmote(null);
       setReplyTo(null);
       setMention(null);
       setPanel(null);
@@ -387,12 +396,6 @@ export function Composer({
         >
           <div className={styles.panelHead}>
             <span className={styles.panelTitle}>表情</span>
-            <input
-              className={styles.panelSearch}
-              value={emoteQuery}
-              placeholder="搜索表情"
-              onChange={(event) => setEmoteQuery(event.target.value)}
-            />
             <span className={styles.composerSpacer} />
             {panelClose}
           </div>
@@ -409,11 +412,7 @@ export function Composer({
             </div>
           )}
           {grouped.length === 0 ? (
-            <div className={styles.empty}>
-              {emoteQuery.trim().length > 0
-                ? "没有匹配的表情"
-                : "没有可用表情（或尚未加载）"}
-            </div>
+            <div className={styles.empty}>没有可用表情（或尚未加载）</div>
           ) : (
             // 面板主体分两列：左边**竖向 tab 轨道**（分组），右边表情网格。两列各自滚，
             // 面板头常驻（用户 #6：tab 是切组的唯一入口，不许被格子滚走）。
@@ -422,8 +421,7 @@ export function Composer({
                   用 `role=tablist/tab` + roving tabindex（WAI-ARIA tabs 口径），↑↓ 换组、焦点跟着走 ——
                   它得**读起来就是 tab**，不是一排长得像 tab 的普通按钮（用户 2026-09-12：
                   「给表情的全是按钮，根本框不住表情图标，可以直接仿照官方实现」）。
-                  搜索是在**所有组**里搜的，所以 tab 只列「当前有内容的组」——
-                  搜完切到有命中的那一组，不必自己挨个点开找。 */}
+                  tab 只列**当前有内容的组**（面板里没有搜索，见上）。 */}
               <div
                 className={styles.emoteRail}
                 data-testid="db-emote-tabs"
@@ -478,14 +476,11 @@ export function Composer({
                     } ${emote.locked === true ? styles.pickerItemLocked : ""}`}
                     title={
                       emote.locked === true
-                        ? `${emote.text}（当前身份用不了，置灰只是提示，发送仍由上游判定）`
+                        ? `${emote.text}（点一下直接发送；当前身份用不了，置灰只是提示，能不能发由上游判定）`
                         : emote.text
                     }
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                      insertAtCaret(emote.text);
-                      setPickedEmote(emote);
-                    }}
+                    onClick={() => void sendEmote(emote)}
                   >
                     {emote.url.length > 0 ? (
                       <img src={emote.url} alt={emote.text} />

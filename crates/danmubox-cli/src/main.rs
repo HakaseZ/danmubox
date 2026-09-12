@@ -394,7 +394,19 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
                 Ok(Event::Status(status)) => {
                     println!("# 状态 {:?} {}", status.state, status.detail);
                 }
-                Ok(Event::Session(_)) | Ok(Event::Room(_)) => {}
+                Ok(Event::Session(session)) => {
+                    if !quiet {
+                        println!(
+                            "# 本人身份 room_id={} 粉丝牌={} Lv{} 大航海={} 房管={}",
+                            session.room_id,
+                            session.my_medal_name,
+                            session.my_medal_level,
+                            session.my_guard_level,
+                            session.is_admin
+                        );
+                    }
+                }
+                Ok(Event::Room(_)) => {}
                 Ok(Event::RoomClosed(id)) => {
                     println!("# 房间 {id} 会话关闭");
                     break;

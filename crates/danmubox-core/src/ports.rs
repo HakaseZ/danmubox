@@ -84,6 +84,13 @@ pub trait LiveSource: Send + Sync {
     /// 房间号 / 短号 / URL → 房间元信息。
     async fn resolve_room(&self, input: &str) -> Result<Room>;
 
+    /// 本人**在该房间**的身份（粉丝牌 / 大航海 / 房管；`RoomSession`）。
+    ///
+    /// 只有拿到它，界面才知道「我在这房间是不是房管」——房管菜单的可见性与禁用
+    /// 状态靠它，而不是靠「点一次等上游报错」。未登录时返回全零身份（不是错误）；
+    /// 上游取不到时报错，由调用方按「身份未知」容错。
+    async fn room_identity(&self, room_id: i64) -> Result<RoomSession>;
+
     /// 保持连接直到 `cancel` 触发；心跳、解包、重连与退避都在实现内完成。
     /// 返回 `Ok(())` 表示被正常取消。
     async fn stream(&self, room_id: i64, sink: MessageSink, cancel: Cancel) -> Result<()>;

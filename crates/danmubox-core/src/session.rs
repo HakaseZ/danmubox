@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::bus::{Cancel, ConnState, Counters, Event, EventBus, MessageSink};
 use crate::error::Result;
-use crate::model::{Message, MessageKind, Room};
+use crate::model::{Message, MessageKind, Room, RoomSession};
 use crate::ports::LiveSource;
 
 /// 历史查询条件（`docs/contract.md` §7 的 `history_query` 参数）。
@@ -150,6 +150,8 @@ impl std::fmt::Debug for MessageBuffer {
 pub struct RoomRuntime {
     pub room: Room,
     buffer: Arc<Mutex<MessageBuffer>>,
+    /// 本人在这房间的身份（会话级、不落盘）。会话建立时取一次；取不到即全零身份。
+    session: Arc<Mutex<RoomSession>>,
     bus: EventBus,
     /// 会话级取消：结束整次房内会话。
     cancel: Cancel,
@@ -169,8 +171,32 @@ impl RoomRuntime {
     ) -> Self {
         let buffer = Arc::new(Mutex::new(MessageBuffer::new(buffer_rows)));
         let cancel = Cancel::new();
+        let session_state = Arc::new(Mutex::new(RoomSession {
+            room_id: room.room_id,
+            ..Default::default()
+        }));
 
         let room_id = room.room_id;
+
+        // 本人身份（粉丝牌 / 大航海 / 房管）：**并发**取，不占连接路径的时间——
+        // 房管菜单要它做权限前置，但晚一两百毫秒拿到也远好过拖慢进房。
+        // 与历史回填同属「尽力而为」：未登录或上游失败都只记日志，留全零身份。
+        let identity = {
+            let source = Arc::clone(&source);
+            let session_state = Arc::clone(&session_state);
+            let bus = bus.clone();
+            tokio::spawn(async move {
+                match source.room_identity(room_id).await {
+                    Ok(identity) => {
+                        *session_state.lock().expect("session poisoned") = identity.clone();
+                        bus.publish(Event::Session(identity));
+                    }
+                    Err(err) => {
+                        tracing::debug!(room_id, %err, "本人房内身份未取到，按全零身份继续");
+                    }
+                }
+            })
+        };
         let collector = {
             let buffer = Arc::clone(&buffer);
             let mut rx = bus.subscribe();
@@ -252,11 +278,20 @@ impl RoomRuntime {
         Self {
             room,
             buffer,
+            session: session_state,
             bus,
             cancel,
             restart,
-            tasks: vec![collector, driver],
+            tasks: vec![identity, collector, driver],
         }
+    }
+
+    /// 本人在这房间的身份；会话刚建立、上游还没回来时是全零身份（`is_admin = false`）。
+    ///
+    /// 界面据此决定房管菜单的可见性：拿不到身份时**按无权限处理**，
+    /// 而不是先放行再等服务端报错。
+    pub fn session(&self) -> RoomSession {
+        self.session.lock().expect("session poisoned").clone()
     }
 
     /// 房间内「刷新」：立即重建连接，**保持会话缓冲不变**（`docs/contract.md` §4.3）。
@@ -401,6 +436,10 @@ mod tests {
         history: Vec<Message>,
         /// 历史拉取失败时使用，用于验证「失败不影响进场」。
         history_fails: bool,
+        /// 预置的本人身份（房间号由调用方覆盖）。
+        identity: RoomSession,
+        /// 身份拉取失败时使用，用于验证「失败按全零身份继续」。
+        identity_fails: bool,
     }
 
     #[async_trait::async_trait]
@@ -414,6 +453,16 @@ mod tests {
 
         async fn resolve_room(&self, _input: &str) -> Result<Room> {
             Ok(Room::default())
+        }
+
+        async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {
+            if self.identity_fails {
+                return Err(crate::Error::Upstream("假适配器的身份失败".into()));
+            }
+            Ok(RoomSession {
+                room_id,
+                ..self.identity.clone()
+            })
         }
 
         async fn stream(&self, _room_id: i64, sink: MessageSink, cancel: Cancel) -> Result<()> {
@@ -447,6 +496,8 @@ mod tests {
             history: vec![history_msg(100, 9, "进场前的弹幕")],
             messages: vec![msg(200, MessageKind::Danmaku, 8, "进场后的弹幕")],
             history_fails: false,
+            identity: RoomSession::default(),
+            identity_fails: false,
         });
 
         let runtime = RoomRuntime::spawn(room, 5000, bus, counters.clone(), source);
@@ -495,6 +546,8 @@ mod tests {
                 history: vec![],
                 messages: vec![msg(200, MessageKind::Danmaku, 8, "实时消息")],
                 history_fails,
+                identity: RoomSession::default(),
+                identity_fails: false,
             });
             let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
             settle().await;
@@ -523,6 +576,8 @@ mod tests {
             ],
             history: vec![],
             history_fails: false,
+            identity: RoomSession::default(),
+            identity_fails: false,
         });
         let mut events = bus.subscribe();
         let first = RoomRuntime::spawn(room.clone(), 5000, bus.clone(), counters.clone(), noisy);
@@ -545,10 +600,95 @@ mod tests {
             messages: vec![],
             history: vec![],
             history_fails: false,
+            identity: RoomSession::default(),
+            identity_fails: false,
         });
         let second = RoomRuntime::spawn(room, 5000, bus, counters, quiet);
         settle().await;
         assert!(second.is_empty(), "重进必须是新会话，旧缓冲不得残留");
         second.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn room_identity_is_stored_and_published() {
+        let bus = EventBus::default();
+        let counters = Arc::new(Counters::default());
+        let room = Room {
+            room_id: 7,
+            ..Default::default()
+        };
+        let identity = RoomSession {
+            room_id: 7,
+            my_medal_level: 21,
+            my_medal_name: "牌子".into(),
+            my_guard_level: 3,
+            is_admin: true,
+        };
+        let source: Arc<dyn LiveSource> = Arc::new(FakeSource {
+            messages: vec![],
+            history: vec![],
+            history_fails: false,
+            identity: identity.clone(),
+            identity_fails: false,
+        });
+
+        let mut events = bus.subscribe();
+        let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
+        settle().await;
+
+        // 房间页要在「点了才会知道有没有权限」之外有一条确定答案：
+        // 这条状态既可以直接读，也要经事件推给消费方。
+        assert_eq!(runtime.session(), identity, "身份必须能被读出来");
+        let mut published = None;
+        while let Ok(event) = events.try_recv() {
+            if let Event::Session(session) = event {
+                published = Some(session);
+            }
+        }
+        assert_eq!(published, Some(identity), "身份必须经 Event::Session 广播");
+        runtime.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn identity_failure_leaves_a_zero_identity_without_blocking() {
+        let bus = EventBus::default();
+        let counters = Arc::new(Counters::default());
+        let room = Room {
+            room_id: 7,
+            ..Default::default()
+        };
+        let source: Arc<dyn LiveSource> = Arc::new(FakeSource {
+            messages: vec![msg(5, MessageKind::Danmaku, 1, "实时消息")],
+            history: vec![],
+            history_fails: false,
+            identity: RoomSession::default(),
+            identity_fails: true,
+        });
+
+        let mut events = bus.subscribe();
+        let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
+        settle().await;
+
+        assert_eq!(
+            runtime.session(),
+            RoomSession {
+                room_id: 7,
+                ..Default::default()
+            },
+            "身份取不到时按全零处理（即：无房管权限），不报错"
+        );
+        let mut saw_session = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, Event::Session(_)) {
+                saw_session = true;
+            }
+        }
+        assert!(!saw_session, "没拿到身份就不该广播一个假身份");
+        assert_eq!(
+            runtime.query(&HistoryQuery::default()).len(),
+            1,
+            "身份失败不得影响收弹幕"
+        );
+        runtime.close().await.unwrap();
     }
 }

@@ -8,7 +8,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use danmubox_core::ports::LiveSource;
-use danmubox_core::{Cancel, ConnState, Counters, Error, Message, MessageSink, Result, Room};
+use danmubox_core::{
+    Cancel, ConnState, Counters, Error, Message, MessageSink, Result, Room, RoomSession,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -35,6 +37,55 @@ const WS_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// WS 心跳包体：字面量，见 `docs/protocol.md` §8.1。
 const HEARTBEAT_BODY: &[u8] = b"[object Object]";
+
+/// 官方 web 客户端进房时用来取「本人在该房间的身份」的端点
+/// （`GET`，需 Cookie；实测结论见 `docs/protocol.md` 附录 A38）。
+const EP_ROOM_USER: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByUser";
+
+/// 身份请求的超时。与历史回填同理：它只是给界面做权限前置，
+/// 卡住时不能让会话建立停在原地。
+const ROOM_USER_TIMEOUT: Duration = Duration::from_millis(2_000);
+
+/// `getInfoByUser` 响应 → 本人在该房间的身份（纯函数，便于离线覆盖）。
+///
+/// 实测字段（2026-09-12，见附录 A38）：
+///
+/// | 目标 | 路径 |
+/// |---|---|
+/// | 是否房管 | `data.badge.is_room_admin`（布尔；同层 `admin_level` 亦可，`> 0` 同为房管）|
+/// | 我的粉丝牌等级 / 名 | `data.medal.up_medal.level` / `.medal_name`（无牌时为 `null`）|
+/// | 我的大航海等级 | `data.uinfo.guard.level` |
+///
+/// 缺任何一项都按 0 / 空串 / `false` 容错：宁可显示「无牌、非房管」，
+/// 也不编造一个身份出来。
+pub fn parse_room_identity(room_id: i64, value: &Value) -> RoomSession {
+    let is_admin = value
+        .pointer("/data/badge/is_room_admin")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || value
+            .pointer("/data/badge/admin_level")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            > 0;
+    RoomSession {
+        room_id,
+        my_medal_level: value
+            .pointer("/data/medal/up_medal/level")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        my_medal_name: value
+            .pointer("/data/medal/up_medal/medal_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        my_guard_level: value
+            .pointer("/data/uinfo/guard/level")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        is_admin,
+    }
+}
 
 pub struct BiliLive {
     http: BiliHttp,
@@ -330,6 +381,35 @@ impl LiveSource for BiliLive {
         self.http.room_play_info(input).await
     }
 
+    async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {
+        // 游客态没有「本人身份」可言：不发请求，直接给全零身份。
+        if !self.store.as_ref().map(|s| s.is_logged_in()).unwrap_or(false) {
+            return Ok(RoomSession {
+                room_id,
+                ..Default::default()
+            });
+        }
+
+        // 与历史回填同样的护栏：身份是「锦上添花」，卡住时不能让会话停在原地。
+        let url = format!("{EP_ROOM_USER}?room_id={room_id}&from=0&not_mock_enter_effect=0");
+        let request = self.http.get_with_cookies(&url);
+        let (value, _) = tokio::time::timeout(ROOM_USER_TIMEOUT, request)
+            .await
+            .map_err(|_| {
+                Error::Upstream(format!(
+                    "getInfoByUser 超时（{}ms）",
+                    ROOM_USER_TIMEOUT.as_millis()
+                ))
+            })??;
+
+        let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
+        if code != 0 {
+            // 未实测的码集合：原样带回，不赋予语义。
+            return Err(Error::Upstream(format!("getInfoByUser code={code}")));
+        }
+        Ok(parse_room_identity(room_id, &value))
+    }
+
     async fn stream(&self, room_id: i64, sink: MessageSink, cancel: Cancel) -> Result<()> {
         let mut backoff = INITIAL_BACKOFF;
         loop {
@@ -429,6 +509,61 @@ mod tests {
     #[test]
     fn heartbeat_body_is_the_literal_from_protocol() {
         assert_eq!(HEARTBEAT_BODY, b"[object Object]");
+    }
+
+    #[test]
+    fn room_identity_reads_admin_medal_and_guard() {
+        // 形状照抄实测响应（2026-09-12，房间号写成中性值，昵称与 uid 不参与断言）。
+        let value = serde_json::json!({
+            "code": 0,
+            "data": {
+                "badge": {"admin_level": 0, "is_room_admin": true, "permissions": null},
+                "medal": {"up_medal": {"level": 21, "medal_name": "牌子", "uid": 1}},
+                "uinfo": {"guard": {"level": 3}}
+            }
+        });
+        assert_eq!(
+            parse_room_identity(5440, &value),
+            RoomSession {
+                room_id: 5440,
+                my_medal_level: 21,
+                my_medal_name: "牌子".into(),
+                my_guard_level: 3,
+                is_admin: true,
+            }
+        );
+    }
+
+    #[test]
+    fn room_identity_accepts_admin_level_as_the_only_admin_signal() {
+        let value = serde_json::json!({
+            "data": {"badge": {"admin_level": 2, "is_room_admin": false}}
+        });
+        assert!(parse_room_identity(1, &value).is_admin, "admin_level>0 也是房管");
+    }
+
+    #[test]
+    fn room_identity_defaults_when_medal_is_hidden_or_missing() {
+        // 粉丝牌可被用户隐藏（`fans_medal: null` 一类），此时是「无牌」而不是错误。
+        let value = serde_json::json!({
+            "code": 0,
+            "data": {"badge": {"is_room_admin": false}, "medal": {"up_medal": null}}
+        });
+        assert_eq!(
+            parse_room_identity(7, &value),
+            RoomSession {
+                room_id: 7,
+                ..Default::default()
+            },
+            "取不到就全零，不编造身份"
+        );
+        assert_eq!(
+            parse_room_identity(7, &serde_json::json!({"code": 0})),
+            RoomSession {
+                room_id: 7,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]

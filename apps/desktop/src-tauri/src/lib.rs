@@ -397,15 +397,41 @@ fn prefs_set(state: State<'_, AppState>, patch: serde_json::Value) -> ApiResult<
     Ok(prefs.effective())
 }
 
+/// 本人在该房间的身份（契约 §7）：粉丝牌 / 大航海 / 是否房管。
+///
+/// 房间没有活跃会话时返回该 `room_id` 的**全零身份**而不是报错——与
+/// `history_query` 对「无活跃会话」的处理一致。界面对它的解释是「还没有身份
+/// 信息」，因此房管入口必须按**无权限**渲染（拿不到就不放行），而不是先放行再
+/// 等服务端报错。身份在会话建立时由引擎取一次，同时经 `danmubox://session`
+/// 事件推送，因此这条命令只在进房时读一次快照即可。
+#[tauri::command]
+fn room_session(state: State<'_, AppState>, room_id: i64) -> RoomSession {
+    state
+        .rooms
+        .lock()
+        .expect("rooms poisoned")
+        .runtimes
+        .get(&room_id)
+        .map(|runtime| runtime.session())
+        .unwrap_or(RoomSession {
+            room_id,
+            ..Default::default()
+        })
+}
+
 #[tauri::command]
 async fn emotes_list(state: State<'_, AppState>, room_id: i64) -> ApiResult<Vec<Emote>> {
     let provider = BiliEmotes::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    // 我在该房间的身份（粉丝牌 / 大航海 / 房管）尚未采集，先按零身份请求；
-    // 上游若已按身份下发可用包，这不影响结果。身份采集见 docs/protocol.md 的待实测项。
-    let session = RoomSession {
+    // 身份取自当前会话（粉丝牌 / 大航海 / 房管）：上游按身份下发可用表情包，
+    // 传全零会拿不到粉丝牌与大航海那几包。无会话时退回零身份（与上面同语义）。
+    let session = {
+        let rooms = state.rooms.lock().expect("rooms poisoned");
+        rooms.runtimes.get(&room_id).map(|runtime| runtime.session())
+    }
+    .unwrap_or(RoomSession {
         room_id,
         ..Default::default()
-    };
+    });
     provider
         .emotes(room_id, &session)
         .await
@@ -898,6 +924,7 @@ pub fn run() {
             rooms_disconnect,
             rooms_reconnect,
             history_query,
+            room_session,
             chat_send,
             chat_report,
             report_reasons,

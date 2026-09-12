@@ -26,6 +26,12 @@
 
 ### Added
 
+- **本人在房间的身份可查**（契约 §7 `room_session`、§3 `LiveSource::room_identity`）：
+  进房时取一次本人粉丝牌 / 大航海 / 是否房管（官方进房接口 `getInfoByUser`），
+  既可以直接读，也经既有 `danmubox://session` 事件推送——房管菜单的可见性由此有了
+  确定答案，不再退化成「先放行、点一次再看上游报错」。无活跃会话时返回该房间的
+  全零身份而**不报错**（与 `history_query` 同风格），界面按无权限渲染。
+  顺带 `emotes_list` 不再传零身份，表情包按真实身份加载。协议依据 `docs/protocol.md` 附录 A38。
 - **粉丝牌配色**（契约 §5 `Message.medal_color_start` / `_end` / `_border` / `_text`）：
   实时弹幕与进场回填都带出上游 `user.medal.v2_medal_color_*`——官方前端的
   `getMedalHtml` 用的就是这一组，取值是带 alpha 的 CSS 十六进制串（实测

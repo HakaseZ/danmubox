@@ -16,7 +16,7 @@
         "title": "弹幕框",
         "width": 1180,
         "height": 780,
-        "minWidth": 720,
+        "minWidth": 360,
         "minHeight": 480
       }
     ],

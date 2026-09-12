@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminPanel } from "./AdminPanel";
 import { Composer } from "./Composer";
@@ -65,8 +65,7 @@ export const DOT: Record<ConnState, string> = {
  * 房间页。从左到右、从上到下只有一条生长轴（issue #8 的重排）：
  *
  * ```
- * [头部排一：◀返回 · ●直播状态 ······ 在线 · 看过 · 🔋电池 · ⋯菜单]
- * [头部排二：直播间标题]
+ * [头部：◀返回 · ●直播状态 · 直播间标题（放不下就循环滚动） ······ 在线 · 看过 · ⋯菜单]
  * [弹幕列表  ← 唯一的 flex-1 生长/滚动区]
  * [弹出面板（表情 / 短语 / 筛选）← 向上展开，列表自动上弹]
  * [输入区：输入框 + 工具行 + 发送]
@@ -115,10 +114,29 @@ export function RoomView({
   // 举报理由改用上游固定清单（`dReport/ForReason`，实测 7 条）：
   // 官方客户端按文案反查 `reason_id` 后与文案一起上报，因此界面不该让用户手输。
   const [reasonId, setReasonId] = useState("");
-  // 直播状态点：绿 = 直播中、橙 = 未开播（轮播归到橙）。文案只进 title / aria-label，不上屏
-  // （用户 2026-09-12：房间头不再写字，靠小圆点区分）。
+  // 直播状态点三态（用户 2026-09-13 的口径）：**红 = 下播 / 绿 = 开播 / 橙 = 未连接**。
+  // 判据是「本房间的连接态 + 上游的 live_status」两件事：没连上时根本不知道在不在播，
+  // 那一档是**未连接**（橙）；连上了再看 `live_status === 1` 才是**开播**（绿）；
+  // 其余（`0` 下播、`2` 轮播）都归**下播**（红）——轮播不是开播，不许借绿点冒充。
+  // 文案只进 title / aria-label，不上屏（用户 2026-09-12：房间头不再写字，靠小圆点区分）。
+  // 连接态取**事件驱动**的那一份（`danmubox://status`，与房间标签页上的圆点同源）；
+  // store 里还没有这个房间的状态时（刚加进来、还没连过）回落到列表载荷给的 `connected`。
+  const connState = useApp((store) => store.status[room.room_id]?.state);
+  const liveKind: "on" | "off" | "idle" =
+    (connState ?? (room.connected ? "connected" : "disconnected")) !== "connected"
+      ? "idle"
+      : room.live_status === 1
+        ? "on"
+        : "off";
   const liveText =
-    room.live_status === 1 ? "直播中" : room.live_status === 2 ? "轮播中" : "未开播";
+    liveKind === "idle" ? "未连接" : liveKind === "on" ? "开播" : "下播";
+  // 标题放不下就循环滚动（用户 2026-09-13 第 3 条）：量「一份文字」的宽度与可视宽度比，
+  // 放不下才启动动画 —— 短标题因此一动不动（不是「一律滚」）。
+  const titleText = room.title.length > 0 ? room.title : `房间 ${room.room_id}`;
+  const titleViewportRef = useRef<HTMLSpanElement>(null);
+  const titleCopyRef = useRef<HTMLSpanElement>(null);
+  const [titleScrolls, setTitleScrolls] = useState(false);
+  const [titlePeriod, setTitlePeriod] = useState(0);
   const separateGifts = prefs["ui.gift_panel_mode"] === "separate";
 
   // 从 store 直接取 action：它的身份在渲染之间是稳定的，
@@ -167,6 +185,28 @@ export function RoomView({
   useEffect(() => {
     if (reportTarget) void loadReportReasons();
   }, [reportTarget, loadReportReasons]);
+
+  // 标题的循环滚动是**量出来的**：一份文字的宽度 vs 可视宽度（ResizeObserver 同时盯容器与
+  // 文字本身，所以窗口改宽 / 字号滑杆 / 换标题都会重新判一次）。滚动是纯 CSS 的
+  // `translateX(-50%)` 无限循环，布局宽度自始至终不变（`.title` 是 `overflow: hidden` +
+  // `min-width: 0` 的 flex 项），因此**不会引起布局跳动**。
+  useEffect(() => {
+    const viewport = titleViewportRef.current;
+    const copy = titleCopyRef.current;
+    if (!viewport || !copy) return;
+    const measure = () => {
+      const textWidth = copy.offsetWidth;
+      const overflow = textWidth > viewport.clientWidth + 0.5;
+      setTitleScrolls(overflow);
+      // 匀速约 40px/s 走完一份标题，最少 6s 一圈（短标题不该飞快闪一下）
+      setTitlePeriod(overflow ? Math.max(6, Math.round(textWidth / 40)) : 0);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(copy);
+    return () => observer.disconnect();
+  }, [titleText, prefs["ui.font_scale"]]);
 
   // 礼物金额统计与排行（需求 §2.7）：只算本次会话；金额口径是金瓜子（协议 §10.2）。
   const giftStats = useMemo(() => {
@@ -342,10 +382,10 @@ export function RoomView({
 
   return (
     <div className={styles.shell}>
-      {/* 房间头（用户 2026-09-12 反馈 1）：**第一排只有控件与状态点，标题另起一排**。
-          连接状态不再写字（「已连接」文字已删），一眼要看的是「在不在播」——
-          绿点 = 直播中、橙点 = 未开播（.liveOn / .liveOff，色值走 --live-on / --live-off）。
-          连接状态仍可在房间标签页的圆点上看到（见 DOT）。 */}
+      {/* 房间头（用户 2026-09-13 的纠正）：**一排**——
+          ◀返回 · ●状态点 · 直播间标题（放不下就循环滚动） ······ 在线 · 看过 · ⋯。
+          标题不再另起一排；电池也不在这排（挪到输入区的发送按钮左侧），这排腾给
+          「当前在线」与「看过」两个数值。连接状态仍可在房间标签页的圆点上看到（见 DOT）。 */}
       <div className={styles.roomHeader} data-testid="db-room-header">
         <div className={styles.headerBar} data-testid="db-room-header-bar">
           <button
@@ -366,19 +406,57 @@ export function RoomView({
               />
             </svg>
           </button>
+          {/* 状态点 = **外壳 12px（热区 / 悬停面，与改前同尺寸）+ 里面一颗 10px 的圆点**。
+              两件事分开写：外壳承 `title` / `aria-label` / `data-*`，圆点承颜色 ——
+              这样「缩短到 10px」只是看得见的那颗点变小，热区一点没动。 */}
           <span
-            className={`${styles.liveDot} ${
-              room.live_status === 1 ? styles.liveOn : styles.liveOff
-            }`}
-            data-testid="db-live-dot"
+            className={styles.liveDotBox}
+            data-testid="db-live-dot-box"
             data-live={String(room.live_status)}
+            data-state={liveKind}
             role="img"
             title={liveText}
             aria-label={liveText}
-          />
-          <span className={styles.headerSpacer} />
+          >
+            <span
+              className={`${styles.liveDot} ${
+                liveKind === "on"
+                  ? styles.liveOn
+                  : liveKind === "off"
+                    ? styles.liveOff
+                    : styles.liveIdle
+              }`}
+              data-testid="db-live-dot"
+            />
+          </span>
+          {/* 标题紧跟状态点：**同一排**、左边缘在状态点右侧。放不下时轨道循环滚动，
+              两份拷贝首尾相接（动画走 -50% 正好一份），文字区之外一律裁掉 */}
+          <span
+            className={styles.title}
+            data-testid="db-room-title"
+            title={titleText}
+            ref={titleViewportRef}
+          >
+            <span
+              className={styles.titleTrack}
+              data-testid="db-title-track"
+              data-scroll={String(titleScrolls)}
+              style={titlePeriod > 0 ? { animationDuration: `${titlePeriod}s` } : undefined}
+            >
+              <span className={styles.titleItem}>
+                <span className={styles.titleText} data-testid="db-title-copy" ref={titleCopyRef}>
+                  {titleText}
+                </span>
+              </span>
+              {titleScrolls && (
+                <span className={styles.titleItem} aria-hidden="true">
+                  <span className={styles.titleText}>{titleText}</span>
+                </span>
+              )}
+            </span>
+          </span>
           {roomStats?.online !== undefined && (
-            <span className={styles.balance} title="在线人数（协议 §10.7 的 ONLINE_RANK_COUNT）">
+            <span className={styles.balance} title="当前在线（协议 §10.7 的 ONLINE_RANK_COUNT）">
               在线 {formatCount(roomStats.online)}
             </span>
           )}
@@ -386,40 +464,6 @@ export function RoomView({
             <span className={styles.balance} title="累计看过（协议 §10.7 的 WATCHED_CHANGE）">
               看过 {formatCount(roomStats.watched)}
             </span>
-          )}
-          {/* 电池 = 圆形按钮（与返回 / ⋯ 同形状），余额数字贴着它（参考截图：一个图标 + 一个小数字） */}
-          {balance !== undefined && (
-            <>
-              <button
-                className={styles.ctlRound}
-                data-testid="db-header-battery"
-                title={`电池余额 ${balance}`}
-                aria-label={`电池余额 ${balance}`}
-              >
-                <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
-                  <rect
-                    x="2"
-                    y="7"
-                    width="16"
-                    height="10"
-                    rx="3"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  />
-                  <path
-                    d="M20.5 10.5v3"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </button>
-              <span className={styles.balance} data-testid="db-header-balance">
-                {balance}
-              </span>
-            </>
           )}
           <button
             className={styles.ctlRound}
@@ -434,13 +478,6 @@ export function RoomView({
             ⋯
           </button>
         </div>
-        <span
-          className={styles.title}
-          data-testid="db-room-title"
-          title={room.title.length > 0 ? room.title : `房间 ${room.room_id}`}
-        >
-          {room.title.length > 0 ? room.title : `房间 ${room.room_id}`}
-        </span>
       </div>
 
       {/* 唯一的生长区：面板与礼物栏展开时只有它会变矮 */}
@@ -571,6 +608,8 @@ export function RoomView({
         ownedEmotes={ownedEmotes}
         ownedError={ownedError}
         seenEmotes={seenEmotes}
+        balance={balance}
+        onRefreshBalance={() => void loadBalance()}
         pendingAction={pendingAction}
         prefs={prefs}
         onPrefs={onPrefs}

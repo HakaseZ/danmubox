@@ -30,6 +30,10 @@ interface Props {
   /** 「我的表情」上次拉取失败的原因；面板里显示并提供重试（不阻塞输入框）。 */
   ownedError?: string;
   seenEmotes: Emote[];
+  /** 电池余额（`wallet_balance`）：显示在**发送按钮左侧**（用户 2026-09-13）。 */
+  balance?: number;
+  /** 点数值手动刷新余额（docs/ui.md §6.4）。 */
+  onRefreshBalance: () => void;
   /** 行菜单里点的 @ / 回复，点一次应用一次（token 变则重放）。 */
   pendingAction?: { kind: "mention" | "reply"; message: Message; token: number } | null;
   prefs: Prefs;
@@ -69,6 +73,8 @@ export function Composer({
   ownedEmotes,
   ownedError,
   seenEmotes,
+  balance,
+  onRefreshBalance,
   pendingAction,
   prefs,
   onPrefs,
@@ -99,6 +105,8 @@ export function Composer({
   const areaRef = useRef<HTMLTextAreaElement>(null);
   // 输入区这一块（含向上展开的面板）：用来判「点在外面就收起面板」（见下面的 pointerdown）。
   const composerRef = useRef<HTMLDivElement>(null);
+  // 展开中的那个面板自身（表情 / 短语 / 筛选三选一，同时只有一个在 DOM 里）。
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // 行菜单送来的动作：@ 与回复各应用一次（token 每次点击都变，不会自激）。
   useEffect(() => {
@@ -133,11 +141,22 @@ export function Composer({
   // 面板顶上不再有「关闭」按钮（用户 2026-09-12：表情与关闭都不需要），
   // 关面板的入口因此是两条：① 再点一次那个工具按钮（togglePanel）；
   // ② 点输入区这一块**外面**的任何地方 —— 包括弹幕列表、别的面板入口。
+  //
+  // 「外面」的判据必须是**面板之外**，不是「输入区之外」（用户 2026-09-13 报的真 bug：
+  // 「展开表情包面板后切换 tab，面板就自动关闭了」）。面板与输入区是**兄弟**节点
+  // （面板在输入区上方、文档流里各占一块），只判 `composerRef` 就会把面板内部的按下
+  // 当成外面：真鼠标点 tab 先发 `pointerdown` → 面板当场卸载 → tab 切不动。
+  // 因此这里排除三块：输入区、展开中的面板、面板自己弹出来的右键菜单（短语的「改 / 删」）。
   useEffect(() => {
     if (panel === null) return;
     const onPointerDown = (event: PointerEvent) => {
-      const root = composerRef.current;
-      if (root && !root.contains(event.target as Node)) setPanel(null);
+      const target = event.target as Node | null;
+      if (target !== null && composerRef.current?.contains(target)) return;
+      if (target !== null && panelRef.current?.contains(target)) return;
+      // 面板里弹出的右键菜单也归面板：它的「编辑 / 删除」点下去时面板必须还在
+      // （`pointerdown` 连右键一起收，菜单项不在面板 DOM 里，不排除就会被关掉）。
+      if (target instanceof Element && target.closest('[data-testid="db-context-menu"]')) return;
+      setPanel(null);
     };
     // 捕获阶段：先于被点元素的处理收起面板，避免「点了一下别人、面板还挂在上面」
     document.addEventListener("pointerdown", onPointerDown, true);
@@ -421,6 +440,7 @@ export function Composer({
           className={`${styles.picker} ${activeKind === "common" ? "" : styles.pickerBig}`}
           data-testid="db-panel"
           style={panelFont}
+          ref={panelRef}
         >
           {/* 面板顶上**没有标题、也没有「关闭」**（用户 2026-09-12：「表情包栏顶部的表情和
               关闭不需要」）：收起面板靠再点一次「表情」或点输入区外面（见上面那条 pointerdown）。
@@ -523,7 +543,7 @@ export function Composer({
       )}
 
       {panel === "phrases" && (
-        <div className={styles.phrases} data-testid="db-panel" style={panelFont}>
+        <div className={styles.phrases} data-testid="db-panel" style={panelFont} ref={panelRef}>
           <div className={styles.panelHead}>
             <span className={styles.panelTitle}>短语</span>
             <span className={styles.composerSpacer} />
@@ -605,7 +625,7 @@ export function Composer({
       )}
 
       {panel === "filter" && (
-        <div className={styles.filterPanel} data-testid="db-panel">
+        <div className={styles.filterPanel} data-testid="db-panel" ref={panelRef}>
           <div className={styles.panelHead}>
             <span className={styles.panelTitle}>筛选与显示</span>
             <span className={styles.composerSpacer} />
@@ -719,12 +739,46 @@ export function Composer({
             筛选
           </button>
           <span className={styles.composerSpacer} />
-          <button
-            disabled={disabled || !loggedIn || busy || draft.trim().length === 0}
-            onClick={() => void submit()}
-          >
-            {busy ? "发送中" : "发送"}
-          </button>
+          {/* 发送簇 = **电池 + 发送**，同进同退（窄屏换行时不许被拆到两排——
+              用户 2026-09-13：「电池数量挪到底部发送按钮左侧」）。
+              电池是**圆角矩形**（.battery），与返回 / ⋯ 的圆**不同形状**；点数值手动刷新（§6.4）。 */}
+          <span className={styles.sendCluster} data-testid="db-send-cluster">
+            {balance !== undefined && (
+              <button
+                className={styles.battery}
+                data-testid="db-battery"
+                title={`电池余额 ${balance}（点一下刷新）`}
+                onClick={onRefreshBalance}
+              >
+                <svg className={styles.batteryIcon} viewBox="0 0 24 24" aria-hidden="true">
+                  <rect
+                    x="2"
+                    y="7"
+                    width="16"
+                    height="10"
+                    rx="3"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  />
+                  <path
+                    d="M20.5 10.5v3"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <span data-testid="db-battery-balance">{balance}</span>
+              </button>
+            )}
+            <button
+              disabled={disabled || !loggedIn || busy || draft.trim().length === 0}
+              onClick={() => void submit()}
+            >
+              {busy ? "发送中" : "发送"}
+            </button>
+          </span>
         </div>
       </div>
       {/* 最下方只留**一直成立**的静态说明（未登录）。发送失败不再在这里出行：

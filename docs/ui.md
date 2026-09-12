@@ -210,21 +210,31 @@
 
 ### 3.1 房间头
 
-房间头固定在弹幕列表上方（不参与虚拟列表滚动），**两排**（用户 2026-09-12 的反馈 1，照 B 站官方手机端直播间顶栏的做法）：
+房间头固定在弹幕列表上方（不参与虚拟列表滚动），**一排**（用户 2026-09-13 的更正：上一版把标题另起了一排，理解错了）：
 
 ```
-[◀返回 ●直播状态 ·············· 在线 x 看过 x 🔋电池 N ⋯]   ← 排一：只有控件与状态点
-[直播间标题]                                              ← 排二：标题单独一行
+[◀返回 ●状态点 直播间标题…… ·············· 在线 x 看过 x ⋯]   ← 一排：标题在状态点右侧
 ```
 
 | 元素 | 取值与来源 |
 |---|---|
-| 返回 | **圆形左箭头按钮**（与下面两枚同形状同大小，几何由 `--ctl-round` 一处给出；可访问名仍是「返回房间列表」）。回到房间列表页（等同关闭当前房间页） |
-| 直播状态点 | **绿 = 直播中、橙 = 未开播**（轮播归到橙），判据 `room.live_status`，色值走 `--live-on` / `--live-off`。文案只进 `title` / `aria-label`，**不上屏** |
-| 标题 / 房间号 | 房间元信息（`follow_list` / `rooms_list` / `getRoomPlayInfo` 解析结果）；**独占一排**，不再与按钮挤同一行 |
-| 观众数 | 在线人数（`ONLINE_RANK_COUNT` 的 `online_count`）与累计看过（`WATCHED_CHANGE` 的 `num`），两个都显示（用户 2026-09-12）；上游还没给过的一侧不显示，不用 `—` 或 `0` 顶替。人气值不再展示 |
-| 电池 | **圆形按钮**（图标）+ 紧跟一个余额数字（用户 2026-09-12：与返回一样做成圆形；参考截图就是「一个图标 + 一个小数字」）。`wallet_balance` 的数值**只在房间头显示一处**，不在输入区重复占位 |
-| `⋯` 菜单 | 同样是**圆形按钮**，动作收在右键菜单里：房管面板 / 刷新连接 / 断开连接 / 显示·隐藏日志（见 §3.2、§3.4、§3.5） |
+| 返回 | **圆形左箭头按钮**（几何由 `--ctl-round` 一处给出；可访问名仍是「返回房间列表」）。回到房间列表页（等同关闭当前房间页）。**顶栏的圆形控件只剩它**与 `⋯` |
+| 直播状态点 | **红 = 下播 / 绿 = 开播 / 橙 = 未连接**（用户 2026-09-13 的三态口径）。判据是「**本房间的连接态** × 上游 `live_status`」：连接态不是 `connected`（含 `connecting` / `disconnected` / `error`，取自 `danmubox://status`，与房间标签页上的圆点同源）→ **橙**（没连上就不知道在不在播）；连上了且 `live_status == 1` → **绿**；其余（`0` 下播、`2` 轮播）→ **红**（轮播不是开播）。色值走 `--live-on` / `--live-off` / `--live-idle`。文案只进 `title` / `aria-label`（「开播 / 下播 / 未连接」），**不上屏** |
+| 标题 / 房间号 | 房间元信息（`follow_list` / `rooms_list` / `getRoomPlayInfo` 解析结果）；**紧跟状态点右侧、同一排**，不再独占一排。放不下时**循环滚动**（marquee，见下），不再用省略号截断；完整标题始终在 `title` 属性里 |
+| 观众数 | 当前在线（`ONLINE_RANK_COUNT` 的 `online_count`）与累计看过（`WATCHED_CHANGE` 的 `num`），两个都显示（用户 2026-09-12 / 2026-09-13：电池挪走后这两个占顶栏）；上游还没给过的一侧不显示，不用 `—` 或 `0` 顶替。人气值不再展示 |
+| 电池 | **不在顶栏**（用户 2026-09-13：「电池数量挪到底部发送按钮左侧」）：它是输入区工具行里、发送按钮左侧的一枚控件，且**不是圆形**（见 §6.4） |
+| `⋯` 菜单 | **圆形按钮**，动作收在右键菜单里：房管面板 / 刷新连接 / 断开连接 / 显示·隐藏日志（见 §3.2、§3.4、§3.5） |
+
+**标题的循环滚动**（用户 2026-09-13：「如果放不下就循环滚动显示」）：
+
+| 项 | 规则 |
+|---|---|
+| 判据 | `一份文字的宽度 > 可视宽度` 才滚（`ResizeObserver` 同时盯容器与文字，窗口改宽 / 字号滑杆 / 换标题都会重判）。**短标题一动不动**——不是「一律滚」 |
+| 形态 | **要滚的时候**轨道里放**两份完全相同的拷贝**（第二份 `aria-hidden`、只在 `data-scroll="true"` 时挂上 —— 不滚时只有一份，否则屏幕上就是「标题重复两遍」），动画 `translateX(0 → -50%)` 无限循环：-50% 正好一份（含每份自己的右间隙），循环处没有断口 |
+| 不跳布局 | `.title` 是 `flex: 1 1 0` + `min-width: 0` + `overflow: hidden`：flex 基准是 **0**，所以它既不会把「在线 / 看过 / ⋯」挤到第二排，也不会把容器撑出横向滚动；动画只改 `transform`（布局宽度自始至终不变）。实现在 `RoomView.tsx`（量完给 `db-title-track` 打 `data-scroll`）与 `app.module.css` 的 `.titleTrack` / `@keyframes titleMarquee` |
+| 速度 | 约 40px/s 走完一份，最少 6s 一圈（`animation-duration` 由量到的宽度算，写在行内） |
+| 动效偏好 | `@media (prefers-reduced-motion: reduce)` 下**停滚**：文字按第一份的开头显示，完整标题仍在 `title` 属性里 |
+| DOM | 滚动时标题在 DOM 里有**两份**拷贝，因此判「标题是什么」要读 `db-room-title` 的 `title` 属性、别读 `innerText`；量宽度的那把尺子是 `db-title-copy`（**第一份**，宽度与第二份无关，所以滚动开始不会改变它的量法，也就不会自激） |
 
 **房间头不再写连接状态文字**（用户 2026-09-12：「弹幕页不要已连接 verified」）：没有「已连接（缓冲 N）」、没有 `verified` 徽标，
 也不留占位。连接状态的可观察面是**房间标签页上的圆点**（§3.3）与 `⋯` 菜单；`error` 的退避详情只在标签页圆点与 `⋯` 菜单上下文里体现。
@@ -257,8 +267,9 @@
 | `disconnected` | 灰色空心圆 | **可用** | 未连接或已主动断开；点击立即重连 |
 | `error` | 红色实心圆 | **可用** | 认证失败或上游错误，正在退避重连 |
 
-⚠ 这一族状态点**只出现在房间标签页上**；房间头那枚圆点表示的是**直播状态**（绿 / 橙，见 §3.1），两者不是一回事 ——
-房间里只有一个房间时没有标签页，连接状态因此不经圆点呈现，用户要看连接细节走 `⋯` 菜单（刷新 / 断开 / 日志）。
+⚠ 这一族状态点**只出现在房间标签页上**；房间头那枚圆点是**直播状态点**（红 / 绿 / 橙，见 §3.1），两者不是一回事 ——
+不过房间头那枚的**橙色**一档恰好用的就是本节的连接态（`danmubox://status` 不是 `connected` 就点橙），
+因此「连不上」这件事在只有一个房间、没有标签页时也能一眼看到；连接细节（退避原因）仍走 `⋯` 菜单（刷新 / 断开 / 日志）。
 
 规则：
 
@@ -659,7 +670,7 @@
 | 选中态 | **三处同时变**才读得出是 tab：左侧 2px 强调色条 + 底色抬起（`--bg-input`）+ 字重加粗。只换底色或只加下划线都会被读成「一排按钮」 |
 | 键盘 | roving tabindex：只有选中的那个 tab 可 Tab 到（`tabindex=0`，其余 `-1`），进入后 `↑` / `↓` 循环换组、`Home` / `End` 跳首尾，焦点跟着选中项走；`:focus-visible` 有独立描边 |
 | 滚动 | **两列各自滚、且都与网格同高**（`height: var(--emote-grid-h)`）：组多时轨道自己上下滚（用户 2026-09-12：「左边也加入上下滚动」），表情多时网格自己滚。轨道用 `scrollbar-gutter: stable` 预留滚动条的槽，出不出滚动条都不改轨道宽度，**因此不挤窄右边的网格**（冒烟按 `panelEmoteRailScrollable` / `panelEmoteRailKeepsGridWidth` 断言） |
-| 关面板 | **顶上没有关闭按钮**（用户 2026-09-12 删掉）：① 再点一次工具行的「表情」；② 点输入区这一块**外面**的任何地方（`pointerdown` 捕获阶段监听；面板在文档流里、不带遮罩，所以点哪儿都能收） |
+| 关面板 | **顶上没有关闭按钮**（用户 2026-09-12 删掉）：① 再点一次工具行的「表情」；② 点**面板与输入区之外**的任何地方（`pointerdown` 捕获阶段监听；面板在文档流里、不带遮罩，所以点哪儿都能收）。**判据是「面板之外」，不是「输入区之外」**（用户 2026-09-13 报的真 bug：「展开表情包面板后切换 tab，面板就自动关闭了」——面板与输入区是兄弟节点，只判输入区会把面板内部的按下当成外面，真鼠标点 tab 先发 `pointerdown`、面板当场卸载）。因此三块都算「里面」：输入区、展开中的面板、面板自己弹出的右键菜单（短语的「编辑 / 删除」）。冒烟按 `panelSurvivesTabSwitch` / `panelStaysOnInsidePress` / `panelClosesOnChatPress` 断言（复现必须补一次真实的 `pointerdown`：`.click()` 只发 click 事件、绕过那条监听，这正是它当初漏测的原因） |
 
 | 分组（`package_kind`） | 说明 |
 |---|---|
@@ -710,7 +721,8 @@
 
 | 项 | 规则 |
 |---|---|
-| 位置 | **房间头第一排**：一枚圆形按钮（图标）+ 紧跟的余额数字（用户 2026-09-12：与返回一样做成圆形；参考截图的形态就是「一个图标 + 一个小数字」），与「在线 / 看过」并列，不在输入区重复占位；输入区工具行只放面板入口与发送 |
+| 位置 | **输入区工具行、发送按钮左侧**（用户 2026-09-13：「电池数量挪到底部发送按钮左侧」；顶栏那个位置改给「当前在线 / 看过」两个数值）。形态是**圆角矩形**（`--r-2`：图标 + 数值的一枚控件），**不是圆形**——用户 2026-09-13：「电池不要圆形，仅 3 点选项需要」，顶栏的返回与 `⋯` 才是 `--r-full` 正圆。它与发送按钮同在一个不可换行的「发送簇」（`.sendCluster`）里：窄屏工具行换行时两者不会被拆到两排 |
+| 形状的判据 | 圆角**不等于**半短边（正圆与胶囊都等于半短边，都算「圆」）。冒烟按 `batteryNotRound`（圆角 < 半短边 − 1px）、`batteryLeftOfSend`（x 坐标在发送按钮左侧）、`batteryInComposer`、`batteryText` 断言 |
 | 刷新时机 | 进入房间时、每次送礼成功后、点击数值手动刷新 |
 | 未登录 | 显示「—」，`title`「登录后可见」 |
 | 失败 | 显示「—」并保留上一次成功值 5 秒后回退，不弹窗 |
@@ -943,12 +955,12 @@
 | 区域 | 宽屏（> 520px） | 窄屏（≤ 520px） |
 |---|---|---|
 | 房间列表页 | 单列、居中、左右留白 24px | 单列，左右留白 12px |
-| 房间头 | **两排**（用户 2026-09-12）：排一 = ◀返回（圆形）· ●直播状态 ··· 在线 / 看过 / 🔋电池（圆形 + 数字）· `⋯`（圆形）；排二 = 直播间标题（独占一行，`--fs-5` 加粗、超长省略） | 同一套两排结构；三枚圆形控件直径都是 `--ctl-round`（= `--tap-min` 40px）。任何宽度下**不许横向滚动** |
+| 房间头 | **一排**（用户 2026-09-13 的更正）：◀返回（圆形）· ●状态点 · 直播间标题（`--fs-5` 加粗，放不下就循环滚动） ······ 在线 / 看过 · `⋯`（圆形）。标题不再另起一排，电池不在顶栏 | 同一套一排结构；两枚圆形控件直径都是 `--ctl-round`（= `--tap-min` 40px）。标题是 `flex: 1 1 0` + `min-width: 0`，因此窄屏也**不会**被甩到第二排；任何宽度下**不许横向滚动** |
 | 弹幕列表 | 唯一生长区与滚动区 | 同左 |
-| 弹出面板（表情 / 短语 / 筛选） | 文档流里的一块，向上展开，只挤压列表（不遮最新一条）；限高 `--panel-max-h` = 260px。**表情面板是例外**：面板顶上去掉了标题与「关闭」，网格区与左侧轨道同高、都定死为**两行表情格**（`--emote-grid-h`，按当前那一组的格子高算，§6.3），因此面板实际高度只有两行 + 上下内边距（宽屏 85.3px、窄屏 109px），两列各自滚 | **同一口径**：也在文档流里，只挤压列表、不遮最新一条；区别只在限高——窄屏用视口份额 `--panel-max-h-narrow` = **45vh**（844px 下 ≈ 380px），内容超出由**面板内部滚动**承担，不去吃列表空间。表情面板按两行表情格定高（比 45vh 更矮），顶上没有标题与「关闭」（再点一次「表情」或点输入区外面收起） |
+| 弹出面板（表情 / 短语 / 筛选） | 文档流里的一块，向上展开，只挤压列表（不遮最新一条）；限高 `--live-dot`（= 10px：状态点**看得见的那颗点**的直径，元素盒仍是 `--sp-3` 12px、热区不缩）、`--title-gap`（= 2.5em：循环滚动的标题两份拷贝之间的间隙）、`--panel-max-h` = 260px。**表情面板是例外**：面板顶上去掉了标题与「关闭」，网格区与左侧轨道同高、都定死为**两行表情格**（`--emote-grid-h`，按当前那一组的格子高算，§6.3），因此面板实际高度只有两行 + 上下内边距（宽屏 85.3px、窄屏 109px），两列各自滚 | **同一口径**：也在文档流里，只挤压列表、不遮最新一条；区别只在限高——窄屏用视口份额 `--panel-max-h-narrow` = **45vh**（844px 下 ≈ 380px），内容超出由**面板内部滚动**承担，不去吃列表空间。表情面板按两行表情格定高（比 45vh 更矮），顶上没有标题与「关闭」（再点一次「表情」或点输入区外面收起） |
 | 房管面板 | 同弹出面板（文档流、只挤压列表、限高 260px） | 同弹出面板（文档流、限高 45vh、内部滚动、有「关闭」） |
 | 账号管理对话框 | 居中卡片（`max-width: 680px`），顶对齐，点背景或 `Esc` 关闭 | 贴底 sheet：占满宽度、顶部圆角、内容可滚动、头部「关闭」。它是**模态流程**（不是在读弹幕时顺手展开的面板），所以这里用覆盖式而不是挤压 |
-| 输入区 | 输入框占满宽度，工具行一行放得下 | 输入框占满宽度；工具行**放不下就换行**，不挤成小方块 |
+| 输入区 | 输入框占满宽度；工具行一行放得下（面板入口在左，发送簇 = 电池 + 发送在右） | 输入框占满宽度；工具行**放不下就换行**，不挤成小方块；换行以「发送簇」为单位，电池不会被拆到发送按钮之外的排 |
 | 礼物 / SC 折叠条 | 输入区下方一行 | 同样一行，不换行，不挤掉弹幕列表 |
 | 触屏热区 | 不强制 | 窄屏下面板 / 账号对话框（自底 sheet）里的可点元素（按钮、输入框、下拉、复选框的 `label`）高度 ≥ **40px**（`--tap-min`）；复选框与滑杆本体不撑高（会变形），热区由它们的 `label` 承担 |
 | 行内菜单入口 | 无（只有右键 / 长按，见 §4.5） | 无（同一个入口） |
@@ -973,9 +985,9 @@
 | 字号阶 | `--fs-1 … --fs-8` | 0.79 / 0.86 / 0.93 / 1 / 1.07 / 1.15 / 1.3 / 1.43 em | **全部是 em**，不能写成 px：基准字号由 body 的 `--fs-root`（14px）与弹幕区 / 面板上的 `ui.font_scale`（写成 em）共同给出，因此字号滑杆能作用到所有文字（§8.2） |
 | 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是**彩色底上**的文字色，`--accent-text` 是「强调色**作为文字**」（与填充分开：填充只要 3:1、文字要 4.5:1，浅色下两者必须分叉），遮罩 `--overlay`，悬停洗色 `--hover-wash` |
 | 徽标底色 | `--gold`、`--neutral`、`--guard-1…3`、`--sc-1…5`、`--block-platform`、`--block-room`、`--badge-fg`、`--badge-lift`、`--badge-border` | 见 `:root` | 粉丝牌**不吃**这些：它的真彩色来自上游（§4.2），令牌只兜底 |
-| 顶栏 / 状态点 / 浮动提示 | `--header-bg`（半透明顶栏：本主题表面色 88%）、`--header-lift`（自上而下的一道高光）、`--live-on` / `--live-off`（直播状态点：绿 / 橙）、`--toast-bg` / `--toast-fg`（失败浮动提示） | 见 `:root` | 顶栏的「半透明深色层次」由这三条混出来，**深浅两套自动成立**（浅色下同一槽就是半透明白面）；直播状态点的色值与 `--ok` / `--warn` 分开命名：语义不同（在不在播 ≠ 连接状态），浅色下也要各自达标 |
+| 顶栏 / 状态点 / 浮动提示 | `--header-bg`（半透明顶栏：本主题表面色 88%）、`--header-lift`（自上而下的一道高光）、`--live-on` / `--live-off` / `--live-idle`（直播状态点三态：绿=开播 / 红=下播 / 橙=未连接）、`--toast-bg` / `--toast-fg`（失败浮动提示） | 见 `:root` | 顶栏的「半透明深色层次」由这三条混出来，**深浅两套自动成立**（浅色下同一槽就是半透明白面）；直播状态点的色值与 `--ok` / `--warn` / `--danger` 分开命名：语义不同（在不在播 ≠ 连接状态），浅色下也要各自达标 |
 | 阴影 / 遮罩 | `--shadow-menu`、`--shadow-dialog`、`--shadow-sheet`、`--overlay` | — | 菜单 / 对话框 / sheet / 遮罩各一处 |
-| 行与触屏的固定尺寸 | `--row-line`（行盒高）、`--avatar` = 1.25×行盒、`--badge-h` = 0.9×行盒（**不跟头像走**）、`--emote` = 1.1×行盒、`--time-col`、`--tap-min`、`--ctl-round`（= `--tap-min`：房间头三枚圆形控件的直径）、`--panel-max-h`、`--panel-max-h-narrow`、`--sheet-max-h` | — | 只有这些是「结构尺寸」；其余一次性尺寸（二维码 200px、菜单最小宽 150px 等）仍写在各自规则里，不硬凑进间距阶。`--panel-max-h-narrow` 用视口份额（45vh）而不是固定像素，窄屏才不会被面板吃掉整屏。**弹幕行的那四个是一组**：`--row-line` 是基准（行盒高，1.5em，声明在 `.row` 上并用 `@property` 注册成 `<length>`，这样它算成 px 后再往下继承，子元素各写各的字号也不会算错）；**头像（1.25×）与身份牌（0.9×）是两条独立的派生**（2026-09-13：复用时牌会跟着头像一起放大）；**而 `--avatar` 有两层**：`.row` 里是行盒的 1.25 倍，`:root` 里另给一个行外默认值（1.35em，随所在字号走）——`.avatar` 是跨页面复用的组件（关注列表 / 账号区 / 账号对话框都在弹幕行之外），令牌只活在 `.row` 里会让那些地方 `var(--avatar)` 解析失败、`<img>` 退回原图尺寸（2026-09-12 的返工，见 §15），头像 / 身份牌 / 表情三个尺寸都从基准按比例派生（§4.1） |
+| 行与触屏的固定尺寸 | `--row-line`（行盒高）、`--avatar` = 1.25×行盒、`--badge-h` = 0.9×行盒（**不跟头像走**）、`--emote` = 1.1×行盒、`--time-col`、`--tap-min`、`--ctl-round`（= `--tap-min`：房间头两枚圆形控件——返回与 `⋯`的直径）、`--panel-max-h`、`--panel-max-h-narrow`、`--sheet-max-h` | — | 只有这些是「结构尺寸」；其余一次性尺寸（二维码 200px、菜单最小宽 150px 等）仍写在各自规则里，不硬凑进间距阶。`--panel-max-h-narrow` 用视口份额（45vh）而不是固定像素，窄屏才不会被面板吃掉整屏。**弹幕行的那四个是一组**：`--row-line` 是基准（行盒高，1.5em，声明在 `.row` 上并用 `@property` 注册成 `<length>`，这样它算成 px 后再往下继承，子元素各写各的字号也不会算错）；**头像（1.25×）与身份牌（0.9×）是两条独立的派生**（2026-09-13：复用时牌会跟着头像一起放大）；**而 `--avatar` 有两层**：`.row` 里是行盒的 1.25 倍，`:root` 里另给一个行外默认值（1.35em，随所在字号走）——`.avatar` 是跨页面复用的组件（关注列表 / 账号区 / 账号对话框都在弹幕行之外），令牌只活在 `.row` 里会让那些地方 `var(--avatar)` 解析失败、`<img>` 退回原图尺寸（2026-09-12 的返工，见 §15），头像 / 身份牌 / 表情三个尺寸都从基准按比例派生（§4.1） |
 
 浅色主题（`ui.theme`）**不是第二套样式**：只在 `:root[data-theme="light"]` 里给这些槽位换一组值，组件规则一行都不用改。`:root` 是**深色基座**（不另开 `:root[data-theme="dark"]`，同一份值只有一个来源）。新增样式时不得再写字面颜色 / 间距 / 圆角 / 字号——要新值就先加令牌。**长度令牌（`--row-line` / `--avatar` / `--badge-h` / `--emote` / `--time-col` / `--tap-min` / `--panel-max-h*` / `--sheet-max-h`）不许出现在主题块里**：`--row-line` 被 `@property` 注册后若在 `:root` 显式赋值，`1.5em` 会按根字号（16px）算成 24px 再继承下去，行内三个尺度就此脱钩；`--avatar` 的 `:root` 默认值也必须永远能解析出值，否则行外共用的头像会按原图 512 渲染（§15 的那个事故）。
 
@@ -999,8 +1011,9 @@
 | `--danger` | `#ff6b6b` | `#c4292f` | B+ | 6.7:1 / 5.0:1 ✓ |
 | `--on-accent` | `#0b141a` | `#0b141a` | B+ | 6.1:1（白字压 `#00a884` 只有 3.0:1，因此**不做白字**） |
 | `--on-ok` / `--on-danger` | `#002b12` / `#1b0000` | `#ffffff` / `#ffffff` | 现状 / B+ | 7.8:1、— / 5.2:1、5.6:1 ✓ |
-| `--live-on` | `#25d366`（= `--ok`） | `#0a7c5f` | A / B+ | 直播状态点「直播中」（填充：9.4:1 / 4.6:1 ✓） |
-| `--live-off` | `#e9a038`（= `--warn`） | `#c2410c` | B+ | 直播状态点「未开播」（填充：8.5:1 / 4.9:1 ✓） |
+| `--live-on` | `#25d366`（= `--ok`） | `#0a7c5f` | A / B+ | 直播状态点「**开播**」绿（填充：9.4:1 / 4.6:1 ✓） |
+| `--live-off` | `#ff6b6b`（= `--danger`） | `#c4292f`（= `--danger`） | B+ | 直播状态点「**下播**」红（轮播归此档；填充：6.7:1 / 5.0:1 ✓） |
+| `--live-idle` | `#e9a038`（= `--warn`） | `#c2410c` | B+ | 直播状态点「**未连接**」橙（连接态不是 `connected`；填充：8.5:1 / 4.9:1 ✓） |
 | `--toast-bg` / `--toast-fg` | 失败色 22% 混 `--bg-elevated` / `--fg` | 同式（浅色下自动是浅粉底 + 深字） | 派生 | 失败浮动提示；文字对底色 ≥ 12:1 ✓ |
 | `--hover-wash` | `--accent` 8% | `--accent` 12% | 派生 | 浅色底更亮，比例提高才看得出 |
 | `--overlay` | `rgba(0,0,0,.55)` | `rgba(11,20,26,.32)` | 现状 / B | 遮罩（浅色下更轻） |
@@ -1108,7 +1121,7 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"     
 
 **主题是一个独立的运行维度**（2026-09-12 新增）：`SMOKE_THEMES`（默认 `dark,light`）决定跑几档，档位写进 mock 的 `ui.theme` 并传进 `buildSmokeHtml(theme)` —— **同一份场景、同一套断言**深浅各跑一遍（不是两套场景）。新增的断言：主题三档都在（`themeSelectHasThreeModes`）、在筛选面板里切档后 `<html data-theme>` 真的变（`themeSwitchFlipsDom` 且偏好写回 `themeSwitchPreserved`）、画布底色跟着变（`themeSwitchChangesBackground`）、两档下正文与次级文字对背景 ≥ 4.5:1（`themeContrastBodyOk` / `themeContrastDimOk`）。`SMOKE_THEMES=dark` 可只跑一档（单档调试用；验收矩阵要求两档都跑）。
 
-**本批（用户 2026-09-12 的四条反馈 + 两条追加）新增的断言**：房间头两排与圆形控件（`headerControlsAllRound` / `headerControlsSameSize` / `headerBackIsArrowOnly` / `headerTitleOwnRow`）、没有了的状态文字与徽标（`headerNoConnectedText` / `headerNoVerifiedBadge`）、直播状态点（`liveDotTokensDistinct` / `liveDotMatchesStatus` / `liveDotFollowsStatus` —— 发一条 `danmubox://room` 把 `live_status` 翻过去再翻回来，颜色必须跟着变）、表情面板（`panelEmoteHeaderGone` / `panelEmoteGridTwoCommonRows` / `panelEmoteHeightIsTwoRows` / `panelEmoteRailScrollable` / `panelEmoteRailScrolled` / `panelEmoteRailKeepsGridWidth` / `panelClosesOnToolToggle` / `panelClosesOnOutsideClick`）、主页（`listPageScrolls` / `listPageMarginsSymmetric` / `listPageRightEdgeStable` —— 内容收短到不出滚动条前后，**同一个元素的右缘 x 必须相等**）、标签条（`listPageNoRoomTabs` / `roomTabsInsideRoom`）、发送失败的浮动提示（`sendFailNoBottomHint` / `sendFailToastShown` / `sendFailToastPassive` / `sendFailToastClearsList` / `sendFailToastAboveComposer` / `sendFailToastGone`）。截图同时多一张 `${prefix}-toast.png`（浮动提示只在 2.6s 内存活，必须在那一格抓）。
+**本批（用户 2026-09-12 的四条反馈 + 两条追加 + 2026-09-13 验收时的四条更正与一条追加）新增的断言**：房间头一排与圆形控件（`headerControlsAllRound` / `headerControlsSameSize` / `headerBackIsArrowOnly` / `headerTitleWithDot` —— 标题与状态点**同一排**：标题左边缘 > 状态点右边缘、两者竖直中心对齐、标题不越出头部那一排）、没有了的状态文字与徽标（`headerNoConnectedText` / `headerNoVerifiedBadge`）、顶栏那对数值与「电池不在顶栏」（`headerHasBothStats` / `headerNoBattery`）、标题的循环滚动（`titleMarqueeOnOverflow` + `titleOverflowPx` —— 判据是**量出来的**「一份文字宽 > 可视宽」且轨道动画名不为 `none`；`titleMarqueeNoLayoutJump` —— 滚起来前后头部与标题的盒子逐项不变；`titleMarqueeKeepsRow`；`titleShortNoMarquee` —— 短标题**不滚**；`titleRestored`）、电池搬去发送按钮左侧（`batteryInComposer` / `batteryLeftOfSend` —— x 坐标比较 / `batteryNotRound` —— 圆角 ≠ 半短边 / `batteryRadiusPx` / `batteryBoxPx` / `batteryText`）、切 tab 不关面板（`panelSurvivesTabSwitch` —— 面板还在 + 选中的组确实换了 + `db-emote-panel` 还在 / `panelStaysOnInsidePress` —— 按轨道与表情格都不关 / `panelClosesOnChatPress` —— 点弹幕列表仍关 / `panelReopensAfterOutsidePress` / `panelBackOnCommon`）、直播状态点（`liveDotTokensDistinct` —— 三态色值互不相同 / `liveDotMatchesStatus` / `liveDotFollowsStatus` —— 发一条 `danmubox://room` 把 `live_status` 翻过去再翻回来，颜色必须跟着变 / `liveDotIdleWhenDisconnected` —— 发一条 `danmubox://status` 的 `disconnected`，点必须变**橙**（未连接档）/ `liveDotVisualPx` / `liveDotHitPx` / `liveDotVisualIsToken` / `liveDotShrunk` —— 看得见的点 < 12px 且热区外壳 > 它、外壳仍是 12px / `liveDotIsCircle`）、表情面板（`panelEmoteHeaderGone` / `panelEmoteGridTwoCommonRows` / `panelEmoteHeightIsTwoRows` / `panelEmoteRailScrollable` / `panelEmoteRailScrolled` / `panelEmoteRailKeepsGridWidth` / `panelClosesOnToolToggle` / `panelClosesOnOutsideClick`）、主页（`listPageScrolls` / `listPageMarginsSymmetric` / `listPageRightEdgeStable` —— 内容收短到不出滚动条前后，**同一个元素的右缘 x 必须相等**）、标签条（`listPageNoRoomTabs` / `roomTabsInsideRoom`）、发送失败的浮动提示（`sendFailNoBottomHint` / `sendFailToastShown` / `sendFailToastPassive` / `sendFailToastClearsList` / `sendFailToastAboveComposer` / `sendFailToastGone`）。截图同时多一张 `${prefix}-toast.png`（浮动提示只在 2.6s 内存活，必须在那一格抓）。
 
 **两个引擎**：Chromium 与 WebKit 各跑一遍同一份场景代码、同一套断言（不是两套脚本），视口也一样。为什么要两个：**应用跑在 macOS 的 WKWebView 里，Chromium 的绿只证明「在 Chromium 里成立」**。两边的差别是真实存在的（`@property` 注册自定义属性、网格的 `minmax()`、`em` 的求值时机），但也**不要**把所有问题都归给引擎——见下面 2026-09-12 的第二个反例。跑 WebKit 需要一次性的 `npm i -D playwright && npx playwright install webkit`（后者约 80MB，落在 `~/Library/Caches/ms-playwright`）。
 
@@ -1137,6 +1150,6 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"     
 | 几何口径 | `layoutShortContentBottomGap` = 滚动容器底边与末行底边之差（贴底时只剩容器 `padding-bottom`，8px）；`layoutNameLefts` = 三行昵称左边缘（头像列占位后完全一致）；`layoutNameBadgeGap` / `layoutBadgeAfterName` / `layoutBadgeTightWithName` = 身份牌在昵称**右侧**且间距 = `--sp-1`；`layoutBodyBelowIdentity` / `layoutBodyLeftAlignedWithName` = 正文在身份行**下面**、左边缘与昵称一致；`layoutHangIndentLines` / `layoutHangIndentFirstLeft` / `layoutHangIndentLastLeft` / `layoutHangIndentLineLefts` = 折行后**每一个**行盒的左边缘（全部相等）与行数（≥2 才不算空对空，用户 2026-09-13 第 ② 条）；`layoutAvatarTopDelta` = 头像列顶边 − 身份行顶边（顶部对齐口径，≈0）与 `layoutAvatarNotRowCentered`（反面对照）；`rowEmoteFirstLineTops` = 表情弹幕行里头像列 / 身份行 / 正文三者的顶边与身份行底边（`rowIdentityOnFirstLineBox` 要求头顶边一致、正文在身份行下方）；`rowScale` / `rowIdentityBoxPx` / `rowScaleCoherent` / `rowAvatarTallerThanIdentity` / `rowBadgeNotFollowingAvatar` / `rowScaleProbe` / `rowScaleFollowsFontSlider` = 头像 1.25 / 身份牌 0.9 / 表情 1.1 × 行盒，且头像 ≥ 身份行的 1.15 倍、三档字号下比值不变 |
 | 覆盖 | 关注列表自动加载与排序分页、**关注项排布（宽屏单排 / 窄屏两排，两档都不出现房间号）、按最近观看降序（"看过"压过"没看过"）、标签条显示主播名而非房间号**、账号区（一行身份 + 对话框：单账号也有添加入口、扫码添加不覆盖、重新登录需确认、删除当前自动切走、退出登录回游客态）、弹幕列表是唯一生长区、面板向上展开不遮挡最新弹幕、行右键菜单、时间戳默认关且打开后等宽对齐、礼物栏在输入区下方且不抢宽度、系统通知与互动自动消失、历史与实时同款、**内容不足视口时整体贴底**、**头像列永远占位（昵称三列纵向对齐）**、**粉丝牌真彩色与兜底色**、**回复关系可见（非回复不画标记）+ 被 @ 名字用 `reply_uname_color` 上色、空串不上色**、**舰长标只认本房间的 `guard_level`**、**主站「我的表情」分组可见且发出去带唯一键**、**@ 目标与文本同源**、**房管权限前置 / 写操作二次确认与请求形状 / 面板三块列表增删 / 无权限时原样展示上游 code + message**、**行排版的整体感（两种间距、徽标贴昵称、悬挂缩进、头像钉首行、身份簇与正文同起点（含大表情那一行）、头像/徽标/表情三条尺度同源）**、**昵称不吃弹幕颜色 + 颜色只落正文 + 默认白按未指定处理（暗色与浅色两套主题各量一遍：`rowLightNameReadable` / `rowLightBodyKeepsDanmakuColor` / `rowLightDefaultWhiteTreatedAsUnset`，因为用户报的「用户名是白色、看不见」正是只在浅色主题下成立的）**、**行内不再有菜单按钮（房间头 `⋯` 保留）**、**工具行只有三个面板入口**、**表情面板：竖向 tab 轨道（语义 / 选中态 / 键盘可达）/ 一屏一组 / 每格图完整落在格内且溢出记账（`panelEmoteFitsCell` / `panelEmoteOverflowPx`）/ 置灰不隐藏 / 置灰仍可选**、**短语：加一条固定行、聊天输入框不被挤占**、**发送成功不再有「上次发送」提示**、**面板：只挤列表 / 不遮最新一条 / 内容对齐一条左边缘 / 展开不弹走滚动位置**、**窄屏：无横向滚动、面板与对话框限高且内部滚动、有关闭入口、热区 ≥ 40px、工具行不溢出、礼物折叠条不挤列表、账号行不叠字**、**真实弹幕夹具派生行（正文列 ≥ 50%、正文不越出列、窄屏折行且悬挂缩进对齐、行内表情图见方 + `contain` 且不随原图尺寸变、200×60 与 162×162 同盒）**、**表情面板三条 UX：面板里没有搜索框、网格区高度 = 两行表情格且超出滚动、点一次表情格立刻发出 `chat_send`（带唯一键、不动草稿、面板不关，置灰的那批同样能发）** |
 | 两个视口 | 同一份场景代码在两个视口各跑一遍，**断言集合相同、没有例外名单**：面板在窄屏也是文档流里的一块（§9.1），所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真。视口专属的补充断言按 `narrow_*` / `wide_*` 前缀分开存放 |
-| 产物 | 快照 JSON + **八十张**截图（2 引擎 × 2 视口 × 2 主题，每次运行十张）：`-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`-rooms.png` 连接中的房间列表（卡片报「主播名 · 直播间名」，用户 #17）、`-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-final.png` 结束时。命名 = `danmubox-ui[-narrow]-<theme>-<场景>.png`（如 `danmubox-ui-dark-follow.png`、`danmubox-ui-narrow-light-follow.png`）——**主题后缀是必须的**，否则深浅两遍互相覆盖、验收矩阵里只剩一套图。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
+| 产物 | 快照 JSON + **八十八张**截图（2 引擎 × 2 视口 × 2 主题，每次运行十一张）：`-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`-rooms.png` 连接中的房间列表（卡片报「主播名 · 直播间名」，用户 #17）、`-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-toast.png` 发送失败的浮动提示、`-final.png` 结束时。命名 = `danmubox-ui[-narrow]-<theme>-<场景>.png`（如 `danmubox-ui-dark-follow.png`、`danmubox-ui-narrow-light-follow.png`）——**主题后缀是必须的**，否则深浅两遍互相覆盖、验收矩阵里只剩一套图。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
 | 维护约定 | 场景代码整段是一个模板字符串：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩（踩过两次） |
 | 失败判读 | 退出码非 0 时打印不成立的布尔字段名（带 `wide:` / `narrow:` 前缀）；`EXPECTED_FALSE` 里列的是「本来就该是 false」的字段（如人气值不展示、系统通知默认关） |

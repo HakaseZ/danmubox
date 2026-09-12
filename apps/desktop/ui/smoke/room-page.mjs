@@ -907,10 +907,12 @@ const MOCK = (theme) => `(function () {
       document.body.scrollWidth <= document.body.clientWidth);
 
     // ---- 房间头（用户 2026-09-12 反馈 1）：**两排**（控件一排、标题另一排）、
-    //      返回 / 电池 / ⋯ 三枚**圆形控件**、直播状态点（绿 = 直播中、橙 = 未开播）、
-    //      不再有「已连接（缓冲 N）」文字与 verified 徽标。
+    //      返回 / ⋯ 两枚**圆形控件**、直播状态点（红 = 下播 / 绿 = 开播 / 橙 = 未连接）、
+    //      标题在状态点右侧同一排、顶栏两个数值、不再有「已连接（缓冲 N）」文字与 verified 徽标。
     var headerEl1 = byTestId("db-room-header");
-    var roundCtl = [byTestId("db-header-back"), byTestId("db-header-battery"), byTestId("db-header-more")];
+    // 圆形控件只剩**返回**与 **⋯**（用户 2026-09-13：「电池不要圆形，仅 3 点选项需要」）。
+    // 电池挪去输入区、发送按钮左侧，形状也不同（圆角矩形，见下面的 battery* 断言）。
+    var roundCtl = [byTestId("db-header-back"), byTestId("db-header-more")];
     var circleOf = function (el) {
       if (!el) return null;
       var box = rect(el);
@@ -937,8 +939,19 @@ const MOCK = (theme) => `(function () {
       document.querySelectorAll('[data-testid*="verified"], [class*="verified"], [class*="Verified"]').length === 0;
     var barBox = rect(byTestId("db-room-header-bar"));
     var titleBox = rect(byTestId("db-room-title"));
-    out.headerTitleOwnRow = !!titleBox && !!barBox &&
-      titleBox.top >= barBox.bottom - 0.5 && titleBox.left <= barBox.left + 0.5;
+    var dotBox0 = rect(byTestId("db-live-dot"));
+    // 标题回到**状态点右侧、同一排**（用户 2026-09-13 第 3 条的纠正：上一版「标题另起一排」理解错了）。
+    // 判据：① 标题左边缘在状态点右边缘之右；② 两者的竖直中心对齐（同一排）；
+    // ③ 标题整个落在头部那一排的盒子里（没有掉到第二排）。
+    out.headerTitleWithDot = !!titleBox && !!dotBox0 && !!barBox &&
+      titleBox.left >= dotBox0.right - 0.5 &&
+      Math.abs((titleBox.top + titleBox.height / 2) - (dotBox0.top + dotBox0.height / 2)) <= 3 &&
+      titleBox.top >= barBox.top - 0.5 && titleBox.bottom <= barBox.bottom + 0.5;
+    // 顶栏腾出来的位置给**两个数值**：当前在线 / 看过（用户 2026-09-13）；电池**不在**顶栏。
+    var headerText = headerEl1.innerText;
+    out.headerHasBothStats = headerText.indexOf("在线") >= 0 && headerText.indexOf("看过") >= 0;
+    out.headerNoBattery = !headerEl1.querySelector('[data-testid="db-battery"]') &&
+      headerText.indexOf("电池") < 0 && headerText.indexOf("150") < 0;
     // 直播状态点：颜色必须等于令牌值，且**随 live_status 变**（发一条 room 事件翻成未开播再翻回来）
     var cssColorOf = function (name) {
       var probe = document.createElement("span");
@@ -954,24 +967,138 @@ const MOCK = (theme) => `(function () {
       var dot = byTestId("db-live-dot");
       return dot ? getComputedStyle(dot).backgroundColor : null;
     };
-    out.liveDotTokensDistinct = liveOnColor !== liveOffColor;
-    // 绿 = 直播中、橙 = 未开播：夹具里的 live_status 是多少就按哪个色验（不写死 1 ——
-    // 真实载荷是轮播（live_status = 2），它不是「直播中」，落到橙色那一档）。
+    var liveIdleColor = cssColorOf("--live-idle");
+    // 三态口径（用户 2026-09-13）：**红 = 下播 / 绿 = 开播 / 橙 = 未连接**，三条色值互不相同
+    out.liveDotTokensDistinct = liveOnColor !== liveOffColor &&
+      liveOffColor !== liveIdleColor && liveOnColor !== liveIdleColor;
+    // 夹具里的 live_status 是多少就按哪个色验（不写死 1 —— 真实载荷是轮播（live_status = 2），
+    // 它不是「开播」，落到红那一档）。
     var liveIsOn = fixtureRoom.live_status === 1;
     var liveExpectedColor = liveIsOn ? liveOnColor : liveOffColor;
-    var liveOtherStatus = liveIsOn ? 0 : 1;
-    var liveOtherColor = liveIsOn ? liveOffColor : liveOnColor;
-    out.liveDotMatchesStatus = dotColor() === liveExpectedColor;
-    // 然后**把状态翻过去**再量一次：颜色必须跟着 live_status 变（这才是「随它变」的可验形式）
-    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: liveOtherStatus });
+    out.liveDotMatchesStatus = dotColor() === liveExpectedColor &&
+      byTestId("db-live-dot-box").getAttribute("data-state") === (liveIsOn ? "on" : "off");
+    // ① 上游把 live_status 翻过去 → 颜色跟着变（这才是「随它变」的可验形式）
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: liveIsOn ? 0 : 1 });
     await sleep(350);
     var toggledDot = byTestId("db-live-dot");
-    out.liveDotFollowsStatus = dotColor() === liveOtherColor && !!toggledDot &&
-      toggledDot.getAttribute("data-live") === String(liveOtherStatus);
+    out.liveDotFollowsStatus = dotColor() === (liveIsOn ? liveOffColor : liveOnColor) && !!toggledDot &&
+      byTestId("db-live-dot-box").getAttribute("data-state") === (liveIsOn ? "off" : "on");
+    // ② 连接态掉线 → **未连接**（橙），与在不在播无关（这一档的来源是「danmubox://status」，
+    //    与房间标签页上的圆点同源）
+    window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "disconnected", detail: "" });
+    await sleep(350);
+    out.liveDotIdleWhenDisconnected = dotColor() === liveIdleColor &&
+      byTestId("db-live-dot-box").getAttribute("data-state") === "idle";
+    // ③ 连回来 → 回到上游那一档
+    window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "connected", detail: "" });
     window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: fixtureRoom.live_status });
     await sleep(350);
     out.liveDotRestored = dotColor() === liveExpectedColor && !!byTestId("db-live-dot") &&
-      byTestId("db-live-dot").getAttribute("data-live") === String(fixtureRoom.live_status);
+      byTestId("db-live-dot-box").getAttribute("data-live") === String(fixtureRoom.live_status) &&
+      byTestId("db-live-dot-box").getAttribute("data-state") === (liveIsOn ? "on" : "off");
+    // ---- 状态点**缩小一档**（用户 2026-09-13 追加：「开播状态标稍微缩小一点」）。
+    //      两层：看得见的那颗点（db-live-dot，--live-dot = 10px）画在外壳（db-live-dot-box，
+    //      仍是旧的 --sp-3 12px）里面；悬停 / 热区**不跟着缩**（用户明确要求「别让可点面积变小」）。
+    //      两个数都记进快照：改的是**数字**（12 → 10），不是删断言。
+    var liveDotEl = byTestId("db-live-dot");
+    var liveDotBoxEl = byTestId("db-live-dot-box");
+    var liveDotBox = rect(liveDotEl);
+    var cssLengthOf = function (name) {
+      var probe = document.createElement("span");
+      probe.style.display = "block";
+      probe.style.width = "var(" + name + ")";
+      document.body.appendChild(probe);
+      var value = parseFloat(getComputedStyle(probe).width);
+      probe.parentNode.removeChild(probe);
+      return value;
+    };
+    out.liveDotVisualPx = liveDotBox ? Math.round(liveDotBox.width * 10) / 10 : null;
+    out.liveDotHitPx = liveDotBoxEl ? Math.round(rect(liveDotBoxEl).width * 10) / 10 : null;
+    // 看得见的那颗点 = --live-dot（10px）；热区 / 悬停面（外壳）仍是改前的 12px，没跟着缩
+    out.liveDotVisualIsToken = !!liveDotBox &&
+      Math.abs(liveDotBox.width - cssLengthOf("--live-dot")) < 0.6;
+    out.liveDotShrunk = !!liveDotBox && !!liveDotBoxEl && liveDotBox.width < 12 &&
+      rect(liveDotBoxEl).width > liveDotBox.width &&
+      Math.abs(rect(liveDotBoxEl).width - 12) < 0.6;
+    // 圆点仍是**正圆**（圆角 = 半径）
+    out.liveDotIsCircle = !!liveDotEl &&
+      Math.abs(liveDotEl.getBoundingClientRect().width -
+        liveDotEl.getBoundingClientRect().height) < 0.6 &&
+      (parseFloat(getComputedStyle(liveDotEl).borderTopLeftRadius) || 0) >=
+        liveDotEl.getBoundingClientRect().width / 2 - 0.6;
+    // ---- 标题放不下就**循环滚动**（用户 2026-09-13 第 3 条）。判据不靠「看起来在动」：
+    //      「data-scroll」由「一份文字的宽度 > 可视宽度」量出来，动画挂在轨道上。
+    //      三种标题各量一次（超长 / 短 / 夹具原名），另外量「滚动不许引起布局跳动」。
+    var trackScrolling = function () {
+      var trackEl = byTestId("db-title-track");
+      return !!trackEl && trackEl.getAttribute("data-scroll") === "true" &&
+        getComputedStyle(trackEl).animationName !== "none";
+    };
+    var longTitle = new Array(40).join("很长的直播间标题");
+    var headerBoxBeforeScroll = rect(byTestId("db-room-header"));
+    var titleBoxBeforeScroll = rect(byTestId("db-room-title"));
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, title: longTitle });
+    await sleep(400);
+    // 「放不下」是**量出来的**（一份文字的宽度 vs 可视宽度），不是一个开关：把两个数都记进快照
+    var titleOverflowMeasured = function () {
+      var copyEl = byTestId("db-title-copy");
+      var viewEl = byTestId("db-room-title");
+      return !!copyEl && !!viewEl && copyEl.offsetWidth > viewEl.clientWidth + 0.5;
+    };
+    out.titleMarqueeOnOverflow = trackScrolling() && titleOverflowMeasured();
+    out.titleOverflowPx = (function () {
+      var copyEl = byTestId("db-title-copy");
+      var viewEl = byTestId("db-room-title");
+      return copyEl && viewEl ? Math.round((copyEl.offsetWidth - viewEl.clientWidth) * 10) / 10 : null;
+    })();
+    // 轨道滚起来之后布局**一点都不许动**：头部 / 标题的盒子与滚动前逐项相同
+    var headerBoxAfterScroll = rect(byTestId("db-room-header"));
+    var titleBoxAfterScroll = rect(byTestId("db-room-title"));
+    out.titleMarqueeNoLayoutJump = !!headerBoxAfterScroll && !!titleBoxAfterScroll &&
+      Math.abs(headerBoxAfterScroll.height - headerBoxBeforeScroll.height) < 0.6 &&
+      Math.abs(titleBoxAfterScroll.left - titleBoxBeforeScroll.left) < 0.6 &&
+      Math.abs(titleBoxAfterScroll.top - titleBoxBeforeScroll.top) < 0.6 &&
+      Math.abs(titleBoxAfterScroll.width - titleBoxBeforeScroll.width) < 0.6;
+    // 标题仍与状态点同一排（滚动没有把它挤走）。**比中心不比顶边**：标题是整行文本盒
+    // （行高 ~22px）、状态点只有 10px，顶边天然差半个行高，那不是「不同排」。
+    var dotBoxAfterScroll = rect(byTestId("db-live-dot"));
+    out.titleRowGapPx = titleBoxAfterScroll && dotBoxAfterScroll
+      ? Math.round((titleBoxAfterScroll.left - dotBoxAfterScroll.right) * 10) / 10 : null;
+    out.titleMarqueeKeepsRow = !!titleBoxAfterScroll && !!dotBoxAfterScroll &&
+      titleBoxAfterScroll.left >= dotBoxAfterScroll.right - 0.5 &&
+      Math.abs((titleBoxAfterScroll.top + titleBoxAfterScroll.height / 2) -
+        (dotBoxAfterScroll.top + dotBoxAfterScroll.height / 2)) <= 3;
+    // 短标题**不滚**（不是「一律滚」）
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, title: "短" });
+    await sleep(400);
+    out.titleShortNoMarquee = !trackScrolling() && !titleOverflowMeasured() &&
+      byTestId("db-title-track").getAttribute("data-scroll") === "false";
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, title: fixtureRoom.title });
+    await sleep(400);
+    // 标题在 DOM 里有两份拷贝（循环滚动要的），因此按**属性**而不是 innerText 认它。
+    // 这里不判滚不滚：宽屏下夹具标题放得下、窄屏（可视宽 ~83px）下放不下，两边本来就不同档
+    out.titleRestored = byTestId("db-room-title").getAttribute("title") === fixtureRoom.title;
+
+    // ---- 电池：**发送按钮左侧**、**不是圆形**（用户 2026-09-13：「电池不要圆形，仅 3 点选项需要」+
+    //      「电池数量挪到底部发送按钮左侧」）。
+    var batteryEl = byTestId("db-battery");
+    var batteryBox = rect(batteryEl);
+    var batteryRadius = batteryEl
+      ? parseFloat(getComputedStyle(batteryEl).borderTopLeftRadius) || 0 : 0;
+    var sendButtonEl = [].slice.call(byTestId("db-composer-tools").querySelectorAll("button"))
+      .filter(function (b) { return b.innerText.trim() === "发送"; })[0];
+    var sendBox = rect(sendButtonEl);
+    out.batteryInComposer = !!batteryEl && !!byTestId("db-composer-tools") &&
+      byTestId("db-composer-tools").contains(batteryEl);
+    out.batteryLeftOfSend = !!batteryBox && !!sendBox && batteryBox.right <= sendBox.left + 1;
+    out.batteryRadiusPx = Math.round(batteryRadius * 10) / 10;
+    out.batteryBoxPx = batteryBox
+      ? [Math.round(batteryBox.width * 10) / 10, Math.round(batteryBox.height * 10) / 10] : null;
+    // 「不是圆形」= 圆角**不**等于半边长（正圆与胶囊都会等于半短边，都算圆）
+    out.batteryNotRound = !!batteryBox && batteryRadius > 0 &&
+      batteryRadius < Math.min(batteryBox.width, batteryBox.height) / 2 - 1;
+    out.batteryText = batteryEl ? batteryEl.innerText.trim() : null;
+
     // 输入区：输入框占满宽度；工具行放不下就换行，不许挤成小方块
     var composerEl0 = document.querySelector("textarea").parentElement;
     var toolsEl0 = byTestId("db-composer-tools");
@@ -1861,6 +1988,54 @@ const MOCK = (theme) => `(function () {
     // 面板在**两个视口**都是文档流里的一块（不是浮层）——「只挤列表、不遮最新一条」
     // 由上面的 layoutOnlyChatShrank / layoutNewestNotCovered 按同一口径断言。
     out.panelInline = getComputedStyle(panel).position !== "fixed";
+
+    // ---- 切 tab **不许**把面板关掉（用户 2026-09-13 报的真 bug：「展开表情包面板后切换 tab，
+    //      面板就自动关闭了」）。这是本批新增的「点输入区外面收起面板」监听把它自己踩了：
+    //      面板与输入区是**兄弟**节点，只判输入区就会把面板内部的按下当成外面。
+    //      复现必须补一次真实的「pointerdown」—— 「.click()」只发 click 事件、绕过那条监听，
+    //      这正是它当初没被测出来的原因（真鼠标点 tab 一定先有 pointerdown）。
+    var pressLike = function (el) {
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      el.click();
+    };
+    var pressedOnly = function (el) {
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    };
+    var selectedKind = function () {
+      var hit = [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-tab"]'))
+        .filter(function (b) { return b.getAttribute("aria-selected") === "true"; })[0];
+      return hit ? hit.getAttribute("data-kind") : null;
+    };
+    // ① 切 tab：面板还在，且选中的那一组确实换了（两条一起判，缺一条都可能是假通过）
+    var tabBefore = selectedKind();
+    var tabTarget = tabOf(tabBefore === "room" ? "medal" : "room");
+    var targetKind = tabTarget.getAttribute("data-kind");
+    pressLike(tabTarget);
+    await sleep(350);
+    out.panelSurvivesTabSwitch = !!byTestId("db-panel") &&
+      !!document.getElementById("db-emote-panel") &&
+      selectedKind() === targetKind && targetKind !== tabBefore;
+    // ② 面板内部**其它**按下（滚 tab 轨道、按表情格）也不关
+    pressedOnly(byTestId("db-emote-tabs"));
+    var emotePanelEl = document.getElementById("db-emote-panel");
+    var firstCell = emotePanelEl
+      ? emotePanelEl.querySelector('[data-testid="db-emote-item"]') : null;
+    if (firstCell) pressedOnly(firstCell);
+    await sleep(250);
+    out.panelStaysOnInsidePress = !!byTestId("db-panel") && selectedKind() === targetKind;
+    // ③ 点输入区**外面**（弹幕列表）仍然关 —— 收窄的是「哪里算外面」，不是「还能不能关」
+    pressedOnly(byTestId("db-chat-scroll"));
+    await sleep(350);
+    out.panelClosesOnChatPress = !byTestId("db-panel");
+    clickTool("表情");
+    await sleep(450);
+    out.panelReopensAfterOutsidePress = !!byTestId("db-panel") &&
+      selectedKind() === targetKind;
+    // 复原到「通用」组：后面的表情格度量与它前面的口径一致
+    if (tabOf("common")) pressLike(tabOf("common"));
+    await sleep(300);
+    out.panelBackOnCommon = selectedKind() === "common";
+
     clickTool("表情");
     await sleep(300);
 

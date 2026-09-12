@@ -42,8 +42,11 @@
   /* 直播状态点（房间头第一排那枚小圆点）：**绿 = 直播中、橙 = 未开播**（用户 2026-09-12）。
      它表示的是**直播状态**（`room.live_status`），不是连接状态 —— 连接状态只在房间标签页上
      （`.dot*` 一族）与 `⋯` 菜单里，房间头不再写「已连接」文字（用户 2026-09-12）。 */
-  --live-on: var(--ok);
-  --live-off: #e9a038; /* B+：橙（对 --bg 8.5:1 ✓） */
+  /* 直播状态点三态（用户 2026-09-13 的口径）：绿 = 开播 / **红 = 下播** / 橙 = 未连接。
+     三条都引用语义色槽，浅色下跟着槽一起换值。 */
+  --live-on: var(--ok); /* 绿：开播 */
+  --live-off: var(--danger); /* 红：下播（轮播归此档——它不是开播） */
+  --live-idle: var(--warn); /* 橙：未连接（本房间的连接态不是 connected） */
   /* 次级文字的两档（docs/ui.md §4.1 的弱化口径） */
   --fg-muted: #8696a0; /* B */
   --fg-subtle: #6a7e8a; /* B+：三级弱化，只用于非关键微文案（对 --bg ≈ 4.6:1，勉强过线） */
@@ -128,6 +131,8 @@
 
   /* 触屏与弹出层 */
   --tap-min: 40px; /* 窄屏 sheet / 对话框里的热区下限（触屏） */
+  --live-dot: 10px; /* 直播状态点的**视觉**直径（元素盒仍是 --sp-3，热区不跟着缩） */
+  --title-gap: 2.5em; /* 循环滚动的标题：两份拷贝之间的间隙（跟着标题字号走） */
   /* 房间头顶栏：**半透明**的一层 + 自上而下的一道高光（参考截图的层次做法）。
      值只从本主题已有的槽里混出来 —— 深色下就是「半透明深色」，浅色下自动是半透明白面，
      组件规则一行不用改；文字仍是 --fg，压在这层上 ≥ 15:1 ✓。 */
@@ -165,8 +170,9 @@
   --accent: #00a884; /* B：只做填充与边（对白面 3.0:1 压线，对米色 2.5:1） */
   --accent-text: #07705a; /* B+：浅色下唯一可做文字的绿（米色 5.1:1 / 白面 5.8:1 ✓） */
   --ok: #0a7c5f; /* B+：#25d366 当文字在米色上只有 1.8:1 ✗（品牌绿只做填充） */
-  --live-on: #0a7c5f; /* B+：浅色下的「直播中」绿（对白面 4.5:1 ✓） */
-  --live-off: #c2410c; /* B+：浅色下的「未开播」橙（对白面 4.9:1 ✓） */
+  --live-on: #0a7c5f; /* B+：浅色下的「开播」绿（对白面 4.5:1 ✓） */
+  --live-off: var(--danger); /* 浅色下的「下播」红（= --danger #c4292f，5.0:1 ✓） */
+  --live-idle: #c2410c; /* B+：浅色下的「未连接」橙（对白面 4.9:1 ✓） */
   --warn: #8a5200; /* B+（对米色 5.7:1 ✓） */
   --danger: #c4292f; /* B+（对米色 5.0:1 ✓） */
   --on-accent: #0b141a; /* B+：绿底深字，不做白字（白字只有 3.0:1） */
@@ -480,14 +486,12 @@
 
 /* ---------------------------------------------------------------- 房间页 */
 
-/* 房间头 = **两排**（用户 2026-09-12 反馈 1）：
-   第一排只有控件与状态点（返回 / 电池 / ⋯ 三枚圆形按钮，同一个 --ctl-round），第二排是直播间标题。
-   标题不再与按钮挤一行，窄屏下也不会被压成一条缝；顶栏是半透明的一层 + 一道自上而下的高光
-   （参考截图的做法），深浅两套都从本主题的槽混出来，组件规则一行不用改。 */
+/* 房间头 = **一排**（用户 2026-09-13 第 3 条的纠正：标题回到状态点**右侧**，不另起一排）：
+   ◀返回 · ●状态点 · 直播间标题（放不下就循环滚动） ······ 在线 · 看过 · ⋯。
+   电池不在这排（在输入区、发送按钮左侧），这排腾给「当前在线 / 看过」两个数值。
+   顶栏是半透明的一层 + 一道自上而下的高光（参考截图的做法），深浅两套都从本主题的槽混出来，
+   组件规则一行不用改。 */
 .roomHeader {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
   background-color: var(--header-bg);
@@ -502,7 +506,8 @@
   min-width: 0;
 }
 
-/* 圆形控件：返回 / 电池 / ⋯ **同形状同大小**（几何由 --ctl-round 一处给出）。
+/* 圆形控件：返回 / ⋯（几何由 --ctl-round 一处给出）。**电池不在此列**——
+   用户 2026-09-13：「电池不要圆形，仅 3 点选项需要」，它是输入区里的一枚圆角矩形（.battery）。
    `--r-full` 作用在正方盒上就是正圆（圆角 = 半径），不需要各处再写 50%。 */
 .ctlRound {
   flex: none;
@@ -528,33 +533,95 @@
   height: 60%;
 }
 
-/* 直播状态点：绿 = 直播中、橙 = 未开播（用户 2026-09-12 的「靠小圆点区分」）。
-   比标签页上的连接点（.dot，--sp-2）大一号并带一圈同色柔光，一眼能看出在播与否。 */
-.liveDot {
+/* 直播状态点（用户 2026-09-13 的三态口径）：**红 = 下播 / 绿 = 开播 / 橙 = 未连接**。
+   两层：外壳 = **改前的元素盒尺寸**（--sp-3 12px，热区与悬停面），里面那颗点 = --live-dot。
+   为什么要两层：用户 2026-09-13 追加「开播状态标稍微缩小一点」，同时要求**热区不许跟着缩**。
+   拿 padding 撑热区不行 —— `background` 会铺满 padding 区，圆角一夹就成一颗更大的圆，
+   「点」与「热区」就分不开了；两层各自独立，看得见的那颗点（12 → 10px）仍比标签页上的
+   连接点（.dot，--sp-2）大一号。颜色挂在内层（所以「这颗点是什么颜色」在 DOM 上读得到）。 */
+.liveDotBox {
   flex: none;
   width: var(--sp-3);
   height: var(--sp-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 看得见的那颗点：直径 --live-dot（12 → 10px）。颜色挂在它自己身上（不是外层壳），
+   所以「这颗点是什么颜色」在 DOM 上仍然读得到（冒烟读 db-live-dot 的 background-color）。 */
+.liveDot {
+  width: var(--live-dot);
+  height: var(--live-dot);
   border-radius: var(--r-full);
-  display: inline-block;
 }
 
 .liveOn {
-  background: var(--live-on);
+  background-color: var(--live-on);
+}
+
+/* 开播才带一圈同色柔光（柔光跟着点一起缩，视觉占位 18 → 16px） */
+.liveOn {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--live-on) 22%, transparent);
 }
 
 .liveOff {
-  background: var(--live-off);
+  background-color: var(--live-off);
 }
 
+.liveIdle {
+  background-color: var(--live-idle);
+}
+
+/* 标题：紧跟状态点、与它**同一排**（用户 2026-09-13 第 3 条的纠正）。
+   `flex: 1 1 0`（注意是 **0** 的基准，不是 auto）+ `min-width: 0` 是「放不下就交给内部滚动」的
+   前提：它的 flex 基准是 0，因此既不会把「在线 / 看过 / ⋯」挤到第二排，也不会把容器撑出横向
+   滚动；反过来，只要基准不是 0，窄屏第一次换行就会把标题整条甩到下一排（与「同一排」矛盾）。 */
 .roomHeader .title {
-  width: 100%;
+  flex: 1 1 0;
   min-width: 0;
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   font-size: var(--fs-5);
   font-weight: 600;
+}
+
+/* 循环滚动的轨道 = 两份**完全相同**的拷贝首尾相接，动画走 -50%（正好一份），
+   循环处因此没有断口；间隙算在每一份自己的右内边距里，一起参与循环。
+   放得下（data-scroll="false"）时一动不动 —— 短标题不滚动。 */
+.titleTrack {
+  display: flex;
+  width: max-content;
+  white-space: nowrap;
+}
+
+.titleTrack[data-scroll="true"] {
+  animation: titleMarquee linear infinite;
+}
+
+.titleItem {
+  flex: none;
+  padding-right: var(--title-gap);
+}
+
+.titleText {
+  display: inline-block;
+}
+
+@keyframes titleMarquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* 「循环滚动」也得让位给**动效偏好**：系统开了「减少动态效果」就停住（文字按第一份的开头
+   显示，完整标题仍在 title 属性里）。 */
+@media (prefers-reduced-motion: reduce) {
+  .titleTrack[data-scroll="true"] {
+    animation: none;
+  }
 }
 
 .dot {
@@ -1049,6 +1116,40 @@
 
 .composerSpacer {
   flex: 1;
+}
+
+/* 发送簇：电池 + 发送按钮同进同退（窄屏换行时不许被拆开） */
+.sendCluster {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* 电池余额：**发送按钮左侧**的一枚控件（图标 + 数值），用户 2026-09-13：
+   「电池不要圆形，仅 3 点选项需要」。返回与 ⋯ 仍是 --r-full 正圆，电池是圆角矩形
+   （--r-2），一眼分得出「一个数值」与「两个按钮」。字号随工具行（--fs-2）。 */
+.battery {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-2);
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.battery:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+.batteryIcon {
+  width: 1.1em;
+  height: 1.1em;
 }
 
 /* 活动态是**色块**不是描边（WhatsApp 的口径）：洗色底 + 强调色文字。
@@ -1782,8 +1883,9 @@
   /* 窄屏**不再**为正文让宽度：正文已经另起一行、拿到整行宽（用户 2026-09-13）。
      旧的 `--identity-max-w: 10em` 是两列排法的补丁，随网格一起删掉。 */
 
-  /* 头部：在线 / 看过 / 电池不缩字号、不隐字段，改为换行；标题仍可截断 */
-  .roomHeader {
+  /* 头部：在线 / 看过不缩字号、不隐字段，改为换行；标题（flex 基准 0）**不会**被甩到第二排，
+     它永远与状态点同一排，放不下就在自己的可视区里循环滚动 */
+  .headerBar {
     flex-wrap: wrap;
     row-gap: var(--sp-1);
   }

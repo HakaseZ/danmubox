@@ -119,8 +119,10 @@ export function Composer({
     // `sendSeq === 0` = 还没发过东西（可能是进房间带进来的旧结果）：不弹。
     if (sendSeq === 0) return;
     if (lastOutcome === undefined || lastOutcome === "ok") return;
+    // 文案不再加「发送失败：」前缀：`SEND_OUTCOME_TEXT` 本身已经把它说全了
+    // （`failed` 就是「发送失败」），前缀会拼成「发送失败：发送失败 · …」。
     setToast(
-      `发送失败：${SEND_OUTCOME_TEXT[lastOutcome]}${lastDetail ? ` · ${lastDetail}` : ""}`,
+      `${SEND_OUTCOME_TEXT[lastOutcome]}${lastDetail ? ` · ${lastDetail}` : ""}`,
     );
     // 渐隐是 CSS 动画（.toast），这里只负责在动画走完之后把元素摘掉 ——
     // 否则它会「透明地占着一块地方」，那正是用户不要的形态。

@@ -1726,7 +1726,8 @@
 .toast {
   pointer-events: none;
   align-self: center;
-  margin-bottom: var(--sp-2);
+  /* 上下各留一道间距：它紧挨着弹幕列表的最后一行，贴上会被读成「盖住了那条弹幕」 */
+  margin-block: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   font-size: var(--fs-2);
   border: 1px solid var(--border);

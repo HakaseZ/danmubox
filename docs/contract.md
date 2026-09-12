@@ -182,12 +182,18 @@ sessdata = ""
 | `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。存整份而非只存图片地址，是为了让界面能把它**再发出去** |
 | `reply_to_uid` | i64 | 被回复者的 uid；`0` 表示这条不是回复（上游把它塞在 `info[0][15].extra` 这个 JSON 字符串里，历史条目另有其路径） |
 | `reply_to_uname` | string | 被回复者昵称；非回复为空串 |
+| `reply_type_enum` | i64 | 上游回复类型枚举（实时 `extra.reply_type_enum`，历史 `reply.reply_type_enum`）。官方枚举 `{0: NO_REPLY, 1: NORMAL_REPLY, 2: MATCH_REPLY}`，但实测只有 `0`/`1` 出现、且与 `reply_mid` 是否非 0 完全同构——**不得**用它区分「纯 @」与「回复」（`protocol.md` A40） |
+| `show_reply` | bool | 上游 `show_reply`。实测在**所有**样本（含毫无回复关系的）里都是 `true`，不是判别式，仅供渲染与校准 |
+| `reply_uname_color` | string | 被 @ 者名字的颜色（实测 `#FB7299`）；无关系时为空串 |
 | `face` | string | 发言者头像 URL（`info[0][15].user.base.face`，历史条目同层）；取不到为空串，界面自行降级 |
 | `medal_color_start` | string | 粉丝牌起始色（上游 `user.medal.v2_medal_color_start`），带 alpha 的 CSS 十六进制串（如 `#3FB4F699`）；无牌/缺失为空串 |
 | `medal_color_end` | string | 同上（`v2_medal_color_end`） |
 | `medal_color_border` | string | 同上（`v2_medal_color_border`） |
 | `medal_color_text` | string | 同上（`v2_medal_color_text`）。**空串不是颜色**，界面必须自备兜底色，不得拿黑色顶替 |
 | `upstream_id` | string | **上游弹幕标识，举报必需**（来源待实测，见 `protocol.md` 附录） |
+
+
+> **收包侧区分不了「纯 @」与「回复」（2026-09-12 实测结论）**：收包载荷里**没有任何指回被回复弹幕的 id** —— `extra` 的 45 个键枚举下来，发送侧用的 `replay_dmid` 在收包侧**不存在**。所以「这条回复了哪条弹幕」在客户端**无法恢复**；界面一律渲染 `回复 @昵称`（官方前端同样不展示被回复的那条）。**能准确区分的只有我们自己发出的那条**：发送时 `reply.dmid` 非空 = 回复某条、为空 = 纯 @。
 
 > **徽标（REQUIREMENTS.md 需求）**：主播 = `uid == Room.anchor_uid` 派生；房管 = `Message.is_admin`；大航海 = `Message.guard_level`（`1` 总督 / `2` 提督 / `3` 舰长）。`is_anchor` 不设独立字段——能推导就不存。
 

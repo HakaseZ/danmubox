@@ -603,6 +603,15 @@ const MOCK = `(function () {
     var after = rect(scroller);
     var newestAfter = rows()[rows().length - 1];
     out.layoutPanelShown = !!panel;
+    // 面板内部的左右边距只有一条：面板头（搜索框所在行）、每个分区标题与表情格容器
+    // 都是面板的直接子元素，左边缘必须完全一致（不然看着就是「有的顶格、有的缩进」）
+    var panelChildLefts = [].slice.call(panel.children).map(function (el) {
+      return Math.round(el.getBoundingClientRect().left * 10) / 10;
+    });
+    out.panelChildLefts = panelChildLefts;
+    out.panelContentAligned = panelChildLefts.length > 0 && panelChildLefts.every(function (x) {
+      return Math.abs(x - panelChildLefts[0]) < 0.6;
+    });
     out.layoutPanelAboveComposer = !!panel && !!document.querySelector("textarea") &&
       (panel.compareDocumentPosition(document.querySelector("textarea")) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     out.layoutChatShrankPx = Math.round(before.height - after.height);
@@ -629,27 +638,35 @@ const MOCK = `(function () {
     // 面板还开着就先把快照写进去、并多停 1.5s：跑脚本的进程据此抓一张「面板已展开」的截图
     snap();
     await sleep(1500);
-    if (!NARROW) {
-      // 宽屏口径不变：面板仍是文档流里的一块（不是浮层），展开只挤弹幕列表
-      out.wide_panelInline = getComputedStyle(panel).position !== "fixed";
-    }
+    // 面板在**两个视口**都是文档流里的一块（不是浮层）——「只挤列表、不遮最新一条」
+    // 由上面的 layoutOnlyChatShrank / layoutNewestNotCovered 按同一口径断言。
+    out.panelInline = getComputedStyle(panel).position !== "fixed";
     clickTool("表情");
     await sleep(200);
 
-    // ---- 面板形态（窄屏）：自底部升起的 sheet、内容可滚动、有明确的关闭入口、热区 ≥ 40px
+    // ---- 面板形态（窄屏）：限高（视口份额）+ 内容超出时**面板内部**滚动 + 关闭入口 + 热区 ≥ 40px，
+    //      同时列表仍要剩下可观的高度（不遮最新一条，也不把列表挤成一条缝）
     if (NARROW) {
       clickTool("表情");
       await sleep(400);
-      var sheet = byTestId("db-panel");
-      var sheetRect = rect(sheet);
-      put("panelIsBottomSheet", !!sheet &&
-        getComputedStyle(sheet).position === "fixed" &&
-        Math.abs(sheetRect.bottom - window.innerHeight) < 2 &&
-        Math.abs(sheetRect.width - document.documentElement.clientWidth) < 2);
-      var sheetHotspots = sheet ? shortHotspots(sheet) : ["没有面板"];
-      put("panelHotspotsBad", sheetHotspots);
-      put("panelHotspotsAtLeast40", !!sheet && sheetHotspots.length === 0);
-      put("panelScrollable", !!sheet && getComputedStyle(sheet).overflowY === "auto");
+      var narrowPanel = byTestId("db-panel");
+      var narrowPanelRect = rect(narrowPanel);
+      var narrowScrollerRect = rect(byTestId("db-chat-scroll"));
+      var narrowNewest = rows()[rows().length - 1];
+      put("panelInFlow", getComputedStyle(narrowPanel).position !== "fixed");
+      put("panelHeightPx", Math.round(narrowPanelRect.height));
+      put("panelCappedToViewportShare", narrowPanelRect.height <= window.innerHeight * 0.5 + 1);
+      put("panelScrollsInternally", getComputedStyle(narrowPanel).overflowY === "auto");
+      put("panelListStillTall", narrowScrollerRect.height >= 240);
+      put("panelListHeightPx", Math.round(narrowScrollerRect.height));
+      put("panelRowHeightPx", rows().length > 1
+        ? Math.round((rect(rows()[1]).top - rect(rows()[0]).top) * 10) / 10
+        : null);
+      put("panelNewestNotCovered", !!narrowNewest &&
+        rect(narrowNewest).bottom <= narrowPanelRect.top + 1);
+      var narrowHotspots = shortHotspots(narrowPanel);
+      put("panelHotspotsBad", narrowHotspots);
+      put("panelHotspotsAtLeast40", narrowHotspots.length === 0);
       put("panelClosable", !!byTestId("db-panel-close"));
       var panelCloseBtn = byTestId("db-panel-close");
       if (panelCloseBtn) {
@@ -658,6 +675,34 @@ const MOCK = `(function () {
       }
       put("panelCloseWorks", !byTestId("db-panel"));
     }
+
+    // ---- 面板展开会改可视高度：**正在看的位置不能被弹走**
+    // 先把列表停在中间（此时不在底部 = 非跟随模式），再展开面板，量同一个行在视口里的
+    // 位置变化。跟随模式下重新贴底是**有意**的（见 MessageList 的 ResizeObserver），
+    // 所以这里量的是「用户自己滚上去看历史」时的行为。
+    var stableScroll = byTestId("db-chat-scroll");
+    stableScroll.scrollTop = Math.round((stableScroll.scrollHeight - stableScroll.clientHeight) * 0.55);
+    await sleep(300);
+    out.layoutPausedBeforePanel = stableScroll.scrollHeight - stableScroll.scrollTop - stableScroll.clientHeight > 8;
+    var anchorRow = rows()[4];
+    var anchorTopBefore = anchorRow ? Math.round(rect(anchorRow).top * 10) / 10 : null;
+    clickTool("表情");
+    await sleep(600);
+    var anchorTopAfter = anchorRow && anchorRow.isConnected
+      ? Math.round(rect(anchorRow).top * 10) / 10
+      : null;
+    out.layoutPanelScrollStablePx = anchorTopBefore !== null && anchorTopAfter !== null
+      ? Math.round((anchorTopAfter - anchorTopBefore) * 10) / 10
+      : null;
+    out.layoutPanelScrollStable = out.layoutPausedBeforePanel &&
+      out.layoutPanelScrollStablePx !== null && Math.abs(out.layoutPanelScrollStablePx) < 8;
+    clickTool("表情");
+    await sleep(200);
+    // 还原成「跟随最新」，后面的断言依赖它
+    stableScroll.scrollTop = stableScroll.scrollHeight;
+    await sleep(500);
+    out.layoutStabilityRestored =
+      stableScroll.scrollHeight - stableScroll.scrollTop - stableScroll.clientHeight < 8;
 
     // ---- emotes 主站「我的表情」：分组可见、选得到、发出去带的是唯一键（issue #8）
     out.emotesOwnedCalled = calls.indexOf("emotes_owned") >= 0;
@@ -910,13 +955,16 @@ const MOCK = `(function () {
       allByTestId("db-admin-blacklist-item").length,
       allByTestId("db-admin-keyword-item").length
     ];
-    // 窄屏：房管面板同样是自底部升起的 sheet，可滚动、有明确关闭入口、热区 ≥ 40px
+    // 窄屏：房管面板同样是文档流里的一块（只挤列表、不遮最新一条），限高 + 内部滚动 + 关闭入口 + 热区 ≥ 40px
     if (NARROW) {
-      var adminRect = rect(adminPanel);
-      put("adminPanelIsBottomSheet",
-        getComputedStyle(adminPanel).position === "fixed" &&
-        Math.abs(adminRect.bottom - window.innerHeight) < 2);
+      var adminPanelRect = rect(adminPanel);
+      var adminPanelNewest = rows()[rows().length - 1];
+      put("adminPanelInFlow", getComputedStyle(adminPanel).position !== "fixed");
       put("adminPanelScrollable", getComputedStyle(adminPanel).overflowY === "auto");
+      put("adminPanelHeightPx", Math.round(adminPanelRect.height));
+      put("adminPanelCappedToViewportShare", adminPanelRect.height <= window.innerHeight * 0.5 + 1);
+      put("adminPanelNewestNotCovered", !!adminPanelNewest &&
+        rect(adminPanelNewest).bottom <= adminPanelRect.top + 1);
       put("adminPanelClosable", !!byTestId("db-admin-close"));
       var adminHotspots = shortHotspots(adminPanel);
       put("adminPanelHotspotsBad", adminHotspots);
@@ -956,6 +1004,32 @@ const MOCK = `(function () {
     document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     await sleep(200);
     out.adminReadOnlyPanelStillOpen = !!byTestId("db-admin-panel");
+    snap();
+
+    // ---- 滚到顶部时第一条不被头部压住（头部是文档流里的一行，不是 sticky/fixed 浮层）。
+    // 放在最后量：改滚动位置会影响「跟随最新」，量完立刻还原。
+    var headerBox = rect(byTestId("db-room-header"));
+    var chatScroll = byTestId("db-chat-scroll");
+    var keptScrollTop = chatScroll.scrollTop;
+    chatScroll.scrollTop = 0;
+    await sleep(300);
+    var topRow = rows()[0];
+    var chatScrollBox = rect(chatScroll);
+    out.layoutHeaderOverlapPx = topRow
+      ? Math.round((chatScrollBox.top - rect(topRow).top) * 10) / 10
+      : null;
+    out.layoutHeaderAboveList = headerBox.bottom <= chatScrollBox.top + 1;
+    out.layoutTopRowNotCovered = !!topRow &&
+      rect(topRow).top >= chatScrollBox.top - 0.5;
+    out.layoutTopRowVisible = !!topRow &&
+      rect(topRow).top >= chatScrollBox.top - 0.5 &&
+      rect(topRow).bottom <= chatScrollBox.bottom + 1;
+    chatScroll.scrollTop = keptScrollTop;
+    await sleep(500);
+    // 还原的判据是「又回到贴底 / 跟随状态」，不是 scrollTop 逐位相等：
+    // 虚拟列表的高度估算落定后，可滚区间的最大值会差几像素，逐位比较是假失败。
+    out.layoutScrollRestored =
+      chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 8;
     snap();
 
     // ---- account 账号区一行身份 + 账号管理对话框（契约 §7 accounts_*）

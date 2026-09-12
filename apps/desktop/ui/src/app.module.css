@@ -92,9 +92,10 @@
   --shadow-sheet: 0 -8px 28px rgba(0, 0, 0, 0.5);
 
   /* 触屏与弹出层 */
-  --tap-min: 40px; /* 窄屏 sheet 里的热区下限（触屏） */
+  --tap-min: 40px; /* 窄屏 sheet / 对话框里的热区下限（触屏） */
   --panel-max-h: 260px; /* 宽屏面板在文档流里展开的最大高度 */
-  --sheet-max-h: min(80vh, 640px); /* 窄屏 sheet 的最大高度 */
+  --panel-max-h-narrow: 45vh; /* 窄屏面板的限高（视口份额）：844px 下 ≈ 380px，超出由面板内部滚动 */
+  --sheet-max-h: min(80vh, 640px); /* 窄屏账号对话框（模态）的最大高度 */
 
   color-scheme: dark;
 }
@@ -1397,24 +1398,17 @@
     row-gap: var(--sp-1);
   }
 
-  /* ---- 自底部升起的 sheet ---- */
+  /* ---- 弹出面板：**仍留在文档流里**（用户 2026-09-12 定案）----
+     与宽屏同一口径：面板向上展开只把弹幕列表顶上去，**不遮挡最新一条**。
+     窄屏只是把限高从固定 260px 换成视口的一个份额（45vh ≈ 844px 下的 380px）：
+     面板内容超出就在**面板内部**滚动，不去吃列表的空间（列表仍剩 1/3 上下）。 */
   .picker,
   .phrases,
   .recent,
   .filterPanel,
   .adminPanel {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 40;
-    max-height: var(--sheet-max-h);
-    overflow-y: auto;
-    border-top: 1px solid var(--border);
-    border-radius: var(--r-4) var(--r-4) 0 0;
-    box-shadow: var(--shadow-sheet);
+    max-height: var(--panel-max-h-narrow);
     padding: var(--sp-3);
-    padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
   }
 
   /* 账号对话框：同一个遮罩，只是把卡片挪到底部并让它占满宽度 */

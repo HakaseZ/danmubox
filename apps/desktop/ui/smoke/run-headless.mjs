@@ -23,15 +23,6 @@ const EXPECTED_FALSE = new Set([
   "step6_prefAutoHide",
 ]);
 
-/**
- * 窄屏不适用的宽屏口径。
- *
- * 宽屏下面板是**文档流里的一块**，展开只挤压弹幕列表、不遮挡最新一条（docs/ui.md §2.3）；
- * 窄屏下面板按需求改成**自底部升起的 sheet**（同文档 §9），这条口径自然不成立——
- * 它不是「窄屏下坏了」，而是窄屏不采用这套排布。跳过的是这两条，其余旧断言两边都跑。
- */
-const NARROW_SKIP = new Set(["layoutOnlyChatShrank", "layoutNewestNotCovered"]);
-
 /** 视口：宽屏在前（截图沿用既有文件名），窄屏的截图带 `-narrow` 前缀。 */
 const VIEWPORTS = [
   { name: "wide", width: 1440, height: 900 },
@@ -252,10 +243,8 @@ try {
 
   const failures = [];
   for (const { viewport, snapshot } of results) {
-    const skip = viewport === "narrow" ? NARROW_SKIP : new Set();
     for (const [key, value] of Object.entries(snapshot)) {
       if (typeof value !== "boolean") continue;
-      if (skip.has(key)) continue;
       if (value !== !EXPECTED_FALSE.has(key)) failures.push(`${viewport}:${key}`);
     }
   }
@@ -266,8 +255,13 @@ try {
     const total = results.reduce((sum, item) => sum + Object.keys(item.snapshot).length, 0);
     console.error(
       "\n两个视口全部断言成立（" +
-        results.map((item) => `${item.viewport} ${Object.keys(item.snapshot).length} 项`).join(" + ") +
-        ` = ${total} 项快照；窄屏跳过 ${NARROW_SKIP.size} 条宽屏专属口径）`,
+        results
+          .map(
+            (item) =>
+              `${item.viewport} ${Object.values(item.snapshot).filter((v) => typeof v === "boolean").length} 条布尔断言 / ${Object.keys(item.snapshot).length} 项快照`,
+          )
+          .join(" + ") +
+        ` = ${total} 项快照）`,
     );
   }
 } finally {

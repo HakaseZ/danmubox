@@ -871,7 +871,7 @@
 | 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是彩色底上的文字色，遮罩 `--overlay`，悬停洗色 `--hover-wash` |
 | 徽标底色 | `--gold`、`--neutral`、`--guard-1…3`、`--sc-1…5`、`--block-platform`、`--block-room`、`--badge-fg`、`--badge-lift`、`--badge-border` | 见 `:root` | 粉丝牌**不吃**这些：它的真彩色来自上游（§4.2），令牌只兜底 |
 | 阴影 / 遮罩 | `--shadow-menu`、`--shadow-dialog`、`--shadow-sheet`、`--overlay` | — | 菜单 / 对话框 / sheet / 遮罩各一处 |
-| 行与触屏的固定尺寸 | `--row-line`、`--avatar` = 0.9×行盒、`--badge-h` = `--avatar`、`--emote` = 1.1×行盒、`--time-col`、`--tap-min`、`--panel-max-h`、`--panel-max-h-narrow`、`--sheet-max-h` | — | 只有这些是「结构尺寸」；其余一次性尺寸（二维码 200px、菜单最小宽 150px 等）仍写在各自规则里，不硬凑进间距阶。`--panel-max-h-narrow` 用视口份额（45vh）而不是固定像素，窄屏才不会被面板吃掉整屏。**弹幕行的那四个是一组**：`--row-line` 是基准（正文行盒高，1.5em，声明在 `.row` 上并用 `@property` 注册成 `<length>`，这样它算成 px 后再往下继承，子元素各写各的字号也不会算错），头像 / 徽标 / 表情三个尺寸都从它按比例派生（§4.1） |
+| 行与触屏的固定尺寸 | `--row-line`、`--avatar` = 0.9×行盒、`--badge-h` = `--avatar`、`--emote` = 1.1×行盒、`--time-col`、`--tap-min`、`--panel-max-h`、`--panel-max-h-narrow`、`--sheet-max-h` | — | 只有这些是「结构尺寸」；其余一次性尺寸（二维码 200px、菜单最小宽 150px 等）仍写在各自规则里，不硬凑进间距阶。`--panel-max-h-narrow` 用视口份额（45vh）而不是固定像素，窄屏才不会被面板吃掉整屏。**弹幕行的那四个是一组**：`--row-line` 是基准（正文行盒高，1.5em，声明在 `.row` 上并用 `@property` 注册成 `<length>`，这样它算成 px 后再往下继承，子元素各写各的字号也不会算错），**而 `--avatar` 有两层**：`.row` 里是行盒的 0.9 倍，`:root` 里另给一个行外默认值（1.35em，随所在字号走）——`.avatar` 是跨页面复用的组件（关注列表 / 账号区 / 账号对话框都在弹幕行之外），令牌只活在 `.row` 里会让那些地方 `var(--avatar)` 解析失败、`<img>` 退回原图尺寸（2026-09-12 的返工，见 §15），头像 / 徽标 / 表情三个尺寸都从它按比例派生（§4.1） |
 
 浅色主题（`ui.theme`）**不是第二套样式**：只在 `:root[data-theme="light"]` 里给这些槽位换一组值，组件规则一行都不用改。新增样式时不得再写字面颜色 / 间距 / 圆角 / 字号——要新值就先加令牌。
 
@@ -943,22 +943,35 @@
 
 ## 15. 自检：房间页无头冒烟
 
-布局这类「排得对不对」的规则靠人工目视不可靠，因此有一份可重复跑的无头冒烟：真实的 `dist` 产物 + 注入的 `__TAURI_INTERNALS__` 替身（假 IPC、假样本），在无头 Chromium 里跑完整房间页并断言几何与副作用。
+布局这类「排得对不对」的规则靠人工目视不可靠，因此有一份可重复跑的无头冒烟：真实的 `dist` 产物 + 注入的 `__TAURI_INTERNALS__` 替身（假 IPC、假样本），跑完整房间页并断言几何与副作用。**它有两个引擎**：Chromium（默认）与 WebKit（`--engine webkit`）——后者就是 macOS 上 Tauri 用的 WKWebView，**宿主引擎必须在验证链里**。
 
 ```bash
 cd apps/desktop/ui
 npm run build
-node smoke/run-headless.mjs          # 自己起 Chrome for Testing 走 CDP，两个视口各跑一遍，打印 data-smoke 快照
+node smoke/run-headless.mjs                    # Chromium（默认）：自己起 Chrome for Testing 走 CDP
+node smoke/run-headless.mjs --engine webkit    # WebKit（宿主引擎）：Playwright，同一份场景 / 同一套断言
 ```
 
 **两个视口**：1440×900（宽屏）与 **360×844**（窄屏：竖屏是默认形态，而 360 是窗口能达到的**最小宽度**，即可达面的边界值）。用 CDP 的 `Emulation.setDeviceMetricsOverride`
 把布局视口改小，跑的是**同一份场景代码**——窄屏那遍不是另写一套脚本，否则两边会各自漂移。
+
+**两个引擎**：Chromium 与 WebKit 各跑一遍同一份场景代码、同一套断言（不是两套脚本），视口也一样。为什么要两个：**应用跑在 macOS 的 WKWebView 里，Chromium 的绿只证明「在 Chromium 里成立」**。两边的差别是真实存在的（`@property` 注册自定义属性、网格的 `minmax()`、`em` 的求值时机），但也**不要**把所有问题都归给引擎——见下面 2026-09-12 的第二个反例。跑 WebKit 需要一次性的 `npm i -D playwright && npx playwright install webkit`（后者约 80MB，落在 `~/Library/Caches/ms-playwright`）。
 
 **判据：视口是产品的可达面，不是测试的自由参数。** 凡新增「只在某些视口成立」的行为，必须同时确认**用户能到达那个视口**——
 窗口/设备的最小尺寸、断点、以及入口（能不能拖到、能不能旋转到）。2026-09-12 的反例：窄屏形态在无头浏览器的视口里全绿，
 而桌面窗口的 `minWidth: 720` 让用户永远够不到它（`tauri.conf.json` 现已钉在 360px，§9.1）。落地两条：
 ① 新增按视口分叉的行为时，先确认窗口/设备可达该视口；② 够不到就在报告里明说「该形态仅在某些视口成立、当前入口够不到」，
 不许当成已验证。
+
+**判据：渲染引擎同样是可达面，而且「夹具能不能暴露失败」也是一条判据。** 2026-09-12 的第二个反例：弹幕行重做把
+`--avatar` 等尺寸令牌从 `:root` 挪进了 `.row`，于是 `.row` 之外的共用组件（关注列表 / 账号区 / 账号对话框的头像）
+`var(--avatar)` 解析不出来，`width` 落到 `auto`，`<img>` 按**原图尺寸**渲染（上游头像是原图直出，512 见方）——
+装到真机上主页只剩下一个头像的角落。三条落地：
+① 冒烟引擎必须覆盖宿主引擎（上面的 `--engine webkit`）；
+② 共用组件（`Avatar.tsx` 这类跨页面复用的）消费的令牌必须能解析出值，不能只活在某个组件的作用域里；
+③ **夹具要能失败**：原来的样本把关注项头像写成空串、账号头像用 32×32 小图，`auto` 尺寸在小图上看着无害，
+所以两个引擎都是绿的——现在夹具用**原图尺寸 512×512**，并断言列表页头像的渲染尺寸（`listAvatarsSized`）。
+这个反例同时说明：**先怀疑引擎，但要用证据落地**——它的根因与引擎无关（修前修后两个引擎行为完全一致）。
 
 | 项 | 规则 |
 |---|---|

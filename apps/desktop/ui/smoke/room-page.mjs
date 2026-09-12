@@ -1,7 +1,10 @@
-// 房间页 UI 冒烟：无头 Chromium + mock IPC，把整套断言跑在真实的 dist 产物上。
+// 房间页 UI 冒烟：mock IPC + 真实 dist 产物，同一份场景与断言跑在**两个引擎**上
+// （Chromium 与 WebKit；后者就是 macOS 上 Tauri 用的 WKWebView —— 见 run-headless.mjs）。
+// 宿主引擎必须在验证链里，否则「全绿」只对 Chromium 成立（2026-09-12 的教训）。
 //
-// 复现（一条命令，自己起 Chrome，不依赖 relay 标签页）：
-//   cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs
+// 复现（一条命令，自己起浏览器，不依赖 relay 标签页）：
+//   cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs                 # Chromium
+//   cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs --engine webkit # 宿主引擎
 // 只要快照（不跑浏览器）：
 //   node smoke/room-page.mjs            # 生成 /tmp/danmubox-ui-smoke.html
 //
@@ -77,11 +80,14 @@ const MOCK = `(function () {
     for (var key in (extra || {})) base[key] = extra[key];
     return base;
   }
+  // 头像样本刻意用**原图尺寸 512×512**：上游 CDN 的头像是原图直出（没有尺寸后缀），
+  // 一旦 CSS 没给出宽高，<img> 就按 512 渲染、把整页顶爆。32×32 的小图看不见这个毛病。
+  var FACE_512 = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'><rect width='512' height='512' fill='%2300aeec'/></svg>";
   // 关注列表：上游顺序刻意打乱，用来看排序是否真按最后开播时间生效；
   // 再补 28 条凑够 31 条，验证「>30 条才出现分页」。
   var followed = [
     { room_id: 300, uname: "离线甲", face: "", live_status: 0, group_name: "", live_start_at: 1700000000, online: 0 },
-    { room_id: 100, uname: "在播主播", face: "", live_status: 1, group_name: "", live_start_at: 1789000000, online: 500 },
+    { room_id: 100, uname: "在播主播", face: FACE_512, live_status: 1, group_name: "", live_start_at: 1789000000, online: 500 },
     { room_id: 200, uname: "离线乙", face: "", live_status: 0, group_name: "", live_start_at: 1789500000, online: 0 }
   ];
   for (var i = 1; i <= 28; i += 1) {
@@ -94,7 +100,7 @@ const MOCK = `(function () {
   var accounts = [
     {
       name: "default", nickname: "本地测试", uid: 1000, logged_in: true, active: true,
-      face: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><rect width='32' height='32' fill='%2300aeec'/></svg>"
+      face: FACE_512
     }
   ];
   // 假二维码（21×21 图案）：真二维码由后端离线渲染，这里只要截图里**看得到图案**，
@@ -369,6 +375,15 @@ const MOCK = `(function () {
     out.followPagerShown = !!document.querySelector('[class*="pager"]');
     out.followNonLiveListed = followNames.indexOf("离线乙") >= 0 && followNames.indexOf("离线甲") >= 0;
     out.accountArea = !!byTestId("db-account");
+    // 列表页的头像（账号区 / 关注项）尺寸必须由 CSS 给，不能落到「原图尺寸」：
+    // 夹具是 512×512，一旦 var(--avatar) 解析不出来，头像会按 512 渲染、把主页顶爆
+    // （用户 2026-09-12：「主页的内容都没了啊，只能看到一个头像的角落」）。
+    var listAvatars = allByTestId("db-msg-avatar");
+    out.listAvatarCount = listAvatars.length;
+    out.listAvatarsSized = listAvatars.length >= 2 && listAvatars.every(function (el) {
+      var r = rect(el);
+      return r.width > 8 && r.width <= 40 && r.height > 8 && r.height <= 40;
+    });
     // 列表页在窄屏也不许横向滚动（关注项一行放不下要换行）
     var listPage = byTestId("db-list-page");
     put("listNoHorizontalScroll", !!listPage &&
@@ -459,6 +474,9 @@ const MOCK = `(function () {
     }));
     // 回复关系（issue #13b）与「舰长标只认本房间」（issue #12）的样本行
     window.__emit("danmubox://message", window.__mk("danmaku", "这条是回复", false, {
+      // 上游自定义颜色的弹幕（舰长/老爷常见金黄）。用户名与正文都不许被它染色——
+      // 用户 2026-09-12 的原始反馈：用户名被染成白色看不见、正文偏黄。
+      color: 16776960,
       reply_to_uid: 777, reply_to_uname: "被回复的人", reply_uname_color: "#FB7299"
     }));
     // 上游没给配色（空串）时不上色：**空串不是颜色**，与粉丝牌真彩色同一口径
@@ -677,6 +695,7 @@ const MOCK = `(function () {
       Math.abs(out.rowScale.avatar / lineBoxPx - 0.9) < 0.06 &&
       Math.abs(out.rowScale.emote / lineBoxPx - 1.1) < 0.06;
 
+
     // ---- 昵称不吃弹幕颜色，颜色只落正文（用户 #2）
     var redRow = rowWith("红字弹幕正文");
     var redNameEl = redRow ? redRow.querySelector('[data-testid="db-msg-name"]') : null;
@@ -724,6 +743,15 @@ const MOCK = `(function () {
       .map(function (el) { return getComputedStyle(el).color; });
     out.rowAllBodiesSameColor = allBodyColors.length >= 3 &&
       allBodyColors.every(function (c) { return c === allBodyColors[0]; });
+    // ---- 同一屏里所有昵称也必须是一个颜色，且既不是上游给的自定义色、也不是白
+    // （白在浅色主题里等于看不见；这两条是用户 2026-09-12 那条反馈的最强口径）
+    var screenNames = Array.from(document.querySelectorAll('[data-testid="db-msg-name"]'))
+      .map(function (el) { return getComputedStyle(el).color; });
+    out.namesAllSameColor = screenNames.length >= 3 &&
+      screenNames.every(function (c) { return c === screenNames[0]; });
+    out.namesNotPaintedByCustomColor = screenNames.length >= 3 && screenNames.every(function (c) {
+      return c.indexOf("255, 255, 0") < 0 && c !== "rgb(255, 255, 255)";
+    });
     out.rowLightDefaultWhiteTreatedAsUnset = lightWhiteBodyColor.length > 0 &&
       lightWhiteBodyColor !== "rgb(255, 255, 255)" && lightWhiteBodyColor !== lightPageBg;
     out.rowLightColors = [lightNameColor, lightBodyColor, lightWhiteBodyColor, lightPageBg];

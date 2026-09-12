@@ -100,6 +100,7 @@ type Message = {
   ts: number;            // UTC 毫秒
   uid: number;           // 游客/未知为 0
   uname: string;
+  face: string;          // 发言者头像 URL；取不到为空串（前端自行降级）
   content: string;
   color: number;         // 十进制 RGB
   medal_level: number;   // 发送者粉丝牌等级，0 无

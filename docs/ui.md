@@ -123,7 +123,7 @@
 | 返回列表 | `xs` / `md` 下从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-chat-scroll` / `db-msg-row` / `db-msg-time` / `db-context-menu` / `db-panel` / `db-account` / `db-gift-dock` / `db-follow-item`），冒烟脚本按它定位，不再依赖 CSS 类名 |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-room-header` / `db-chat-scroll` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-context-menu` / `db-panel` / `db-account` / `db-gift-dock` / `db-follow-item`），冒烟脚本按它定位，不再依赖 CSS 类名 |
 
 ### 2.4 会话缓冲生命周期（契约 §4.3）
 

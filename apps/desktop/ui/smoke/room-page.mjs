@@ -113,8 +113,8 @@ const MOCK = `(function () {
         case "follow_list": window.__followCalls += 1; return Promise.resolve(followed.slice());
         case "history_query": return Promise.resolve([history]);
         case "emotes_list": return Promise.resolve([
-          { key: "common:1", emoticon_unique: "official_1", width: 20, height: 20, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "common", text: "[大笑]", url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", room_id: 0 },
-          { key: "room:1", emoticon_unique: "room_5440_1", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "room", text: "[房间专属]", url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", room_id: 5440 }
+          { key: "common:1", emoticon_unique: "official_1", width: 20, height: 20, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "common", text: "[大笑]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 0 },
+          { key: "room:1", emoticon_unique: "room_5440_1", width: 60, height: 60, is_dynamic: false, in_player_area: false, bulge_display: false, package_kind: "room", text: "[房间专属]", url: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f09300'/></svg>", room_id: 5440 }
         ]);
         case "report_reasons": return Promise.resolve([{ id: 1, reason: "垃圾广告" }]);
         case "wallet_balance": return Promise.resolve(150);
@@ -257,6 +257,10 @@ const MOCK = `(function () {
     // ---- layout 弹幕列表是唯一生长区；面板向上展开不遮挡最新弹幕
     var scroller = byTestId("db-chat-scroll");
     var before = rect(scroller);
+    var headerEl = byTestId("db-room-header");
+    var composerEl = document.querySelector("textarea").closest('[class*="composer"]');
+    var headerBefore = rect(headerEl).height;
+    var composerBefore = rect(composerEl).height;
     var newestBefore = rows()[rows().length - 1];
     out.layoutNewestVisibleBeforePanel =
       rect(newestBefore).bottom <= before.bottom + 1 && rect(newestBefore).bottom >= before.bottom - 40;
@@ -269,6 +273,11 @@ const MOCK = `(function () {
     out.layoutPanelAboveComposer = !!panel && !!document.querySelector("textarea") &&
       (panel.compareDocumentPosition(document.querySelector("textarea")) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     out.layoutChatShrankPx = Math.round(before.height - after.height);
+    // 「唯一生长区」的双向判：面板展开时只有弹幕列表变矮，头部与输入区纹丝不动
+    out.layoutOnlyChatShrank =
+      Math.abs(rect(headerEl).height - headerBefore) < 1 &&
+      Math.abs(rect(composerEl).height - composerBefore) < 1 &&
+      before.height - after.height > 50;
     out.layoutNewestNotCovered = !!newestAfter && rect(newestAfter).bottom <= rect(panel).top + 1;
     // 更硬的两条：视口仍在底部（跟随模式重新贴底），且渲染出的最后一行确实是最后一条消息
     out.layoutFollowingAtBottom =
@@ -284,10 +293,11 @@ const MOCK = `(function () {
     var commonH = out.layoutEmoteSizes.filter(function (x) { return !x.big; })[0];
     var bigH = out.layoutEmoteSizes.filter(function (x) { return x.big; })[0];
     out.layoutNonCommonEmoteBigger = !!commonH && !!bigH && bigH.height >= commonH.height * 1.4;
-    clickTool("表情");
-    // 多停一会儿：跑脚本的进程会在这段时间里抓一张「面板已展开」的截图（视觉证据）
-    await sleep(1500);
+    // 面板还开着就先把快照写进去、并多停 1.5s：跑脚本的进程据此抓一张「面板已展开」的截图
     snap();
+    await sleep(1500);
+    clickTool("表情");
+    await sleep(200);
 
     // ---- menu 右键菜单
     var target = rows()[rows().length - 1];
@@ -355,8 +365,44 @@ const MOCK = `(function () {
     out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;
     snap();
 
+    // ---- panel 层：短语右键增删改、点选插入到光标处、头部 ⋯ 菜单
+    clickTool("筛选"); // 收起筛选面板，避免两个面板互相干扰
+    out.toolsPhrasesOpen = clickTool("短语");
+    await sleep(300);
+    var phrasesPanel = byTestId("db-panel");
+    out.phrasesPanelShown = !!phrasesPanel;
+    var phraseChip = buttonWith(phrasesPanel, "早上好");
+    phraseChip.click();
+    await sleep(200);
+    out.phraseInsertsAtCaret = document.querySelector("textarea").value.indexOf("早上好") >= 0;
+    phraseChip.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 300 }));
+    await sleep(250);
+    var phraseMenu = byTestId("db-context-menu");
+    out.phraseMenuItems = phraseMenu ? [].slice.call(phraseMenu.querySelectorAll("button")).map(function (b) { return b.innerText; }) : [];
+    buttonWith(phraseMenu, "删除").click();
+    await sleep(300);
+    out.phraseDeleted = window.__prefs["composer.phrases"].length === 0 && !buttonWith(byTestId("db-panel"), "早上好");
+    var phraseInput = [].slice.call(byTestId("db-panel").querySelectorAll("input")).filter(function (i) {
+      return (i.placeholder || "").indexOf("新短语") >= 0;
+    })[0];
+    typeInto(phraseInput, "晚上好");
+    await sleep(150);
+    buttonWith(byTestId("db-panel"), "添加").click();
+    await sleep(300);
+    out.phraseAdded = window.__prefs["composer.phrases"].join(",") === "晚上好" && !!buttonWith(byTestId("db-panel"), "晚上好");
+    clickTool("短语");
+    await sleep(200);
+
+    buttonWith(null, "⋯").click();
+    await sleep(250);
+    var headerMenu = byTestId("db-context-menu");
+    out.headerMenuItems = headerMenu ? [].slice.call(headerMenu.querySelectorAll("button")).map(function (b) { return b.innerText; }) : [];
+    document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await sleep(200);
+    out.headerMenuClosed = !byTestId("db-context-menu");
+    snap();
+
     // ---- account 新增账号 = profiles_create + 自动扫码；单 profile 禁止删除
-    clickTool("筛选"); // 收掉面板，露出账号区（房间列表页在返回后才有）
     document.querySelector("button").click();
     await sleep(500);
     var account = byTestId("db-account");

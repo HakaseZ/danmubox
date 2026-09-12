@@ -247,7 +247,7 @@ export function RoomView({
 
   return (
     <div className={styles.shell}>
-      <div className={styles.roomHeader}>
+      <div className={styles.roomHeader} data-testid="db-room-header">
         <button onClick={onBack}>返回</button>
         <span className={`${styles.dot} ${DOT[state]}`} />
         <span className={styles.title}>

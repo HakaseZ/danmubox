@@ -50,6 +50,31 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+/* 房间信息夹具（真实载荷，只读抓取 2026-09-12）：**mock 与断言都从这里派生，不许手写**。
+   手写的「测试主播 · 测试房间」正是 #17/#18 的病因：解析把 `anchor_info` 挂在
+   `getRoomPlayInfo` 上（真实响应里根本没有这个键），手写夹具照样绿，界面却显示占位词。
+   两份夹具各是一次真实响应（公开测试房间 1 = room_id 5440）：
+     fixtures/room-play-info.json  GET /xlive/web-room/v1/index/getRoomPlayInfo?room_id=5440
+     fixtures/room-h5-info.json    GET /xlive/web-room/v1/index/getH5InfoByRoom?room_id=5440
+   房间名（主播名 · 标题）只存在于后者：`data.anchor_info.base_info.uname` / `data.room_info.title`。 */
+const roomPlayFixture = JSON.parse(
+  readFileSync(new URL("./fixtures/room-play-info.json", import.meta.url), "utf8"),
+);
+const roomH5Fixture = JSON.parse(
+  readFileSync(new URL("./fixtures/room-h5-info.json", import.meta.url), "utf8"),
+);
+/** 真实载荷派生的房间（`RoomView` 形状）：`connected` / `buffered` 是冒烟的会话态。 */
+const FIXTURE_ROOM = {
+  room_id: roomPlayFixture.data.room_id,
+  short_id: roomPlayFixture.data.short_id,
+  anchor_uid: roomPlayFixture.data.uid,
+  anchor_uname: roomH5Fixture.data.anchor_info.base_info.uname,
+  title: roomH5Fixture.data.room_info.title,
+  live_status: roomPlayFixture.data.live_status,
+  connected: true,
+  buffered: 1,
+};
+
 const MOCK = `(function () {
   var listeners = {};
   var calls = [];
@@ -86,19 +111,19 @@ const MOCK = `(function () {
   // 头像样本刻意用**原图尺寸 512×512**：上游 CDN 的头像是原图直出（没有尺寸后缀），
   // 一旦 CSS 没给出宽高，<img> 就按 512 渲染、把整页顶爆。32×32 的小图看不见这个毛病。
   var FACE_512 = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'><rect width='512' height='512' fill='%2300aeec'/></svg>";
-  // 已登记的房间。默认只有 1 个：标签条只在**多于一个**房间时渲染（App 既有语义），
+  // 房间字段来自**真实载荷夹具**（见文件头的 room-play-info.json / room-h5-info.json 说明），
+  // 默认只有 1 个：标签条只在**多于一个**房间时渲染（App 既有语义），
   // 场景末尾用 __addSecondRoom() 补登记第二个，好把 #18（标签条显示主播名、不显示房间号）
   // 也验到——不然那一段永远没有可观察面。
-  var rooms = [
-    {
-      room_id: 5440, short_id: 0, anchor_uid: 2, anchor_uname: "测试主播",
-      title: "测试房间", live_status: 1, connected: true, buffered: 1
-    }
-  ];
+  var fixtureRoom = ${JSON.stringify(FIXTURE_ROOM)};
+  var rooms = [Object.assign({}, fixtureRoom)];
+  // 第二个房间刻意是「**上游没给主播名与标题**」的形态：getH5InfoByRoom 到不了、
+  // 或字段缺失时就是这样。它让「取不到名字」这条路在冒烟里真实可见——房间卡与标签
+  // 都只能报房间号，**不许**渲染「未命名直播间」那种占位词（docs/ui.md §2.2）。
   window.__addSecondRoom = function () {
     rooms.push({
-      room_id: 5555, short_id: 0, anchor_uid: 9, anchor_uname: "第二位主播",
-      title: "第二个直播间", live_status: 0, connected: false, buffered: 0
+      room_id: 5555, short_id: 0, anchor_uid: 0, anchor_uname: "",
+      title: "", live_status: 0, connected: false, buffered: 0
     });
   };
   // 关注列表：上游顺序刻意打乱，用来看排序是否真按最后开播时间生效；
@@ -468,12 +493,25 @@ const MOCK = `(function () {
     out.followItemHidesRoomNumber = !!liveFollowItem && !!emptyTitleItem &&
       liveFollowItem.innerText.indexOf("100") < 0 &&
       emptyTitleItem.innerText.indexOf("300") < 0;
-    // 连接中的房间列表同样不报房间号（#17）：卡片报「主播名 · 直播间名」。
+    // 连接中的房间列表同样不报房间号（#17）：卡片报「主播名 · 直播间名」，
+    // 且名字取的是**真实载荷**里的值（fixtureRoom，见文件头夹具说明）。
+    // 这两条就是「不许出现占位词」的回归断言：解析路径写错时 anchor_uname 是空串，
+    // 卡片会退成「未命名直播间」或「房间 5440」，两条都会失败。
     var roomCard = byTestId("db-room-card");
     out.roomCardShowsAnchorAndTitle = !!roomCard &&
-      roomCard.innerText.indexOf("测试主播") >= 0 &&
-      roomCard.innerText.indexOf("测试房间") >= 0;
+      roomCard.innerText.indexOf(fixtureRoom.anchor_uname) >= 0 &&
+      roomCard.innerText.indexOf(fixtureRoom.title) >= 0;
     out.roomCardHidesRoomNumber = !!roomCard && roomCard.innerText.indexOf("5440") < 0;
+    out.roomCardHidesPlaceholder = !!roomCard &&
+      roomCard.innerText.indexOf("未命名直播间") < 0;
+    // 把卡片滚进画面并停一下：跑脚本的进程据此抓一张「连接中的房间列表」截图（#17）。
+    // 下一段会把关注项滚到顶，那时卡片已不在画面里，所以这一步必须在它前面。
+    if (roomCard && roomCard.scrollIntoView) {
+      roomCard.scrollIntoView({ block: "start" });
+    }
+    out.roomsListRendered = !!roomCard;
+    snap();
+    await sleep(900);
 
     // 让跑脚本的进程抓一张「关注列表排布」的截图（宽屏单排 / 窄屏两排各一张）。
     var firstFollowItem = byTestId("db-follow-item");
@@ -1712,12 +1750,17 @@ const MOCK = `(function () {
     await sleep(800);
     var tabs = allByTestId("db-room-tab");
     out.tabsRendered = tabs.length === 2;
-    out.tabShowsAnchorNames = tabs.length === 2 &&
-      tabs.some(function (t) { return t.innerText.indexOf("测试主播") >= 0; }) &&
-      tabs.some(function (t) { return t.innerText.indexOf("第二位主播") >= 0; });
-    out.tabHidesRoomNumbers = tabs.length === 2 && tabs.every(function (t) {
-      return t.innerText.indexOf("5440") < 0 && t.innerText.indexOf("5555") < 0;
-    });
+    // 有名字的那个标签：报的是**真实载荷**里的主播名，且不露房间号。
+    var namedTab = tabs.filter(function (t) {
+      return t.innerText.indexOf(fixtureRoom.anchor_uname) >= 0;
+    })[0];
+    out.tabShowsAnchorNames = !!namedTab && tabs.length === 2;
+    out.tabHidesRoomNumbers = !!namedTab && namedTab.innerText.indexOf("5440") < 0;
+    // 没有名字的那个标签（上游名与标题都缺）：只能报房间号——但**不许**报「未命名直播间」，
+    // 那个词既不说明是哪个房间，又像真名字（用户 2026-09-12 报的就是它）。
+    out.tabFallbackShowsRoomNumber = tabs.length === 2 &&
+      tabs.some(function (t) { return t.innerText.indexOf("房间 5555") >= 0; }) &&
+      tabs.every(function (t) { return t.innerText.indexOf("未命名直播间") < 0; });
     snap();
 
     out.done = true;

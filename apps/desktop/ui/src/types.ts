@@ -64,11 +64,13 @@ export interface Room {
   short_id: number;
   anchor_uid: number;
   /**
-   * 主播昵称（契约 §5 `Room.anchor_uname`，上游 `anchor_info.base_info.uname`）。
+   * 主播昵称（契约 §5 `Room.anchor_uname`；上游 `getH5InfoByRoom` 的
+   * `anchor_info.base_info.uname`——`getRoomPlayInfo` 里没有这个字段）。
    * 主界面用它**代替房间号**展示房间（#17 房间列表 / #18 标签条）；
-   * 空串 = 上游没给，界面回落到 `title`（不渲染空）。
+   * 空串 = 上游没给，界面回落到 `title`、再回落到「房间 <号>」（不渲染空）。
    */
   anchor_uname: string;
+  /** 直播间标题（上游 `getH5InfoByRoom` 的 `room_info.title`）；空串 = 上游没给。 */
   title: string;
   live_status: number;
 }

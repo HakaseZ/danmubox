@@ -267,8 +267,8 @@ sessdata = ""
 | `room_id` | i64 | 真实房间号（短号 / URL 已由 `getRoomPlayInfo` 解析） |
 | `short_id` | i64 | 上游短号；无比为 0 |
 | `anchor_uid` | i64 | 主播 UID，用于派生「主播」徽标（`uid == Room.anchor_uid`） |
-| `anchor_uname` | string | **主播昵称**（上游 `getRoomPlayInfo` 的 `anchor_info.base_info.uname`，2026-09-12 只读解析）。界面用它**代替房间号**展示房间（用户 #17 房间列表 / #18 标签条：主界面不再露房间号）。空串 = 上游没给，界面回落到 `title`，**不渲染空** |
-| `title` | string | 直播间标题；空串 = 上游没给 |
+| `anchor_uname` | string | **主播昵称**（上游 `getH5InfoByRoom` 的 `data.anchor_info.base_info.uname`，2026-09-12 只读解析；`getRoomPlayInfo` 的响应里**没有**这个键）。界面用它**代替房间号**展示房间（用户 #17 房间列表 / #18 标签条：主界面不再露房间号）。空串 = 上游没给，界面回落到 `title`、再回落到「房间 <真实 room_id>」，**不渲染空、不渲染占位词**（口径见 `docs/ui.md` §2.2） |
+| `title` | string | 直播间标题（上游 `getH5InfoByRoom` 的 `data.room_info.title`，与 `FollowedRoom.title` 同义）；空串 = 上游没给 |
 | `live_status` | i32 | 0 未开播 / 1 直播中 / 2 轮播 |
 
 `FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `title` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
@@ -295,6 +295,8 @@ sessdata = ""
 - `DANMU_MSG` 关键取值：内容在 `info[1]`；明文用户对象在 `info[0][15].user`（`uid`、`base.name`、`base.face`）。
 - `DANMU_MSG_MIRROR` 是非本房间的镜像弹幕，默认丢弃并计数。
 - 短号/URL → 真实 `room_id`：使用 `getRoomPlayInfo`，一次拿到 `room_id` / `uid` / `live_status`。
+- 主播昵称与直播间标题另取 `getH5InfoByRoom`（`data.anchor_info.base_info.uname` / `data.room_info.title`）——
+  `getRoomPlayInfo` **不返回**这两个字段。这一跳失败不阻断登记房间：两个字段留空，界面按 `docs/ui.md` §2.2 回落。
 - 认证回应 `code=0` 为成功；非 0 一律视为认证失败并按退避重连，**不得**在未知 code 上编造含义。
 
 ## 7. Tauri IPC（规范性）

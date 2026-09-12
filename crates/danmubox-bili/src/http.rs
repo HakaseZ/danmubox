@@ -18,6 +18,13 @@ const EP_FINGER_SPI: &str = "https://api.bilibili.com/x/frontend/finger/spi";
 const EP_NAV: &str = "https://api.bilibili.com/x/web-interface/nav";
 const EP_ROOM_PLAY_INFO: &str =
     "https://api.live.bilibili.com/xlive/web-room/v1/index/getRoomPlayInfo";
+/// 主播昵称与直播间标题的来源。
+///
+/// `getRoomPlayInfo` **没有**这两个字段（见 `map_room_play_info` 的实测说明），
+/// 名字只能另外问一次；同理它的 `data.room_info.short_id` 只有本接口有，
+/// 所以两个接口都留着，不是重复调用。
+const EP_ROOM_H5_INFO: &str =
+    "https://api.live.bilibili.com/xlive/web-room/v1/index/getH5InfoByRoom";
 const EP_DANMU_INFO: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
 const EP_WEB_HEARTBEAT: &str =
     "https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat";
@@ -191,7 +198,40 @@ impl BiliHttp {
         }
 
         let data = value.get("data").unwrap_or(&Value::Null);
-        map_room_play_info(data, input)
+        // 名字与标题不在上面这个响应里，得再问一次 `getH5InfoByRoom`（见 `map_room_play_info`）。
+        // 这一跳是**锦上添花**：拿不到就留空串，界面自己回落——绝不让登记房间失败。
+        let room_id = data.get("room_id").and_then(Value::as_i64).unwrap_or(0);
+        let h5 = if room_id == 0 {
+            Value::Null
+        } else {
+            match self.room_h5_info(room_id).await {
+                Ok(value) => value,
+                Err(e) => {
+                    tracing::debug!(
+                        target: "danmubox_bili::http",
+                        room_id,
+                        error = %e,
+                        "getH5InfoByRoom 失败，昵称与标题留空（界面回落到标题 / 房间号）"
+                    );
+                    Value::Null
+                }
+            }
+        };
+        map_room_play_info(data, h5.get("data").unwrap_or(&Value::Null), input)
+    }
+
+    /// 房间名与主播昵称：`getH5InfoByRoom` 的原始响应（`map_room_play_info` 只读它的 `data`）。
+    async fn room_h5_info(&self, room_id: i64) -> Result<Value> {
+        let value = self
+            .get(&format!("{EP_ROOM_H5_INFO}?room_id={room_id}"))
+            .send()
+            .await
+            .map_err(|e| Error::Upstream(format!("getH5InfoByRoom: {e}")))?
+            .json::<Value>()
+            .await
+            .map_err(|e| Error::Upstream(format!("getH5InfoByRoom decode: {e}")))?;
+        require_ok(&value, "getH5InfoByRoom")?;
+        Ok(value)
     }
 
     /// 取长连接票据与候选地址。游客态同样需要 `buvid` 与 WBI 签名。
@@ -430,34 +470,40 @@ pub fn normalize_room_input(input: &str) -> Result<String> {
     Ok(digits)
 }
 
-/// `getRoomPlayInfo` 的 `data` → `Room`（上游字段名只允许出现在这个函数里）。
+/// `getRoomPlayInfo` + `getH5InfoByRoom` 的 `data` → `Room`（上游字段名只允许出现在这个函数里）。
 ///
-/// 主播昵称在 `anchor_info.base_info.uname`（只读解析，2026-09-12：#17/#18 要用它代替
-/// 房间号展示房间）。**它与 `uid` 一样是「有就有、没有就没有」**：测不到就留空串，
-/// 由界面回落到直播间标题——不在这里编造，也不用房间号顶替。
-fn map_room_play_info(data: &Value, input: &str) -> Result<Room> {
-    let room_id = data.get("room_id").and_then(Value::as_i64).unwrap_or(0);
+/// **取证（2026-09-12，只读实测，夹具见 `smoke/fixtures/`）**：主播昵称与直播间标题
+/// **不在 `getRoomPlayInfo` 里**——它的 `data` 只有 `room_id` / `short_id` / `uid` /
+/// `live_status` / `play_url`（在播、轮播、带 Cookie 与不带 Cookie 都一样，`anchor_info`
+/// 与 `title` 键根本不存在）。#17/#18 的原始故障就是把这层字段挂在了它下面：
+/// `anchor_uname` 恒为空串，界面于是显示占位词。它们真正的家在
+/// `getH5InfoByRoom`：`data.anchor_info.base_info.uname` / `data.room_info.title`。
+///
+/// 昵称与 `uid` 一样是「有就有、没有就没有」：取不到就留空串，由界面回落到标题、
+/// 再回落到「房间 <号>」——不在这里编造，也不用房间号顶替。
+fn map_room_play_info(play: &Value, h5: &Value, input: &str) -> Result<Room> {
+    let room_id = play.get("room_id").and_then(Value::as_i64).unwrap_or(0);
     if room_id == 0 {
         return Err(Error::RoomNotFound(format!("输入 `{input}` 未解析出房间")));
     }
     Ok(Room {
         room_id,
-        short_id: data
+        short_id: play
             .get("short_id")
             .and_then(Value::as_i64)
             .unwrap_or_default(),
-        anchor_uid: data.get("uid").and_then(Value::as_i64).unwrap_or(0),
-        anchor_uname: data
+        anchor_uid: play.get("uid").and_then(Value::as_i64).unwrap_or(0),
+        anchor_uname: h5
             .pointer("/anchor_info/base_info/uname")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        title: data
-            .get("title")
+        title: h5
+            .pointer("/room_info/title")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        live_status: data.get("live_status").and_then(Value::as_i64).unwrap_or(0) as i32,
+        live_status: play.get("live_status").and_then(Value::as_i64).unwrap_or(0) as i32,
     })
 }
 
@@ -465,38 +511,72 @@ fn map_room_play_info(data: &Value, input: &str) -> Result<Room> {
 mod tests {
     use super::*;
 
+    /// 真实载荷夹具（只读抓取，2026-09-12）：公开测试房间 `1`（真实 `room_id` 5440）。
+    ///
+    /// 断言**只能从这两份夹具派生**——手写 JSON 正是 #17/#18 翻车的病因：
+    /// 手写的那份「响应」里有 `anchor_info`，真实响应里没有，于是测试全绿而界面显示占位词。
+    const ROOM_PLAY_INFO: &str =
+        include_str!("../../../apps/desktop/ui/smoke/fixtures/room-play-info.json");
+    const ROOM_H5_INFO: &str =
+        include_str!("../../../apps/desktop/ui/smoke/fixtures/room-h5-info.json");
+
+    fn fixture(name: &str) -> Value {
+        serde_json::from_str(name).expect("夹具必须是合法 JSON")
+    }
+
+    #[test]
+    fn play_info_carries_no_nickname_or_title() {
+        // 病因取证：`getRoomPlayInfo` 的响应里既没有 `anchor_info` 也没有 `title`。
+        // 这条断言是回归护栏：谁再把昵称解析挂回这个接口，它会直接失败。
+        let play = fixture(ROOM_PLAY_INFO);
+        assert!(play.pointer("/data/anchor_info").is_none());
+        assert!(play.pointer("/data/title").is_none());
+    }
+
     #[test]
     fn room_info_reads_anchor_nickname() {
-        // 载荷形状取自 `getRoomPlayInfo` 的实测响应：`data` 顶层有 room_id / short_id / uid /
-        // title / live_status，主播昵称在 `anchor_info.base_info.uname`（只读解析）。
-        let data = serde_json::json!({
-            "room_id": 5440,
-            "short_id": 0,
-            "uid": 42,
-            "title": "测试直播间",
-            "live_status": 1,
-            "anchor_info": { "base_info": { "uname": "测试主播", "gender": "保密" } }
-        });
-        let room = map_room_play_info(&data, "5440").unwrap();
+        let room = map_room_play_info(
+            &fixture(ROOM_PLAY_INFO)["data"],
+            &fixture(ROOM_H5_INFO)["data"],
+            "1",
+        )
+        .unwrap();
         assert_eq!(room.room_id, 5440);
-        assert_eq!(room.anchor_uid, 42);
-        assert_eq!(room.anchor_uname, "测试主播");
-        assert_eq!(room.title, "测试直播间");
+        assert_eq!(room.short_id, 1);
+        assert_eq!(room.anchor_uid, 9617619);
+        assert_eq!(room.anchor_uname, "哔哩哔哩直播");
+        assert_eq!(room.title, "PK赏金周赛S3火热开赛！");
+        assert_eq!(room.live_status, 2);
     }
 
     #[test]
     fn room_info_without_anchor_block_leaves_nickname_empty() {
-        // 上游没给 anchor_info（游客态/字段改名）时不许编造昵称：留空串，
-        // 界面自己回落到 title（用户 #17/#18 要的是「展示主播名」，取不到才退让）。
-        let data = serde_json::json!({ "room_id": 7, "title": "只有标题" });
-        let room = map_room_play_info(&data, "7").unwrap();
+        // 从真实夹具派生的退化形态（显式删掉 `anchor_info`，不是另编一份 JSON）：
+        // 上游不给昵称时不许编造，界面自己回落（`docs/ui.md` §2.2）。
+        let mut h5 = fixture(ROOM_H5_INFO);
+        h5["data"]
+            .as_object_mut()
+            .expect("夹具 data 是对象")
+            .remove("anchor_info");
+        let room = map_room_play_info(&fixture(ROOM_PLAY_INFO)["data"], &h5["data"], "1").unwrap();
         assert_eq!(room.anchor_uname, "");
-        assert_eq!(room.title, "只有标题");
+        assert_eq!(room.title, "PK赏金周赛S3火热开赛！");
+    }
+
+    #[test]
+    fn room_info_without_h5_leaves_nickname_and_title_empty() {
+        // `getH5InfoByRoom` 不可达时的形态：两个字段都留空，房间照样登记得出来。
+        let room =
+            map_room_play_info(&fixture(ROOM_PLAY_INFO)["data"], &Value::Null, "1").unwrap();
+        assert_eq!(room.room_id, 5440);
+        assert_eq!(room.anchor_uname, "");
+        assert_eq!(room.title, "");
     }
 
     #[test]
     fn room_info_without_room_id_is_not_found() {
-        let err = map_room_play_info(&serde_json::json!({ "title": "x" }), "9").unwrap_err();
+        let err =
+            map_room_play_info(&serde_json::json!({ "title": "x" }), &Value::Null, "9").unwrap_err();
         assert_eq!(err.code(), "ROOM_NOT_FOUND");
     }
 

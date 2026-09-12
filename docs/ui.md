@@ -62,6 +62,22 @@
 | **我的房间** | `rooms_list` 中手动添加的房间，带删除按钮（`rooms_remove`）。行内是「**主播名 · 直播间名**」（`anchor_uname` · `title`）+ 直播状态 + 连接状态，**不显示房间号**（用户 #17） | 上游返回顺序 |
 | **关注列表** | `follow_list` 全量（**含未开播**），头像 + 主播名 + 直播标题 + 状态标签 + 最后开播时间（**不显示房间号、不显示关注分组名**，用户 #14/#15/#16） | 排序：`live_status == 1` 置顶 → **最近观看降序**（`ui.recent_watched`；没看过的不在这一档、排在看过的之后）→ `live_start_at` 降序 → `online` 降序 → `room_id` 升序。前端分页，每页 `FOLLOW_PAGE_SIZE = 30`，>1 页时显示上一页/下一页与页码 |
 
+**房间名的口径**（`roomDisplayName()` / `roomTabName()`，契约 §5）：
+
+| 级 | 取值 | 例 |
+|---|---|---|
+| 1 | 主播名（`anchor_uname`） | 「哔哩哔哩直播」 |
+| 2 | 直播间标题（`title`）；列表里与上一级拼「主播名 · 直播间名」，标签只报主播名 | 「PK赏金周赛S3火热开赛！」 |
+| 3 | 「房间 <真实房间号>」——**前两级都空**时的最后一级 | 「房间 5440」 |
+
+- 上游**连标题都没有**是可能的（昵称与标题同源，这一跳到不了时两个都是空串），所以第 3 级必须存在：
+  它只报房间号，至少告诉用户「这是我加的哪个房间」。
+- **不再有「未命名直播间」这种占位词**：那是假名字——既不说明是哪个房间，又会被当成真昵称
+  （用户 2026-09-12 报的就是它）。
+- 两个字段的来源都是 `getH5InfoByRoom`：`data.anchor_info.base_info.uname` / `data.room_info.title`。
+  `getRoomPlayInfo`（房间解析那一步）的响应里**没有**这两个键——2026-09-12 只读实测，
+  夹具 `apps/desktop/ui/smoke/fixtures/room-{play,h5}-info.json`；解析在 `map_room_play_info`。
+
 **关注项的排布按宽度分两种形态**（同一套 DOM，只换 grid 模板；用户 #14/#15）：
 
 | 档 | 第一排 | 第二排 |
@@ -161,7 +177,7 @@
 
 | 项 | 规则 |
 |---|---|
-| 标签条 | 已打开房间的标签，按打开顺序排列，可横向滚动；激活标签高亮，连接状态点见 §3。标签上的名字是**主播名**（`anchor_uname`，取不到才退回直播间标题），**不显示房间号**（用户 #18） |
+| 标签条 | 已打开房间的标签，按打开顺序排列，可横向滚动；激活标签高亮，连接状态点见 §3。标签上的名字是**主播名**（`anchor_uname`，取不到才退回直播间标题，标题也没有才退到「房间 <号>」——口径同 §2.2），**不显示房间号**（用户 #18） |
 | 多标签共存 | 已打开的房间保留各自的长连接与**会话缓冲**；切换标签只切换渲染，不断开、不清空 |
 | 新增标签 | 在房间列表点击房间：已打开则激活该标签，未打开则新开 |
 | 关闭标签 | 关闭该房间页，断开连接、销毁并清空该房间的会话缓冲；**不**删除房间数据（不调 `rooms_remove`） |
@@ -1012,6 +1028,6 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"     
 | 几何口径 | `layoutShortContentBottomGap` = 滚动容器底边与末行底边之差（贴底时只剩容器 `padding-bottom`，8px）；`layoutNameLefts` = 三行昵称左边缘（头像列占位后完全一致）；`layoutBadgeNameGap` / `layoutNameBodyGap` = 徽标组→昵称 / 昵称→正文两道间距（前者必须更小）；`layoutHangIndentFirstLeft` / `layoutHangIndentLastLeft` / `layoutHangIndentLines` = 折行后首行与末行的文字左边缘（相等）与行数（≥2 才不算空对空）；`layoutAvatarFirstLineDelta` = 头像中心 − 首行行盒中心（首行居中口径，≈0）；`rowEmoteFirstLineTops` = 表情弹幕行里头像列 / 身份簇 / 正文三者的顶边（`rowIdentityOnFirstLineBox` 要求三者差 < 1.5px）；`rowScale` = 行盒 / 头像 / 徽标 / 表情四个实测高度（`rowScaleCoherent` 要求 0.9 / 0.9 / 1.1 的比例关系）；`layoutHeaderOverlapPx` = 滚到顶部时滚动容器顶边 − 第一条行盒顶边（≥0 即没被头部压住）；`panelChildLefts` = 面板直接子元素的左边缘（必须只有一个值）；`layoutPanelScrollStablePx` = 展开面板前后、同一行在视口里的位移 |
 | 覆盖 | 关注列表自动加载与排序分页、**关注项排布（宽屏单排 / 窄屏两排，两档都不出现房间号）、按最近观看降序（"看过"压过"没看过"）、标签条显示主播名而非房间号**、账号区（一行身份 + 对话框：单账号也有添加入口、扫码添加不覆盖、重新登录需确认、删除当前自动切走、退出登录回游客态）、弹幕列表是唯一生长区、面板向上展开不遮挡最新弹幕、行右键菜单、时间戳默认关且打开后等宽对齐、礼物栏在输入区下方且不抢宽度、系统通知与互动自动消失、历史与实时同款、**内容不足视口时整体贴底**、**头像列永远占位（昵称三列纵向对齐）**、**粉丝牌真彩色与兜底色**、**回复关系可见（非回复不画标记）+ 被 @ 名字用 `reply_uname_color` 上色、空串不上色**、**舰长标只认本房间的 `guard_level`**、**主站「我的表情」分组可见且发出去带唯一键**、**@ 目标与文本同源**、**房管权限前置 / 写操作二次确认与请求形状 / 面板三块列表增删 / 无权限时原样展示上游 code + message**、**行排版的整体感（两种间距、徽标贴昵称、悬挂缩进、头像钉首行、身份簇与正文同起点（含大表情那一行）、头像/徽标/表情三条尺度同源）**、**昵称不吃弹幕颜色 + 颜色只落正文 + 默认白按未指定处理（暗色与浅色两套主题各量一遍：`rowLightNameReadable` / `rowLightBodyKeepsDanmakuColor` / `rowLightDefaultWhiteTreatedAsUnset`，因为用户报的「用户名是白色、看不见」正是只在浅色主题下成立的）**、**行内不再有菜单按钮（房间头 `⋯` 保留）**、**工具行只有三个面板入口**、**表情面板：分组 tab / 一屏一组 / 置灰不隐藏（含字段缺失按可用）/ 置灰仍可选**、**短语：加一条固定行、聊天输入框不被挤占**、**发送成功不再有「上次发送」提示**、**面板：只挤列表 / 不遮最新一条 / 内容对齐一条左边缘 / 展开不弹走滚动位置**、**窄屏：无横向滚动、面板与对话框限高且内部滚动、有关闭入口、热区 ≥ 40px、工具行不溢出、礼物折叠条不挤列表、账号行不叠字** |
 | 两个视口 | 同一份场景代码在两个视口各跑一遍，**断言集合相同、没有例外名单**：面板在窄屏也是文档流里的一块（§9.1），所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真。视口专属的补充断言按 `narrow_*` / `wide_*` 前缀分开存放 |
-| 产物 | 快照 JSON + **十八张**截图（每个视口各九张）：`danmubox-ui-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`danmubox-ui-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-final.png` 结束时；窄屏那九张带 `-narrow` 前缀（如 `danmubox-ui-narrow-follow.png`）。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
+| 产物 | 快照 JSON + **二十张**截图（每个视口各十张）：`danmubox-ui-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`danmubox-ui-rooms.png` 连接中的房间列表（卡片报「主播名 · 直播间名」，用户 #17）、`danmubox-ui-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-final.png` 结束时；窄屏那十张带 `-narrow` 前缀（如 `danmubox-ui-narrow-follow.png`）。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
 | 维护约定 | 场景代码整段是一个模板字符串：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩（踩过两次） |
 | 失败判读 | 退出码非 0 时打印不成立的布尔字段名（带 `wide:` / `narrow:` 前缀）；`EXPECTED_FALSE` 里列的是「本来就该是 false」的字段（如人气值不展示、系统通知默认关） |

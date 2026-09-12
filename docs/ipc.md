@@ -59,7 +59,7 @@
 | `account_logout` | `name?: string` | `SessionStatus` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省=当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
 | `account_remove` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
 | `rooms_list` | 无 | `RoomView[]` | `INTERNAL` | 已添加房间 + 当前连接状态 + 当前会话缓冲条数 |
-| `rooms_add` | `input: string` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号，解析走 `getRoomPlayInfo`；解析不出即 `BAD_REQUEST` |
+| `rooms_add` | `input: string` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号，解析走 `getRoomPlayInfo`（昵称与标题另取一次 `getH5InfoByRoom`，失败只留空、不阻断）；解析不出即 `BAD_REQUEST` |
 | `rooms_remove` | `roomId: number` | `void` | `ROOM_NOT_FOUND` `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
 | `rooms_connect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 建立会话：创建 supervisor、创建会话缓冲、开始收包。幂等：已连接时直接返回当前状态 |
 | `rooms_disconnect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` | 断开并**结束会话、清空缓冲**。幂等：已断开时直接返回 |
@@ -166,7 +166,7 @@ type RoomView = {
   room_id: number;
   short_id: number | null;
   anchor_uid: number | null;     // 主播徽标的派生依据：uid == anchor_uid
-  anchor_uname: string;          // 主播昵称（契约 §5）；空串 = 上游未给，界面回落到 title
+  anchor_uname: string;          // 主播昵称（契约 §5，上游 getH5InfoByRoom）；空串 = 上游未给，界面回落 title →「房间 <号>」
   title: string | null;
   live_status: number;           // 0 未开播 / 1 直播中 / 2 轮播
   connected: boolean;

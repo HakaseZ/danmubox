@@ -207,6 +207,25 @@
 
 ### Fixed
 
+- **房间卡片与标签条拿到真正的主播名**（用户 2026-09-12：「未命名直播间」——连接的房间、房间标签上都只有占位词）。
+  根因是**解析挂在了错误的接口上**：`Room.anchor_uname` 读的是 `getRoomPlayInfo` 的
+  `anchor_info.base_info.uname`，而这个接口的 `data` 里**根本没有 `anchor_info`、也没有 `title`**
+  （只读实测四种组合：在播房间 / 轮播房间 × 带 Cookie / 游客，都一样）。所以昵称恒为空串 → 界面回落标题 →
+  标题也是空串 → 显示占位词。原「单元测试」用的是**手写 JSON**，里面恰好有 `anchor_info`，于是测试全绿而界面是坏的。
+  落法：先只读抓真实载荷并**提交成仓库夹具**（`apps/desktop/ui/smoke/fixtures/room-play-info.json` 与
+  `room-h5-info.json`，公开测试房间 1 = room_id 5440，原始响应未改结构），再按真实结构改解析——
+  昵称与标题改从 `getH5InfoByRoom` 取（`data.anchor_info.base_info.uname` / `data.room_info.title`，游客态可读、无需签名），
+  这一跳失败**不阻断**登记房间（两个字段留空，界面回落）。
+  - 界面口径（`roomDisplayName()` / `roomTabName()`，`docs/ui.md` §2.2）：主播名 → 直播间标题 → 「房间 <号>」。
+    删掉 `UNNAMED_ROOM`（「未命名直播间」）——那是假名字，既不说明是哪个房间又会被当成真昵称。
+  - 夹具从真实载荷派生：`http.rs` 的单元测试改为读这两份夹具（并新增一条「`getRoomPlayInfo` 里没有
+    `anchor_info`/`title`」的病因断言），冒烟 mock 的房间字段也不再手写「测试主播 · 测试房间」。
+    新增回归断言：真实夹具下房间卡与标签**不得**出现占位词（`roomCardHidesPlaceholder` /
+    `tabFallbackShowsRoomNumber`），且第二个房间刻意是「上游名与标题都缺」的形态，让回落这条路在冒烟里真实可见。
+  - 协议侧记一篇取证：`docs/protocol.md` 附录 A41；契约 §5 / §6 与 `docs/ipc.md` 同步。
+
+### Fixed
+
 - **列表页头像不再按原图尺寸撑爆页面**（用户 2026-09-12：「主页的内容都没了啊，只能看到一个头像的角落」）。
   根因：弹幕行重做把 `--avatar`（以及 `--row-line` / `--badge-h` / `--emote`）从 `:root` 挪进了 `.row`，
   而 `--avatar` 是**没有注册、也没有 fallback** 的普通自定义属性 —— `.row` 之外（关注列表 / 账号区 /
@@ -663,9 +682,11 @@
     没看过的房间不在键里，因此整档排在看过的之后（缺省 `{}` 时行为与旧版一致）。**所有关注项照旧全量展示**。
   - **#17 连接的房间列表**：卡片不再显示房间号与短号，改报「**主播名 · 直播间名**」（任一侧缺失就只显示另一侧）。
   - **#18 房间标签条**：标签上的名字从直播间标题改成**主播名**（取不到才退回标题），不再出现房间号。
-  - **前置字段**：`Room` 新增 `anchor_uname`（契约 §5，上游 `getRoomPlayInfo` 的 `anchor_info.base_info.uname`，
+  - **前置字段**：`Room` 新增 `anchor_uname`（契约 §5，上游 `getH5InfoByRoom` 的 `anchor_info.base_info.uname`，
     只读解析）→ core 模型 → bili 解析 → `RoomView`（`docs/ipc.md`）→ UI 类型。上游没给时为空串，
-    界面回落到标题，**不渲染空**、也绝不拿房间号顶替。
+    界面回落到标题、再回落到「房间 <号>」。
+    （**这段原始实现取错了接口**——`getRoomPlayInfo` 的响应里没有 `anchor_info`，昵称恒为空串；
+    修法与取证见 Unreleased `### Fixed` 的第一条。）
   - 关注项的**关注分组名（`group_name`）不再渲染**：用户给定的行内布局只有四个槽位，分组名没有位置；
     字段仍随 `FollowedRoom` 带出，留待以后做分组视图。
   - 冒烟新增：`followLivePinnedFirst` / `followWatchedDesc` / `followWatchedBeforeUnwatched` /

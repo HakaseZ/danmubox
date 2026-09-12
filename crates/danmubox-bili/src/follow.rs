@@ -21,7 +21,8 @@
 //!   - 昵称：`uname` / `name` / `nickname`。
 //!   - 头像：`face` / `cover` / `user_cover`。
 //!   - 直播间标题：`title`（实测 2026-09-12：条目里同时有 `title` 与 `roomname`，
-//!     前者是本场直播标题，与 `getRoomPlayInfo` 的房间 `title` 一致）。
+//!     前者是本场直播标题，与 `getH5InfoByRoom` 的 `room_info.title` 同义——
+//!     `getRoomPlayInfo` 里根本没有标题字段）。
 //!   - 直播状态：`live_status` / `liveStatus`。
 //!   - 分组名：`group_name` / `groupName` / `group`。**不要**用 `tag_name`
 //!     ——它是逗号拼接的房间标签列表，不是分组（实测样本见 `map_item` 注释）。

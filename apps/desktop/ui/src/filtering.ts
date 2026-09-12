@@ -181,29 +181,46 @@ export function sortFollowedRooms(
   });
 }
 
-/** 上游连主播昵称都没给时的中性占位：**绝不拿房间号顶替**（用户 #17/#18）。 */
-export const UNNAMED_ROOM = "未命名直播间";
+/**
+ * 房间名的兜底：上游连主播名与标题都没给（`anchor_uname` 与 `title` 都是空串）时
+ * **只报房间号**。
+ *
+ * 为什么不是「未命名直播间」那种占位：占位词不告诉用户这是哪个房间（用户 2026-09-12
+ * 报的就是它）。口径见 `docs/ui.md` §2.2：主播名 → 直播间标题 → 房间 <号>。
+ */
+export function roomFallbackName(roomId: number): string {
+  return `房间 ${roomId}`;
+}
 
 /**
  * 列表里的房间名（用户 #17：房间列表不展示房间号）：
- * 「主播名 · 直播间名」，缺哪一侧就只显示另一侧（不留悬空的分隔符）。
+ * 「主播名 · 直播间名」，缺哪一侧就只显示另一侧（不留悬空的分隔符）；
+ * 两侧都没有才退到 `roomFallbackName`。
  */
-export function roomDisplayName(room: { anchor_uname: string; title: string }): string {
+export function roomDisplayName(room: {
+  room_id: number;
+  anchor_uname: string;
+  title: string;
+}): string {
   const parts = [room.anchor_uname.trim(), room.title.trim()].filter(
     (part) => part.length > 0,
   );
-  return parts.length > 0 ? parts.join(" · ") : UNNAMED_ROOM;
+  return parts.length > 0 ? parts.join(" · ") : roomFallbackName(room.room_id);
 }
 
 /**
  * 标签条上的房间名（用户 #18：tab 展示主播名）。
- * 主播名取不到才退回直播间标题——标签也要能认出是哪个房间。
+ * 主播名取不到才退回直播间标题，标题也没有才退到房间号——标签也要能认出是哪个房间。
  */
-export function roomTabName(room: { anchor_uname: string; title: string }): string {
+export function roomTabName(room: {
+  room_id: number;
+  anchor_uname: string;
+  title: string;
+}): string {
   const uname = room.anchor_uname.trim();
   if (uname.length > 0) return uname;
   const title = room.title.trim();
-  return title.length > 0 ? title : UNNAMED_ROOM;
+  return title.length > 0 ? title : roomFallbackName(room.room_id);
 }
 
 /** 分页切片；`page` 从 1 开始，越界时夹回有效范围。 */

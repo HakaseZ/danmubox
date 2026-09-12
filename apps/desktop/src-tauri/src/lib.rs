@@ -92,7 +92,8 @@ pub struct RoomView {
     pub short_id: i64,
     pub anchor_uid: i64,
     /// 主播昵称（契约 §5 `Room.anchor_uname`）：界面用它代替房间号展示房间
-    /// （用户 2026-09-12：#17 房间列表 / #18 标签条）。上游没给时为空串。
+    /// （用户 2026-09-12：#17 房间列表 / #18 标签条）。上游没给时为空串，
+    /// 界面回落到 `title`、再回落到「房间 <号>」。
     pub anchor_uname: String,
     pub title: String,
     pub live_status: i32,

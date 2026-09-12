@@ -49,7 +49,7 @@ export interface Message {
    * 界面按**可选**消费：引擎侧尚未落地时是 `undefined`，与空串同样处理（不渲染头像）。
    */
   face?: string;
-  /** 进场回填的历史弹幕（上游最近 10+10 条），与实时弹幕区分展示。 */
+  /** 进场回填的历史弹幕（上游 `data.room` 的最近 10 条，见 `history.rs` / 契约 §4.3），与实时弹幕区分展示。 */
   is_history: boolean;
   amount: number;
   /** 礼物连击标识；非连击类为空串（界面据此聚合）。 */
@@ -289,7 +289,7 @@ export interface Prefs {
   "ui.system_notice": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */
   "ui.show_timestamp": boolean;
-  /** 自定义短语（需求 §2.2）；颜文字是内置常量，不占偏好键。 */
+  /** 自定义短语（需求 §2.2）；短语面板里唯一的内容来源，点选插到光标处。 */
   "composer.phrases": string[];
   "filter.keywords": string[];
   "filter.keywords_mode": "hide" | "only";

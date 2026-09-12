@@ -111,7 +111,7 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // 文档三处都写了它，但 SPECS 没有 → `set_patch` 命中未知键分支返回
         // `BAD_REQUEST`，开关存不下去也读不回来（用户 2026-09-12 核 issue #6 时发现）。
         spec("ui.show_timestamp", Ty::Bool, json!(false), None, None, None),
-        // 自定义短语（需求 §2.2）。颜文字是内置常量，不进偏好。
+        // 自定义短语（需求 §2.2）；短语面板里唯一的内容来源（内置颜文字已删，见 issue #19）。
         spec("composer.phrases", Ty::StrArr, json!([]), None, None, None),
         spec("filter.keywords", Ty::StrArr, json!([]), None, None, None),
         spec(

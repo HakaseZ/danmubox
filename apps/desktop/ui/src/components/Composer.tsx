@@ -64,18 +64,6 @@ const PACKAGE_ORDER: EmotePackage[] = [
   "guard",
 ];
 
-/** 内置颜文字与快捷短语（需求 §2.2 的「快捷短语 / 颜文字」）。 */
-const KAOMOJI: string[] = [
-  "233",
-  "awsl",
-  "yyds",
-  "(￣▽￣)",
-  "(・∀・)",
-  "╮(╯▽╰)╭",
-  "→_→",
-  "666",
-];
-
 export function Composer({
   disabled,
   loggedIn,
@@ -456,7 +444,7 @@ export function Composer({
       {panel === "phrases" && (
         <div className={styles.phrases} data-testid="db-panel" style={panelFont}>
           <div className={styles.panelHead}>
-            <span className={styles.panelTitle}>短语与颜文字</span>
+            <span className={styles.panelTitle}>短语</span>
             <span className={styles.composerSpacer} />
             {panelClose}
           </div>
@@ -488,20 +476,6 @@ export function Composer({
           </div>
           <div className={styles.phrasesBody}>
             <div className={styles.phrasesRow}>
-              <span className={styles.previewLabel}>颜文字</span>
-              {KAOMOJI.map((text) => (
-                <button
-                  key={text}
-                  className={styles.phraseItem}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => insertAtCaret(text)}
-                >
-                  {text}
-                </button>
-              ))}
-            </div>
-            <div className={styles.phrasesRow}>
-              <span className={styles.previewLabel}>自定义</span>
               {customPhrases.length === 0 && (
                 <span className={styles.previewLabel}>（还没有，在上面加一条）</span>
               )}
@@ -636,7 +610,7 @@ export function Composer({
           <button
             className={panel === "phrases" ? styles.toolActive : undefined}
             disabled={disabled || !loggedIn}
-            title="快捷短语与颜文字（右键短语可改名 / 删除）"
+            title="快捷短语（右键短语可改名 / 删除）"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => togglePanel("phrases")}
           >

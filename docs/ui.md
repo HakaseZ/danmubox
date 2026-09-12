@@ -266,12 +266,12 @@
 | 徽标组 | 见 §4.2，尺寸随字号缩放（em）。紧贴昵称（同一身份簇） |
 | 昵称 | `--fg-dim`（低正文一档），**不吃**弹幕自身颜色：普通弹幕的颜色是 `16777215`（白），套到人名上在浅色主题里等于隐形（用户 2026-09-12 实测「用户名是白色、看不见」）。超长时 14em 截断（窄屏下不许把正文挤出屏幕） |
 | 回复标记 | `reply_to_uid != 0`（契约 §5）时在昵称之后、正文之前显示「回复 @昵称」（`data-testid="db-msg-reply"`，弱化小标、定宽截断 14em、完整名字在 `title`）；非回复（`reply_to_uid == 0` 或 `reply_to_uname` 为空串）不渲染这一格。它**不占正文列**，因此不妨碍正文折行与时间戳/昵称的纵向对齐。被 @ 的名字单独一格（`db-msg-reply-name`）：上游给了 `reply_uname_color`（实测 `#FB7299`）就上色，空串沿用标记自身的弱化色（**空串不是颜色**，与粉丝牌真彩色同一口径）。这一格也是「纯 @ 某人」的槽位——收包侧区分不出 @ 与回复（引擎 2026-09-12 实测：`extra` 45 个键里没有任何指回被回复弹幕的 id，`reply_type_enum` 与 `reply_mid != 0` 同构、`show_reply` 恒为 `true`），因此两种形态共用这一格、只差文案，不各开一列 |
-| 正文 | 折行；**弹幕自身颜色只落在这里**（`Message.color` → `#RRGGBB`；`0` 与 `0xFFFFFF` 都按「未指定」处理 → 主题前景色，见 §4.3）；超过 4 行截断并给「展开」 |
+| 正文 | 折行；**不吃弹幕自身颜色**（`Message.color` 界面一处都不消费，正文与昵称 / 时间戳 / 徽标同用主题前景色，见 §4.3）；超过 4 行截断并给「展开」 |
 | 合并计数 | `count > 1` 或 `kind == gift` 时在正文**行内**末尾渲染 `×N`：跟在最后一行文字后面，不另占一行、不另开一栏 |
 
 | kind | 颜色（本地设计 token） | 图标位 | 对齐 | 字号档 | 备注 |
 |---|---|---|---|---|---|
-| `danmaku` | **正文**取消息 `color`（十进制 RGB → `#RRGGBB`）；`0` 与 `0xFFFFFF` 视为未指定 → 主题前景色；昵称 / 时间戳 / 徽标都不吃它 | `弹` | 左对齐 | 正文档 / 昵称低一档 / 时间最低档 | 竖条贴行首，仅此一种取消息颜色 |
+| `danmaku` | 全部用本地设计 token：正文 `--fg`、昵称 `--fg-dim`、时间戳 `--fg-muted`；**不消费** `Message.color`（§4.3） | `弹` | 左对齐 | 正文档 / 昵称低一档 / 时间最低档 | 竖条贴行首；正文色与其它 kind 一致 |
 | `gift` | 竖条 `--gold #C08A2E`；礼物名加粗；`amount` 用金额色 | `礼` | 左对齐 | 正文档 / 昵称低一档 | 金额单位见 §6.4、§13 |
 | `superchat` | 卡片，背景与边框取自 SC 档位 token `--sc-1 … --sc-5`（档位边界见 §13）；金额行加粗 | `SC` | 左对齐，卡片占满行宽 | 金额低一档加粗 / 正文档 / 昵称低一档 | 高度随内容行数增长 |
 | `interact` | 竖条 `--neutral #6B7280`；正文 `--fg-muted` | `入` | 左对齐 | 最低档 | 弱化显示；默认显示一会儿后自动消失，见 §4.8 |
@@ -357,14 +357,16 @@
 
 | kind | 使用的 `Message` 字段 |
 |---|---|
-| `danmaku` | `ts` `uname` `content` `color` `medal_level` `medal_name` `guard_level` `is_admin` `uid` `reply_to_uid` `reply_to_uname` |
+| `danmaku` | `ts` `uname` `content` `medal_level` `medal_name` `guard_level` `is_admin` `uid` `reply_to_uid` `reply_to_uname` |
 | `gift` | `ts` `uname` `content`（礼物描述） `amount` `uid` |
 | `superchat` | `ts` `uname` `content` `amount` `uid` |
 | `interact` | `ts` `uname` `content`（行为描述） `uid` |
 | `guard` | `ts` `uname` `content` `guard_level` `amount` `uid` |
 | `system` | `ts` `content` |
 
-统一规则：`uid == 0` 且 `uname` 为空时昵称显示「游客」；`medal_level == 0` 不渲染粉丝牌；`guard_level == 0` 不渲染大航海徽标；`color` 为 `0` / 越界 / 非数字 / 等于 `0xFFFFFF`（上游给普通弹幕的白）时都按「未指定」回退主题前景色，不抛错。
+统一规则：`uid == 0` 且 `uname` 为空时昵称显示「游客」；`medal_level == 0` 不渲染粉丝牌；`guard_level == 0` 不渲染大航海徽标。
+
+`Message.color` 仍在契约 §5 里（引擎原样带出；发送侧的 `chat_send.color` 照旧透传），但**界面一处都不消费它**：正文与昵称都用主题 token，因此 `0` / `0xFFFFFF`（上游给普通弹幕的白）/ 越界值都不需要特判，也没有 `cssColor` 一类的换算。依据是用户 2026-09-12 的两次实测反馈——先报「他人用户名是白色、看不见」（浅色主题下白字等于隐形），后报「正文偏黄」；统一后**同屏所有正文一个颜色、所有昵称一个颜色**（冒烟按 `rowBodyNotPaintedByDanmakuColor` / `rowNameNotPaintedByDanmakuColor` / `rowAllBodiesSameColor` / `namesAllSameColor` / `rowLightBodyNotPaintedByDanmakuColor` 断言）。被 @ 的名字是唯一例外：仍按上游 `reply_uname_color` 上色（空串不上色）。
 
 ### 4.4 本地发送回显与被吞标记
 
@@ -571,11 +573,10 @@
 
 | 功能 | 规则 |
 |---|---|
-| 内置快捷短语 | 编译期常量表（常用语 + 颜文字），不占偏好键；点选插入光标处 |
 | 自定义短语 | 用户新增 / 改名 / 删除，存 `composer.phrases`（字符串数组）。**新增**用面板里**独立的一行**（面板头下方固定行：输入框占满除「添加」按钮外的整行，回车或「添加」都提交，`data-testid="db-phrase-add"`）；**改名与删除**在短语上**右键**，菜单两项「编辑 / 删除」，编辑是就地变成输入框（Enter 提交、Esc 取消） |
 | 加一条那一行不许被顶走 | 短语面板自上而下固定为「面板头 → **加一条（固定行）** → 芯片区（`overflow-y: auto`）」：芯片再多也只让**芯片区**滚动，加一条那一行永远在场（用户 2026-09-12：竖屏下加短语时输入框被挤占）。冒烟按 `phraseAddRowInsidePanel`（在面板内）、`phraseAddRowStaysPut`（相对面板顶的偏移不变）、`phraseAddRowWideEnough`（≥ 120px）与 `phraseChatInputStillVisible`（聊天输入框仍完整落在视口里、被面板顶到下面而不是被盖住）断言 |
 | 重复与空值 | 添加或改名撞上已有短语、或内容为空时**给出提示**（「这条短语已经有了」/「短语不能为空」），不静默丢弃 |
-| 颜文字 | 归入内置快捷短语分组，面板里独立一行，不占偏好键 |
+| 来源 | 只有用户自己加的短语（存 `composer.phrases`）：面板里**没有**内置短语 / 颜文字（用户 2026-09-12：短语删除颜文字部分），打开面板时列表为空就是空 |
 | @某人 | 行菜单「＠TA」把 `@昵称 ` 插到**光标处**；上游是否支持 at 语法与 at 后是否真正提醒见 §13，UI 不保证提醒效果 |
 | 回复 | 行菜单「回复」后在输入区上方显示引用条（昵称 + 内容摘要）；发送时按上游支持的 at 语法拼装文本（`Message` 无引用字段，本地不渲染引用结构）；取消引用则清空引用条，草稿文本不变 |
 

@@ -24,6 +24,12 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **短语面板删掉内置颜文字**（用户 2026-09-12 #19「短语删除颜文字部分」）。面板现在只有用户自己加的短语
+  （存 `composer.phrases`），`Composer.tsx` 的 `KAOMOJI` 常量与那行芯片一并删除，面板标题与工具行 `title` 里
+  不再提颜文字；偏好键数量不变（颜文字本来就不占键）。`docs/ui.md` §6.2 同步删掉「内置快捷短语」与「颜文字」两行。
+
 ### Added
 
 - **关注列表带出直播间标题**（用户 2026-09-12 反馈：关注项只有头像 / 昵称 / 状态，看不到直播标题）。
@@ -38,10 +44,12 @@
 - **弹幕行 DOM 重做 + 界面按用户实测意见逐条整改**（用户 2026-09-12，实际使用后提的 9 条）。
   核心是每条弹幕的 DOM 结构：身份与正文从「两个被 `align-items: baseline` 摆平的 flex 项」改成**同一个网格的两列**，
   头像从「钉在行容器上」改成**钉在首行盒上**。口径与理由写进 `docs/ui.md` §4.1 / §4.2 / §6.2 / §6.3 / §9.1。
-  - **用户名不再吃弹幕颜色**（用户原话：「用户名是白色、看不见」）。根因：`Message.color` 被套在**昵称**上，
-    而普通弹幕的颜色是 `16777215`（白）——浅色主题下白字人名等于隐形。现在颜色**只落正文**；
-    `0` 与 `0xFFFFFF` 一并按「未指定」处理（回退主题前景色），被 @ 的名字仍按上游 `reply_uname_color` 上色（空串不上色）。
-    新增断言：`rowNameNotPaintedByDanmakuColor` / `rowBodyPaintedByDanmakuColor` / `rowDefaultWhiteTreatedAsUnset`。
+  - **弹幕自定义颜色整体不再消费**（用户 2026-09-12 先报「用户名是白色、看不见」，后报「正文偏黄」）。根因：`Message.color`
+    被套在**昵称**上，而普通弹幕的颜色是 `16777215`（白）——浅色主题下白字人名等于隐形；正文一并统一之后，界面
+    **一处都不读** `Message.color`（`filtering.ts` 的 `cssColor` 随之删除），正文与昵称都用主题 token（`--fg` / `--fg-dim`），
+    被 @ 的名字仍按上游 `reply_uname_color` 上色（空串不上色）。断言：`rowNameNotPaintedByDanmakuColor` /
+    `rowBodyNotPaintedByDanmakuColor` / `rowDefaultWhiteTreatedAsUnset` / `rowAllBodiesSameColor` / `namesAllSameColor` /
+    `rowLightBodyNotPaintedByDanmakuColor`。此前 `docs/ui.md` §4.1 / §4.3 写的「颜色只落正文」与实际不符，同批改成一致。
   - **头像与身份不再错开**（用户原话：「发表情时显得错开」）。根因有两个：行上同时存在两套对齐模型
     （`align-items: baseline` + 头像 `align-self: flex-start`），以及基线取自「各自第一个行盒」——
     正文里一旦出现**块级大表情**，那个行盒就不存在，基线退化成「正文盒底边」，身份簇被拽到图片底边
@@ -501,8 +509,8 @@
   另确认 `UNIVERSAL_EVENT_GIFT(_V2)` = **连线礼物**（PK 连线时投喂，社区文档有载）。
 - **多房间标签页**（需求 §2.8）：已添加房间多于一个时顶部显示标签页，点一下切换，标签带连接状态圆点。
   房间本来就能同时连接，这里只是补上切换入口。
-- **快捷短语与颜文字**（需求 §2.2）：输入区「短语」按钮展开面板——内置颜文字为固定常量，
-  自定义短语存偏好键 `composer.phrases`（契约 §8 的偏好键因此由 15 个变为 16 个），面板内可增删。
+- **快捷短语**（需求 §2.2）：输入区「短语」按钮展开面板——短语存偏好键 `composer.phrases`
+  （契约 §8 的偏好键因此由 15 个变为 16 个），面板内可增删；内置颜文字已于 2026-09-12 按用户 #19 删除（见 `### Removed`）。
 - **@某人与回复弹幕**（需求 §2.2）：行内动作 `@TA` 把昵称插进输入框并记住 uid，`回复` 显示引用条；
   发送时按官方载荷带上 `reply_mid` / `reply_uname` / `reply_type`，回复时另带 `replay_dmid`
   （**官方字段名就是这个拼写**，见 `protocol.md` §11.6）。

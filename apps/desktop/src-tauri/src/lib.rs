@@ -18,7 +18,7 @@ use danmubox_core::ports::{
 use danmubox_core::{
     config_path, data_dir, prefs_path, BlacklistedUser, ConfigStore, Counters, Emote, Event,
     EventBus, FollowedRoom, HistoryQuery, Message, MessageKind, Prefs, ReportReason, Room,
-    RoomRuntime, RoomSession, SendOutcome,
+    RoomRuntime, RoomSession, SendOutcome, SilentUser,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
@@ -448,6 +448,16 @@ async fn admin_unmute(state: State<'_, AppState>, room_id: i64, uid: i64) -> Api
         .unmute(room_id, uid)
         .await
         .map_err(ApiError::from)
+}
+
+/// 禁言名单（契约 §7）。与黑名单列表同款：只读，非房管时上游 code 原样带回。
+#[tauri::command]
+async fn admin_silent_list(
+    state: State<'_, AppState>,
+    room_id: i64,
+) -> ApiResult<Vec<SilentUser>> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    admin.silent_list(room_id).await.map_err(ApiError::from)
 }
 
 /// 房间黑名单（契约 §7）。
@@ -895,6 +905,7 @@ pub fn run() {
             emotes_owned,
             admin_mute,
             admin_unmute,
+            admin_silent_list,
             admin_blacklist_list,
             admin_blacklist_add,
             admin_blacklist_del,

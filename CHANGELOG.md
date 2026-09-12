@@ -39,9 +39,9 @@
   包在 `data.packages[]`、表情在包的 **`emote[]`**（不是直播那套 `emoticons`）；
   唯一键按 `upower_` + 表情 `text` 拼装；包分类新增 `owned`。未登录时上游退化为免费表情包。
   协议依据 `docs/protocol.md` 附录 A35 结案。
-- **房管能力**（端口 `RoomAdmin`，IPC `admin_mute` / `admin_unmute` / `admin_blacklist_list` /
-  `admin_blacklist_add` / `admin_blacklist_del` / `admin_keywords_list` / `admin_keywords_add` /
-  `admin_keywords_del`）：禁言 / 解除、黑名单增删查、屏蔽词增删查。
+- **房管能力**（端口 `RoomAdmin`，IPC `admin_silent_list` / `admin_mute` / `admin_unmute` /
+  `admin_blacklist_list` / `admin_blacklist_add` / `admin_blacklist_del` / `admin_keywords_list` /
+  `admin_keywords_add` / `admin_keywords_del`）：禁言名单、禁言 / 解除、黑名单增删查、屏蔽词增删查。
   **只读三个列表接口已用真实登录态实测**（禁言 `POST …/v1/banned/GetSilentUserList`、
   屏蔽词 `POST …/v1/banned/GetShieldKeywordList`、黑名单
   `GET …/xlive/app-ucenter/v2/xbanned/banned/GetBlackList`——注意黑名单在 `app-ucenter`

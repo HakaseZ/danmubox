@@ -56,6 +56,8 @@
 | `session_logout` | 无 | `SessionStatus` | `INTERNAL` | 清空 `config.toml` 中当前 profile 的凭据（原子替换）并断开需登录的连接 |
 | `profiles_list` | 无 | `ProfileList` | `INTERNAL` | 列出 `config.toml` 中的 profile 名与当前 `active_profile` |
 | `profiles_switch` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换 `active_profile` 并以新凭据重建连接；`name` 不在文件中 → `NOT_FOUND`；不复制凭据文件 |
+| `profiles_create` | `name: string` | `SessionStatus` | `BAD_REQUEST` `INTERNAL` | 新建空 profile 并设为当前（随后可扫码或手填凭据）；名字限 `[A-Za-z0-9_-]{1,32}`，重名或非法 → `BAD_REQUEST`，**不覆盖已有** |
+| `profiles_remove` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除 profile；**不许删最后一个** → `BAD_REQUEST`；不存在 → `NOT_FOUND`；删的若是当前项，当前指向切到剩下的条目并落盘 |
 | `rooms_list` | 无 | `RoomView[]` | `INTERNAL` | 已添加房间 + 当前连接状态 + 当前会话缓冲条数 |
 | `rooms_add` | `input: string` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号，解析走 `getRoomPlayInfo`；解析不出即 `BAD_REQUEST` |
 | `rooms_remove` | `roomId: number` | `void` | `ROOM_NOT_FOUND` `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
@@ -63,9 +65,19 @@
 | `rooms_disconnect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` | 断开并**结束会话、清空缓冲**。幂等：已断开时直接返回 |
 | `rooms_reconnect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` | 房间内「刷新」按钮：主动断开并立即重连（跳过退避）。**不清空缓冲、不结束会话**；连接中/退避中/已连接三种状态均可调用 |
 | `history_query` | `roomId: number`、`limit?: number`、`after?: number`、`before?: number`、`kinds?: MessageKind[]`、`uid?: number`、`q?: string` | `Message[]`（snake_case，按 `ts` 升序） | `ROOM_NOT_FOUND` `BAD_REQUEST` `INTERNAL` | 只查**当前房内会话缓冲**（契约 §4.3）；无活跃会话（缓冲已销毁）时返回空数组，不报错。不跨会话、不回放、不导出 |
-| `chat_send` | `roomId: number`、`content: string`、`color?: number`、`mode?: number` | `ChatSendResult` | `BAD_REQUEST` `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | `color` 0–16777215（默认 16777215）、`mode` ∈ {1, 4, 5}（默认 1）；本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发 |
+| `chat_send` | `roomId: number`、`content: string`、`color?: number`、`mode?: number` | `ChatSendResult` | `BAD_REQUEST` `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | `color` 缺省 16777215、`mode` 缺省 1，**两者都原样透传不做范围校验**——A18 实测：上游对 `mode` 与越界 `color` 都不做范围检查，且会把过暗颜色改写成白（可读性规范化）；**唯一要避免的是 `color=0`**（上游参数层直接拒绝 `-400`）。本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发 |
 | `chat_report` | `roomId: number`、`upstreamId: string`、`reason: number` | `ReportResult` | `BAD_REQUEST` `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕；`upstreamId` 取 `Message.upstream_id`（契约 §5，举报必需）；`reason` 为上游举报类型码，取值见 §3.2 |
 | `emotes_list` | `roomId: number` | `Emote[]` | `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 按**当前房间身份**（`RoomSession`）加载表情包库：无牌/有牌/房管/大航海看到的面板不同 |
+| `emotes_owned` | 无 | `Emote[]` | `UPSTREAM_ERROR` `INTERNAL` | 主站「我的表情」：用户**拥有**的表情包（充电/UP 主专属那一族）。`package_kind="owned"`、`room_id=0`、唯一键 = `"upower_" + 表情 text`；未登录时上游退化为免费表情包，因此**不报** `NOT_LOGGED_IN` |
+| `admin_mute` | `roomId: number`、`uid: number`、`hour: number`、`msg?: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
+| `admin_unmute` | `roomId: number`、`uid: number` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 解除禁言 |
+| `admin_silent_list` | `roomId: number` | `SilentUser[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 当前禁言名单（只读） |
+| `admin_blacklist_list` | `roomId: number` | `BlacklistedUser[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 黑名单（只读）。内部把 `roomId` 解析成主播 uid 后按 `anchor_id` 寻址——上游这个接口不吃房间号 |
+| `admin_blacklist_add` | `roomId: number`、`uid: number` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 加入黑名单（拉黑会解除关系并禁止互动，比禁言重） |
+| `admin_blacklist_del` | `roomId: number`、`uid: number` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 移出黑名单 |
+| `admin_keywords_list` | `roomId: number` | `string[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 直播间屏蔽词（只读） |
+| `admin_keywords_add` | `roomId: number`、`words: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 添加屏蔽词；上游一次只收一个 `keyword`，多词由实现逐个调用 |
+| `admin_keywords_del` | `roomId: number`、`word: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 删除屏蔽词 |
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；排序规则 `live_status == 1` 置顶（契约 §5） |
 | `wallet_balance` | 无 | `WalletBalance` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额；单位与刷新时机见 §3.2 |
 | `prefs_get` | 无 | `PrefsSnapshot`（契约 §8 全部 17 键的**生效值**） | `INTERNAL` | 未写入过的键返回契约 §8 默认值 |
@@ -211,7 +223,7 @@ type AppInfo = {
 
 | 待确认项 | 现状 | 核对方法 | 责任人动作 |
 |---|---|---|---|
-| `chat_send` 的 `color` / `mode` 是否存在上述之外的合法取值 | 按 `color` 0–16777215（默认 16777215）、`mode` ∈ {1, 4, 5}（默认 1）校验 | 用边界值与疑似模式值各发一次弹幕，抓取上游响应 | 协议层维护者实测后回填 `protocol.md`；本文件只引用 |
+| ~~`chat_send` 的 `color` / `mode` 合法取值~~ | **已实测结案**（`protocol.md` A18，2026-09-12）：`color=0` 被参数层拒；`mode` 与越界 `color` 上游不校验；过暗颜色会被改写成白。客户端原样透传即可 | — | — |
 | 扫码上游状态码 → 归一化状态的映射 | 本文件只透传 `code`；状态机与状态码语义表由 `auth.md` 拥有 | 完整跑一次扫码（未扫码 / 已扫码待确认 / 确认成功 / 失效）并在每个节点记录 `code` 与凭据下发情况 | `auth.md` 维护者回填状态码表；本文件无需改动 |
 | `chat_report` 的 `reason` 类型码取值 | 只透传调用方给出的数值，不校验语义 | 用官方界面举报一次同一条弹幕并抓取请求参数 | 协议层维护者回填类型码表并同步 `protocol.md` |
 | 被吞弹幕回显内容的稳定字段路径 | 按契约 §5 取 `data.mode_info.extra`（JSON 字符串）的 `content` | 各触发一次平台风控与直播间吞没，记录原始响应 | 协议层维护者确认是否需要兜底路径 |

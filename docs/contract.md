@@ -177,9 +177,9 @@ sessdata = ""
 | `is_admin` | bool | 发送者是否房管（REQUIREMENTS.md 需求） |
 | `is_history` | bool | 是否来自进场回填（§4.3）；实时推送恒为 `false` |
 | `amount` | i64 | 礼物金瓜子或 SC 金额，非交易类为 0 |
-| `emote_url` | string | 表情弹幕的图片地址（**已规范化为 https**）；非表情弹幕为空串 |
+| `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。存整份而非只存图片地址，是为了让界面能把它**再发出去** |
+| `face` | string | 发言者头像 URL（`info[0][15].user.base.face`，历史条目同层）；取不到为空串，界面自行降级 |
 | `upstream_id` | string | **上游弹幕标识，举报必需**（来源待实测，见 `protocol.md` 附录） |
-| `emote_url` | string | 表情弹幕的图片地址（已规范化）；非表情为空串 |
 
 > **徽标（REQUIREMENTS.md 需求）**：主播 = `uid == Room.anchor_uid` 派生；房管 = `Message.is_admin`；大航海 = `Message.guard_level`（`1` 总督 / `2` 提督 / `3` 舰长）。`is_anchor` 不设独立字段——能推导就不存。
 
@@ -229,7 +229,7 @@ sessdata = ""
 
 > 与 `Message.medal_level` 区分：后者是**发送者**的牌，前者是**我**在这个房间的牌。表情包库可用范围取决于这套身份。
 
-`Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard`；`room` = UP 主大表情与房间专属表情。**没有 `admin`**——房管没有表情分类，见 `protocol.md` A26）/ `text` / `url` / `room_id`（房间专属时非 0）。
+`Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `owned`；`owned` = 主站「我的表情」中用户拥有的包，见 `protocol.md` A35；`room` = UP 主大表情与房间专属表情。**没有 `admin`**——房管没有表情分类，见 `protocol.md` A26）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
 `EmoteRef`（弹幕携带的表情，规范性）：`emoticon_unique` / `url`（已规范化）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display`。
 
@@ -264,6 +264,10 @@ Frontend → Rust 命令（`invoke`）：
 |---|---|
 | `session_status` | 登录态（不含 Cookie 值），含当前 `active_profile` |
 | `session_qr_start` / `session_qr_poll` | 扫码登录 |
+| `emotes_owned` | 主站「我的表情」（用户拥有的表情包）；`package_kind` 为 `owned`，唯一键 = `"upower_" + 表情 text` |
+| `admin_mute` / `admin_unmute` | 禁言 / 解除（`room_id`、`uid`、`hour`：`-1` 永久、`0` 本场） |
+| `admin_blacklist_list` / `_add` / `_del` | 直播间黑名单（列表 / 加入 / 移除） |
+| `admin_keywords_list` / `_add` / `_del` | 直播间屏蔽词（列表 / 添加 / 删除） |
 | `session_logout` | 登出并清空 `config.toml` 中当前 profile 的凭据 |
 | `profiles_list` / `profiles_switch` | 列出配置文件中的 profiles、切换当前 profile 并以新凭据重连 |
 | `rooms_list` / `rooms_add` / `rooms_remove` | 房间增删查 |
@@ -301,6 +305,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.gift_panel_mode` | string | `"merged"` | `merged`（礼物混在弹幕栏）/ `separate`（独立礼物栏） |
 | `ui.interact_auto_hide` | boolean | `true` | 互动/进场消息显示一会儿后自动消失（`false` = 常驻） |
 | `ui.system_notice` | boolean | `false` | 是否显示系统通知（开播 / 下播 / 标题变更 / 公告） |
+| `ui.show_timestamp` | boolean | `false` | 弹幕前是否显示时间戳（用户 2026-09-12 反馈：要可开关） |
 | `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；点一下插入输入框。颜文字是内置常量，不占用偏好键 |
 | `filter.keywords` | string[] | `[]` | 关键词列表 |
 | `filter.keywords_mode` | string | `"hide"` | `hide` 命中隐藏 / `only` 仅显示命中 |
@@ -341,6 +346,9 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 房间观众数（在线人数 / 累计看过） | §5 `RoomStats`、§7 `danmubox://room_stats` |
 | 互动消息自动消失 / 系统通知开关 | §8 `ui.interact_auto_hide` / `ui.system_notice` |
 | 关注列表自动加载 | §3 `RoomCatalog`、§7 `follow_list`、`ui.md` §2.2 |
+| 时间戳显示开关 / 用户头像 / 粉丝牌与身份标识（#6） | §5 `Message.face`、§8 `ui.show_timestamp`、`ui.md` |
+| 主站「我的表情」可发送（#8） | §5 `Emote.package_kind=owned`、§7 `emotes_owned` |
+| 房管功能：禁言 / 黑名单 / 屏蔽词（#3） | §7 `admin_*`、`protocol.md` A36 |
 | 过滤与合并相似 | §8 `filter.*` / `ui.merge_*` |
 | 多房间标签页 | `ui.md` |
 | 多账号（单文件多 profiles） | §4.1、§7 `profiles_list` / `profiles_switch` |

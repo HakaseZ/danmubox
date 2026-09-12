@@ -9,11 +9,27 @@
 //        await page.evaluate(() => document.dispatchEvent(
 //          new CustomEvent("__smoke-cmd", { detail: { type: "run" } })));
 //      场景自己跑完（含两段 8.6s 等待）后把断言快照写进 document.documentElement 的
-//      data-smoke 属性（JSON）并 console.log 一份。
+//      data-smoke 属性（JSON），外层轮询这个属性即得结果。
+//      坑：page.evaluate 跑在隔离世界，读不到 main world 里挂在 window 上的变量（mock 与 bundle
+//      都在 main world），所以断言只写成 DOM 属性；跨世界派发 DOM CustomEvent 是通的。
 //
 // 断言：① 头部同时显示在线/看过且没有人气值；② 系统消息默认不渲染、开关打开后出现；
 //       ③ 互动行默认 8 秒后被摘除、关掉开关则常驻；④ 历史行与实时行 computed opacity 相等
 //       且页面找不到「以上为进场前的最新弹幕」这类分界文案。
+//
+// 失败长什么样（data-smoke 里对应字段为 false）：
+//   - 属性根本不出现：App 没 bootstrap 起来——先查 mock 注入顺序与 dist 是否与 src 同步。
+//   - step3_interactRendered / step5_interactGoneAfter8s / step6_interactPersistsWhenOff：
+//     互动消息的渲染、淡出与 store 侧的摘除定时器（曾在这里抓到 updatePrefs 无条件清定时器）。
+//   - step4_systemRenderedAfterToggle：系统通知开关（filtering.passesFilter 的 kind 级门）。
+//   - step3_historyOpacity != step3_liveOpacity 或 dividerTextPresent=true：历史与实时又割裂了。
+//   - step3_headerHasOnline / step3_headerHasWatched / step3_headerHasPopularity：
+//     房间头三个数的展示口径（观众数 vs 已废弃的人气值）。
+//   - step1_followCalls != 1 或 step1_roomListShowsFollowed=false：启动时没自动拉关注列表。
+//
+// 维护提示：定位 DOM 靠 "roomCard" 类名、以 `_row_` 开头的行类名，以及「系统通知」「互动消息
+// 自动消失」两个 label 文案；布局重排后若这些变了，只改 rows() / clickLabel() 的定位，断言逻辑不动。
+// 本仓库没有前端测试运行器，这是界面行为唯一的运行时证据入口，长期保留。
 
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 

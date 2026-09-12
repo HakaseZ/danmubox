@@ -69,6 +69,17 @@
 
 ### Added
 
+- **CLI 新增 `--config <路径>`**：指向一个空文件即可跑游客态采集，用于 A21 这类需要两种登录态对照的校准，
+  不必动真实凭据。
+
+### Changed
+
+- **修正文档对游客态的假设**（已实测）：游客态**不会**掩码字段——`uid`、昵称、粉丝牌、举报标识
+  与登录态同样完整，礼物照常下发。差异只在连接能力（认证包 `uid=0`、`key` 为空）。
+  A3 与 A21 两行据此改写。
+
+### Added
+
 - **独立可运行的 release 产物**（交付形态）：`tauri build --no-bundle` 产出
   `target/release/danmubox-desktop`（约 13 MB），前端已内嵌——日志里页面加载的是
   `tauri://localhost`，因此不必再起 Vite dev server。构建步骤记入 `docs/operations.md` §1.3。

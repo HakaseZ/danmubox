@@ -20,6 +20,10 @@ use tokio::sync::broadcast::error::RecvError;
 #[derive(Parser)]
 #[command(name = "danmubox", about = "弹幕框调试入口", version)]
 struct Cli {
+    /// 覆盖凭据文件路径。指向一个不存在的文件即可跑游客态采集——
+    /// 用于 A21（游客态字段覆盖）这类需要对照两种登录态的校准，不必动真实凭据。
+    #[arg(long, global = true)]
+    config: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -80,12 +84,13 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
+    let cli = Cli::parse();
+    let path = cli.config.clone().unwrap_or_else(config_path);
     let store = Arc::new(
-        ConfigStore::load(config_path())
-            .with_context(|| format!("读取 {} 失败", config_path().display()))?,
+        ConfigStore::load(path.clone()).with_context(|| format!("读取 {} 失败", path.display()))?,
     );
 
-    match Cli::parse().command {
+    match cli.command {
         Command::Resolve { input } => resolve(&store, &input).await?,
         Command::Watch {
             input,

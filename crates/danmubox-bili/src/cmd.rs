@@ -163,6 +163,8 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
 /// 内容 `info[1]`；颜色 `info[0][3]`；时间戳 `info[0][4]`（毫秒）；
 /// **本房间**大航海等级 `info[7]`（数字，不是数组）；
 /// 明文用户对象 `info[0][15].user`；粉丝牌 `…user.medal.{level,name,guard_level}`；
+/// `info[0][15].extra`（JSON 字符串）里同时有举报标识 `id_str` 与回复关系
+/// `reply_mid` / `reply_uname`（见 §11.6 的更正）。
 ///
 /// 两个易混点（都有实测依据，见 A39）：
 /// `user.medal.guard_level` 是**牌子**所属房间的舰长标记，不是本房间的舰长标；
@@ -264,6 +266,20 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
         if let Ok(parsed) = serde_json::from_str::<Value>(extra) {
             if let Some(id) = parsed.get("id_str").and_then(Value::as_str) {
                 message.upstream_id = id.to_string();
+            }
+            // 回复关系也在这份 JSON 里（不在 `info` 的 `reply` 槽位上，见 §11.6 更正）。
+            // `reply_mid == 0` 即不是回复。
+            let reply_mid = parsed
+                .get("reply_mid")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if reply_mid != 0 {
+                message.reply_to_uid = reply_mid;
+                message.reply_to_uname = parsed
+                    .get("reply_uname")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
             }
         }
     }
@@ -662,6 +678,66 @@ mod tests {
         let m = message(7, &this_room, &counters()).expect("必须解出弹幕");
         assert_eq!(m.guard_level, 3, "本房间舰长要画标");
         assert_eq!(m.medal_guard_level, 3);
+    }
+
+    #[test]
+    fn reply_target_comes_from_the_extra_json() {
+        // 真实样本（180 条里 1 条回复弹幕）：回复关系在 `extra` 这个 JSON 字符串里，
+        // 不在 `info` 的槽位上。同层还有 reply_uname_color / reply_type_enum /
+        // reply_is_mystery / show_reply（本实现不消费）。
+        let extra = json!({
+            "content": "奇怪",
+            "id_str": "0123456789abcdef",
+            "show_reply": true,
+            "reply_mid": 11425685,
+            "reply_uname": "被回复的人",
+            "reply_uname_color": "#FB7299",
+            "reply_type_enum": 1,
+            "reply_is_mystery": false
+        })
+        .to_string();
+        let payload = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1, 1, 0, "x", 0, 0, 0, "", 0, "{}", "{}",
+                 {"extra": extra, "user": {"uid": 7, "base": {"name": "回复的人"},
+                                           "medal": {"level": 0}}}],
+                "奇怪",
+                [7, "回复的人", 0, 0, 0, 10000, 1, ""],
+                []
+            ]
+        });
+        let m = message(7, &payload, &counters()).expect("必须解出弹幕");
+        assert_eq!(m.reply_to_uid, 11425685);
+        assert_eq!(m.reply_to_uname, "被回复的人");
+        assert_eq!(m.upstream_id, "0123456789abcdef", "举报标识与回复同源");
+    }
+
+    #[test]
+    fn non_reply_danmaku_leaves_the_reply_target_empty() {
+        // 常态：extra 里 reply_mid = 0（实测 179/180 如此），不得产出半截回复关系。
+        let extra = json!({
+            "id_str": "0123456789abcdef",
+            "reply_mid": 0,
+            "reply_uname": "",
+            "reply_uname_color": "",
+            "reply_type_enum": 0,
+            "show_reply": true
+        })
+        .to_string();
+        let payload = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1, 1, 0, "x", 0, 0, 0, "", 0, "{}", "{}",
+                 {"extra": extra, "user": {"uid": 7, "base": {"name": "路人"}, "medal": {"level": 0}}}],
+                "普通弹幕",
+                [7, "路人", 0, 0, 0, 10000, 1, ""],
+                []
+            ]
+        });
+        let m = message(7, &payload, &counters()).expect("必须解出弹幕");
+        assert_eq!(m.reply_to_uid, 0);
+        assert!(m.reply_to_uname.is_empty());
     }
 
     #[test]

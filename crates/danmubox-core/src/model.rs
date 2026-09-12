@@ -118,6 +118,15 @@ pub struct Message {
     // 装箱只在真有表情时分配一次，换取消息本体保持紧凑。
     #[serde(default)]
     pub emote: Option<Box<EmoteRef>>,
+    /// 被回复者的 uid；`0` 表示这条不是回复。
+    ///
+    /// 上游把回复关系塞在 `info[0][15].extra` 这个 JSON 字符串里（历史条目则是
+    /// 顶层的 `reply` 对象），字段名都是 `reply_mid`（`docs/protocol.md` §11.6、附录 A40）。
+    #[serde(default)]
+    pub reply_to_uid: i64,
+    /// 被回复者昵称；非回复为空串（上游 `reply_uname`）。
+    #[serde(default)]
+    pub reply_to_uname: String,
     pub upstream_id: String,
 }
 
@@ -147,6 +156,8 @@ impl Message {
             amount: 0,
             combo_id: String::new(),
             emote: None,
+            reply_to_uid: 0,
+            reply_to_uname: String::new(),
             upstream_id: String::new(),
         }
     }

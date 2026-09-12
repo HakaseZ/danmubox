@@ -175,6 +175,20 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
         .pointer("/user/medal/guard_level")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    // 回复：历史条目放在顶层 `reply` 对象里，键名与实时 `extra` 内的完全相同
+    // （`reply_mid` / `reply_uname`，实测键位；本次样本里值都是 0，即没有回复）。
+    if let Some(reply_mid) = item
+        .pointer("/reply/reply_mid")
+        .and_then(Value::as_i64)
+        .filter(|mid| *mid != 0)
+    {
+        message.reply_to_uid = reply_mid;
+        message.reply_to_uname = item
+            .pointer("/reply/reply_uname")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+    }
     message.is_admin = item.get("isadmin").and_then(Value::as_i64).unwrap_or(0) != 0;
     message.upstream_id = item
         .get("id_str")
@@ -285,6 +299,7 @@ mod tests {
                         "isadmin": 0,
                         "guard_level": 0,
                         "id_str": "bbb",
+                        "reply": {"reply_mid": 4242, "reply_uname": "被回复的人", "show_reply": true}
                     },
                     {
                         "text": "前一条",
@@ -294,6 +309,7 @@ mod tests {
                         "isadmin": 1,
                         "guard_level": 3,
                         "id_str": "aaa",
+                        "reply": {"reply_mid": 0, "reply_uname": "", "show_reply": true},
                         "user": {"base": {"face": "https://f/h.png"}, "medal": {
                             "name": "牌子", "level": 21,
                             "guard_level": 3,
@@ -320,6 +336,9 @@ mod tests {
             messages[0].medal_guard_level, 3,
             "粉丝牌自身的舰长标记另取 user.medal.guard_level"
         );
+        assert_eq!(messages[0].reply_to_uid, 0, "reply_mid=0 即不是回复");
+        assert_eq!(messages[1].reply_to_uid, 4242, "回复关系在顶层 reply 对象里");
+        assert_eq!(messages[1].reply_to_uname, "被回复的人");
         assert_eq!(
             messages[1].medal_guard_level, 0,
             "没有粉丝牌就没有牌子的舰长标记"

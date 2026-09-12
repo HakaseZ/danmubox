@@ -148,10 +148,11 @@ type SessionStatus = {
   active_profile: string;     // `config.toml` 中当前生效的 profile 名
 };
 
-// profiles_list 的返回：profiles 为 `config.toml` 中全部 `[profiles.<name>]` 的名字
-type ProfileList = { active_profile: string; profiles: string[] };
+// accounts_list 的返回：每个账号一份具名凭据（config.toml 的 [profiles.<name>]）
+type Account = { name: string; nickname: string; uid: number; face: string; logged_in: boolean; active: boolean };
 
-type QrStart = { key: string; url: string; expires_at: number };
+// account_qr_start 的返回：二维码由后端离线渲染成 SVG，前端包成 data URI 显示
+type AccountQr = { key: string; url: string; svg: string };
 
 type QrPoll = {
   // 归一化状态：pending（未扫码/已扫码待确认/一切未知上游码）/ confirmed / expired
@@ -312,9 +313,8 @@ type AppState = {
 | store 动作 | 调用 | 说明 |
 |---|---|---|
 | `refreshSession()` | `session_status` | 登录态变化入口 |
-| `startQr()` / `pollQr(key)` | `session_qr_start` / `session_qr_poll` | 轮询间隔与超时由 `auth.md` 的状态机决定 |
-| `logout()` | `session_logout` | 清空 `session`，清空 `sessionBuffer` / `emotes` / `follow` / `wallet`，再 `refreshRooms()` |
-| `loadAccounts()` / `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `loginCookie(cookie, name?)` / `startAccountQr(target?)` / `pollAccountQr()` | `profiles_list` / `profiles_switch` | 用返回值覆盖 `session`；切换后按「离开房间」规则清空会话缓冲、表情与钱包切片 |
+| `logoutAccount(name?)` | `account_logout` | 清空 `session`，清空 `sessionBuffer` / `emotes` / `follow` / `wallet`，再 `refreshRooms()` |
+| `loadAccounts()` / `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `loginCookie(cookie, name?)` / `startAccountQr(target?)` / `pollAccountQr()` | `accounts_list` / `account_switch` / `account_remove` / `account_login_cookie` | 用返回值覆盖 `session`；切换「当前账号」后按「离开房间」规则清空会话缓冲、表情与钱包切片（那些是**上一个账号**的）；账号本身的变化交给 `loadAccounts()` |
 | `refreshRooms()` | `rooms_list` | 启动时与 `danmubox://room` 事件后调用 |
 | `addRoom(input)` | `rooms_add` | 成功后插入 `rooms.byId` |
 | `removeRoom(roomId)` | `rooms_remove` | 同时删除该房间的 `sessionBuffer.byRoom[roomId]` / `droppedByRoom[roomId]` / `emotes.byRoom[roomId]` |

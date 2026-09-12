@@ -9,10 +9,11 @@
 //! |---|---|
 //! | 端点 | `GET https://api.live.bilibili.com/xlive/web-room/v1/dM/gethistory` |
 //! | 参数 | `roomid`（真实房间号）+ `room_type`（官方页面取值为 `0` 或 `1`，两者都实测返回过数据） |
-//! | 上限 | `data.room` 恰好 10 条（普通用户）+ `data.admin` 至多 10 条（房管）= **最多 20 条** |
+//! | 上限 | `data.room` 恰好 10 条（房间最近弹幕）；`data.admin` 另有至多 10 条「只看房管」切片 |
 //! | 分页 | **不存在**：`limit` / `page_size` / `size` / `ps` / `page` / `offset` / `last_id` 实测均不加量 |
-//! | 登录 | **不需要**；带与不带 Cookie 实测结果一致 |
+//! | 登录 | **需要完整会话 Cookie**；只带 `buvid3` 或不带头实测成批返回空数组 |
 //! | 时间 | `timeline` 是**北京时间（UTC+8）**的 `yyyy-MM-dd HH:mm:ss`，秒级 |
+//! | 取哪一份 | **只取 `data.room`**；`data.admin` 是同一窗口的房管切片，拼接后会变成「我的发言铺在前面」，见 `map_history` |
 //!
 //! ## 上游不可靠，因此本模块是「尽力而为」
 //!
@@ -88,20 +89,26 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 
 /// 把 `gethistory` 响应映射成历史弹幕（`is_history = true`）。
 ///
-/// `data.room`（普通用户）与 `data.admin`（房管）都映射，保持各自原始顺序：
-/// 先房管后普通，与官方客户端一致（两者上限各 10 条）。
+/// **只取 `data.room`**。上游另外还给一个 `data.admin`（至多 10 条房管弹幕），
+/// 它是同一个窗口的「只看房管」切片：请求者本人就是房管时，那 10 条几乎全是
+/// 请求者自己最近发的弹幕，而且时间整体早于 `data.room`。把它拼在最前面，
+/// 效果就是「最近 10 条历史之前先铺了一屏我自己的发言」——用户报告的
+/// 「历史前面混入了本人的发言记录」正是这个（2026-09-12 实测）。
+/// 房管弹幕只要够新就已经在 `data.room` 里：实测两条数组有 4 条完全重合（同一
+/// `id_str`），因此不再单独拼接。
+///
+/// 顺序：按 `ts` 升序。回填是本次会话缓冲的**前缀**，必须整体早于实时消息；
+/// 上游实测已是升序，这里显式排序把这条不变量钉在实现里。
 pub fn map_history(room_id: i64, value: &Value) -> Vec<Message> {
     let mut out = Vec::new();
-    for key in ["admin", "room"] {
-        let Some(items) = value.pointer(&format!("/data/{key}")).and_then(Value::as_array) else {
-            continue;
-        };
+    if let Some(items) = value.pointer("/data/room").and_then(Value::as_array) {
         for item in items {
             if let Some(message) = map_item(room_id, item) {
                 out.push(message);
             }
         }
     }
+    out.sort_by_key(|message| message.ts);
     out
 }
 
@@ -227,40 +234,54 @@ mod tests {
     }
 
     #[test]
-    fn maps_both_arrays_in_order_with_history_flag() {
+    fn maps_room_history_in_ascending_order_with_history_flag() {
         let value = json!({
             "code": 0,
             "data": {
+                // `data.admin` 是同一窗口的房管切片：实测里它整体早于 `data.room`
+                // 且与之重合，拼在最前面就会变成「我自己的发言铺在历史之前」。
                 "admin": [{
-                    "text": "房管的弹幕",
+                    "text": "房管的旧弹幕",
                     "uid": 11,
                     "nickname": "admin-a",
-                    "timeline": "2026-09-12 08:49:31",
+                    "timeline": "2026-09-12 08:30:00",
                     "isadmin": 1,
                     "guard_level": 3,
-                    "id_str": "aaa",
+                    "id_str": "old",
                     "user": {"medal": {"name": "牌子", "level": 21}}
                 }],
-                "room": [{
-                    "text": "普通弹幕",
-                    "uid": 22,
-                    "nickname": "user-b",
-                    "timeline": "2026-09-12 08:49:32",
-                    "isadmin": 0,
-                    "guard_level": 0,
-                    "id_str": "bbb"
-                }]
+                "room": [
+                    {
+                        "text": "后一条",
+                        "uid": 22,
+                        "nickname": "user-b",
+                        "timeline": "2026-09-12 08:49:32",
+                        "isadmin": 0,
+                        "guard_level": 0,
+                        "id_str": "bbb"
+                    },
+                    {
+                        "text": "前一条",
+                        "uid": 11,
+                        "nickname": "admin-a",
+                        "timeline": "2026-09-12 08:49:31",
+                        "isadmin": 1,
+                        "guard_level": 3,
+                        "id_str": "aaa",
+                        "user": {"medal": {"name": "牌子", "level": 21}}
+                    }
+                ]
             }
         });
 
         let messages = map_history(7, &value);
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].content, "房管的弹幕", "房管数组在前");
-        assert_eq!(messages[1].content, "普通弹幕");
-        assert!(messages[0].is_history && messages[1].is_history);
+        assert_eq!(messages.len(), 2, "只取 data.room，不拼接 data.admin");
+        assert_eq!(messages[0].content, "前一条", "必须按 ts 升序");
+        assert_eq!(messages[1].content, "后一条");
+        assert!(messages.iter().all(|m| m.is_history));
         assert_eq!(messages[0].room_id, 7);
         assert_eq!(messages[0].uid, 11);
-        assert!(messages[0].is_admin);
+        assert!(messages[0].is_admin, "房管弹幕靠 isadmin 字段标注");
         assert_eq!(messages[0].guard_level, 3);
         assert_eq!(messages[0].medal_level, 21);
         assert_eq!(messages[0].medal_name, "牌子");

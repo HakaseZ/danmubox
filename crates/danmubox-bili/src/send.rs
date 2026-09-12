@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use danmubox_core::ports::{DanmakuSender, EmoteToken, SendReport};
+use danmubox_core::ports::{DanmakuSender, EmoteToken, ReplyTarget, SendReport};
 use danmubox_core::{ConfigStore, Error, Result, SendOutcome};
 use serde_json::Value;
 
@@ -138,6 +138,7 @@ impl DanmakuSender for BiliSender {
         color: Option<i64>,
         mode: Option<i64>,
         emote: Option<&EmoteToken>,
+        reply: Option<&ReplyTarget>,
     ) -> Result<SendReport> {
         let profile = self
             .store
@@ -167,6 +168,7 @@ impl DanmakuSender for BiliSender {
             color,
             mode,
             emote,
+            reply,
             &profile.bili_jct,
             &format!("{}", now.elapsed().as_nanos()),
             unix_seconds(),
@@ -204,6 +206,7 @@ fn build_params(
     color: Option<i64>,
     mode: Option<i64>,
     emote: Option<&EmoteToken>,
+    reply: Option<&ReplyTarget>,
     csrf: &str,
     rnd: &str,
     wts: u64,
@@ -228,6 +231,15 @@ fn build_params(
     if let Some(token) = emote {
         params.push(("dm_type".to_string(), "1".to_string()));
         params.push(("emoticonOptions".to_string(), emote_options(token)));
+    }
+    if let Some(target) = reply {
+        // 官方实现这两个字段总是成对出现；`replay_dmid` 只在「回复某条」时才有值。
+        params.push(("reply_mid".to_string(), target.mid.to_string()));
+        params.push(("reply_uname".to_string(), target.uname.clone()));
+        params.push(("reply_type".to_string(), "0".to_string()));
+        if !target.dmid.is_empty() {
+            params.push(("replay_dmid".to_string(), target.dmid.clone()));
+        }
     }
     params
 }
@@ -353,7 +365,7 @@ mod tests {
 
     #[test]
     fn plain_send_carries_no_emote_fields() {
-        let params = build_params(7, "普通弹幕", None, None, None, "csrf", "1", 1);
+        let params = build_params(7, "普通弹幕", None, None, None, None, "csrf", "1", 1);
         assert_eq!(param(&params, "msg"), Some("普通弹幕"));
         assert_eq!(param(&params, "dm_type"), None, "普通弹幕不得带 dm_type");
         assert_eq!(param(&params, "emoticonOptions"), None);
@@ -362,7 +374,7 @@ mod tests {
     #[test]
     fn emote_send_sends_the_unique_key_not_the_name() {
         // 用户实测：发名字会被上游当成普通文本。官方实现发的是 emoticon_unique。
-        let params = build_params(7, "这个好耶", None, None, Some(&token()), "csrf", "1", 1);
+        let params = build_params(7, "这个好耶", None, None, Some(&token()), None, "csrf", "1", 1);
         assert_eq!(
             param(&params, "msg"),
             Some("official_345"),
@@ -380,6 +392,38 @@ mod tests {
         assert_eq!(options["inPlayerArea"], 1);
         assert_eq!(options["bulgeDisplay"], 0);
         assert_eq!(options["url"], "https://i0.hdslb.com/bfs/live/x.png");
+    }
+
+    #[test]
+    fn reply_send_carries_the_official_reply_fields() {
+        // 官方 web 客户端的字段名照抄（含它自己那个 `replay_dmid` 拼写）。
+        let target = ReplyTarget {
+            mid: 42,
+            uname: "被回复的人".into(),
+            dmid: "0123456789abcdef".into(),
+        };
+        let params = build_params(7, "回复内容", None, None, None, Some(&target), "csrf", "1", 1);
+        assert_eq!(param(&params, "reply_mid"), Some("42"));
+        assert_eq!(param(&params, "reply_uname"), Some("被回复的人"));
+        assert_eq!(param(&params, "reply_type"), Some("0"));
+        assert_eq!(
+            param(&params, "replay_dmid"),
+            Some("0123456789abcdef"),
+            "被回复弹幕的 id 字段名是官方的拼写 replay_dmid"
+        );
+        assert_eq!(param(&params, "msg"), Some("回复内容"));
+    }
+
+    #[test]
+    fn mention_without_a_target_message_omits_replay_dmid() {
+        let target = ReplyTarget {
+            mid: 42,
+            uname: "被 @ 的人".into(),
+            dmid: String::new(),
+        };
+        let params = build_params(7, "@被 @ 的人 你好", None, None, None, Some(&target), "csrf", "1", 1);
+        assert_eq!(param(&params, "reply_mid"), Some("42"));
+        assert_eq!(param(&params, "replay_dmid"), None, "@ 不是回复，不该带被回复弹幕 id");
     }
 
     #[test]

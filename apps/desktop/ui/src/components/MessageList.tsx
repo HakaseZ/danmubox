@@ -10,11 +10,22 @@ interface Props {
   rows: DisplayRow[];
   anchorUid?: number;
   prefs: Prefs;
+  onMention?: (message: Message) => void;
+  onReply?: (message: Message) => void;
+  onOpenProfile?: (uid: number) => void;
   onReport?: (message: Message) => void;
 }
 
 /** 聊天流。虚拟滚动 + 自动跟随/暂停规则见 docs/ui.md §2、§3。 */
-export function MessageList({ rows, anchorUid, prefs, onReport }: Props) {
+export function MessageList({
+  rows,
+  anchorUid,
+  prefs,
+  onMention,
+  onReply,
+  onOpenProfile,
+  onReport,
+}: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(prefs["ui.auto_scroll"]);
   const pauseOnHover = prefs["ui.pause_on_hover"];
@@ -85,6 +96,9 @@ export function MessageList({ rows, anchorUid, prefs, onReport }: Props) {
                 }
                 anchorUid={anchorUid}
                 prefs={prefs}
+                onMention={onMention}
+                onReply={onReply}
+                onOpenProfile={onOpenProfile}
                 onReport={onReport}
               />
             </div>

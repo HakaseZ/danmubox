@@ -72,7 +72,7 @@ danmubox/
 |---|---|
 | `AuthProvider` | 登录态、凭据读写、扫码流程、buvid3 |
 | `LiveSource` | 房间解析、建立/断开连接、事件流 |
-| `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5）。`emote: Option<&EmoteToken>` 非空时发送**表情弹幕** |
+| `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5）。`emote: Option<&EmoteToken>` 非空时发送**表情弹幕**；`reply: Option<&ReplyTarget>` 非空时带上 @ / 回复字段（见 `protocol.md` §11.6） |
 | `DanmakuReporter` | 举报弹幕；`reasons()` 取上游固定理由清单（官方客户端按文案反查 `reason_id` 后与文案一起上报） |
 | `EmoteProvider` | 按身份加载表情包库 |
 | `RoomCatalog` | 关注列表、直播状态、房间元信息 |
@@ -253,9 +253,10 @@ Frontend → Rust 命令（`invoke`）：
 | `rooms_connect` / `rooms_disconnect` | 连接控制 |
 | `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |
 | `history_query` | 查询**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`） |
-| `chat_send` | 发弹幕（可带 `emote`）——`emote` 非空时按表情弹幕发送（`docs/protocol.md` §11.4），返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现 |
+| `chat_send` | 发弹幕（可带 `emote` 与 `reply`）——`emote` 非空时按表情弹幕发送（`docs/protocol.md` §11.4），返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现 |
 | `chat_report` | 举报弹幕，理由取自上一步的清单（`{id, reason}`） |
 | `report_reasons` | 举报理由清单（上游固定 7 条） |
+| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)` |
 | `emotes_list` | 按身份加载表情包库 |
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令） |
 | `wallet_balance` | 电池余额 |

@@ -15,11 +15,23 @@ interface Props {
   prefs: Prefs;
   /** 本条是历史与实时之间的第一条实时消息：上面画一条分界说明。 */
   showLiveDivider?: boolean;
+  onMention?: (message: Message) => void;
+  onReply?: (message: Message) => void;
+  onOpenProfile?: (uid: number) => void;
   onReport?: (message: Message) => void;
 }
 
 /** 六种 kind 的渲染规范见 docs/ui.md §6.1；互动与系统行的文案由展示层生成。 */
-export function MessageRow({ row, anchorUid, prefs, showLiveDivider, onReport }: Props) {
+export function MessageRow({
+  row,
+  anchorUid,
+  prefs,
+  showLiveDivider,
+  onMention,
+  onReply,
+  onOpenProfile,
+  onReport,
+}: Props) {
   const { message, count } = row;
   const badges = badgesFor(message, anchorUid);
   const color = cssColor(message.color);
@@ -90,6 +102,33 @@ export function MessageRow({ row, anchorUid, prefs, showLiveDivider, onReport }:
         <span className={`${styles.content} ${highlight ?? ""}`}>{text}</span>
       )}
       {count > 1 && <span className={styles.merged}>×{count}</span>}
+      {onMention && message.kind === "danmaku" && message.uname.length > 0 && (
+        <button
+          className={styles.rowAction}
+          title="在输入框里 @ 这位观众"
+          onClick={() => onMention(message)}
+        >
+          @
+        </button>
+      )}
+      {onReply && message.kind === "danmaku" && (
+        <button
+          className={styles.rowAction}
+          title="回复这条弹幕"
+          onClick={() => onReply(message)}
+        >
+          回复
+        </button>
+      )}
+      {onOpenProfile && message.uid !== 0 && (
+        <button
+          className={styles.rowAction}
+          title="在浏览器里打开 TA 的主页"
+          onClick={() => onOpenProfile(message.uid)}
+        >
+          主页
+        </button>
+      )}
       {onReport && message.kind === "danmaku" && (
         <button
           className={styles.rowAction}

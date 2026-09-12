@@ -13,6 +13,7 @@ import type {
   RoomView as RoomViewData,
   EmoteToken,
   ReportReason,
+  ReplyTarget,
   SendOutcome,
   SessionState,
 } from "../types";
@@ -33,7 +34,11 @@ interface Props {
   onBack: () => void;
   onRefresh: () => void;
   onDisconnect: () => void;
-  onSend: (content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
+  onSend: (
+    content: string,
+    emote?: EmoteToken,
+    reply?: ReplyTarget,
+  ) => Promise<SendOutcome | undefined>;
   onReport: (message: Message, reason: ReportReason) => Promise<void>;
   onPrefs: (patch: Partial<Prefs>) => void;
 }
@@ -74,6 +79,13 @@ export function RoomView({
 }: Props) {
   const [showLogs, setShowLogs] = useState(false);
   const [reportTarget, setReportTarget] = useState<Message>();
+  // 行悬浮菜单里点的 @ / 回复：交给 Composer 应用。
+  // 带 token 是为了「每点一次应用一次」——同一个对象引用重复触发容易写成死循环。
+  const [pendingAction, setPendingAction] = useState<{
+    kind: "mention" | "reply";
+    message: Message;
+    token: number;
+  } | null>(null);
   // 举报理由改用上游固定清单（`dReport/ForReason`，实测 7 条）：
   // 官方客户端按文案反查 `reason_id` 后与文案一起上报，因此界面不该让用户手输。
   const [reasonId, setReasonId] = useState("");
@@ -86,6 +98,7 @@ export function RoomView({
   const loadEmotes = useApp((store) => store.loadEmotes);
   const reportReasons = useApp((store) => store.reportReasons);
   const loadReportReasons = useApp((store) => store.loadReportReasons);
+  const openProfile = useApp((store) => store.openProfile);
   const popularity = useApp((store) => store.popularity[room.room_id]);
   const loggedIn = session?.logged_in ?? false;
 
@@ -152,6 +165,13 @@ export function RoomView({
           rows={chatRows}
           anchorUid={room.anchor_uid}
           prefs={prefs}
+          onMention={(message) =>
+            setPendingAction({ kind: "mention", message, token: Date.now() })
+          }
+          onReply={(message) =>
+            setPendingAction({ kind: "reply", message, token: Date.now() })
+          }
+          onOpenProfile={(uid) => void openProfile(uid)}
           onReport={setReportTarget}
         />
         {separateGifts && (
@@ -177,6 +197,7 @@ export function RoomView({
         lastDetail={lastDetail}
         emotes={emotes}
         recentSends={recentSends}
+        pendingAction={pendingAction}
         onSend={onSend}
         onOpenEmotes={() => void loadEmotes(room.room_id)}
       />

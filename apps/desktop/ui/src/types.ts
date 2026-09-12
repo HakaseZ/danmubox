@@ -44,6 +44,13 @@ export interface RoomView extends Room {
 
 export type ConnState = "connecting" | "connected" | "disconnected" | "error";
 
+export interface ReplyTarget {
+  mid: number;
+  uname: string;
+  /** 被回复弹幕的上游 id；仅 @ 时为空串。 */
+  dmid: string;
+}
+
 export interface ReportReason {
   id: number;
   reason: string;

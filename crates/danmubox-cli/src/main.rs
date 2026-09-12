@@ -211,7 +211,7 @@ async fn send(
     };
 
     let report = sender
-        .send(resolved.room_id, text, color, None, token.as_ref())
+        .send(resolved.room_id, text, color, None, token.as_ref(), None)
         .await
         .context("发送失败")?;
     println!("# 房间 {} 发送结果：{:?}", resolved.room_id, report.outcome);

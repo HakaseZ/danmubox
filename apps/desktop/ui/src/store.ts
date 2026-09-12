@@ -7,6 +7,7 @@ import type {
   AppInfo,
   ChatSendResult,
   EmoteToken,
+  ReplyTarget,
   ReportReason,
   ConnState,
   Emote,
@@ -50,10 +51,17 @@ interface AppStore {
   connect: (roomId: number) => Promise<void>;
   disconnect: (roomId: number) => Promise<void>;
   refresh: (roomId: number) => Promise<void>;
-  send: (roomId: number, content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
+  send: (
+    roomId: number,
+    content: string,
+    emote?: EmoteToken,
+    reply?: ReplyTarget,
+  ) => Promise<SendOutcome | undefined>;
   report: (message: Message, reason: ReportReason) => Promise<boolean>;
   reportReasons: ReportReason[];
   loadReportReasons: () => Promise<void>;
+  /** 用系统浏览器打开用户主页（需求 §2.3：点昵称跳用户主页）。 */
+  openProfile: (uid: number) => Promise<void>;
   /** 最近发送记录：仅会话内保留（需求 §2.2），不落盘。 */
   recentSends: string[];
   loadEmotes: (roomId: number) => Promise<void>;
@@ -201,9 +209,9 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
 
-  async send(roomId, content, emote) {
+  async send(roomId, content, emote, reply) {
     try {
-      const result = await api.chatSend(roomId, content, emote);
+      const result = await api.chatSend(roomId, content, emote, reply);
       // 会话内的最近发送记录：发出去才记，失败的草稿仍留在输入框里等重试。
       set((state) => ({
         lastSend: result,
@@ -235,6 +243,14 @@ export const useApp = create<AppStore>((set, get) => ({
     } catch (error) {
       set({ error: describeError(error) });
       return false;
+    }
+  },
+
+  async openProfile(uid) {
+    try {
+      await api.openUrl(`https://space.bilibili.com/${uid}`);
+    } catch (error) {
+      set({ error: describeError(error) });
     }
   },
 

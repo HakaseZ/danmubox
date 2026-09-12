@@ -14,6 +14,7 @@ import type {
   Message,
   PopularityEvent,
   ReportReason,
+  ReplyTarget,
   Prefs,
   Room,
   RoomView,
@@ -75,8 +76,16 @@ export const api = {
   historyQuery: (roomId: number, query: HistoryQuery = {}) =>
     invoke<Message[]>("history_query", { roomId, query }),
 
-  chatSend: (roomId: number, content: string, emote?: EmoteToken, color?: number) =>
-    invoke<ChatSendResult>("chat_send", { roomId, content, emote, color }),
+  chatSend: (
+    roomId: number,
+    content: string,
+    emote?: EmoteToken,
+    reply?: ReplyTarget,
+    color?: number,
+  ) => invoke<ChatSendResult>("chat_send", { roomId, content, emote, reply, color }),
+
+  /** 用系统浏览器打开链接（点昵称跳主页）。 */
+  openUrl: (url: string) => call<void>("open_url", { url }),
 
   /** 举报一条弹幕。理由取值尚未实测，先按不透明字符串传递。 */
   chatReport: (message: Message, reason: ReportReason) =>

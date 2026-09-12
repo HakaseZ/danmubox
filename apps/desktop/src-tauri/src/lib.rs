@@ -323,10 +323,11 @@ async fn chat_send(
     content: String,
     color: Option<i64>,
     emote: Option<danmubox_core::ports::EmoteToken>,
+    reply: Option<danmubox_core::ports::ReplyTarget>,
 ) -> ApiResult<ChatSendResult> {
     let sender = BiliSender::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     let report = sender
-        .send(room_id, &content, color, None, emote.as_ref())
+        .send(room_id, &content, color, None, emote.as_ref(), reply.as_ref())
         .await
         .map_err(ApiError::from)?;
 
@@ -338,6 +339,48 @@ async fn chat_send(
     };
     let _ = app.emit("danmubox://send", &result);
     Ok(result)
+}
+
+/// 用系统默认浏览器打开一个链接（点昵称跳用户主页用）。
+///
+/// 刻意不引入 `tauri-plugin-opener`：桌面三端各一条系统命令就够，
+/// 少一个依赖、少一份 capability 配置。Android 端目前没有可用路径，
+/// 明确返回不支持而不是静默失败（`docs/roadmap.md` 的交付形态里 Android 尚未开工）。
+#[tauri::command]
+fn open_url(url: String) -> ApiResult<()> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(ApiError {
+            code: "BAD_REQUEST".into(),
+            message: "只允许打开 http(s) 链接".into(),
+        });
+    }
+    let spawned = {
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open").arg(&url).spawn()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "", &url])
+                .spawn()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            std::process::Command::new("xdg-open").arg(&url).spawn()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "当前平台没有打开外部链接的实现",
+            ))
+        }
+    };
+    spawned.map(|_| ()).map_err(|err| ApiError {
+        code: "UPSTREAM_ERROR".into(),
+        message: format!("打开链接失败：{err}"),
+    })
 }
 
 #[tauri::command]
@@ -621,6 +664,7 @@ pub fn run() {
             emotes_list,
             follow_list,
             wallet_balance,
+            open_url,
             prefs_get,
             prefs_set,
             frontend_log

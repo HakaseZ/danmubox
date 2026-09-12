@@ -1,11 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   EMOTE_PACKAGE_LABEL,
   SEND_OUTCOME_TEXT,
   type Emote,
   type EmotePackage,
+  type Message,
   type EmoteToken,
+  type ReplyTarget,
   type SendOutcome,
 } from "../types";
 import styles from "../app.module.css";
@@ -17,7 +19,13 @@ interface Props {
   lastDetail?: string | null;
   emotes: Emote[];
   recentSends: string[];
-  onSend: (content: string, emote?: EmoteToken) => Promise<SendOutcome | undefined>;
+  /** 行菜单里点的 @ / 回复，点一次应用一次（token 变则重放）。 */
+  pendingAction?: { kind: "mention" | "reply"; message: Message; token: number } | null;
+  onSend: (
+    content: string,
+    emote?: EmoteToken,
+    reply?: ReplyTarget,
+  ) => Promise<SendOutcome | undefined>;
   onOpenEmotes: () => void;
 }
 
@@ -42,6 +50,7 @@ export function Composer({
   lastDetail,
   emotes,
   recentSends,
+  pendingAction,
   onSend,
   onOpenEmotes,
 }: Props) {
@@ -49,6 +58,24 @@ export function Composer({
   // 被点选的表情：名字会重名（实测「贴贴」同时存在于通用包与房间包），
   // 因此发送时必须按「点的是哪一个」来判定，而不是拿草稿去反推。
   const [pickedEmote, setPickedEmote] = useState<Emote | null>(null);
+  // 回复某条弹幕时显示引用条；@ 某人只是把名字插进草稿，另记 uid 供发送时上报。
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [mention, setMention] = useState<{ mid: number; uname: string } | null>(null);
+
+  useEffect(() => {
+    if (!pendingAction) return;
+    const { kind, message } = pendingAction;
+    if (kind === "mention") {
+      if (message.uname.length === 0) return;
+      setMention({ mid: message.uid, uname: message.uname });
+      setDraft((value) =>
+        value.startsWith(`@${message.uname} `) ? value : `@${message.uname} ${value}`,
+      );
+    } else {
+      setReplyTo(message);
+    }
+    // 只在用户点菜单时应用一次：token 每次点击都变，因此不会自激。
+  }, [pendingAction]);
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -116,13 +143,21 @@ export function Composer({
             bulge_display: pickedEmote.bulge_display,
           }
         : undefined;
+    // 回复优先于 @：回复本身就带上了被回复者，官方载荷里也是一组字段。
+    const reply = replyTo
+      ? { mid: replyTo.uid, uname: replyTo.uname, dmid: replyTo.upstream_id }
+      : mention
+        ? { mid: mention.mid, uname: mention.uname, dmid: "" }
+        : undefined;
     setBusy(true);
-    const outcome = await onSend(content, asEmote);
+    const outcome = await onSend(content, asEmote, reply);
     setBusy(false);
     // 只有确实发出去（或被吞）才清空草稿；失败保留内容便于重试。
     if (outcome !== undefined && outcome !== "failed") {
       setDraft("");
       setPickedEmote(null);
+      setReplyTo(null);
+      setMention(null);
     }
   };
 
@@ -160,6 +195,15 @@ export function Composer({
               </div>
             ))
           )}
+        </div>
+      )}
+
+      {replyTo && (
+        <div className={styles.replyBar}>
+          <span className={styles.previewLabel}>
+            回复 {replyTo.uname}：{replyTo.content.slice(0, 30)}
+          </span>
+          <button onClick={() => setReplyTo(null)}>取消回复</button>
         </div>
       )}
 

@@ -604,6 +604,22 @@ resp.msg / resp.message == "k"     → blocked_room
   本实现暂不上报这两项——是否必需、缺失时上游如何拒绝，均未实测（见 A27）。
 - `dm_type` 取被举报弹幕的类型。
 
+### 11.6 @ 某人与回复的载荷（官方实现）
+
+官方 web 客户端在 `msg/send` 里额外带这组字段（字段名照抄，**含它自己的拼写 `replay_dmid`**）：
+
+| 字段 | 含义 |
+|---|---|
+| `reply_mid` | 被 @ 或被回复者的 uid |
+| `reply_uname` | 同上，昵称 |
+| `replay_dmid` | **被回复弹幕的上游 id**（本实现取 `Message.upstream_id`）；仅 @ 时为空 |
+| `reply_type` | `0` 无 / `1` 普通回复 / `2` 匹配回复（官方枚举 `NO_REPLY` / `NORMAL_REPLY` / `MATCH_REPLY`）；普通 @ 与回复实测取 `0` |
+| `reply_attr` | 被回复者是否为「神秘人」 |
+| `jumpfrom` / `room_type` / `statistics` | 来源与统计，本实现不发送（未实测其必要性） |
+
+收包侧的对应信息在 `DANMU_MSG` 的 `reply` 对象（`{show_reply, reply_mid, reply_uname, reply_uname_color, reply_is_mystery}`）；
+本实现的 `Message` 模型**不含**这些字段，因此「回复了谁」目前不展示。
+
 ---
 
 ## 12. 分发与内存缓冲边界

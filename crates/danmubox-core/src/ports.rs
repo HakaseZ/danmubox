@@ -119,6 +119,20 @@ pub struct EmoteToken {
     pub bulge_display: bool,
 }
 
+/// @ 某人与回复某条弹幕所需的目标信息。
+///
+/// 官方 web 客户端的载荷（见 `docs/protocol.md` §11.6）：`reply_mid`（被 @ 者 uid）、
+/// `reply_uname`、`reply_type`，回复某条时另有 `replay_dmid`（**官方字段名就是这个拼写**）。
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ReplyTarget {
+    pub mid: i64,
+    pub uname: String,
+    /// 被回复弹幕的上游标识（`Message.upstream_id`）；仅 @ 时为空。
+    #[serde(default)]
+    pub dmid: String,
+}
+
 #[async_trait]
 pub trait DanmakuSender: Send + Sync {
     /// 发送弹幕；被吞的两种情形由上游响应判定（`docs/contract.md` §5）。
@@ -131,6 +145,7 @@ pub trait DanmakuSender: Send + Sync {
         color: Option<i64>,
         mode: Option<i64>,
         emote: Option<&EmoteToken>,
+        reply: Option<&ReplyTarget>,
     ) -> Result<SendReport>;
 }
 

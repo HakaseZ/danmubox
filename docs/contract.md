@@ -247,6 +247,8 @@ sessdata = ""
 
 `Account`（账号，规范性）：`name`（具名凭据标识，即 `config.toml` 的 profile 名）/ `nickname` / `uid` / `face` / `logged_in` / `active`。**游客态不是账号**——没有凭据就没有条目；`logged_in=false` 表示该账号存在但凭据已清（或已失效），它仍是可切回的槽位。
 
+`locked`（**我**现在能不能用这个表情；`true` = 无权限，界面应**置灰而不是隐藏**）：由上游**表情级 `perm == 0`** 派生（实测依据 `protocol.md` A26 补充之三：同一房间两个身份不同的账号拿到**完全相同**的 68 个表情，只有舰长专属那批的 `perm` 随身份 0↔1；包级 `pkg_perm`/`unlock_*` 对判定无用）。**字段缺失按可用处理**——置灰是提示不是闸门，真正的拦截在上游发送侧。主站「我的表情」无此概念，恒为 `false`。
+
 `Emote`（表情，规范性）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `owned`；`owned` = 主站「我的表情」中用户拥有的包，见 `protocol.md` A35；`room` = UP 主大表情与房间专属表情。**没有 `admin`**——房管没有表情分类，见 `protocol.md` A26）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
 `EmoteRef`（弹幕携带的表情，规范性）：`emoticon_unique` / `url`（已规范化）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display`。

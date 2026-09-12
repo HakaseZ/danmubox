@@ -59,8 +59,12 @@ const EP_KEYWORD_DEL: &str =
 
 /// 黑名单单页条数（官方前端 `ps`；实测该接口接受 30）。
 const BLACK_PAGE_SIZE: i64 = 30;
-/// 黑名单翻页上限，防止 `total` 恒真时无限请求（安全阀，非上游约定）。
-const BLACK_MAX_PAGES: i64 = 20;
+/// 翻页上限，防止 `total` / `total_page` 恒真时无限请求（安全阀，非上游约定）。
+///
+/// 取值有实测依据：禁言名单**每页固定 10 条**，一个真实房间实测 481 条 / 49 页——
+/// 上限太小会在真实房间里静默截断（曾用 20，恰好卡在 200 条）。触顶时打 `warn`，
+/// 调用方从日志就能看出结果被截断。
+const MAX_PAGES: i64 = 200;
 
 /// 房管操作适配器。凭据由 `BiliHttp` 实时读取当前 profile。
 pub struct BiliAdmin {
@@ -161,8 +165,10 @@ pub fn map_silent_users(value: &Value) -> Vec<SilentUser> {
 
 /// 黑名单响应 → `BlacklistedUser`。
 ///
-/// 上游条目字段名未能观测（实测黑名单为空，`data.data` 为 `null`），因此按
-/// 与禁言列表同形的候选名容错解析；取不到一律零值/空串，不报错。
+/// 实测条目字段（2026-09-12，一个 35 条的真实名单）：`uid` / `name` / `face` /
+/// `mtime` / `operator_name` / `admin_level` / `is_anchor` / `is_mystery`——
+/// **与禁言列表不同名**：这里是人 `uid` + `name`，禁言列表才是 `tuid` + `tname`。
+/// 两种名字都收（后一种是未观测到的旧形态），取不到一律零值/空串，不报错。
 pub fn map_blacklisted(value: &Value) -> Vec<BlacklistedUser> {
     let Some(items) = value.pointer("/data/data").and_then(Value::as_array) else {
         return Vec::new();
@@ -170,8 +176,8 @@ pub fn map_blacklisted(value: &Value) -> Vec<BlacklistedUser> {
     items
         .iter()
         .map(|item| BlacklistedUser {
-            uid: int(item, &["tuid", "uid", "mid"]),
-            uname: text(item, &["tname", "uname"]),
+            uid: int(item, &["uid", "tuid", "mid"]),
+            uname: text(item, &["name", "tname", "uname"]),
             face: text(item, &["face"]),
         })
         .collect()
@@ -209,11 +215,17 @@ impl RoomAdmin for BiliAdmin {
                 .await?;
             ensure_ok(&value, "GetSilentUserList")?;
             out.extend(map_silent_users(&value));
+            // `ps` 是**页码**（实测：`ps=1` 取到前 10 条，`total_page=49`），
+            // 每页固定 10 条；因此必须按 `total_page` 翻完，少翻一页就少一整页人。
             let pages = value
                 .pointer("/data/total_page")
                 .and_then(Value::as_i64)
                 .unwrap_or(1);
-            if page >= pages || page >= BLACK_MAX_PAGES {
+            if page >= pages {
+                break;
+            }
+            if page >= MAX_PAGES {
+                tracing::warn!(room_id, page, pages, "禁言名单达到翻页上限，结果被截断");
                 break;
             }
             page += 1;
@@ -273,7 +285,11 @@ impl RoomAdmin for BiliAdmin {
             ensure_ok(&value, "GetBlackList")?;
             out.extend(map_blacklisted(&value));
             let total = value.pointer("/data/total").and_then(Value::as_i64).unwrap_or(0);
-            if (out.len() as i64) >= total || page >= BLACK_MAX_PAGES {
+            if (out.len() as i64) >= total {
+                break;
+            }
+            if page >= MAX_PAGES {
+                tracing::warn!(room_id, page, total, "黑名单达到翻页上限，结果被截断");
                 break;
             }
             page += 1;
@@ -399,14 +415,24 @@ mod tests {
     }
 
     #[test]
-    fn blacklist_maps_and_tolerates_null() {
-        // 实测黑名单为空的响应形状：`data.data` 是 null。
+    fn blacklist_maps_real_field_names_and_tolerates_null() {
+        // 黑名单为空的响应形状：`data.data` 是 null。
         assert!(map_blacklisted(&json!({"code": 0, "data": {"data": null, "total": 0}})).is_empty());
-        let value = json!({"data": {"data": [{"tuid": 7, "tname": "拉黑的人", "face": "https://i/7.jpg"}]}});
+        // 实测条目形状（35 条的真实名单）：uid / name / face / operator_name。
+        let value = json!({"data": {"data": [{
+            "uid": 7, "name": "拉黑的人", "face": "https://i/7.jpg",
+            "operator_name": "房管", "mtime": "2026-09-07 13:36:42", "admin_level": 0
+        }]}});
         let users = map_blacklisted(&value);
         assert_eq!(users.len(), 1);
         assert_eq!(users[0].uid, 7);
-        assert_eq!(users[0].uname, "拉黑的人");
+        assert_eq!(users[0].uname, "拉黑的人", "黑名单用 name，不是 tname");
+        assert_eq!(users[0].face, "https://i/7.jpg");
+
+        // 未观测到的旧名形态也容错，不因此丢条目。
+        let alias = json!({"data": {"data": [{"tuid": 8, "tname": "别名"}]}});
+        assert_eq!(map_blacklisted(&alias)[0].uid, 8);
+        assert_eq!(map_blacklisted(&alias)[0].uname, "别名");
     }
 
     #[test]

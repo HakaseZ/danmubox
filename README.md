@@ -52,13 +52,19 @@
 
 ## 3. 当前状态
 
-| 阶段 | 状态 |
+截至 2026-09-12：
+
+| 项 | 状态 |
 |---|---|
-| 技术选型 | 已完成（结论见 `docs/decisions/`） |
-| 文档基线 | 已按需求基线 [`REQUIREMENTS.md`](REQUIREMENTS.md) 重写，契约见 [`docs/contract.md`](docs/contract.md) |
-| 代码 | **阶段 1 已完成**：`danmubox-core` / `danmubox-bili` / `danmubox-cli` 三个 crate 可编译、可运行，游客态已能连真实直播间收弹幕 |
-| 构建 / 测试 / 运行 | 命令见 §8；`cargo test --workspace` 与 `cargo clippy -- -D warnings` 均通过 |
-| 桌面端 | **已可用**：`apps/desktop`（Tauri 2 + React）能打开房间、看弹幕、发弹幕、过滤；需先起前端 dev server（见 §8） |
+| 技术选型 | 已完成（结论见 `docs/decisions/`，8 篇 ADR） |
+| 文档基线 | 已完成：需求 [`REQUIREMENTS.md`](REQUIREMENTS.md)、契约 [`docs/contract.md`](docs/contract.md)、协议与实测校准 [`docs/protocol.md`](docs/protocol.md)，另有架构 / IPC / UI / 登录 / 分发 / 运维 / 测试 / 路线图各一篇 |
+| 代码 | 约 11300 行（Rust + TS/TSX）：`danmubox-core`（领域模型 / 端口 / 总线 / 会话缓冲 / 偏好 / 凭据）、`danmubox-bili`（协议 / WS / 鉴权 / WBI / HTTP）、`danmubox-cli`（采集与校准入口）、`apps/desktop`（Tauri 2 + React 19 + Zustand + 虚拟滚动） |
+| 阶段进度 | **阶段 1–4 已退出**；阶段 5 仅 macOS 完成，Windows / Android 见 §8 待办 |
+| 功能面 | 游客态与登录态收弹幕；发弹幕（纯文本 / 表情 / @回复 / 快捷短语）；进场历史回填；礼物（V1+V2、连击聚合、金额统计与排行）；SuperChat；大航海播报；举报（7 条理由）；关注列表与分组；电池余额；多房间标签页；多账号切换与**界面内扫码登录**；过滤与 16 项偏好 |
+| 构建与测试 | `cargo test --workspace` **153 通过**；`cargo clippy --workspace --all-targets -- -D warnings` **零告警**；前端 `npx tsc -b` 通过 |
+| 桌面端产物 | 可出**独立可执行文件**（前端已内嵌，**不再需要 dev server**）：`cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` → `target/release/danmubox-desktop` |
+
+实测校准的进展与仍缺样本的项，统一记在 [`docs/protocol.md`](docs/protocol.md) 附录 A；待办清单见 [`docs/roadmap.md`](docs/roadmap.md) §8。
 
 ## 4. 目标平台
 
@@ -158,8 +164,8 @@ danmubox/
 | 登出 | `cargo run -p danmubox-cli -- logout` | 清空当前 profile 的凭据 |
 | 账号切换 | `cargo run -p danmubox-cli -- profiles --use <名字>` | 改写 `active_profile` |
 | 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败） |
-| 前端 dev server | `npm --prefix apps/desktop/ui run dev` | **必须先起**，否则桌面端窗口空白（见 `docs/operations.md` §1.1） |
-| 桌面端 | `cargo run -p danmubox-desktop` | 依赖上面的 dev server |
+| 桌面端（独立产物） | `cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` | **推荐**：产出 `target/release/danmubox-desktop`，前端已内嵌，双击即用 |
+| 桌面端（开发热更新） | `npm --prefix apps/desktop/ui run dev` + `cargo run -p danmubox-desktop` | 仅开发时用；须先起 dev server，否则窗口空白（见 `docs/operations.md` §1.1） |
 
 数据目录可用环境变量 `DANMUBOX_HOME` 覆盖（调试与多环境并存时用）。
 

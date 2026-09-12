@@ -70,14 +70,6 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             None,
         ),
         spec(
-            "ui.opacity",
-            Ty::Num,
-            json!(1.0),
-            Some(0.3),
-            Some(1.0),
-            None,
-        ),
-        spec(
             "ui.theme",
             Ty::Str,
             json!("system"),
@@ -104,6 +96,17 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             None,
             Some(&["merged", "separate"]),
         ),
+        // 互动/进场消息：默认「显示一会儿就淡出」，关掉则常驻（需求 §2.4）。
+        spec(
+            "ui.interact_auto_hide",
+            Ty::Bool,
+            json!(true),
+            None,
+            None,
+            None,
+        ),
+        // 系统通知（开播 / 下播 / 标题变更 / 公告）：默认不显示（需求 §2.4）。
+        spec("ui.system_notice", Ty::Bool, json!(false), None, None, None),
         // 自定义短语（需求 §2.2）。颜文字是内置常量，不进偏好。
         spec("composer.phrases", Ty::StrArr, json!([]), None, None, None),
         spec("filter.keywords", Ty::StrArr, json!([]), None, None, None),
@@ -314,9 +317,9 @@ mod tests {
     #[test]
     fn spec_table_matches_contract_keys() {
         // 数量与契约 §8 的表逐行对应：加/删偏好键必须同时改这里与契约。
-        assert_eq!(SPECS.len(), 16, "契约 §8 规定 16 个偏好键");
+        assert_eq!(SPECS.len(), 17, "契约 §8 规定 17 个偏好键");
         let effective = Prefs::new().effective();
-        assert_eq!(effective.as_object().unwrap().len(), 16);
+        assert_eq!(effective.as_object().unwrap().len(), 17);
     }
 
     #[test]
@@ -324,6 +327,8 @@ mod tests {
         let prefs = Prefs::new();
         assert_eq!(prefs.get("ui.theme").unwrap(), json!("system"));
         assert_eq!(prefs.get("ui.gift_panel_mode").unwrap(), json!("merged"));
+        assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
+        assert_eq!(prefs.get("ui.system_notice").unwrap(), json!(false));
         assert_eq!(prefs.get("filter.keywords_mode").unwrap(), json!("hide"));
         assert_eq!(prefs.get("history.buffer_rows").unwrap(), json!(5000));
         assert_eq!(prefs.buffer_rows(), 5000);
@@ -354,9 +359,10 @@ mod tests {
 
         for bad in [
             json!({ "ui.font_scale": 3.0 }),
-            json!({ "ui.opacity": 0.1 }),
             json!({ "ui.theme": "neon" }),
             json!({ "ui.auto_scroll": "yes" }),
+            json!({ "ui.interact_auto_hide": 1 }),
+            json!({ "ui.system_notice": "on" }),
             json!({ "filter.kinds": ["danmaku", "notice"] }),
             json!({ "filter.uids": [1, "2"] }),
             json!({ "history.buffer_rows": 5 }),

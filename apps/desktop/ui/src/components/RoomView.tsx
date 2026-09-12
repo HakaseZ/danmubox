@@ -4,7 +4,7 @@ import { Composer } from "./Composer";
 import { FilterBar } from "./FilterBar";
 import { MessageList } from "./MessageList";
 import { useApp } from "../store";
-import { formatPopularity, type DisplayRow } from "../filtering";
+import { formatCount, type DisplayRow } from "../filtering";
 import type {
   ConnState,
   Emote,
@@ -103,7 +103,7 @@ export function RoomView({
   const reportReasons = useApp((store) => store.reportReasons);
   const loadReportReasons = useApp((store) => store.loadReportReasons);
   const openProfile = useApp((store) => store.openProfile);
-  const popularity = useApp((store) => store.popularity[room.room_id]);
+  const roomStats = useApp((store) => store.roomStats[room.room_id]);
   const loggedIn = session?.logged_in ?? false;
 
   useEffect(() => {
@@ -159,9 +159,18 @@ export function RoomView({
           {STATE_TEXT[state]}
           {status?.detail ? `（${status.detail}）` : ""}
         </span>
-        {popularity !== undefined && (
-          <span className={styles.balance} title="人气值（协议 §10.7 的 op=3 口径）">
-            人气 {formatPopularity(popularity)}
+        {(roomStats?.online !== undefined || roomStats?.watched !== undefined) && (
+          <span className={styles.roomMeta}>
+            {roomStats?.online !== undefined && (
+              <span className={styles.balance} title="在线人数（协议 §10.7 的 ONLINE_RANK_COUNT）">
+                在线 {formatCount(roomStats.online)}
+              </span>
+            )}
+            {roomStats?.watched !== undefined && (
+              <span className={styles.balance} title="累计看过（协议 §10.7 的 WATCHED_CHANGE）">
+                看过 {formatCount(roomStats.watched)}
+              </span>
+            )}
           </span>
         )}
         {balance !== undefined && (

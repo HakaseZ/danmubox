@@ -141,11 +141,13 @@ sessdata = ""
 - **不建数据库，不做回看，不做导出。**
 - 缓冲的生命周期 = **一次房内会话**：从进入某个直播间开始，到离开该房间（返回房间列表、关闭房间或切走）结束。离开即**销毁并清空**；再次进入同一房间是全新的一次会话。
 - 会话内保留上限 5000 条的环形缓冲（容量由 `history.buffer_rows` 覆盖），超出丢最旧。进程退出即丢。
-- B 站只提供「进房间时最近若干条」的接口（上限 10 条普通 + 10 条房管，**不可翻页**，见 `protocol.md` 附录 A30），**不提供可翻页的历史回放**。因此跨会话历史只能本地落盘，而本次会话的缓冲仍是内存——这是一个已接受的产品取舍。
+- B 站只提供「进房间时最近若干条」的接口（`data.room`，上限 10 条，**不可翻页**，见 `protocol.md` 附录 A30），**不提供可翻页的历史回放**。因此跨会话历史只能本地落盘，而本次会话的缓冲仍是内存——这是一个已接受的产品取舍。
 - 唯一允许的用途是当前会话内在界面上向上回滚查看（`history_query` 只查当前会话缓冲）。
-- **进场回填**：进入房间时先用 `LiveSource::recent` 取上游能给的「最近若干条」弹幕（上限 10 条普通 + 10 条房管，**不可翻页**，见 `protocol.md` 附录 A30），
+- **进场回填**：进入房间时先用 `LiveSource::recent` 取上游能给的「最近若干条」弹幕（`data.room`，上限 10 条，**不可翻页**，见 `protocol.md` 附录 A30），
   标记 `is_history` 后作为本次会话缓冲的**前缀**（先回填、再连接，因此顺序天然是历史在前）；
   每条回填已带 `upstream_id`，因此与实时弹幕一样可举报。
+  上游同一响应里还有一个 `data.admin`（至多 10 条「只看房管」切片），**不采用**：它是同一窗口的房管子集，
+  与 `data.room` 大量重合且时间整体更早，拼在前缀里会表现为「我自己的发言铺在历史之前」（2026-09-12 实测，见 A30）。
 - 回填**不经过 `MessageSink`**，因此不计入「收到的消息」等流量统计。
 - 回填是**尽力而为**：上游可能返回空或失败（A30），此时与从前一样从空列表开始——**不得报错、不得重试风暴、不得因此延迟连接**（实现侧有 2 秒上限）。
 - 长连接卡住或推流中断时，用房间内的「刷新」按钮触发**手动重连**（`rooms_reconnect`）；重连不恢复旧缓冲，仍属同一次会话，已收到的消息保留。
@@ -205,8 +207,18 @@ sessdata = ""
 
 > `blocked_platform` / `blocked_room` 的判定规则来自一个可复现的社区实现（见 `protocol.md` 发送章节），阶段 1 必须用真实发送复核后写死。
 
-`RoomSession`（**本人在该房间的身份**，会话级、不落盘，规范性）：
+`RoomStats`（**房间观众数**，会话级、不落盘、不入缓冲，规范性）：
 
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `room_id` | i64 | 房间号 |
+| `online` | Option&lt;i64&gt; | 在线人数（`ONLINE_RANK_COUNT` 的 `online_count`，协议 §10.7）；上游未给过为 `null` |
+| `watched` | Option&lt;i64&gt; | 累计看过（`WATCHED_CHANGE` 的 `num`，协议 §10.7）；上游未给过为 `null` |
+
+> 两个数各自随不同命令到达，因此两侧都可缺省；界面保留上一次的值，不用 0 顶替。
+> 人气值（`POPULARITY_CHANGE` / `op=3`）**不再展示**（用户 2026-09-12 反馈：那个参数官方也没实现）。
+
+`RoomSession`（**本人在该房间的身份**，会话级、不落盘，规范性）：
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `room_id` | i64 | 房间号 |
@@ -268,7 +280,9 @@ Frontend → Rust 命令（`invoke`）：
 | `prefs_get` / `prefs_set` | 偏好读写 |
 | `app_info` | 版本、数据目录、构建信息 |
 
-Rust → Frontend 事件：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://log`。
+Rust → Frontend 事件：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
+
+`danmubox://room_stats` 的载荷是 §5 的 `RoomStats`（在线人数 / 累计看过，两侧可缺省）。
 
 IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 
@@ -279,13 +293,14 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 键 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
 | `ui.font_scale` | number | `1.0` | 聊天区字号缩放，范围 0.8–2.0 |
-| `ui.opacity` | number | `1.0` | 消息不透明度，范围 0.3–1.0 |
 | `ui.theme` | string | `"system"` | `system` / `dark` / `light` |
 | `ui.auto_scroll` | boolean | `true` | 是否自动跟随最新 |
 | `ui.pause_on_hover` | boolean | `true` | 鼠标悬停暂停自动滚动 |
 | `ui.merge_similar` | boolean | `true` | 是否合并相似消息 |
 | `ui.merge_window_ms` | integer | `8000` | 相似消息合并窗口 |
 | `ui.gift_panel_mode` | string | `"merged"` | `merged`（礼物混在弹幕栏）/ `separate`（独立礼物栏） |
+| `ui.interact_auto_hide` | boolean | `true` | 互动/进场消息显示一会儿后自动消失（`false` = 常驻） |
+| `ui.system_notice` | boolean | `false` | 是否显示系统通知（开播 / 下播 / 标题变更 / 公告） |
 | `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；点一下插入输入框。颜文字是内置常量，不占用偏好键 |
 | `filter.keywords` | string[] | `[]` | 关键词列表 |
 | `filter.keywords_mode` | string | `"hide"` | `hide` 命中隐藏 / `only` 仅显示命中 |
@@ -321,7 +336,11 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 单次会话内保留弹幕 | §4.3 |
 | 进场回填最近弹幕（用户 2026-09-12 追加，非 REQUIREMENTS.md 原文） | §3 `LiveSource::recent`、§4.3、§5 `is_history`、`ui.md` §4.7 |
 | 词云 | 下期非核心条目，见 `roadmap.md` |
-| 深色模式 / 字号 / 透明度 | §8 `ui.theme` / `ui.font_scale` / `ui.opacity` |
+| 深色模式 / 字号 | §8 `ui.theme` / `ui.font_scale` |
+| 透明度（原 `ui.opacity`） | **已删除**（用户 2026-09-12 反馈：实现方式非预期），待办见 `roadmap.md` |
+| 房间观众数（在线人数 / 累计看过） | §5 `RoomStats`、§7 `danmubox://room_stats` |
+| 互动消息自动消失 / 系统通知开关 | §8 `ui.interact_auto_hide` / `ui.system_notice` |
+| 关注列表自动加载 | §3 `RoomCatalog`、§7 `follow_list`、`ui.md` §2.2 |
 | 过滤与合并相似 | §8 `filter.*` / `ui.merge_*` |
 | 多房间标签页 | `ui.md` |
 | 多账号（单文件多 profiles） | §4.1、§7 `profiles_list` / `profiles_switch` |

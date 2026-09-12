@@ -62,8 +62,8 @@ pub trait AuthProvider: Send + Sync {
 
 #[async_trait]
 pub trait LiveSource: Send + Sync {
-    /// 进场回填：上游能给的**最近若干条**弹幕（上限 10 条普通 + 10 条房管，
-    /// 不可翻页，见 `docs/protocol.md` 附录 A30）。返回的每条 `is_history` 为 `true`。
+    /// 进场回填：上游能给的**最近若干条**弹幕（上限 10 条，不可翻页，见
+    /// `docs/protocol.md` 附录 A30）。返回的每条 `is_history` 为 `true`，且按时间升序。
     ///
     /// 这是"进场时不要空着"，**不是**可翻页的历史；失败只记日志，不得阻塞会话。
     async fn recent(&self, room_id: i64) -> Result<Vec<Message>>;

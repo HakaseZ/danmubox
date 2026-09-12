@@ -21,7 +21,7 @@
 | 虚拟列表 | 单次房内会话的缓冲上限为 5000 条（`history.buffer_rows`），需要只渲染视口内的行 |
 | 自动滚动 / 暂停 / 回到最新 | 用户向上翻阅时必须停止自动跟随，回到底部时恢复 |
 | 过滤 | 关键词、用户、消息类型（六种 `kind`） |
-| 样式调节 | 字号（`ui.font_scale`）、透明度（`ui.opacity`）、合并相似消息 |
+| 样式调节 | 字号（`ui.font_scale`）、合并相似消息；透明度那条滑杆已于 2026-09-12 删除，重做见 [`../roadmap.md`](../roadmap.md) |
 | 礼物栏双模式 | `ui.gift_panel_mode`：`merged`（礼物混在弹幕栏）/ `separate`（独立礼物栏） |
 | 多房间标签页 | 每个房间一份独立的消息流与滚动位置 |
 | 六类消息渲染 | `danmaku` / `gift` / `superchat` / `interact` / `guard` / `system` 各有独立视觉 |

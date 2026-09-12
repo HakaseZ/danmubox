@@ -14,7 +14,7 @@ import type {
   EmoteToken,
   FollowedRoom,
   Message,
-  PopularityEvent,
+  RoomStatsEvent,
   ReportReason,
   ReplyTarget,
   Prefs,
@@ -110,7 +110,7 @@ export const api = {
 export interface EventHandlers {
   onMessage?: (message: Message) => void;
   onStatus?: (status: StatusEvent) => void;
-  onPopularity?: (event: PopularityEvent) => void;
+  onRoomStats?: (event: RoomStatsEvent) => void;
   onRoom?: (room: Room) => void;
   onSession?: (session: SessionState) => void;
   onSend?: (result: ChatSendResult) => void;
@@ -136,10 +136,10 @@ export async function subscribeEvents(
       ),
     );
   }
-  if (handlers.onPopularity) {
+  if (handlers.onRoomStats) {
     unlisteners.push(
-      await listen<PopularityEvent>("danmubox://popularity", (e) =>
-        handlers.onPopularity!(e.payload),
+      await listen<RoomStatsEvent>("danmubox://room_stats", (e) =>
+        handlers.onRoomStats!(e.payload),
       ),
     );
   }

@@ -26,6 +26,18 @@
 
 ### Added
 
+- **房间观众数（在线人数 + 累计看过）**：引擎把 `ONLINE_RANK_COUNT` 的 `online_count` 与
+  `WATCHED_CHANGE` 的 `num` 冒泡成 `Event::RoomStats`（契约 §5 新增模型、§7 新增事件
+  `danmubox://room_stats`），房间头两个都显示。人气值不再展示（用户反馈：那个参数官方客户端也没实现）；
+  `POPULARITY_CHANGE` 与 `op=3` 仍计入计数、只落 `debug` 日志。协议依据 `docs/protocol.md` §10.7 / A22 补充。
+  实测：某在播房间 50 秒内收到在线 `41→42`、累计看过 `421`，`unknown_cmd` 为 0
+  （此前 `ONLINE_RANK_COUNT` 未归类，会污染这个计数器）。
+- **两个消息显示开关**（契约 §8）：
+  `ui.interact_auto_hide`（默认 `true`）——互动/进场消息显示 8 秒后淡出并从列表移除，关掉则常驻；
+  `ui.system_notice`（默认 `false`）——系统通知（开播 / 下播 / 标题变更 / 公告）默认不渲染。
+- **关注列表在会话就绪后自动拉取**（需求 §2.6）：启动、扫码登录完成、切换账号后各自动调用一次
+  `follow_list`，不再需要用户手动点「刷新」；失败仍走既有错误提示并保留「刷新」按钮。
+
 - 确立需求基线 [`REQUIREMENTS.md`](REQUIREMENTS.md)（用户手写），并产出规范性契约 [`docs/contract.md`](docs/contract.md)
   （唯一事实源）：命名、共享常量、领域模型、端口边界、IPC 与本地文件契约、偏好键、写作要求。
 - 产出并按新基线重写派生文档集：`docs/protocol.md`、`docs/auth.md`、`docs/architecture.md`、
@@ -51,10 +63,10 @@
   `danmubox-cli` 新增 `session` / `login`（终端渲染二维码）/ `logout` / `profiles` 子命令。
 - 凭据值遮蔽：`Profile` 与 `AppConfig` 的 `Debug` 均为手写实现，只输出字段名与 profile 名。
 - **进场回填最近弹幕**：进入房间时先用 `LiveSource::recent` 铺一批上游能给的最近弹幕
-  （上限 10 条普通 + 10 条房管，**不可翻页**），与官方客户端行为一致；带 `is_history` 标记，
-  界面上弱化显示并以「以上为进场前的最新弹幕」分界。回填先于连接，顺序天然为历史在前；
-  不经过 `MessageSink`，不计入流量统计。取不到时与从前一样从空列表开始（2 秒上限），
-  不报错、不重试、不延迟连接。协议依据 `docs/protocol.md` 附录 A30。
+  （`data.room`，上限 10 条，**不可翻页**），与官方客户端行为一致；带 `is_history` 标记。
+  回填先于连接，顺序天然为历史在前（按 `ts` 升序）；不经过 `MessageSink`，不计入流量统计。
+  取不到时与从前一样从空列表开始（2 秒上限），不报错、不重试、不延迟连接。
+  协议依据 `docs/protocol.md` 附录 A30；`data.admin` 为何不采用见同处 A30 补充。
 - **发送失败的原因直达界面**：`SendOutcome::Failed` 原先无载荷，上游的 `code` 与原话只进日志，
   界面永远是「发送失败」。新增 `SendReport { outcome, upstream_code, upstream_message }`
   （契约 §5），`chat_send` 返回 `detail` 字段带上游原话与 code，界面拼接显示，
@@ -80,6 +92,16 @@
   上游链路用**临时配置文件**验证过（打印出真实二维码），全程未碰真实凭据。
 
 ### Fixed
+
+- **历史回填前面那一屏「我自己的发言」的根因**：`gethistory` 的 `data.admin`
+  （至多 10 条「只看房管」切片）被拼在 `data.room`（房间最近 10 条）**之前**。
+  请求者本人是房管时，那一份几乎全是**请求者自己**最近的发言，而且时间整体更早——
+  实测某房间 10 条里 9 条是本人，两条数组另有 4 条完全重合（同一 `id_str`）。
+  于是界面上就是「最近 10 条历史之前先铺一屏我的发言」＋重复条目，看起来像「本地发送记录混进了历史」。
+  处置：`map_history` **只取 `data.room`** 并按 `ts` 升序回填（契约 §4.3、`protocol.md` A30 补充）。
+  非房管房间实测 `data.admin` 为空数组，不受影响。
+- **历史与实时不再割裂**：去掉历史行的弱化样式（0.55 不透明度）与「以上为进场前的最新弹幕」分界提示，
+  两者现在同一套配色 / 字号 / 间距 / 时间戳（`docs/ui.md` §4.7）。
 
 - **删掉凭空造出的「房管」表情分类**。项目所有者确认：**房管没有表情分类**。
   这与两条证据一致——官方前端的表情权限判定 `emoticonDanmakuPermCheck` 只有「粉丝团」与
@@ -241,6 +263,9 @@
 
 ### Changed
 
+- 界面不再展示人气值（`op=3` / `POPULARITY_CHANGE`），改为展示在线人数与累计看过；
+  `Event::Popularity` 与 `Dispatch::Popularity` 随之删除，由 `Event::RoomStats { online, watched }` 取代。
+
 - 需求来源变更：基线由选型讨论原文改为 [`REQUIREMENTS.md`](REQUIREMENTS.md)；选型讨论原文已归档到 `docs/.archive/`（不进 git），
   其中的数据库设计、HTTP API、SSE 与 MCP 章节本期均未采纳。
 - 撤销本地数据库与落库：不建库、不落盘，无去重键、无迁移、无索引、无保留策略；
@@ -258,6 +283,10 @@
   「最近 10+10 条」但**不可翻页**；结论（跨会话历史不落盘）不变。
 
 ### Removed
+
+- **透明度功能（`ui.opacity`）**：用户反馈那一版实现方式不是预期，先删干净——
+  偏好键、设置面板滑杆、列表容器的 `opacity` 样式、契约 §8 与派生文档条目一并移除；
+  以后重做前先想清楚它作用在什么上（见 `docs/roadmap.md` §8.3）。写进 `prefs.json` 的残留键会被忽略。
 
 - 删除数据库中台与本地 HTTP API 两份专项文档（对应章节本期未采纳），
   其适用契约并入 `docs/contract.md` 与架构文档；全部指向它们的链接已改指契约文档。

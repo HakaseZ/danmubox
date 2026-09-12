@@ -111,18 +111,25 @@ export function FilterBar({ prefs, onChange }: Props) {
           }
         />
       </label>
-      <label>
-        透明度
+      <label title="进场/互动消息显示一会儿就淡出；关掉则一直显示">
         <input
-          type="range"
-          min={0.3}
-          max={1}
-          step={0.05}
-          value={prefs["ui.opacity"]}
+          type="checkbox"
+          checked={prefs["ui.interact_auto_hide"]}
           onChange={(event) =>
-            onChange({ "ui.opacity": Number(event.target.value) })
+            onChange({ "ui.interact_auto_hide": event.target.checked })
           }
         />
+        互动消息自动消失
+      </label>
+      <label title="开播 / 下播 / 标题变更 / 公告">
+        <input
+          type="checkbox"
+          checked={prefs["ui.system_notice"]}
+          onChange={(event) =>
+            onChange({ "ui.system_notice": event.target.checked })
+          }
+        />
+        系统通知
       </label>
       <label>
         <input

@@ -1,8 +1,9 @@
 // 应用状态。UI 只消费这里的数据，不直接调用后端（docs/ipc.md §5）。
 
-import { create } from "zustand";
+import { create, type StoreApi } from "zustand";
 
 import { api, describeError, subscribeEvents } from "./ipc";
+import { INTERACT_AUTO_HIDE_MS } from "./types";
 import type {
   AppInfo,
   ChatSendResult,
@@ -32,8 +33,8 @@ interface AppStore {
   activeRoomId?: number;
   messages: Message[];
   status: Record<number, { state: ConnState; detail: string }>;
-  /** 各房间最近一次人气值（协议 §10.7 的 `op=3` 口径）。 */
-  popularity: Record<number, number>;
+  /** 各房间最近一次的观众数（协议 §10.7）；上游还没给过的一侧为 undefined。 */
+  roomStats: Record<number, { online?: number; watched?: number }>;
   prefs?: Prefs;
   logs: string[];
   lastSend?: ChatSendResult;
@@ -87,11 +88,44 @@ interface AppStore {
 
 let unsubscribe: (() => void) | undefined;
 
-export const useApp = create<AppStore>((set, get) => ({
+/**
+ * 互动/进场消息自动消失的定时器（`ui.interact_auto_hide` 打开时）。
+ * 房间切换或离开房间必须清掉：`local_id` 只在一次房内会话内唯一，
+ * 残留的定时器会把另一个房间里同号的消息误删。
+ */
+let interactTimers: number[] = [];
+
+function clearInteractTimers() {
+  for (const timer of interactTimers) window.clearTimeout(timer);
+  interactTimers = [];
+}
+
+/**
+ * 到点把互动消息从列表里摘掉；同一时长已由 CSS 跑成淡出（见 MessageRow）。
+ * `roomId` 记下来是为了防房间切换后误删：`local_id` 只在一次房内会话内唯一。
+ */
+function scheduleInteractHide(store: StoreApi<AppStore>, roomId: number, messages: Message[]) {
+  const now = Date.now();
+  for (const message of messages) {
+    if (message.kind !== "interact") continue;
+    const timer = window.setTimeout(
+      () => {
+        if (store.getState().activeRoomId !== roomId) return;
+        store.setState((state) => ({
+          messages: state.messages.filter((item) => item.local_id !== message.local_id),
+        }));
+      },
+      Math.max(0, message.ts + INTERACT_AUTO_HIDE_MS - now),
+    );
+    interactTimers.push(timer);
+  }
+}
+
+export const useApp = create<AppStore>((set, get, store) => ({
   rooms: [],
   messages: [],
   status: {},
-  popularity: {},
+  roomStats: {},
   logs: [],
   seeding: false,
   emotes: [],
@@ -111,6 +145,10 @@ export const useApp = create<AppStore>((set, get) => ({
         api.prefsGet(),
       ]);
       set({ info, session, rooms, prefs });
+      // 关注列表在会话就绪后自动拉一次（需求 §2.6 / docs/ui.md §2.2）：
+      // 进房间列表就该看到关注里在播的房间，不该等用户去点「刷新」。
+      // 失败仍走既有的错误条 + 保留「刷新」按钮，不静默。
+      if (session.logged_in) void get().loadFollowed();
 
       unsubscribe?.();
       unsubscribe = await subscribeEvents({
@@ -128,11 +166,23 @@ export const useApp = create<AppStore>((set, get) => ({
             messages.splice(0, messages.length - CLIENT_MESSAGE_CAP);
           }
           set({ messages });
+          if (get().prefs?.["ui.interact_auto_hide"]) {
+            scheduleInteractHide(store, message.room_id, [message]);
+          }
         },
-        onPopularity: (event) =>
-          set((state) => ({
-            popularity: { ...state.popularity, [event.room_id]: event.value },
-          })),
+        onRoomStats: (event) =>
+          set((state) => {
+            const previous = state.roomStats[event.room_id] ?? {};
+            return {
+              roomStats: {
+                ...state.roomStats,
+                [event.room_id]: {
+                  online: event.online ?? previous.online,
+                  watched: event.watched ?? previous.watched,
+                },
+              },
+            };
+          }),
         onStatus: (status) =>
           set((state) => ({
             status: {
@@ -173,7 +223,10 @@ export const useApp = create<AppStore>((set, get) => ({
   async removeRoom(roomId) {
     try {
       await api.roomsRemove(roomId);
-      if (get().activeRoomId === roomId) set({ activeRoomId: undefined, messages: [] });
+      if (get().activeRoomId === roomId) {
+        clearInteractTimers();
+        set({ activeRoomId: undefined, messages: [] });
+      }
       set({ rooms: await api.roomsList() });
     } catch (error) {
       set({ error: describeError(error) });
@@ -181,12 +234,16 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   async openRoom(roomId) {
+    clearInteractTimers();
     set({ activeRoomId: roomId, messages: [], seeding: true });
     try {
       const history = await api.historyQuery(roomId, {
         limit: 0,
       });
       set({ messages: history });
+      if (get().prefs?.["ui.interact_auto_hide"]) {
+        scheduleInteractHide(store, roomId, history);
+      }
       await get().connect(roomId);
     } catch (error) {
       set({ error: describeError(error) });
@@ -196,6 +253,7 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   closeRoom() {
+    clearInteractTimers();
     set({ activeRoomId: undefined, messages: [] });
   },
 
@@ -245,6 +303,13 @@ export const useApp = create<AppStore>((set, get) => ({
       set({ prefs: await api.prefsSet(patch) });
     } catch (error) {
       set({ error: describeError(error) });
+      return;
+    }
+    // 开关拨动时立刻对齐当前列表：打开→按剩余停留时间安排摘除；关掉→撤销所有安排。
+    clearInteractTimers();
+    const roomId = get().activeRoomId;
+    if (patch["ui.interact_auto_hide"] === true && roomId !== undefined) {
+      scheduleInteractHide(store, roomId, get().messages);
     }
   },
 
@@ -291,6 +356,8 @@ export const useApp = create<AppStore>((set, get) => ({
         // 后端在这一步已写盘并让房间重连，界面把会话/账号/房间重新拉一遍。
         set({ qr: null, qrError: null, session, profiles: await api.profilesList() });
         set({ rooms: await api.roomsList() });
+        // 换了个账号，关注列表也随之换人：同样在会话就绪后自动拉一次。
+        if (session.logged_in) void get().loadFollowed();
       }
       return state;
     } catch (error) {
@@ -309,9 +376,12 @@ export const useApp = create<AppStore>((set, get) => ({
 
   async switchProfile(name) {
     try {
-      set({ session: await api.profilesSwitch(name) });
+      const session = await api.profilesSwitch(name);
+      set({ session });
       // 后端已让各房间用新凭据重连，这里把房间与会话状态重新拉一遍。
       set({ rooms: await api.roomsList() });
+      // 关注列表跟着账号走：换号后按新身份重新拉（与启动时同一套规则）。
+      if (session.logged_in) void get().loadFollowed();
     } catch (error) {
       set({ error: describeError(error) });
     }

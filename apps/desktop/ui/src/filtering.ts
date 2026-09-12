@@ -29,11 +29,13 @@ export const GUARD_TITLE: Record<number, string> = {
   3: "舰长",
 };
 
-/** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 粉丝牌 → 用户 → 关键词）。 */
+/** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 系统通知 → 粉丝牌 → 用户 → 关键词）。 */
 export function passesFilter(message: Message, prefs: Prefs): boolean {
   if (prefs["filter.kinds"].length > 0 && !prefs["filter.kinds"].includes(message.kind)) {
     return false;
   }
+  // 系统通知（开播 / 下播 / 标题变更 / 公告）默认不渲染，开关打开才显示（需求 §2.4）。
+  if (message.kind === "system" && !prefs["ui.system_notice"]) return false;
   if (message.medal_level < prefs["filter.medal_level_min"]) return false;
   if (prefs["filter.uids"].includes(message.uid)) return false;
 
@@ -63,10 +65,10 @@ export const DOT_CLASS: Record<string, string> = {
 };
 
 /**
- * 人气值的展示格式：过万折成「x.x万」（官方客户端同款习惯）。
- * 数值口径见 docs/protocol.md §10.7。
+ * 观众数的展示格式：过万折成「x.x万」（官方客户端同款习惯）。
+ * 在线人数与累计看过的取值路径见 docs/protocol.md §10.7。
  */
-export function formatPopularity(value: number): string {
+export function formatCount(value: number): string {
   if (value >= 10000) return `${(value / 10000).toFixed(1)}万`;
   return String(value);
 }

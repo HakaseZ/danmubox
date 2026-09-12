@@ -55,7 +55,6 @@ export function MessageList({
         className={styles.scroller}
         style={{
           fontSize: `${14 * prefs["ui.font_scale"]}px`,
-          opacity: prefs["ui.opacity"],
         }}
         onScroll={(event) => {
           const el = event.currentTarget;
@@ -89,11 +88,6 @@ export function MessageList({
             >
               <MessageRow
                 row={rows[item.index]}
-                showLiveDivider={
-                  item.index > 0 &&
-                  !rows[item.index].message.is_history &&
-                  rows[item.index - 1].message.is_history
-                }
                 anchorUid={anchorUid}
                 prefs={prefs}
                 onMention={onMention}

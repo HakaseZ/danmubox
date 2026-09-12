@@ -7,26 +7,24 @@ import {
   type DisplayRow,
 } from "../filtering";
 import type { Message, Prefs } from "../types";
+import { INTERACT_AUTO_HIDE_MS } from "../types";
 import styles from "../app.module.css";
 
 interface Props {
   row: DisplayRow;
   anchorUid?: number;
   prefs: Prefs;
-  /** 本条是历史与实时之间的第一条实时消息：上面画一条分界说明。 */
-  showLiveDivider?: boolean;
   onMention?: (message: Message) => void;
   onReply?: (message: Message) => void;
   onOpenProfile?: (uid: number) => void;
   onReport?: (message: Message) => void;
 }
 
-/** 六种 kind 的渲染规范见 docs/ui.md §6.1；互动与系统行的文案由展示层生成。 */
+/** 六种 kind 的渲染规范见 docs/ui.md §4.1；互动与系统行的文案由展示层生成。 */
 export function MessageRow({
   row,
   anchorUid,
   prefs,
-  showLiveDivider,
   onMention,
   onReply,
   onOpenProfile,
@@ -53,16 +51,22 @@ export function MessageRow({
         ? `${message.uname || "有人"} 进入直播间`
         : "";
 
+  // 互动/进场消息：默认显示一会儿就淡出（store 到点摘除，见 store.scheduleInteractHide）；
+  // 关掉 `ui.interact_auto_hide` 则常驻。
+  const autoHide = message.kind === "interact" && prefs["ui.interact_auto_hide"];
+
   const variant = [
     kindClass[message.kind] ?? "",
-    message.is_history ? styles.historyRow : "",
-    showLiveDivider ? styles.liveDivider : "",
+    autoHide ? styles.autoHide : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   return (
-    <div className={`${styles.row} ${variant}`}>
+    <div
+      className={`${styles.row} ${variant}`}
+      style={autoHide ? { animationDuration: `${INTERACT_AUTO_HIDE_MS}ms` } : undefined}
+    >
       <span className={styles.meta}>{formatClock(message.ts)}</span>
       {message.kind !== "system" && (
         <span className={styles.badges}>

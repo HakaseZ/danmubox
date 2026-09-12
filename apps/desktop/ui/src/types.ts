@@ -83,10 +83,12 @@ export interface ReportReason {
   reason: string;
 }
 
-export interface PopularityEvent {
+export interface RoomStatsEvent {
   room_id: number;
-  /** 人气值；口径见 docs/protocol.md §10.7（`op=3` 心跳回应）。 */
-  value: number;
+  /** 在线人数（`ONLINE_RANK_COUNT` 的 `online_count`，协议 §10.7）；上游未给过为 null。 */
+  online: number | null;
+  /** 累计看过（`WATCHED_CHANGE` 的 `num`，协议 §10.7）；上游未给过为 null。 */
+  watched: number | null;
 }
 
 export interface StatusEvent {
@@ -128,13 +130,16 @@ export interface AppInfo {
 
 export interface Prefs {
   "ui.font_scale": number;
-  "ui.opacity": number;
   "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean;
   "ui.pause_on_hover": boolean;
   "ui.merge_similar": boolean;
   "ui.merge_window_ms": number;
   "ui.gift_panel_mode": "merged" | "separate";
+  /** 互动/进场消息显示一会儿后自动消失；关掉则常驻。 */
+  "ui.interact_auto_hide": boolean;
+  /** 系统通知（开播 / 下播 / 标题变更 / 公告）显示开关。 */
+  "ui.system_notice": boolean;
   /** 自定义短语（需求 §2.2）；颜文字是内置常量，不占偏好键。 */
   "composer.phrases": string[];
   "filter.keywords": string[];
@@ -213,3 +218,9 @@ export const KIND_LABEL: Record<MessageKind, string> = {
   guard: "大航海",
   system: "系统",
 };
+
+/**
+ * 互动/进场消息自动消失前的停留时长（`ui.interact_auto_hide` 打开时）。
+ * `store` 的摘除定时器与行的淡出动画共用这一个长度，两者不会错位。
+ */
+export const INTERACT_AUTO_HIDE_MS = 8000;

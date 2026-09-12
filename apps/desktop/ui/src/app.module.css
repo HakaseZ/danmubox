@@ -222,25 +222,24 @@
   font-size: 12px;
 }
 
-/* 进场回填的历史弹幕：弱化显示，与实时弹幕一眼可分（docs/ui.md §4.5）。 */
-.historyRow {
-  opacity: 0.55;
+/* 互动/进场消息：显示一会儿就淡出（`ui.interact_auto_hide` 打开时）。
+   动画时长由行内 `animationDuration` 给（= store 摘除定时器的同一长度），
+   到点后由 store 把这条从列表里摘掉，空间随之回收。 */
+.autoHide {
+  animation-name: interactFade;
+  animation-timing-function: ease-out;
+  animation-fill-mode: forwards;
+  pointer-events: none;
 }
 
-/* 历史与实时的分界：挂在第一条实时消息上，避免为分界线单独造一行。 */
-.liveDivider {
-  border-top: 1px dashed color-mix(in srgb, var(--fg-dim) 60%, transparent);
-  margin-top: 6px;
-  padding-top: 6px;
-}
-
-.liveDivider::before {
-  content: "以上为进场前的最新弹幕";
-  display: block;
-  margin-bottom: 2px;
-  color: var(--fg-dim);
-  font-size: 11px;
-  text-align: center;
+@keyframes interactFade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 .content {

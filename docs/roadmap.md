@@ -160,7 +160,7 @@ graph LR
 | 举报 | IPC `chat_report`，以 `Message.upstream_id` 定位被举报弹幕 | `docs/contract.md` §5、§7 |
 | 身份徽标 | 主播由 `uid == Room.anchor_uid` 派生；房管用 `is_admin`；大航海用 `guard_level`（1 总督 / 2 提督 / 3 舰长） | `docs/contract.md` §5 |
 | 礼物栏双模式 | 偏好 `ui.gift_panel_mode`：`merged` 礼物混在弹幕栏 / `separate` 独立礼物栏 | `docs/contract.md` §8 |
-| 过滤与样式 | `filter.*` 与 `ui.font_scale` / `ui.opacity` / `ui.theme` 等，经 `prefs_get` / `prefs_set` 读写 | `docs/contract.md` §8、`docs/ui.md` |
+| 过滤与样式 | `filter.*` 与 `ui.font_scale` / `ui.theme` / `ui.interact_auto_hide` / `ui.system_notice` 等，经 `prefs_get` / `prefs_set` 读写 | `docs/contract.md` §8、`docs/ui.md` |
 | 房间内刷新 | IPC `rooms_reconnect`：长连接卡住或推流中断时手动重连；重连不清空已收缓冲 | `docs/contract.md` §4.3、§7、`docs/ui.md` |
 
 ### 5.2 验收标准（可观察、可验证）
@@ -175,7 +175,7 @@ graph LR
 | S3-AC6 | 对一条带 `upstream_id` 的弹幕调用 `chat_report`；再对一条缺 `upstream_id` 的调用 | 前者提交成功；后者返回明确失败，不发送空标识的上游请求 | 响应原文 |
 | S3-AC7 | 界面上渲染六种 `kind`（`danmaku` / `gift` / `superchat` / `interact` / `guard` / `system`） | 六种各自按 `docs/ui.md` 渲染；主播 / 房管 / 大航海徽标按派生规则正确出现 | 截图 |
 | S3-AC8 | 切换 `ui.gift_panel_mode` | `merged` 时礼物混在弹幕栏、`separate` 时为独立礼物栏；重启后保持 | 截图 |
-| S3-AC9 | 设置 `filter.keywords`（`hide` / `only`）、`filter.uids`、`filter.kinds`、`filter.medal_level_min`，并调整字号、透明度、主题 | 过滤即时生效；样式改动即时生效并在重启后保持 | 截图 |
+| S3-AC9 | 设置 `filter.keywords`（`hide` / `only`）、`filter.uids`、`filter.kinds`、`filter.medal_level_min`，并调整字号、主题与互动/系统通知开关 | 过滤即时生效；样式改动即时生效并在重启后保持 | 截图 |
 | S3-AC10 | 在房间内点「刷新」触发 `rooms_reconnect` | 建立新连接；刷新前后本会话缓冲条数不减，已收消息保留 | 条数对比 |
 | S3-AC11 | 逐项复核 §5.4 的发弹幕被吞判定与错误码 | 复核结论写死到 `danmubox-bili` 与 `docs/protocol.md`；不成立则改判定与代码 | 校准表结论 |
 
@@ -288,6 +288,7 @@ graph LR
 | 项 | 说明 | 触发 / 前置 |
 |---|---|---|
 | 词云 | 基于当前会话缓冲的关键词云；需求基线列为下期非核心 | 阶段 3 之后，按需另立条目 |
+| 透明度功能（需要重新设计实现方式） | 原 `ui.opacity`（整表不透明度滑杆）实现方式非预期，2026-09-12 用户反馈后**已删除**（连带偏好键与控件）。重做前先想清楚它要作用在什么上（列表容器？单条？背景？），再定键与取值范围 | 用户提出重做意向；届时先改契约 §8 再加回键 |
 | AI 接入 MCP（想法记录） | 后期想法：接入 MCP，让 Agent 直接消费弹幕数据；**本期不实现**。架构上保持兼容——`core` 的端口与事件总线不得假设消费方是 UI，新能力一律经端口暴露，不写进 Tauri 命令层 | 本期不排期；不定义任何工具、协议或端点 |
 | iOS 端 | 复用同一 `core` 与 IPC 契约，只新增外壳与构建目标 | 阶段 5 退出且桌面 / 安卓主流程无阻塞性缺陷 |
 | Fold8 / 折叠屏 | 展开 / 折叠态布局、双栏（房间列表 + 聊天）、铰链区域避让 | 拿到折叠屏真机且 Android 主流程已跑通 |

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Composer } from "./Composer";
 import { FilterBar } from "./FilterBar";
@@ -117,6 +117,22 @@ export function RoomView({
     if (reportTarget) void loadReportReasons();
   }, [reportTarget, loadReportReasons]);
 
+  // 礼物金额统计与排行（需求 §2.7）：只算本次会话；金额口径是金瓜子（协议 §10.2）。
+  const giftStats = useMemo(() => {
+    const byUser = new Map<string, number>();
+    let total = 0;
+    for (const row of rows) {
+      if (row.message.kind !== "gift") continue;
+      total += row.message.amount;
+      const who = row.message.uname.length > 0 ? row.message.uname : `uid ${row.message.uid}`;
+      byUser.set(who, (byUser.get(who) ?? 0) + row.message.amount);
+    }
+    return {
+      total,
+      ranking: [...byUser.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5),
+    };
+  }, [rows]);
+
   const giftRows = separateGifts
     ? rows.filter((row) =>
         ["gift", "superchat", "guard"].includes(row.message.kind),
@@ -178,6 +194,16 @@ export function RoomView({
         {separateGifts && (
           <div className={styles.giftPanel}>
             <h2>礼物 / SC</h2>
+            {giftStats.total > 0 && (
+              <div className={styles.giftStats}>
+                <div>本场礼物 {giftStats.total.toLocaleString()} 瓜子</div>
+                {giftStats.ranking.map(([who, amount], index) => (
+                  <div key={who} className={styles.giftRankItem}>
+                    {index + 1}. {who} · {amount.toLocaleString()}
+                  </div>
+                ))}
+              </div>
+            )}
             {giftRows.length === 0 ? (
               <div className={styles.empty}>本场还没有礼物</div>
             ) : (

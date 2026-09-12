@@ -101,7 +101,10 @@ export function MessageRow({
       ) : (
         <span className={`${styles.content} ${highlight ?? ""}`}>{text}</span>
       )}
-      {count > 1 && <span className={styles.merged}>×{count}</span>}
+      {/* 礼物行始终显示数量（连击聚合后的次数）；其余类型只在合并时显示 */}
+      {(count > 1 || message.kind === "gift") && (
+        <span className={styles.merged}>×{count}</span>
+      )}
       {onMention && message.kind === "danmaku" && message.uname.length > 0 && (
         <button
           className={styles.rowAction}

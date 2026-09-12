@@ -90,18 +90,26 @@ export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
     if (!passesFilter(message, prefs)) continue;
 
     const last = rows[rows.length - 1];
-    const mergeable =
+    // 礼物连击：同一次连击的每条礼物共享 `combo_id`，一律折叠成一行。
+    // 它不受「合并相似消息」开关影响——连击刷屏本来就是同一个动作的重复。
+    const sameCombo =
+      message.combo_id.length > 0 &&
+      last !== undefined &&
+      last.message.combo_id === message.combo_id;
+    const mergeable = sameCombo || (
       mergeEnabled &&
       message.kind === "danmaku" &&
       last !== undefined &&
       last.message.kind === "danmaku" &&
       last.message.uid === message.uid &&
       last.message.content === message.content &&
-      message.ts - last.message.ts <= windowMs;
+      message.ts - last.message.ts <= windowMs);
 
     if (mergeable) {
       last.count += 1;
-      last.message = message;
+      // 金额累加：连击折叠成一行后，这一行的 amount 应是整串连击的总额，
+      // 否则「礼物金额统计」会只算到第一条。
+      last.message = { ...message, amount: last.message.amount + message.amount };
       continue;
     }
     rows.push({ message, count: 1 });

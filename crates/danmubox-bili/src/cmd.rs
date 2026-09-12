@@ -36,6 +36,11 @@ const IGNORED_CMDS: [&str; 2] = ["STOP_LIVE_ROOM_LIST", "HOT_ROOM_NOTIFY"];
 
 /// `dispatch` 的产出。多数命令产出一条消息；人气值走单独支路——
 /// 它高频、只影响界面上的一个数字，既不该进会话缓冲，也不该被当成消息。
+///
+/// `allow(large_enum_variant)`：`Message` 比 `i64` 大得多，但本枚举是**按值返回**的
+/// 临时载体（从不进集合），尺寸不影响任何东西；按 lint 的建议装箱反而会给
+/// 每条弹幕多一次堆分配，那才是真的代价。
+#[allow(clippy::large_enum_variant)]
 pub enum Dispatch {
     Message(Message),
     /// `POPULARITY_CHANGE` 携带的人气值（协议 §10.7）。
@@ -262,10 +267,12 @@ fn gift_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> 
     let mut message = Message::new(room_id, MessageKind::Gift, ts_ms);
     message.uid = decoded.uid as i64;
     message.uname = decoded.uname;
-    message.content = format!("{} {} ×{}", item.action, item.gift_name, num);
+    // 正文不带数量：界面按连击聚合后的次数统一显示 ×N，避免出现「×1 ×5」。
+    message.content = format!("{} {}", item.action, item.gift_name);
     message.amount = amount;
     // 连击标识用于会话内聚合；订单号是这条礼物的上游标识。
     message.upstream_id = item.tid;
+    message.combo_id = item.batch_combo_id;
     if let Some(medal) = decoded.medal {
         message.medal_level = i64::from(medal.level);
         message.medal_name = medal.name;
@@ -635,12 +642,16 @@ mod tests {
         assert_eq!(message.kind, MessageKind::Gift);
         assert_eq!(message.uid, 1920714644);
         assert_eq!(message.uname, "送礼的人");
-        assert_eq!(message.content, "投喂 粉丝团灯牌 ×2");
+        assert_eq!(message.content, "投喂 粉丝团灯牌");
         assert_eq!(message.amount, 200, "100 金瓜子 × 2");
         assert_eq!(message.ts, 1_789_177_882_000, "pb 里是秒级时间戳");
         assert_eq!(message.medal_level, 12);
         assert_eq!(message.medal_name, "牌子");
         assert_eq!(message.upstream_id, "4816040157599941120", "订单号即上游标识");
+        assert!(
+            message.combo_id.starts_with("batch:gift:combo_id:"),
+            "连击标识要带出来，界面靠它聚合"
+        );
     }
 
     #[test]

@@ -74,6 +74,10 @@ pub struct Message {
     #[serde(default)]
     pub is_history: bool,
     pub amount: i64,
+    /// 礼物连击标识（上游 `batch_combo_id`）；非连击类消息为空串。
+    /// 同一次连击的每条礼物共用它，界面据此聚合展示（`docs/protocol.md` §10.2）。
+    #[serde(default)]
+    pub combo_id: String,
     /// 表情弹幕的图片地址（已规范化为 https）；非表情弹幕为空串。
     /// 上游把表情信息放在 `DANMU_MSG` 的 `info[0][13]`，非表情时该槽位是空对象。
     #[serde(default)]
@@ -99,6 +103,7 @@ impl Message {
             is_admin: false,
             is_history: false,
             amount: 0,
+            combo_id: String::new(),
             emote_url: String::new(),
             upstream_id: String::new(),
         }

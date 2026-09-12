@@ -91,6 +91,14 @@
 
 ### Calibration
 
+- **房管功能（issue #3）的接口位置全部找到**（从官方前端产物抠出，标注为「按官方实现核对」）：
+  禁言 `AddSilentUser` / `DelSilentUser` / `GetSilentUserList`（社区文档只覆盖前两者）、
+  直播间整体禁言档位 `RoomSilent` / `GetRoomSilent`、
+  拉黑三件套 `v2/xbanned/banned/AddBlack` / `DelBlack` / `GetBlackList`、
+  屏蔽词 `GetShieldKeywordList`（增删只见到 `BlockWords` 标识）。
+  除禁言外参数细节未实测，实施时逐个用真实请求核对。
+
+
 - **A35 结案：`upower_` 那一族的来源找到了**。它是主站「我的表情」面板——
   `GET https://api.bilibili.com/x/emote/user/panel/web?business=reply`（Cookie 认证），
   返回**用户名下拥有**的表情包（充电 / UP 主专属那类）。实测包「Kirikosama」20 个表情，

@@ -69,6 +69,10 @@ pub struct Message {
     pub medal_name: String,
     pub guard_level: i64,
     pub is_admin: bool,
+    /// 是否来自**进场回填**的历史弹幕（上游 `dM/gethistory`，上限 10+10，
+    /// 见 `docs/protocol.md` 附录 A30）。实时推来的消息恒为 `false`。
+    #[serde(default)]
+    pub is_history: bool,
     pub amount: i64,
     pub upstream_id: String,
 }
@@ -89,6 +93,7 @@ impl Message {
             medal_name: String::new(),
             guard_level: 0,
             is_admin: false,
+            is_history: false,
             amount: 0,
             upstream_id: String::new(),
         }

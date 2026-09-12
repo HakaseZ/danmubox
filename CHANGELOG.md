@@ -50,6 +50,17 @@
   `danmubox-bili` 的 HTTP 客户端改为按当前 profile 实时取 Cookie；
   `danmubox-cli` 新增 `session` / `login`（终端渲染二维码）/ `logout` / `profiles` 子命令。
 - 凭据值遮蔽：`Profile` 与 `AppConfig` 的 `Debug` 均为手写实现，只输出字段名与 profile 名。
+- **进场回填最近弹幕**：进入房间时先用 `LiveSource::recent` 铺一批上游能给的最近弹幕
+  （上限 10 条普通 + 10 条房管，**不可翻页**），与官方客户端行为一致；带 `is_history` 标记，
+  界面上弱化显示并以「以上为进场前的最新弹幕」分界。回填先于连接，顺序天然为历史在前；
+  不经过 `MessageSink`，不计入流量统计。取不到时与从前一样从空列表开始（2 秒上限），
+  不报错、不重试、不延迟连接。协议依据 `docs/protocol.md` 附录 A30。
+- **发送失败的原因直达界面**：`SendOutcome::Failed` 原先无载荷，上游的 `code` 与原话只进日志，
+  界面永远是「发送失败」。新增 `SendReport { outcome, upstream_code, upstream_message }`
+  （契约 §5），`chat_send` 返回 `detail` 字段带上游原话与 code，界面拼接显示，
+  例如「发送失败 · 发送失败，请先移除该用户黑名单（code 10023）」。
+- CLI 新增 `wallet` / `follow` / `emotes` 三个子命令，作为电池余额、关注列表、表情包库三个
+  适配器的验证入口。
 - **阶段 3 进行中（发弹幕路径）**：`danmubox-bili` 新增 `BiliSender`（实现 `DanmakuSender`）——
   本地节流（同房间 2s、相同内容 5s，命中时不发请求且不延长窗口）、WBI 签名后的表单 POST、
   以及 `SendOutcome` 归一化（`"f"` / `"k"` 被吞判定与被吞原文回显解析）；
@@ -71,6 +82,24 @@
 - 计数类命令（`WATCHED_CHANGE` 等）此前每条都生成 `system` 消息塞进会话缓冲，违反
   `docs/protocol.md` §10.7 的「不写入会话缓冲」；现改为只更新计数。
 
+- **登录态连不上弹幕服务器**：认证包恒发 `uid=0`，而 `key` 是用登录凭据换来的，
+  上游握手后立刻 reset（实测 3/3，连正在直播的房间也一样，`packets: 0`）。改为登录态发真实 uid。
+- **WS 拨号无超时且只用 `host_list` 首个节点**：一个不可达节点会让连接无限挂起。
+  改为逐节点尝试 + 单节点 10s 超时。
+- **打开房间即卡死**：`App.tsx` 每次渲染新建内联闭包传给 `RoomView`，命中其 `useEffect` 依赖，自激循环。
+  改为在 `RoomView` 内直接取稳定的 store action。
+- **桌面端白屏**：`tauri.conf.json` 的 `devUrl` 使窗口始终从 `http://localhost:5173` 加载，
+  未起 Vite dev server 时就是空白窗口且无任何报错；判读方法记入 `docs/operations.md` §1.1。
+- **电池余额、关注列表、表情包库三个适配器的端点与字段错误**（均以真实登录态实测校准，回填 A26 / A28 / A29）：
+  电池余额端点真正是 `GET /xlive/revenue/v1/wallet/myWallet`（原四个候选路径实测全部 404），
+  且上游不给「电池」，口径为 `电池 = data.gold / 100`；
+  关注列表端点为 `GET /xlive/web-ucenter/v1/xfetter/GetWebList`，响应无 `has_more`；
+  表情包库的 `platform` 必须是 `pc`（`web` 被上游拒为 500），显示文本在 `emoji` 字段（原实现读的 `text` 字段不存在）。
+- **桌面端日志被 ANSI 颜色码污染**：进程由 PTY 拉起时 tracing 会着色，颜色码落进日志文件，
+  让 `grep` 与解析失效；现已固定 `with_ansi(false)`。
+- 代码里的文档引用错误：`filtering.ts` 的过滤与合并规则分别指向 `ui.md` §4.2 / §4.5，
+  实际为 §8.1 / §8.4。
+
 ### Changed
 
 - 需求来源变更：基线由选型讨论原文改为 [`REQUIREMENTS.md`](REQUIREMENTS.md)；选型讨论原文已归档到 `docs/.archive/`（不进 git），
@@ -86,6 +115,8 @@
 - `INTERACT_WORD_V2` 载荷按 protobuf 处理（`danmubox-bili` 侧用 `prost` 解码）；
   `DANMU_MSG_MIRROR` 默认丢弃并计数。
 - bundle id 由 `dev.zack.danmubox` 改为 `dev.kksk.danmubox`。
+- 契约 §4.3 的前提纠正：原文断言「B 站本身不提供弹幕历史回放接口」不成立——上游提供
+  「最近 10+10 条」但**不可翻页**；结论（跨会话历史不落盘）不变。
 
 ### Removed
 

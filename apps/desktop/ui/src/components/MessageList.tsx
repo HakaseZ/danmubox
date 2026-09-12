@@ -78,6 +78,11 @@ export function MessageList({ rows, anchorUid, prefs, onReport }: Props) {
             >
               <MessageRow
                 row={rows[item.index]}
+                showLiveDivider={
+                  item.index > 0 &&
+                  !rows[item.index].message.is_history &&
+                  rows[item.index - 1].message.is_history
+                }
                 anchorUid={anchorUid}
                 prefs={prefs}
                 onReport={onReport}

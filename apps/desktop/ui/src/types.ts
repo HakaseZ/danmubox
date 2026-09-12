@@ -21,6 +21,8 @@ export interface Message {
   medal_name: string;
   guard_level: number;
   is_admin: boolean;
+  /** 进场回填的历史弹幕（上游最近 10+10 条），与实时弹幕区分展示。 */
+  is_history: boolean;
   amount: number;
   upstream_id: string;
 }

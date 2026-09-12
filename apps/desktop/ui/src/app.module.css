@@ -179,6 +179,27 @@
   font-size: 12px;
 }
 
+/* 进场回填的历史弹幕：弱化显示，与实时弹幕一眼可分（docs/ui.md §4.5）。 */
+.historyRow {
+  opacity: 0.55;
+}
+
+/* 历史与实时的分界：挂在第一条实时消息上，避免为分界线单独造一行。 */
+.liveDivider {
+  border-top: 1px dashed color-mix(in srgb, var(--fg-dim) 60%, transparent);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+
+.liveDivider::before {
+  content: "以上为进场前的最新弹幕";
+  display: block;
+  margin-bottom: 2px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  text-align: center;
+}
+
 .content {
   flex: 1;
   min-width: 0;

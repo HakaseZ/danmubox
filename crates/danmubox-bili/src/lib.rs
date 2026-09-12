@@ -7,6 +7,7 @@ pub mod auth;
 pub mod cmd;
 pub mod emote;
 pub mod follow;
+pub mod history;
 pub mod http;
 pub mod pb;
 pub mod proto;

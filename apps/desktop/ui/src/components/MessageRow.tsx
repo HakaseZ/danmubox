@@ -13,11 +13,13 @@ interface Props {
   row: DisplayRow;
   anchorUid?: number;
   prefs: Prefs;
+  /** 本条是历史与实时之间的第一条实时消息：上面画一条分界说明。 */
+  showLiveDivider?: boolean;
   onReport?: (message: Message) => void;
 }
 
 /** 六种 kind 的渲染规范见 docs/ui.md §6.1；互动与系统行的文案由展示层生成。 */
-export function MessageRow({ row, anchorUid, prefs, onReport }: Props) {
+export function MessageRow({ row, anchorUid, prefs, showLiveDivider, onReport }: Props) {
   const { message, count } = row;
   const badges = badgesFor(message, anchorUid);
   const color = cssColor(message.color);
@@ -39,8 +41,16 @@ export function MessageRow({ row, anchorUid, prefs, onReport }: Props) {
         ? `${message.uname || "有人"} 进入直播间`
         : "";
 
+  const variant = [
+    kindClass[message.kind] ?? "",
+    message.is_history ? styles.historyRow : "",
+    showLiveDivider ? styles.liveDivider : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className={`${styles.row} ${kindClass[message.kind] ?? ""}`}>
+    <div className={`${styles.row} ${variant}`}>
       <span className={styles.meta}>{formatClock(message.ts)}</span>
       {message.kind !== "system" && (
         <span className={styles.badges}>

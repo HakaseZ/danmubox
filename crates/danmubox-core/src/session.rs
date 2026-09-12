@@ -188,9 +188,26 @@ impl RoomRuntime {
         let restart = Arc::new(tokio::sync::Notify::new());
         let driver = {
             let sink = MessageSink::new(bus.clone(), counters);
+            // 回填走总线（不经过 MessageSink，因此不计入「收到的包」统计）。
+            let history_bus = bus.clone();
             let session = cancel.clone();
             let restart = Arc::clone(&restart);
             tokio::spawn(async move {
+                // 进场回填（`docs/contract.md` §4.3）：先把上游能给的最近若干条铺进总线，
+                // 再开始连接——顺序因此天然是「历史在前、实时在后」，不需要额外的排序。
+                // 上游该接口不可靠且会成批返回空（见 `docs/protocol.md` 附录 A30），
+                // 因此空结果与失败都只记日志，绝不阻塞会话。
+                match source.recent(room_id).await {
+                    Ok(items) if !items.is_empty() => {
+                        tracing::debug!(room_id, count = items.len(), "进场回填历史弹幕");
+                        for message in items {
+                            history_bus.publish(Event::Message(message));
+                        }
+                    }
+                    Ok(_) => tracing::debug!(room_id, "上游未返回历史弹幕，按空列表进场"),
+                    Err(err) => tracing::debug!(room_id, %err, "历史弹幕拉取失败，按空列表进场"),
+                }
+
                 loop {
                     if session.is_cancelled() {
                         return;
@@ -372,13 +389,23 @@ mod tests {
         );
     }
 
-    /// 端口层的假适配器：只投递预置消息，然后挂起等待取消。
+    /// 端口层的假适配器：先返回预置历史，再投递预置实时消息，然后挂起等待取消。
     struct FakeSource {
         messages: Vec<Message>,
+        history: Vec<Message>,
+        /// 历史拉取失败时使用，用于验证「失败不影响进场」。
+        history_fails: bool,
     }
 
     #[async_trait::async_trait]
     impl LiveSource for FakeSource {
+        async fn recent(&self, _room_id: i64) -> Result<Vec<Message>> {
+            if self.history_fails {
+                return Err(crate::Error::Upstream("假适配器的历史失败".into()));
+            }
+            Ok(self.history.clone())
+        }
+
         async fn resolve_room(&self, _input: &str) -> Result<Room> {
             Ok(Room::default())
         }
@@ -396,6 +423,69 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(60)).await;
     }
 
+    fn history_msg(ts: i64, uid: i64, content: &str) -> Message {
+        let mut m = msg(ts, MessageKind::Danmaku, uid, content);
+        m.is_history = true;
+        m
+    }
+
+    #[tokio::test]
+    async fn history_is_seeded_before_live_and_flagged() {
+        let bus = EventBus::default();
+        let counters = Arc::new(Counters::default());
+        let room = Room {
+            room_id: 7,
+            ..Default::default()
+        };
+        let source: Arc<dyn LiveSource> = Arc::new(FakeSource {
+            history: vec![history_msg(100, 9, "进场前的弹幕")],
+            messages: vec![msg(200, MessageKind::Danmaku, 8, "进场后的弹幕")],
+            history_fails: false,
+        });
+
+        let runtime = RoomRuntime::spawn(room, 5000, bus, counters.clone(), source);
+        settle().await;
+
+        let rows = runtime.query(&HistoryQuery::default());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].content, "进场前的弹幕", "历史必须排在实时之前");
+        assert!(rows[0].is_history, "回填的必须带历史标记");
+        assert_eq!(rows[1].content, "进场后的弹幕");
+        assert!(!rows[1].is_history, "实时消息不得被标成历史");
+        assert_eq!(
+            counters.snapshot().messages,
+            1,
+            "历史不经 MessageSink，不得计入「收到的消息」"
+        );
+        runtime.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn history_failure_or_emptiness_does_not_block_the_session() {
+        for history_fails in [true, false] {
+            let bus = EventBus::default();
+            let counters = Arc::new(Counters::default());
+            let room = Room {
+                room_id: 7,
+                ..Default::default()
+            };
+            // history_fails=false 且 history 为空 == 上游返回空数组（实测常态之一）。
+            let source: Arc<dyn LiveSource> = Arc::new(FakeSource {
+                history: vec![],
+                messages: vec![msg(200, MessageKind::Danmaku, 8, "实时消息")],
+                history_fails,
+            });
+            let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
+            settle().await;
+            assert_eq!(
+                runtime.query(&HistoryQuery::default()).len(),
+                1,
+                "历史失败或为空时仍必须正常收实时消息（history_fails={history_fails}）"
+            );
+            runtime.close().await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn runtime_buffer_lives_exactly_one_session() {
         let bus = EventBus::default();
@@ -410,6 +500,8 @@ mod tests {
                 msg(1, MessageKind::Danmaku, 1, "第一条"),
                 msg(2, MessageKind::Gift, 2, "第二条"),
             ],
+            history: vec![],
+            history_fails: false,
         });
         let mut events = bus.subscribe();
         let first = RoomRuntime::spawn(room.clone(), 5000, bus.clone(), counters.clone(), noisy);
@@ -428,7 +520,11 @@ mod tests {
         assert!(saw_closed, "关闭会话必须广播 RoomClosed");
 
         // 重进同一房间是全新会话：不得带出上一次的任何消息。
-        let quiet: Arc<dyn LiveSource> = Arc::new(FakeSource { messages: vec![] });
+        let quiet: Arc<dyn LiveSource> = Arc::new(FakeSource {
+            messages: vec![],
+            history: vec![],
+            history_fails: false,
+        });
         let second = RoomRuntime::spawn(room, 5000, bus, counters, quiet);
         settle().await;
         assert!(second.is_empty(), "重进必须是新会话，旧缓冲不得残留");

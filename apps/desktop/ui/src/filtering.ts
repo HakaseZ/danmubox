@@ -29,7 +29,7 @@ export const GUARD_TITLE: Record<number, string> = {
   3: "舰长",
 };
 
-/** 过滤规则（docs/ui.md §4.2 的求值顺序：类型 → 粉丝牌 → 用户 → 关键词）。 */
+/** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 粉丝牌 → 用户 → 关键词）。 */
 export function passesFilter(message: Message, prefs: Prefs): boolean {
   if (prefs["filter.kinds"].length > 0 && !prefs["filter.kinds"].includes(message.kind)) {
     return false;
@@ -62,7 +62,7 @@ export interface DisplayRow {
 
 /**
  * 过滤 + 合并相似消息。合并规则：同一 uid、同一内容、且在 `ui.merge_window_ms`
- * 窗口内连续出现的消息合成一行，`count` 记录条数（docs/ui.md §4.5）。
+ * 窗口内连续出现的消息合成一行，`count` 记录条数（docs/ui.md §8.4）。
  */
 export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
   const rows: DisplayRow[] = [];

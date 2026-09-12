@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use danmubox_core::ports::LiveSource;
-use danmubox_core::{Cancel, ConnState, Counters, Error, MessageSink, Result, Room};
+use danmubox_core::{Cancel, ConnState, Counters, Error, Message, MessageSink, Result, Room};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -314,6 +314,10 @@ impl BiliLive {
 
 #[async_trait]
 impl LiveSource for BiliLive {
+    async fn recent(&self, room_id: i64) -> Result<Vec<Message>> {
+        crate::history::fetch_history(&self.http, room_id).await
+    }
+
     async fn resolve_room(&self, input: &str) -> Result<Room> {
         self.http.room_play_info(input).await
     }

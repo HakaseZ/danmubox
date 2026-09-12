@@ -194,6 +194,11 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
                 } else {
                     0
                 },
+                // 上游按**调用者身份**算好的可用性：`perm == 0` 即「我无权使用」。
+                // 实测（A26 补记）：同房间两个账号拿到同一份表情，舰长专属那批的 `perm`
+                // 从 0 变 1，其它字段一模一样——所以置灰判据只能取这一位。
+                // 字段缺失按「可用」处理（见 `Emote::locked` 的说明）。
+                locked: item.get("perm").and_then(Value::as_i64) == Some(0),
             });
         }
     }
@@ -263,6 +268,9 @@ pub fn map_owned_packages(value: &Value) -> Vec<Emote> {
                 in_player_area: false,
                 bulge_display: false,
                 room_id: 0,
+                // 主站「我的表情」= 我拥有的表情，响应里没有 `perm` 这一位，
+                // 也不存在「按房间身份解锁」的概念，因此一律可用。
+                locked: false,
             });
         }
     }
@@ -442,6 +450,62 @@ mod tests {
         assert_eq!(emotes[1].url, "https://i/b.png");
         assert_eq!(emotes[0].package_kind, EmotePackage::Common);
         assert_eq!(emotes[0].room_id, 0, "通用表情不绑定房间（契约 §5）");
+    }
+
+    #[test]
+    fn locked_follows_the_emote_level_perm_field() {
+        // 实测形状（同一个房间、两个身份不同的账号各拉一次）：两边拿到**完全相同**的
+        // 表情清单，只有「舰长专属」那批（identity=3）的 `perm` 随身份从 0 变 1。
+        // 因此置灰判据只能取表情级 `perm`。
+        let value = json!({
+            "data": {"data": [{
+                "pkg_id": 327, "pkg_name": "UP主大表情", "pkg_type": 2,
+                "emoticons": [
+                    {"emoji": "饭饭", "url": "https://i/a.png", "identity": 3, "perm": 0,
+                     "unlock_need_level": 1},
+                    {"emoji": "再来亿把", "url": "https://i/b.png", "identity": 4, "perm": 1,
+                     "unlock_need_level": 1}
+                ]
+            }]}
+        });
+        let emotes = map_packages(2233, &value);
+        assert!(emotes[0].locked, "perm=0 即我无权使用 → 界面置灰");
+        assert!(!emotes[1].locked, "perm=1 即可用");
+    }
+
+    #[test]
+    fn missing_perm_is_treated_as_usable() {
+        // 字段没给时按可用处理：宁可少置灰一个，也不要把整个表情面板画成灰色
+        // （置灰是提示，不是权限闸门——真正的拦截在上游发送侧）。
+        let value = json!({
+            "data": {"data": [{
+                "pkg_id": 1, "pkg_name": "通用表情", "emoticons": [
+                    {"emoji": "笑", "url": "https://i/a.png"},
+                    {"emoji": "哭", "url": "https://i/b.png", "perm": 2}
+                ]
+            }]}
+        });
+        let emotes = map_packages(1, &value);
+        assert!(!emotes[0].locked, "缺 perm 视为可用");
+        assert!(
+            !emotes[1].locked,
+            "只有 0 才判为无权限；未观测到的其它取值不猜测语义"
+        );
+    }
+
+    #[test]
+    fn owned_emotes_are_never_locked() {
+        let value = json!({
+            "data": {"packages": [{"id": 4022, "text": "Kirikosama", "emote": [
+                {"id": 1, "text": "[Kirikosama_吃瓜]", "url": "https://i/a.png"}
+            ]}]}
+        });
+        let emotes = map_owned_packages(&value);
+        assert_eq!(emotes.len(), 1);
+        assert!(
+            !emotes[0].locked,
+            "主站「我的表情」是我拥有的，不存在按身份解锁"
+        );
     }
 
     #[test]

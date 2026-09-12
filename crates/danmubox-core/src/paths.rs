@@ -48,8 +48,18 @@ const APP_DIR: &str = ".local/share/danmubox";
 mod tests {
     use super::*;
 
+    /// 环境变量是进程级的，而 cargo 默认并发跑同一 binary 里的用例：
+    /// 一个用例在设 `DANMUBOX_HOME`、另一个在删它，就会随机读到对方的状态。
+    /// 这两个用例因此串行执行。
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn override_env_wins() {
+        let _guard = env_guard();
         std::env::set_var("DANMUBOX_HOME", "/tmp/danmubox-test-home");
         assert_eq!(data_dir(), PathBuf::from("/tmp/danmubox-test-home"));
         assert_eq!(
@@ -66,6 +76,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_uses_application_support() {
+        let _guard = env_guard();
         std::env::remove_var("DANMUBOX_HOME");
         assert!(data_dir().ends_with("Library/Application Support/danmubox"));
     }

@@ -151,23 +151,59 @@ export interface DisplayRow {
 export const FOLLOW_PAGE_SIZE = 30;
 
 /**
- * 关注列表排序（docs/ui.md §2.2，需求 §2.11）：
- * 直播中置顶 → 最后开播时间近的在前 → 人气高的在前 → 房间号升序兜底。
+ * 关注列表排序（docs/ui.md §2.2，需求 §2.11，用户 #16）：
+ * 直播中置顶 → **最近观看降序** → 最后开播时间近的在前 → 人气高的在前 → 房间号升序兜底。
+ *
+ * `recentWatched` 是 `ui.recent_watched`（房间号 → 打开时刻，UTC 毫秒）。没看过的房间
+ * 没有条目，按 0 参与比较：**全都会排在看过的之后**，彼此之间仍走旧的那条链
+ * （`live_start_at` → `online` → `room_id`），所以缺省 `{}` 时与旧版行为完全一致。
  *
  * `live_start_at`（上游 `liveTime`，Unix 秒）与 `online` 缺失时按 0 参与比较，
  * 退化成「直播中置顶 + 房间号升序」——不会因此乱序或抛错。
  * 不改动入参，返回新数组。
  */
-export function sortFollowedRooms(rooms: FollowedRoom[]): FollowedRoom[] {
+export function sortFollowedRooms(
+  rooms: FollowedRoom[],
+  recentWatched: Record<string, number> = {},
+): FollowedRoom[] {
   return [...rooms].sort((a, b) => {
     const live = Number(b.live_status === 1) - Number(a.live_status === 1);
     if (live !== 0) return live;
+    const watched =
+      (recentWatched[String(b.room_id)] ?? 0) -
+      (recentWatched[String(a.room_id)] ?? 0);
+    if (watched !== 0) return watched;
     const time = (b.live_start_at ?? 0) - (a.live_start_at ?? 0);
     if (time !== 0) return time;
     const online = (b.online ?? 0) - (a.online ?? 0);
     if (online !== 0) return online;
     return a.room_id - b.room_id;
   });
+}
+
+/** 上游连主播昵称都没给时的中性占位：**绝不拿房间号顶替**（用户 #17/#18）。 */
+export const UNNAMED_ROOM = "未命名直播间";
+
+/**
+ * 列表里的房间名（用户 #17：房间列表不展示房间号）：
+ * 「主播名 · 直播间名」，缺哪一侧就只显示另一侧（不留悬空的分隔符）。
+ */
+export function roomDisplayName(room: { anchor_uname: string; title: string }): string {
+  const parts = [room.anchor_uname.trim(), room.title.trim()].filter(
+    (part) => part.length > 0,
+  );
+  return parts.length > 0 ? parts.join(" · ") : UNNAMED_ROOM;
+}
+
+/**
+ * 标签条上的房间名（用户 #18：tab 展示主播名）。
+ * 主播名取不到才退回直播间标题——标签也要能认出是哪个房间。
+ */
+export function roomTabName(room: { anchor_uname: string; title: string }): string {
+  const uname = room.anchor_uname.trim();
+  if (uname.length > 0) return uname;
+  const title = room.title.trim();
+  return title.length > 0 ? title : UNNAMED_ROOM;
 }
 
 /** 分页切片；`page` 从 1 开始，越界时夹回有效范围。 */

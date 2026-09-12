@@ -476,6 +476,7 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height }) {
   let accountAreaShot = false;
   let accountShot = false;
   let accountQrShot = false;
+  let followShot = false;
   // 宽屏沿用既有文件名（docs/ui.md §15 列了它们），窄屏加 `-narrow` 前缀
   const prefix = name === "narrow" ? "danmubox-ui-narrow" : "danmubox-ui";
   // 300s 上限：正常 35–45s 跑完；环境被拖慢时宁可多等，也不要报一个假的「场景未跑完」
@@ -503,6 +504,11 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height }) {
         await shoot(join(shotDir, `${prefix}-admin-confirm.png`));
       }
       // 账号区（一行身份 + 账号按钮）、账号管理对话框、二维码面板各一张
+      // 关注列表排布（#14/#15）：宽屏一张单排、窄屏一张两排，两处都不许出现房间号
+      if (!followShot && snapshot.followListRendered) {
+        followShot = true;
+        await shoot(join(shotDir, `${prefix}-follow.png`));
+      }
       if (!accountAreaShot && snapshot.accountAreaReady) {
         accountAreaShot = true;
         await shoot(join(shotDir, `${prefix}-account-area.png`));

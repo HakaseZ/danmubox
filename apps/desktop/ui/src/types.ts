@@ -63,6 +63,12 @@ export interface Room {
   room_id: number;
   short_id: number;
   anchor_uid: number;
+  /**
+   * 主播昵称（契约 §5 `Room.anchor_uname`，上游 `anchor_info.base_info.uname`）。
+   * 主界面用它**代替房间号**展示房间（#17 房间列表 / #18 标签条）；
+   * 空串 = 上游没给，界面回落到 `title`（不渲染空）。
+   */
+  anchor_uname: string;
   title: string;
   live_status: number;
 }
@@ -298,6 +304,11 @@ export interface Prefs {
   "filter.kinds": MessageKind[];
   "filter.medal_level_min": number;
   "history.buffer_rows": number;
+  /**
+   * 各房间最近一次**打开**的时刻（键 = 房间号，值 = UTC 毫秒）。
+   * 界面在 `openRoom` 时记一次，关注列表按它降序排（契约 §8，用户 #16）。
+   */
+  "ui.recent_watched": Record<string, number>;
 }
 
 export interface ApiError {

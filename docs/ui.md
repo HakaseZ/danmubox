@@ -59,17 +59,29 @@
 |---|---|---|
 | **账号区** | **只占一行**：当前身份（头像 + 昵称 + `uid`；未登录时是「游客态：可接收弹幕，发送需先登录」）+ 一个「账号」按钮，按钮打开**账号管理对话框**（§2.2.1）。下拉、删除、新增、扫码、登出这些控件**不再内联在这一行** | 为什么不做成下拉：**只有一个账号时下拉里只有一项**，会被读成「切换功能坏了」——用户就是这么报的（原话「切换身份的功能好像没法选」）。「有几个账号、各是谁、哪个在用、能对这个账号做什么」四件事装不进一个下拉，所以切换与账号操作全部收进对话框 |
 | **添加房间** | 输入短号 / URL / 房间号 → `rooms_add` | 房间不存在时提示「房间不存在或短号无效」并保留输入 |
-| **我的房间** | `rooms_list` 中手动添加的房间，带删除按钮（`rooms_remove`） | 上游返回顺序 |
-| **关注列表** | `follow_list` 全量（**含未开播**），头像 + 昵称 + 标题 + 状态标签 + 最后开播时间 + 房间号 | 排序：`live_status == 1` 置顶 → `live_start_at` 降序 → `online` 降序 → `room_id` 升序。前端分页，每页 `FOLLOW_PAGE_SIZE = 30`，>1 页时显示上一页/下一页与页码 |
+| **我的房间** | `rooms_list` 中手动添加的房间，带删除按钮（`rooms_remove`）。行内是「**主播名 · 直播间名**」（`anchor_uname` · `title`）+ 直播状态 + 连接状态，**不显示房间号**（用户 #17） | 上游返回顺序 |
+| **关注列表** | `follow_list` 全量（**含未开播**），头像 + 主播名 + 直播标题 + 状态标签 + 最后开播时间（**不显示房间号、不显示关注分组名**，用户 #14/#15/#16） | 排序：`live_status == 1` 置顶 → **最近观看降序**（`ui.recent_watched`；没看过的不在这一档、排在看过的之后）→ `live_start_at` 降序 → `online` 降序 → `room_id` 升序。前端分页，每页 `FOLLOW_PAGE_SIZE = 30`，>1 页时显示上一页/下一页与页码 |
+
+**关注项的排布按宽度分两种形态**（同一套 DOM，只换 grid 模板；用户 #14/#15）：
+
+| 档 | 第一排 | 第二排 |
+|---|---|---|
+| 宽屏（> 520px） | 左：头像 · 主播名 · 直播标题　右：直播状态 · 最后开播时间 | —（单排） |
+| 窄屏（≤ 520px，含窗口最小宽度 360） | 左：头像 · 主播名　右：直播状态 | 左：直播标题　右：最后开播时间 |
+
+- 两档都**不渲染房间号**；也没有「短号」这类房间号变体（用户：「不要房间号」）。
+- 头像列**永远占位**（`--avatar`），上游没给 `face` 的条目不会因此把右半边挤到别处。
+- 直播间标题（`title`）超长省略；上游未给（空串）时**不渲染该元素**，不用占位符顶位（空着的格由 grid 模板保证，不让后面的格子错位）。
+- 关注分组名（`group_name`）**当前不渲染**：用户给定的行内布局只有上面四个槽位，分组名没有位置。字段仍随 `FollowedRoom` 带出，留待以后做分组视图。
 
 - `live_status` 展示映射：`1` → 「直播中」（强调色）、`2` → 「轮播中」（弱化）、`0` → 「未开播」（弱化）。
 - 关注列表里的房间点击即**进场**（打开房间页），不写入 `rooms_list`；「我的房间」的项才走 `rooms_add` / `rooms_remove`。
 - 「刷新关注」按钮调用 `follow_list`，刷新期间按钮禁用并显示转圈；失败时保留旧列表并提示原始错误文本。
 - **自动加载**：应用启动时（会话就绪后，即 `session_status` 返回且已登录）自动调一次 `follow_list`，
   用户不必手动点刷新；失败同样走上面的错误提示并保留「刷新」按钮，不静默。登录/换号/新建/删除账号后同样重新拉一次。
-- 列表项展示头像（`face`）、昵称（`uname`）、真实房间号（`room_id`）、直播状态标签、最后开播时间（`live_start_at`，未知则不显示该段）、关注分组名（有则显示）。
-- 直播间标题（`title`）显示在**昵称之后**，超长省略（不撑破行）；上游未给（空串）时**不渲染该元素**，不用占位符顶位。数据来自 `follow_list` 条目自带的 `title`（2026-09-12 实测），不为每个房间另调接口。
-- 关注分组来自直播关注接口之外的另一套上游（`protocol.md` A34），因此当前只把上游给到的 `group_name` 显示出来，不自行分组排序。
+- 列表项展示头像（`face`）、主播名（`uname`）、直播间标题（`title`）、直播状态标签、最后开播时间（`live_start_at`，未知则不显示该段）。**房间号不展示**（用户 #14/#15：「不要房间号」）。
+- 直播间标题（`title`）显示在**主播名之后**，超长省略（不撑破行）；上游未给（空串）时**不渲染该元素**，不用占位符顶位。数据来自 `follow_list` 条目自带的 `title`（2026-09-12 实测），不为每个房间另调接口。
+- 关注分组来自直播关注接口之外的另一套上游（`protocol.md` A34）；当前不渲染 `group_name`（用户给定的行内布局没有这个槽位，见上表），也不自行分组排序。
 
 ### 2.2.1 账号管理对话框（`accounts_list` / `account_*`，需求 §2.5）
 
@@ -149,14 +161,14 @@
 
 | 项 | 规则 |
 |---|---|
-| 标签条 | 已打开房间的标签，按打开顺序排列，可横向滚动；激活标签高亮，连接状态点见 §3 |
+| 标签条 | 已打开房间的标签，按打开顺序排列，可横向滚动；激活标签高亮，连接状态点见 §3。标签上的名字是**主播名**（`anchor_uname`，取不到才退回直播间标题），**不显示房间号**（用户 #18） |
 | 多标签共存 | 已打开的房间保留各自的长连接与**会话缓冲**；切换标签只切换渲染，不断开、不清空 |
 | 新增标签 | 在房间列表点击房间：已打开则激活该标签，未打开则新开 |
 | 关闭标签 | 关闭该房间页，断开连接、销毁并清空该房间的会话缓冲；**不**删除房间数据（不调 `rooms_remove`） |
 | 返回列表 | `xs` / `md` 下从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-reply` / `db-msg-reply-name` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-panel-close` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-send-hint` / `db-composer-tools` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-reply` / `db-msg-reply-name` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-panel-close` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-send-hint` / `db-composer-tools` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
 
 ### 2.4 会话缓冲生命周期（契约 §4.3）
 
@@ -998,8 +1010,8 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"     
 | 断言口径 | 只依赖**对外可观察**的行为：DOM 文本、`getBoundingClientRect` 几何、`Range.getClientRects()` 行盒、`getComputedStyle` 定位/滚动、IPC 调用记录。定位一律走 `data-testid`（§2.3 的稳定钩子），**不依赖 CSS 类名** |
 | 快照即契约 | 快照字段名（`step1_*` … `step6_*` 与 `layout*` / `row*` / `panel*` / `phrase*` / `tools*` / `sendHint*` / `menu*` / `time*` / `gift*` / `follow*` / `account*` / `emotes*` / `owned*` / `admin*` / `medal*` / `narrow*` / `wide*`）是断言契约，改名等于改断言。视口专属的断言按视口取名（`narrow_*` / `wide_*`，由场景里的 `put()` 写入）：同一份场景两个视口都跑，前缀只表示「这条是哪个视口的快照」 |
 | 几何口径 | `layoutShortContentBottomGap` = 滚动容器底边与末行底边之差（贴底时只剩容器 `padding-bottom`，8px）；`layoutNameLefts` = 三行昵称左边缘（头像列占位后完全一致）；`layoutBadgeNameGap` / `layoutNameBodyGap` = 徽标组→昵称 / 昵称→正文两道间距（前者必须更小）；`layoutHangIndentFirstLeft` / `layoutHangIndentLastLeft` / `layoutHangIndentLines` = 折行后首行与末行的文字左边缘（相等）与行数（≥2 才不算空对空）；`layoutAvatarFirstLineDelta` = 头像中心 − 首行行盒中心（首行居中口径，≈0）；`rowEmoteFirstLineTops` = 表情弹幕行里头像列 / 身份簇 / 正文三者的顶边（`rowIdentityOnFirstLineBox` 要求三者差 < 1.5px）；`rowScale` = 行盒 / 头像 / 徽标 / 表情四个实测高度（`rowScaleCoherent` 要求 0.9 / 0.9 / 1.1 的比例关系）；`layoutHeaderOverlapPx` = 滚到顶部时滚动容器顶边 − 第一条行盒顶边（≥0 即没被头部压住）；`panelChildLefts` = 面板直接子元素的左边缘（必须只有一个值）；`layoutPanelScrollStablePx` = 展开面板前后、同一行在视口里的位移 |
-| 覆盖 | 关注列表自动加载与排序分页、账号区（一行身份 + 对话框：单账号也有添加入口、扫码添加不覆盖、重新登录需确认、删除当前自动切走、退出登录回游客态）、弹幕列表是唯一生长区、面板向上展开不遮挡最新弹幕、行右键菜单、时间戳默认关且打开后等宽对齐、礼物栏在输入区下方且不抢宽度、系统通知与互动自动消失、历史与实时同款、**内容不足视口时整体贴底**、**头像列永远占位（昵称三列纵向对齐）**、**粉丝牌真彩色与兜底色**、**回复关系可见（非回复不画标记）+ 被 @ 名字用 `reply_uname_color` 上色、空串不上色**、**舰长标只认本房间的 `guard_level`**、**主站「我的表情」分组可见且发出去带唯一键**、**@ 目标与文本同源**、**房管权限前置 / 写操作二次确认与请求形状 / 面板三块列表增删 / 无权限时原样展示上游 code + message**、**行排版的整体感（两种间距、徽标贴昵称、悬挂缩进、头像钉首行、身份簇与正文同起点（含大表情那一行）、头像/徽标/表情三条尺度同源）**、**昵称不吃弹幕颜色 + 颜色只落正文 + 默认白按未指定处理（暗色与浅色两套主题各量一遍：`rowLightNameReadable` / `rowLightBodyKeepsDanmakuColor` / `rowLightDefaultWhiteTreatedAsUnset`，因为用户报的「用户名是白色、看不见」正是只在浅色主题下成立的）**、**行内不再有菜单按钮（房间头 `⋯` 保留）**、**工具行只有三个面板入口**、**表情面板：分组 tab / 一屏一组 / 置灰不隐藏（含字段缺失按可用）/ 置灰仍可选**、**短语：加一条固定行、聊天输入框不被挤占**、**发送成功不再有「上次发送」提示**、**面板：只挤列表 / 不遮最新一条 / 内容对齐一条左边缘 / 展开不弹走滚动位置**、**窄屏：无横向滚动、面板与对话框限高且内部滚动、有关闭入口、热区 ≥ 40px、工具行不溢出、礼物折叠条不挤列表、账号行不叠字** |
+| 覆盖 | 关注列表自动加载与排序分页、**关注项排布（宽屏单排 / 窄屏两排，两档都不出现房间号）、按最近观看降序（"看过"压过"没看过"）、标签条显示主播名而非房间号**、账号区（一行身份 + 对话框：单账号也有添加入口、扫码添加不覆盖、重新登录需确认、删除当前自动切走、退出登录回游客态）、弹幕列表是唯一生长区、面板向上展开不遮挡最新弹幕、行右键菜单、时间戳默认关且打开后等宽对齐、礼物栏在输入区下方且不抢宽度、系统通知与互动自动消失、历史与实时同款、**内容不足视口时整体贴底**、**头像列永远占位（昵称三列纵向对齐）**、**粉丝牌真彩色与兜底色**、**回复关系可见（非回复不画标记）+ 被 @ 名字用 `reply_uname_color` 上色、空串不上色**、**舰长标只认本房间的 `guard_level`**、**主站「我的表情」分组可见且发出去带唯一键**、**@ 目标与文本同源**、**房管权限前置 / 写操作二次确认与请求形状 / 面板三块列表增删 / 无权限时原样展示上游 code + message**、**行排版的整体感（两种间距、徽标贴昵称、悬挂缩进、头像钉首行、身份簇与正文同起点（含大表情那一行）、头像/徽标/表情三条尺度同源）**、**昵称不吃弹幕颜色 + 颜色只落正文 + 默认白按未指定处理（暗色与浅色两套主题各量一遍：`rowLightNameReadable` / `rowLightBodyKeepsDanmakuColor` / `rowLightDefaultWhiteTreatedAsUnset`，因为用户报的「用户名是白色、看不见」正是只在浅色主题下成立的）**、**行内不再有菜单按钮（房间头 `⋯` 保留）**、**工具行只有三个面板入口**、**表情面板：分组 tab / 一屏一组 / 置灰不隐藏（含字段缺失按可用）/ 置灰仍可选**、**短语：加一条固定行、聊天输入框不被挤占**、**发送成功不再有「上次发送」提示**、**面板：只挤列表 / 不遮最新一条 / 内容对齐一条左边缘 / 展开不弹走滚动位置**、**窄屏：无横向滚动、面板与对话框限高且内部滚动、有关闭入口、热区 ≥ 40px、工具行不溢出、礼物折叠条不挤列表、账号行不叠字** |
 | 两个视口 | 同一份场景代码在两个视口各跑一遍，**断言集合相同、没有例外名单**：面板在窄屏也是文档流里的一块（§9.1），所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真。视口专属的补充断言按 `narrow_*` / `wide_*` 前缀分开存放 |
-| 产物 | 快照 JSON + **十六张**截图（每个视口各八张）：`danmubox-ui-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-final.png` 结束时；窄屏那八张带 `-narrow` 前缀（如 `danmubox-ui-narrow-room.png`）。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
+| 产物 | 快照 JSON + **十八张**截图（每个视口各九张）：`danmubox-ui-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`danmubox-ui-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-final.png` 结束时；窄屏那九张带 `-narrow` 前缀（如 `danmubox-ui-narrow-follow.png`）。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
 | 维护约定 | 场景代码整段是一个模板字符串：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩（踩过两次） |
 | 失败判读 | 退出码非 0 时打印不成立的布尔字段名（带 `wide:` / `narrow:` 前缀）；`EXPECTED_FALSE` 里列的是「本来就该是 false」的字段（如人气值不展示、系统通知默认关） |

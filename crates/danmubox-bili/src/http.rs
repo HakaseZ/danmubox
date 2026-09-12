@@ -191,24 +191,7 @@ impl BiliHttp {
         }
 
         let data = value.get("data").unwrap_or(&Value::Null);
-        let room_id = data.get("room_id").and_then(Value::as_i64).unwrap_or(0);
-        if room_id == 0 {
-            return Err(Error::RoomNotFound(format!("输入 `{input}` 未解析出房间")));
-        }
-        Ok(Room {
-            room_id,
-            short_id: data
-                .get("short_id")
-                .and_then(Value::as_i64)
-                .unwrap_or_default(),
-            anchor_uid: data.get("uid").and_then(Value::as_i64).unwrap_or(0),
-            title: data
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            live_status: data.get("live_status").and_then(Value::as_i64).unwrap_or(0) as i32,
-        })
+        map_room_play_info(data, input)
     }
 
     /// 取长连接票据与候选地址。游客态同样需要 `buvid` 与 WBI 签名。
@@ -447,9 +430,75 @@ pub fn normalize_room_input(input: &str) -> Result<String> {
     Ok(digits)
 }
 
+/// `getRoomPlayInfo` 的 `data` → `Room`（上游字段名只允许出现在这个函数里）。
+///
+/// 主播昵称在 `anchor_info.base_info.uname`（只读解析，2026-09-12：#17/#18 要用它代替
+/// 房间号展示房间）。**它与 `uid` 一样是「有就有、没有就没有」**：测不到就留空串，
+/// 由界面回落到直播间标题——不在这里编造，也不用房间号顶替。
+fn map_room_play_info(data: &Value, input: &str) -> Result<Room> {
+    let room_id = data.get("room_id").and_then(Value::as_i64).unwrap_or(0);
+    if room_id == 0 {
+        return Err(Error::RoomNotFound(format!("输入 `{input}` 未解析出房间")));
+    }
+    Ok(Room {
+        room_id,
+        short_id: data
+            .get("short_id")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        anchor_uid: data.get("uid").and_then(Value::as_i64).unwrap_or(0),
+        anchor_uname: data
+            .pointer("/anchor_info/base_info/uname")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        title: data
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        live_status: data.get("live_status").and_then(Value::as_i64).unwrap_or(0) as i32,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_info_reads_anchor_nickname() {
+        // 载荷形状取自 `getRoomPlayInfo` 的实测响应：`data` 顶层有 room_id / short_id / uid /
+        // title / live_status，主播昵称在 `anchor_info.base_info.uname`（只读解析）。
+        let data = serde_json::json!({
+            "room_id": 5440,
+            "short_id": 0,
+            "uid": 42,
+            "title": "测试直播间",
+            "live_status": 1,
+            "anchor_info": { "base_info": { "uname": "测试主播", "gender": "保密" } }
+        });
+        let room = map_room_play_info(&data, "5440").unwrap();
+        assert_eq!(room.room_id, 5440);
+        assert_eq!(room.anchor_uid, 42);
+        assert_eq!(room.anchor_uname, "测试主播");
+        assert_eq!(room.title, "测试直播间");
+    }
+
+    #[test]
+    fn room_info_without_anchor_block_leaves_nickname_empty() {
+        // 上游没给 anchor_info（游客态/字段改名）时不许编造昵称：留空串，
+        // 界面自己回落到 title（用户 #17/#18 要的是「展示主播名」，取不到才退让）。
+        let data = serde_json::json!({ "room_id": 7, "title": "只有标题" });
+        let room = map_room_play_info(&data, "7").unwrap();
+        assert_eq!(room.anchor_uname, "");
+        assert_eq!(room.title, "只有标题");
+    }
+
+    #[test]
+    fn room_info_without_room_id_is_not_found() {
+        let err = map_room_play_info(&serde_json::json!({ "title": "x" }), "9").unwrap_err();
+        assert_eq!(err.code(), "ROOM_NOT_FOUND");
+    }
 
     #[test]
     fn accepts_plain_room_id_and_short_id() {

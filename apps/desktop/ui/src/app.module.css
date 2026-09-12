@@ -1274,10 +1274,18 @@
   flex: 1;
 }
 
+/* 关注项：**一套 DOM、两种排布**（用户 #14/#15，docs/ui.md §2.2）。
+   宽屏一排：左 = 头像 · 主播名 · 直播标题，右 = 直播状态 · 最后开播时间；
+   窄屏两排（见文件末尾的 @media）：第一排 头像 · 主播名 / 直播状态，
+   第二排 直播标题 / 最后开播时间。头像跨两排、垂直居中。
+   四个槽位都由模板给定，**缺标题的条目不会让后面的格子错位**；行内不再有房间号。 */
 .followItem {
-  display: flex;
+  display: grid;
   align-items: center;
-  gap: var(--sp-2);
+  column-gap: var(--sp-2);
+  row-gap: var(--sp-1);
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "avatar who status time";
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-2);
@@ -1290,6 +1298,26 @@
   border-color: var(--accent);
 }
 
+/* 固定宽度的头像列：上游没给 face 时 `Avatar` 不渲染 <img>，但列宽要照占，
+   否则「有头像」与「没头像」的条目会各按各的左边距排（看起来像两级缩进）。 */
+.followAvatar {
+  grid-area: avatar;
+  align-self: center;
+  width: var(--avatar);
+  height: var(--avatar);
+}
+
+/* 左半边的名字 + 标题：`minmax(0, 1fr)` 的格子给它一个**确定宽度**，
+   里面的 `max-width: 40%`（名字）与 `flex: 1 1 auto`（标题）才是有意义的约束——
+   直接把名字放进 auto 轨道的话，百分比上限会撞上「轨道宽度取决于内容」的循环。 */
+.followWho {
+  grid-area: who;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
 .followName {
   flex: none;
   max-width: 40%;
@@ -1298,17 +1326,30 @@
   white-space: nowrap;
 }
 
-/* 关注项的直播间标题（上游 `GetWebList` 的 `title`）：跟在主播名之后，
-   能伸展但不超过 45%，超出省略，绝不撑破行（与 `.followName` 同款截断手法）。 */
+/* 关注项的直播间标题（上游 `GetWebList` 的 `title`）：吃掉名字右边剩下的宽度，
+   超出省略，绝不撑破行（与 `.followName` 同款截断手法）。 */
 .followTitle {
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-dim);
   font-size: var(--fs-2);
+}
+
+/* 状态与最后开播时间都贴右：grid 模板把它们放在最后两列，宽度按内容走。 */
+.followStatus {
+  grid-area: status;
+  justify-self: end;
+}
+
+.followLastLive {
+  grid-area: time;
+  justify-self: end;
+  color: var(--fg-dim);
+  font-size: var(--fs-2);
+  white-space: nowrap;
 }
 
 .pager {
@@ -1450,18 +1491,30 @@
     flex: 1 1 100%;
   }
 
-  /* 关注项一行放不下时换行，不横向溢出 */
+  /* 关注项在窄屏分成两排（用户 #14）：第一排 头像 · 主播名 / 直播状态，
+     第二排 直播标题 / 最后开播时间。头像跨两排（`.followAvatar` 在模板里占两格）；
+     标题与主播名同列（悬挂缩进），不顶到头像下面。
+     左半边那一层（`.followWho`）在两排形态下被**摊平**（`display: contents`），
+     名字与标题才能各自落到第一排 / 第二排 —— 同一个 DOM，没有为窄屏另开一套结构。 */
   .followItem {
-    flex-wrap: wrap;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "avatar name  status"
+      "avatar title time";
   }
 
+  .followWho {
+    display: contents;
+  }
+
+  /* 名字在 `minmax(0, 1fr)` 的轨道里：上限交给轨道，不再自己卡 40% */
   .followName {
+    grid-area: name;
     max-width: none;
   }
 
-  /* 标题在窄屏换行后可占满整行，仍带省略号 */
   .followTitle {
-    max-width: none;
+    grid-area: title;
   }
 
   /* 输入区：输入框占满宽度；工具行放不下就换行，不挤成小方块 */

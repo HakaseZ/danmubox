@@ -649,6 +649,34 @@
 - 房间列表页的「关注」不再假装有分组：直播关注接口不给分组（`docs/protocol.md` A34），
   原先按 `group_name` 折叠出的一堆「未分组」只是噪音；现在按时间排成一列，`group_name` 有值才作为一项信息展示。
 
+### Changed
+
+- **主界面房间列表与关注列表重排：不露房间号，关注项按宽度分两档**（用户 2026-09-12 的 issue #14–#18）。
+  五条一起落地，因为它们改的是同一块 DOM：
+  - **#14/#15 关注项排布**：从「一条 flex、放不下就 `flex-wrap` 换行」改成**一套 DOM + 两种 grid 模板**。
+    宽屏（> 520px）一排：左 = 头像 · 主播名 · 直播标题，右 = 直播状态 · 最后开播时间；
+    窄屏（≤ 520px，含窗口最小宽度 360）两排：第一排 头像 · 主播名 / 直播状态，第二排 直播标题 / 最后开播时间
+    （头像跨两排、标题与主播名同起点）。四个槽位由 `grid-template-areas` 给定，**缺标题的条目不会让后面的格子错位**。
+    断点沿用既有的 520px（用户能拖到的 360–520 全落在窄屏档，可达面边界值有冒烟覆盖）。
+  - **#16 排序**：新增「**最近观看降序**」——打开房间时记一次时刻（新偏好键 `ui.recent_watched`，契约 §8；
+    键 = 房间号、值 = UTC 毫秒），排序链变成「直播中置顶 → 最近观看降序 → 最后开播时间降序 → 人气 → 房间号」。
+    没看过的房间不在键里，因此整档排在看过的之后（缺省 `{}` 时行为与旧版一致）。**所有关注项照旧全量展示**。
+  - **#17 连接的房间列表**：卡片不再显示房间号与短号，改报「**主播名 · 直播间名**」（任一侧缺失就只显示另一侧）。
+  - **#18 房间标签条**：标签上的名字从直播间标题改成**主播名**（取不到才退回标题），不再出现房间号。
+  - **前置字段**：`Room` 新增 `anchor_uname`（契约 §5，上游 `getRoomPlayInfo` 的 `anchor_info.base_info.uname`，
+    只读解析）→ core 模型 → bili 解析 → `RoomView`（`docs/ipc.md`）→ UI 类型。上游没给时为空串，
+    界面回落到标题，**不渲染空**、也绝不拿房间号顶替。
+  - 关注项的**关注分组名（`group_name`）不再渲染**：用户给定的行内布局只有四个槽位，分组名没有位置；
+    字段仍随 `FollowedRoom` 带出，留待以后做分组视图。
+  - 冒烟新增：`followLivePinnedFirst` / `followWatchedDesc` / `followWatchedBeforeUnwatched` /
+    `followUnwatchedKeepsLiveStartOrder`（排序）、`followItemHasAllParts` / `followSingleRow` /
+    `followNameLeftOfTitle` / `followTitleBeforeStatus` / `followTimeAtRightEdge`（宽屏一排）与
+    `followRow1NameWithStatus` / `followRow2TitleWithTime` / `followTitleOnSecondRow` /
+    `followRowRightsAligned` / `followStatusInRightHalf` / `followTitleAlignedWithName`（窄屏两排）、
+    `followItemHidesRoomNumber` / `roomCardHidesRoomNumber` / `tabHidesRoomNumbers`（两处渲染里房间号不存在）、
+    `roomCardShowsAnchorAndTitle` / `tabShowsAnchorNames` / `tabsRendered`；
+    新增截图 `danmubox-ui-follow.png` / `danmubox-ui-narrow-follow.png`（关注列表排布，两档各一张）。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

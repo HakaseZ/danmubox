@@ -79,9 +79,9 @@
 | `admin_keywords_list` | `roomId: number` | `string[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 直播间屏蔽词（只读） |
 | `admin_keywords_add` | `roomId: number`、`words: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 添加屏蔽词；上游一次只收一个 `keyword`，多词由实现逐个调用 |
 | `admin_keywords_del` | `roomId: number`、`word: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 删除屏蔽词 |
-| `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；排序规则 `live_status == 1` 置顶（契约 §5） |
+| `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；交给界面前按 `live_status == 1` 置顶（契约 §5），完整展示排序见 `docs/ui.md` §2.2 |
 | `wallet_balance` | 无 | `WalletBalance` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额；单位与刷新时机见 §3.2 |
-| `prefs_get` | 无 | `PrefsSnapshot`（契约 §8 全部 17 键的**生效值**） | `INTERNAL` | 未写入过的键返回契约 §8 默认值 |
+| `prefs_get` | 无 | `PrefsSnapshot`（契约 §8 全部 19 键的**生效值**） | `INTERNAL` | 未写入过的键返回契约 §8 默认值 |
 | `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形 |
 | `app_info` | 无 | `AppInfo` | — | 版本、数据目录、构建信息、日志级别、平台；不含任何凭据 |
 
@@ -166,6 +166,7 @@ type RoomView = {
   room_id: number;
   short_id: number | null;
   anchor_uid: number | null;     // 主播徽标的派生依据：uid == anchor_uid
+  anchor_uname: string;          // 主播昵称（契约 §5）；空串 = 上游未给，界面回落到 title
   title: string | null;
   live_status: number;           // 0 未开播 / 1 直播中 / 2 轮播
   connected: boolean;
@@ -208,7 +209,7 @@ type WalletBalance = { battery: number };
 
 type ReportResult = { ok: boolean; upstream_code: number | null; upstream_message: string | null };
 
-type PrefsSnapshot = {            // 契约 §8 的 18 键全量，键名即契约字面
+type PrefsSnapshot = {            // 契约 §8 的 19 键全量，键名即契约字面
   "ui.font_scale": number; "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean; "ui.pause_on_hover": boolean;
   "ui.merge_similar": boolean; "ui.merge_window_ms": number;
@@ -221,6 +222,7 @@ type PrefsSnapshot = {            // 契约 §8 的 18 键全量，键名即契�
   "filter.keywords_alert": boolean; "filter.uids": number[]; "filter.kinds": MessageKind[];
   "filter.medal_level_min": number;
   "history.buffer_rows": number;
+  "ui.recent_watched": Record<string, number>;  // 房间号 → 最近一次打开的时刻（UTC 毫秒）
 };
 // 原先的 "ui.opacity" 已删除（用户 2026-09-12：实现方式非预期），不再接受该键。
 
@@ -327,7 +329,7 @@ type AppState = {
 | `sendChat(roomId, content, color?, mode?)` | `chat_send` | 见 §7 乐观更新 |
 | `reportDanmaku(roomId, upstreamId, reason)` | `chat_report` | 成功后就地提示；失败按错误码提示 |
 | `loadEmotes(roomId)` | `emotes_list` | 进入房间后调用一次；面板按 `package_kind` 分组 |
-| `refreshFollow()` | `follow_list`（每次实时拉取） | 返回后按 `live_status == 1` 置顶排序渲染；**启动时（会话就绪后）与登录/换号后各自动调用一次**，失败仍走错误提示并保留「刷新」按钮 |
+| `refreshFollow()` | `follow_list`（每次实时拉取） | 返回后按「直播中置顶 → 最近观看（`ui.recent_watched`）降序 → 最后开播时间降序」渲染；**启动时（会话就绪后）与登录/换号后各自动调用一次**，失败仍走错误提示并保留「刷新」按钮 |
 | `refreshWallet()` | `wallet_balance` | 状态栏展示；打开礼物面板时刷新 |
 | `loadPrefs()` / `savePrefs(patch)` | `prefs_get` / `prefs_set` | 写入后用返回值整体覆盖 `prefs.effective` |
 | `loadAppInfo()` | `app_info` | 状态栏与调试面板 |

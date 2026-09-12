@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AccountManager } from "./components/AccountManager";
 import { RoomList } from "./components/RoomList";
 import { DOT, RoomView } from "./components/RoomView";
-import { collectSeenEmotes, toDisplayRows } from "./filtering";
+import { collectSeenEmotes, roomTabName, toDisplayRows } from "./filtering";
 import { useApp } from "./store";
 import styles from "./app.module.css";
 
@@ -94,16 +94,18 @@ export function App() {
         <div className={styles.tabs}>
           {rooms.map((room) => {
             const state = status[room.room_id]?.state ?? "disconnected";
-            const title = room.title.length > 0 ? room.title : `房间 ${room.room_id}`;
+            // 标签条报主播名，不报房间号（用户 #18）；拿不到主播名才退回直播间标题。
+            const name = roomTabName(room);
             return (
               <button
                 key={room.room_id}
                 className={room.room_id === activeRoomId ? styles.tabActive : styles.tab}
-                title={`${title} · ${state}`}
+                data-testid="db-room-tab"
+                title={`${name} · ${state}`}
                 onClick={() => void openRoom(room.room_id)}
               >
                 <span className={`${styles.dot} ${DOT[state]}`} />
-                {title}
+                {name}
               </button>
             );
           })}
@@ -143,6 +145,7 @@ export function App() {
           info={info}
           session={session}
           followed={followed}
+          recentWatched={prefs?.["ui.recent_watched"] ?? {}}
           onAdd={(input) => void addRoom(input)}
           onOpen={(roomId) => void openRoom(roomId)}
           accounts={accounts}

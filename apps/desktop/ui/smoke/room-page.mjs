@@ -64,7 +64,10 @@ const MOCK = `(function () {
     "composer.phrases": ["早上好"], "filter.keywords": [], "filter.keywords_mode": "hide",
     "filter.keywords_alert": false, "filter.uids": [],
     "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard", "system"],
-    "filter.medal_level_min": 0, "history.buffer_rows": 5000
+    "filter.medal_level_min": 0, "history.buffer_rows": 5000,
+    // 「最近观看」（契约 §8）：离线甲（room 300）先看过，填充28（room 428）后看过 ——
+    // 用来看排序是否真的按它降序（见场景 step1 的 #16 断言）。
+    "ui.recent_watched": { "300": 1789900000000, "428": 1789990000000 }
   };
   var nextLocal = 1;
   function msg(kind, content, isHistory, extra) {
@@ -83,6 +86,21 @@ const MOCK = `(function () {
   // 头像样本刻意用**原图尺寸 512×512**：上游 CDN 的头像是原图直出（没有尺寸后缀），
   // 一旦 CSS 没给出宽高，<img> 就按 512 渲染、把整页顶爆。32×32 的小图看不见这个毛病。
   var FACE_512 = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'><rect width='512' height='512' fill='%2300aeec'/></svg>";
+  // 已登记的房间。默认只有 1 个：标签条只在**多于一个**房间时渲染（App 既有语义），
+  // 场景末尾用 __addSecondRoom() 补登记第二个，好把 #18（标签条显示主播名、不显示房间号）
+  // 也验到——不然那一段永远没有可观察面。
+  var rooms = [
+    {
+      room_id: 5440, short_id: 0, anchor_uid: 2, anchor_uname: "测试主播",
+      title: "测试房间", live_status: 1, connected: true, buffered: 1
+    }
+  ];
+  window.__addSecondRoom = function () {
+    rooms.push({
+      room_id: 5555, short_id: 0, anchor_uid: 9, anchor_uname: "第二位主播",
+      title: "第二个直播间", live_status: 0, connected: false, buffered: 0
+    });
+  };
   // 关注列表：上游顺序刻意打乱，用来看排序是否真按最后开播时间生效；
   // 再补 28 条凑够 31 条，验证「>30 条才出现分页」。
   var followed = [
@@ -222,7 +240,7 @@ const MOCK = `(function () {
           if (wasActive && accounts.length > 0) accounts[0].active = true;
           return Promise.resolve(syncSession());
         }
-        case "rooms_list": return Promise.resolve([{ room_id: 5440, short_id: 0, anchor_uid: 2, title: "测试房间", live_status: 1, connected: true, buffered: 1 }]);
+        case "rooms_list": return Promise.resolve(rooms.map(function (r) { return Object.assign({}, r); }));
         case "prefs_get": return Promise.resolve(Object.assign({}, prefs));
         case "prefs_set": Object.assign(prefs, args.patch); return Promise.resolve(Object.assign({}, prefs));
         case "follow_list": window.__followCalls += 1; return Promise.resolve(followed.slice());
@@ -390,6 +408,80 @@ const MOCK = `(function () {
     var emptyTitleItem = followItemNamed("离线甲");
     out.step1_followEmptyTitleHidden = !!emptyTitleItem &&
       !emptyTitleItem.querySelector('[data-testid="db-follow-title"]');
+
+    // ---- #16 排序：直播中置顶 → **最近观看降序** → 最后开播时间降序。
+    // 夹具设计：#300（离线甲，最后开播最旧）与 #428（填充28，最后开播垫底那一批）是**看过**的
+    // （prefs 的 ui.recent_watched），#200（离线乙，最后开播最新）没看过。
+    // 于是「填充28 在 离线甲 之前」证明看过的按时间降序，「离线甲 在 离线乙 之前」证明
+    // 「看过的」整档排在「没看过的」之前（否则按 live_start_at 离线乙才是最前的未开播项）。
+    out.followLivePinnedFirst = followNames.length > 0 && followNames[0] === "在播主播";
+    out.followWatchedDesc =
+      followNames.indexOf("填充28") >= 0 && followNames.indexOf("填充28") < followNames.indexOf("离线甲");
+    out.followWatchedBeforeUnwatched =
+      followNames.indexOf("离线甲") >= 0 && followNames.indexOf("离线甲") < followNames.indexOf("离线乙") &&
+      followNames.indexOf("离线乙") >= 0;
+    out.followUnwatchedKeepsLiveStartOrder =
+      followNames.indexOf("离线乙") >= 0 && followNames.indexOf("填充27") >= 0 &&
+      followNames.indexOf("离线乙") < followNames.indexOf("填充27");
+
+    // ---- #14/#15 排布：宽屏一排（左 头像·主播名·直播标题 / 右 状态·最后开播时间），
+    // 窄屏两排（第二排 左标题 / 右最后开播时间）；两档都不得出现房间号。
+    var followPart = function (item, testid) {
+      return item ? item.querySelector('[data-testid="' + testid + '"]') : null;
+    };
+    var centerY = function (el) {
+      var r = rect(el);
+      return (r.top + r.bottom) / 2;
+    };
+    var partsName = followPart(liveFollowItem, "db-follow-name");
+    var partsStatus = followPart(liveFollowItem, "db-follow-status");
+    var partsTime = followPart(liveFollowItem, "db-follow-last-live");
+    out.followItemHasAllParts = !!(partsName && liveFollowTitle && partsStatus && partsTime);
+    if (out.followItemHasAllParts) {
+      if (NARROW) {
+        // 窄屏：主播名与状态同一排；标题与最后开播时间在第二排，且标题在左、时间在右。
+        put("followRow1NameWithStatus", Math.abs(centerY(partsName) - centerY(partsStatus)) < 6);
+        put("followRow2TitleWithTime", Math.abs(centerY(liveFollowTitle) - centerY(partsTime)) < 6);
+        put("followTitleOnSecondRow", rect(liveFollowTitle).top >= rect(partsName).bottom - 2);
+        put("followRow2BelowStatus", rect(liveFollowTitle).top > rect(partsStatus).bottom - 2);
+        put("followTitleLeftOfTime", rect(liveFollowTitle).left < rect(partsTime).left);
+        // 第一排的状态与第二排的时间都贴右边缘（同一列、同一条右边界）
+        put("followRowRightsAligned", Math.abs(rect(partsStatus).right - rect(partsTime).right) < 2);
+        put("followStatusInRightHalf",
+          rect(partsStatus).left > rect(liveFollowItem).left + rect(liveFollowItem).width / 2);
+        // 标题与主播名同一起点（悬挂缩进）：不顶到头像下面，也不越到状态右边。
+        put("followTitleAlignedWithName",
+          Math.abs(rect(liveFollowTitle).left - rect(partsName).left) < 2);
+      } else {
+        // 宽屏：四项在同一排；标题在两簇之间（名字之后、状态之前），最后开播时间在最右。
+        put("followSingleRow",
+          Math.abs(centerY(partsName) - centerY(liveFollowTitle)) < 8 &&
+          Math.abs(centerY(partsName) - centerY(partsStatus)) < 8 &&
+          Math.abs(centerY(partsName) - centerY(partsTime)) < 8);
+        put("followNameLeftOfTitle", rect(partsName).left < rect(liveFollowTitle).left);
+        put("followTitleBeforeStatus", rect(liveFollowTitle).right <= rect(partsStatus).left + 1);
+        put("followTimeAtRightEdge", rect(partsTime).right >= rect(partsStatus).right);
+      }
+    }
+    // 房间号不得出现在关注项里（用户 #14/#15：两档都「不要房间号」）：
+    // #100 是「有标题 + 直播中」那条，#300 是「无标题 + 未开播且看过」那条，两类都查。
+    out.followItemHidesRoomNumber = !!liveFollowItem && !!emptyTitleItem &&
+      liveFollowItem.innerText.indexOf("100") < 0 &&
+      emptyTitleItem.innerText.indexOf("300") < 0;
+    // 连接中的房间列表同样不报房间号（#17）：卡片报「主播名 · 直播间名」。
+    var roomCard = byTestId("db-room-card");
+    out.roomCardShowsAnchorAndTitle = !!roomCard &&
+      roomCard.innerText.indexOf("测试主播") >= 0 &&
+      roomCard.innerText.indexOf("测试房间") >= 0;
+    out.roomCardHidesRoomNumber = !!roomCard && roomCard.innerText.indexOf("5440") < 0;
+
+    // 让跑脚本的进程抓一张「关注列表排布」的截图（宽屏单排 / 窄屏两排各一张）。
+    var firstFollowItem = byTestId("db-follow-item");
+    if (firstFollowItem && firstFollowItem.scrollIntoView) {
+      firstFollowItem.scrollIntoView({ block: "start" });
+    }
+    out.followListRendered = allByTestId("db-follow-item").length > 0;
+
     out.accountArea = !!byTestId("db-account");
     // 列表页的头像（账号区 / 关注项）尺寸必须由 CSS 给，不能落到「原图尺寸」：
     // 夹具是 512×512，一旦 var(--avatar) 解析不出来，头像会按 512 渲染、把主页顶爆
@@ -414,6 +506,9 @@ const MOCK = `(function () {
       document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
       listPage.scrollWidth <= listPage.clientWidth);
     snap();
+    // 停一下让跑脚本的进程抓一张「关注列表排布」（宽屏单排 / 窄屏两排）：
+    // 过了这一步就点进房间了，列表页那两排只在这一刻可见。
+    await sleep(900);
 
     // ---- step2 进房间 + 历史回填可见
     byTestId("db-room-card").click();
@@ -1608,6 +1703,22 @@ const MOCK = `(function () {
     out.accountBackToGuest = !!byTestId("db-account-guest") && !byTestId("db-account-dialog");
     out.accountGuestTextShown = (byTestId("db-account-guest") || { innerText: "" })
       .innerText.indexOf("游客态") >= 0;
+
+    // ---- #18 房间标签条：显示主播名，不显示房间号。
+    // 标签条只在**多于一个**房间时渲染（App 既有语义），所以这里补登记第二个房间，
+    // 再走一次真实路径（点房间卡 → openRoom → connect 会重拉 rooms_list）把它带出来。
+    window.__addSecondRoom();
+    byTestId("db-room-card").click();
+    await sleep(800);
+    var tabs = allByTestId("db-room-tab");
+    out.tabsRendered = tabs.length === 2;
+    out.tabShowsAnchorNames = tabs.length === 2 &&
+      tabs.some(function (t) { return t.innerText.indexOf("测试主播") >= 0; }) &&
+      tabs.some(function (t) { return t.innerText.indexOf("第二位主播") >= 0; });
+    out.tabHidesRoomNumbers = tabs.length === 2 && tabs.every(function (t) {
+      return t.innerText.indexOf("5440") < 0 && t.innerText.indexOf("5555") < 0;
+    });
+    snap();
 
     out.done = true;
     snap();

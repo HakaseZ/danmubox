@@ -20,6 +20,8 @@ enum Ty {
     StrArr,
     IntArr,
     KindArr,
+    /// 「房间号 → 时刻」这类定宽映射：键是十进制房间号，值是 `i64`。
+    IntMap,
 }
 
 struct Spec {
@@ -148,6 +150,11 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             Some(100_000.0),
             None,
         ),
+        // 关注列表的「最近观看」记号（用户 2026-09-12：#16 按最近观看降序）。
+        // 键 = 房间号（十进制字符串），值 = 打开该房间的时刻（UTC 毫秒）。
+        // 由界面在**打开房间**时写，人不会手动改它——但界面状态一律只落 prefs.json，
+        // 不进 config.toml（config 只放凭据，见契约 §4.1）。
+        spec("ui.recent_watched", Ty::IntMap, json!({}), None, None, None),
     ]
 });
 
@@ -176,6 +183,13 @@ fn validate(spec: &Spec, value: &Value) -> Result<()> {
         Ty::KindArr => value.as_array().is_some_and(|a| {
             a.iter()
                 .all(|v| v.as_str().is_some_and(|s| KINDS.contains(&s)))
+        }),
+        // 键必须是十进制房间号（不许出现 `room:123` 这类键，免得同一份数据两种写法），
+        // 值是毫秒时间戳。空对象合法——「一次都没看过」就是这个样子。
+        Ty::IntMap => value.as_object().is_some_and(|map| {
+            map.keys()
+                .all(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+                && map.values().all(Value::is_i64)
         }),
     };
 
@@ -418,6 +432,10 @@ mod tests {
             json!({ "filter.kinds": ["danmaku", "notice"] }),
             json!({ "filter.uids": [1, "2"] }),
             json!({ "history.buffer_rows": 5 }),
+            // 「最近观看」必须是「房间号 → 时刻」的映射：数组、字符串键、非整数时刻都不收
+            json!({ "ui.recent_watched": [1, 2] }),
+            json!({ "ui.recent_watched": { "room:7": 1 } }),
+            json!({ "ui.recent_watched": { "7": 1.5 } }),
         ] {
             let mut p = Prefs::new();
             assert_eq!(
@@ -426,6 +444,26 @@ mod tests {
                 "应拒绝 {bad}"
             );
         }
+    }
+
+    #[test]
+    fn recent_watched_holds_room_stamps() {
+        let mut prefs = Prefs::new();
+        assert_eq!(
+            prefs.get("ui.recent_watched").unwrap(),
+            json!({}),
+            "默认「一次都没看过」"
+        );
+
+        prefs
+            .set_patch(&json!({ "ui.recent_watched": { "5440": 1_789_900_000_000i64 } }))
+            .unwrap();
+        let effective = prefs.effective();
+        assert_eq!(
+            effective["ui.recent_watched"]["5440"],
+            json!(1_789_900_000_000i64),
+            "读回来的仍是那个毫秒时刻"
+        );
     }
 
     #[test]

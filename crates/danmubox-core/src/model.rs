@@ -225,6 +225,12 @@ pub struct Room {
     pub room_id: i64,
     pub short_id: i64,
     pub anchor_uid: i64,
+    /// 主播昵称（上游 `getRoomPlayInfo` 的 `anchor_info.base_info.uname`，只读解析）。
+    ///
+    /// 界面用它代替房间号展示房间（用户 2026-09-12：#17 房间列表、#18 标签条）。
+    /// 上游没给时为空串——界面回落到 `title`，不渲染空。
+    #[serde(default)]
+    pub anchor_uname: String,
     pub title: String,
     /// 0 未开播 / 1 直播中 / 2 轮播
     pub live_status: i32,

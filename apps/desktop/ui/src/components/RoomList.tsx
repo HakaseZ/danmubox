@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 
 import { Avatar } from "./Avatar";
-import { FOLLOW_PAGE_SIZE, formatLastLive, paginate, sortFollowedRooms } from "../filtering";
+import {
+  FOLLOW_PAGE_SIZE,
+  formatLastLive,
+  paginate,
+  roomDisplayName,
+  sortFollowedRooms,
+} from "../filtering";
 import type {
   Account,
   AppInfo,
@@ -20,6 +26,8 @@ interface Props {
   /** 打开账号管理对话框；切换 / 添加 / 重新登录 / 退出登录都在那里。 */
   onOpenAccounts: () => void;
   followed: FollowedRoom[];
+  /** `ui.recent_watched`：房间号 → 最近一次打开的时刻，关注列表据此降序（用户 #16）。 */
+  recentWatched: Record<string, number>;
   onAdd: (input: string) => void;
   onOpen: (roomId: number) => void;
   onRemove: (roomId: number) => void;
@@ -36,7 +44,9 @@ const LIVE_LABEL: Record<number, string> = {
 /**
  * 房间列表页：账号区 + 手动添加 + 已添加房间 + 关注列表（docs/ui.md §2）。
  *
- * 关注列表按「直播中置顶 → 最后开播时间近的在前」排序并分页（需求 §2.11）。
+ * 关注列表按「直播中置顶 → 最近观看降序 → 最后开播时间近的在前」排序并分页
+ * （需求 §2.11、用户 #14–#16）；行内只出现头像 / 主播名 / 直播标题 / 状态 / 最后开播时间，
+ * **不出现房间号**（用户 #14/#15/#17）。宽窄屏的两种排布见 app.module.css 的 `.followItem`。
  */
 export function RoomList({
   rooms,
@@ -45,6 +55,7 @@ export function RoomList({
   accounts,
   onOpenAccounts,
   followed,
+  recentWatched,
   onAdd,
   onOpen,
   onRemove,
@@ -61,7 +72,10 @@ export function RoomList({
     setInput("");
   };
 
-  const sortedFollowed = useMemo(() => sortFollowedRooms(followed), [followed]);
+  const sortedFollowed = useMemo(
+    () => sortFollowedRooms(followed, recentWatched),
+    [followed, recentWatched],
+  );
   const paged = paginate(sortedFollowed, page);
 
   // 当前身份：账号列表里的 `active` 条目为准（它带昵称/uid/头像）；拉不到时退回会话里的两个字段，
@@ -133,13 +147,11 @@ export function RoomList({
             onClick={() => onOpen(room.room_id)}
           >
             <div className={styles.roomCardMain}>
-              <div className={styles.roomTitle} title="直播间标题（上游）">
-                {room.title.length > 0 ? room.title : `房间 ${room.room_id}`}
+              {/* 连接的房间列表只报「谁 · 哪个直播间」，不报房间号（用户 #17）。 */}
+              <div className={styles.roomTitle} data-testid="db-room-name" title="主播 · 直播间">
+                {roomDisplayName(room)}
               </div>
               <div className={styles.roomMeta}>
-                {room.room_id}
-                {room.short_id > 0 ? `（短号 ${room.short_id}）` : ""}
-                {" · "}
                 {room.live_status === 1 ? (
                   <span className={styles.live}>直播中</span>
                 ) : (
@@ -174,41 +186,55 @@ export function RoomList({
             </div>
           ) : (
             <>
-              {paged.items.map((item) => (
-                <div
-                  key={item.room_id}
-                  className={styles.followItem}
-                  data-testid="db-follow-item"
-                  onClick={() => onOpenFollowed(item.room_id)}
-                >
-                  <Avatar url={item.face} name={item.uname} />
-                  <span className={styles.followName}>{item.uname}</span>
-                  {item.title.length > 0 && (
-                    <span
-                      className={styles.followTitle}
-                      data-testid="db-follow-title"
-                      title={item.title}
-                    >
-                      {item.title}
-                    </span>
-                  )}
-                  <span
-                    className={item.live_status === 1 ? styles.live : styles.idle}
+              {paged.items.map((item) => {
+                const lastLive = formatLastLive(item.live_start_at);
+                return (
+                  <div
+                    key={item.room_id}
+                    className={styles.followItem}
+                    data-testid="db-follow-item"
+                    onClick={() => onOpenFollowed(item.room_id)}
                   >
-                    {LIVE_LABEL[item.live_status] ?? "未开播"}
-                  </span>
-                  <span className={styles.headerSpacer} />
-                  {formatLastLive(item.live_start_at) && (
-                    <span className={styles.roomMeta} title="最后开播时间（上游 liveTime）">
-                      最后开播 {formatLastLive(item.live_start_at)}
+                    {/* 头像列永远占位：上游没给 face 的条目也要和别的条目左对齐。 */}
+                    <span className={styles.followAvatar}>
+                      <Avatar url={item.face} name={item.uname} />
                     </span>
-                  )}
-                  {item.group_name.length > 0 && (
-                    <span className={styles.roomMeta}>{item.group_name}</span>
-                  )}
-                  <span className={styles.roomMeta}>{item.room_id}</span>
-                </div>
-              ))}
+                    {/* 宽屏时这一层是 flex（名字 + 标题并排在左半边）；窄屏时被「摊平」
+                        （`display: contents`），名字与标题各自落到第一排 / 第二排的网格里。 */}
+                    <span className={styles.followWho}>
+                      <span className={styles.followName} data-testid="db-follow-name">
+                        {item.uname}
+                      </span>
+                      {item.title.length > 0 && (
+                        <span
+                          className={styles.followTitle}
+                          data-testid="db-follow-title"
+                          title={item.title}
+                        >
+                          {item.title}
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      className={`${styles.followStatus} ${
+                        item.live_status === 1 ? styles.live : styles.idle
+                      }`}
+                      data-testid="db-follow-status"
+                    >
+                      {LIVE_LABEL[item.live_status] ?? "未开播"}
+                    </span>
+                    {lastLive.length > 0 && (
+                      <span
+                        className={styles.followLastLive}
+                        data-testid="db-follow-last-live"
+                        title="最后开播时间（上游 liveTime）"
+                      >
+                        最后开播 {lastLive}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
               {paged.pageCount > 1 && (
                 <div className={styles.pager}>
                   <button

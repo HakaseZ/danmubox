@@ -91,6 +91,9 @@ pub struct RoomView {
     pub room_id: i64,
     pub short_id: i64,
     pub anchor_uid: i64,
+    /// 主播昵称（契约 §5 `Room.anchor_uname`）：界面用它代替房间号展示房间
+    /// （用户 2026-09-12：#17 房间列表 / #18 标签条）。上游没给时为空串。
+    pub anchor_uname: String,
     pub title: String,
     pub live_status: i32,
     /// 当前是否持有连接。
@@ -174,6 +177,7 @@ fn view(state: &AppState, rooms: &Rooms, room_id: i64) -> Option<RoomView> {
         room_id: room.room_id,
         short_id: room.short_id,
         anchor_uid: room.anchor_uid,
+        anchor_uname: room.anchor_uname.clone(),
         title: room.title.clone(),
         live_status: room.live_status,
         connected: rooms.runtimes.contains_key(&room_id),

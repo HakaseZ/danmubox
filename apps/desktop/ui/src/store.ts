@@ -330,6 +330,14 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async openRoom(roomId) {
     clearInteractTimers();
+    // 「最近观看」记号（用户 #16）：打开房间就记一次时刻，关注列表据此降序。
+    // 不 await：它只是记一笔，不该挡在历史回填与建连前面；失败走既有的错误条。
+    void get().updatePrefs({
+      "ui.recent_watched": {
+        ...get().prefs?.["ui.recent_watched"],
+        [String(roomId)]: Date.now(),
+      },
+    });
     // 新会话：丢掉上一轮的身份与房管数据，否则关标签再进会拿着旧身份放行房管入口。
     set((state) => ({
       activeRoomId: roomId,

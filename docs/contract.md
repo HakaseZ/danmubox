@@ -260,6 +260,17 @@ sessdata = ""
 
 `ReportReason`（举报理由，规范性）：`id` / `reason`。取自上游 `dMReport/ForReason`，界面只让用户从清单里选。
 
+`Room`（房间元信息，规范性；`rooms_list` 返回的 `RoomView` 是它加上连接态）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `room_id` | i64 | 真实房间号（短号 / URL 已由 `getRoomPlayInfo` 解析） |
+| `short_id` | i64 | 上游短号；无比为 0 |
+| `anchor_uid` | i64 | 主播 UID，用于派生「主播」徽标（`uid == Room.anchor_uid`） |
+| `anchor_uname` | string | **主播昵称**（上游 `getRoomPlayInfo` 的 `anchor_info.base_info.uname`，2026-09-12 只读解析）。界面用它**代替房间号**展示房间（用户 #17 房间列表 / #18 标签条：主界面不再露房间号）。空串 = 上游没给，界面回落到 `title`，**不渲染空** |
+| `title` | string | 直播间标题；空串 = 上游没给 |
+| `live_status` | i32 | 0 未开播 / 1 直播中 / 2 轮播 |
+
 `FollowedRoom`（关注列表，规范性）：`room_id` / `uname` / `face` / `title` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
 
 | 字段 | 类型 | 说明 |
@@ -268,7 +279,7 @@ sessdata = ""
 | `live_start_at` | i64 | **最后/本次开播的起始时间**（上游 `liveTime`，Unix 秒；0 = 未知）。命名刻意避开上游另一个字段 `live_time`（那个是**已开播秒数**，与 `liveTime` 相加等于当前时间——靠这个关系确认了 `liveTime` 的语义，见 2026-09-12 实测）。 |
 | `online` | i64 | 人气/在线数（上游 `online`；缺失 = 0） |
 
-**展示排序**：`live_status == 1` 置顶（REQUIREMENTS.md 需求）；同一档内按 `live_start_at` 降序。用户 2026-09-12 追加要求：**未开播的也要列出**，因此不再只展示直播中的房间。
+**展示排序**：`live_status == 1` 置顶（REQUIREMENTS.md 需求）→ **最近观看降序**（用户 2026-09-12 #16；数据是 `ui.recent_watched`，没看过的不计入该档、排在看过的之后）→ `live_start_at` 降序 → `online` 降序 → `room_id` 升序。用户追加要求：**未开播的也要列出**，因此不再只展示直播中的房间。
 
 ## 6. B 站协议要点（规范性）
 
@@ -342,7 +353,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.interact_auto_hide` | boolean | `true` | 互动/进场消息显示一会儿后自动消失（`false` = 常驻） |
 | `ui.system_notice` | boolean | `false` | 是否显示系统通知（开播 / 下播 / 标题变更 / 公告） |
 | `ui.show_timestamp` | boolean | `false` | 弹幕前是否显示时间戳（用户 2026-09-12 反馈：要可开关） |
-| `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；点一下插入输入框。颜文字是内置常量，不占用偏好键 |
+| `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
 | `filter.keywords` | string[] | `[]` | 关键词列表 |
 | `filter.keywords_mode` | string | `"hide"` | `hide` 命中隐藏 / `only` 仅显示命中 |
 | `filter.keywords_alert` | boolean | `false` | 命中关键词时高亮并提示音 |
@@ -350,6 +361,10 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `filter.kinds` | string[] | 六种 kind 全集 | 参与展示的消息类型白名单 |
 | `filter.medal_level_min` | integer | `0` | 粉丝牌最低等级 |
 | `history.buffer_rows` | integer | `5000` | 每房间内存缓冲条数上限 |
+| `ui.recent_watched` | object | `{}` | 各房间最近一次打开的时刻：键 = 房间号（十进制字符串），值 = UTC 毫秒。关注列表按它**降序**排（用户 #16）；没打开过的房间不在其中，排序时排在看过的之后 |
+
+`ui.recent_watched` 由界面在**打开房间**时写入（不是手改的开关），但界面状态一律只落 `prefs.json`，
+不进 `config.toml`（后者只放凭据，§4.1）。
 
 `ui.gift_panel_mode` 对应 REQUIREMENTS.md「可以配置独立一个礼物栏或者礼物混合在弹幕栏中」。
 

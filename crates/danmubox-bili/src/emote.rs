@@ -7,11 +7,11 @@
 //! | 项 | 本期实现所依赖的形态 | 状态 |
 //! |---|---|---|
 //! | 端点 | `GET https://api.live.bilibili.com/xlive/web-ucenter/v2/emoticon/GetEmoticons` | 未实测 |
-//! | 查询参数 | `room_id`（当前房间号）+ `platform=web` | 未实测 |
+//! | 查询参数 | `room_id` + **`platform=pc`** | 实测：`web` 被上游拒为 `code=500`「平台来源错误」 |
 //! | 签名 | 假设无需 WBI 签名（不构造 `w_rid` / `wts`） | 未实测 |
 //! | 包裹列表路径 | 依次尝试 `data.data` → `data.packages` → `data`，取首个数组 | 未实测 |
 //! | 包字段名 | `pkg_id`（数字或字符串）、`pkg_name`（字符串）、`emoticons`（数组） | 未实测 |
-//! | 表情字段名 | `text`、`url`、唯一标识 `emoticon_unique` → `emoticon_id` | 未实测 |
+//! | 表情字段名 | 显示文本 `emoji`、图 `url`、唯一标识 `emoticon_unique`（回退 `emoticon_id`） | 实测（38 个表情）；**不存在 `text` 字段** |
 //! | 结果码 | `code == 0` 为成功，非 0 一律 `Error::Upstream` 并保留原始 code；**不赋予具体码语义** | 未实测 |
 //!
 //! # 不得编造的部分
@@ -108,8 +108,11 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
             out.push(Emote {
                 key: format!("{pkg_token}:{token}"),
                 package_kind: kind,
+                // 真实字段是 `emoji`（表情字符本身，如「啊」）；`descript` 常为空串，
+                // `text` 字段**不存在**（实测自 38 个表情的响应）。
                 text: item
-                    .get("text")
+                    .get("emoji")
+                    .or_else(|| item.get("descript"))
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
@@ -183,7 +186,7 @@ impl EmoteProvider for BiliEmotes {
 
         let query = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("room_id", &room_id.to_string())
-            .append_pair("platform", "web")
+            .append_pair("platform", "pc")
             .finish();
         let (value, _) = self
             .http
@@ -226,7 +229,7 @@ mod tests {
                 "pkg_id": 1,
                 "pkg_name": "通用表情",
                 "emoticons": [
-                    {"emoticon_unique": "a", "text": "笑", "url": "https://i/a.png"},
+                    {"emoticon_unique": "a", "emoji": "笑", "descript": "", "url": "https://i/a.png"},
                     {"emoticon_unique": "b", "text": "哭", "url": "https://i/b.png"}
                 ]
             }]}

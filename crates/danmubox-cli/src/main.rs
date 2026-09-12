@@ -7,10 +7,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use danmubox_bili::{BiliAuth, BiliLive, BiliSender};
-use danmubox_core::ports::{AuthProvider, DanmakuSender, LiveSource, QrState};
+use danmubox_bili::{BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliSender, BiliWallet};
+use danmubox_core::ports::{
+    AuthProvider, DanmakuSender, EmoteProvider, LiveSource, QrState, RoomCatalog, WalletProvider,
+};
 use danmubox_core::{
     config_path, prefs_path, ConfigStore, Event, EventBus, HistoryQuery, Prefs, RoomRuntime,
+    RoomSession,
 };
 use tokio::sync::broadcast::error::RecvError;
 
@@ -60,6 +63,15 @@ enum Command {
         #[arg(long = "use")]
         use_profile: Option<String>,
     },
+    /// 打印电池余额（需登录）
+    Wallet,
+    /// 打印关注的直播间（需登录）
+    Follow,
+    /// 打印房间可用的表情包（需登录）
+    Emotes {
+        /// 房间号 / 短号 / URL
+        room: String,
+    },
 }
 
 #[tokio::main]
@@ -90,6 +102,47 @@ async fn main() -> Result<()> {
         }
         Command::Profiles { use_profile } => profiles(&store, use_profile).await?,
         Command::Send { room, text, color } => send(&store, &room, &text, color).await?,
+        Command::Wallet => wallet(&store).await?,
+        Command::Follow => follow(&store).await?,
+        Command::Emotes { room } => emotes(&store, &room).await?,
+    }
+    Ok(())
+}
+
+async fn wallet(store: &Arc<ConfigStore>) -> Result<()> {
+    let wallet = BiliWallet::new(Arc::clone(store))?;
+    println!("# 电池余额：{}", wallet.balance().await.context("查询余额失败")?);
+    Ok(())
+}
+
+async fn follow(store: &Arc<ConfigStore>) -> Result<()> {
+    let catalog = BiliFollow::new(Arc::clone(store))?;
+    let rooms = catalog.followed().await.context("拉取关注列表失败")?;
+    println!("# 关注的直播间：{} 个", rooms.len());
+    for room in &rooms {
+        println!(
+            "  room_id={:<10} live_status={} 分组={:?} {}",
+            room.room_id, room.live_status, room.group_name, room.uname
+        );
+    }
+    Ok(())
+}
+
+async fn emotes(store: &Arc<ConfigStore>, room: &str) -> Result<()> {
+    let live = BiliLive::with_store(Arc::clone(store))?;
+    let resolved = live.resolve_room(room).await?;
+    let provider = BiliEmotes::new(Arc::clone(store))?;
+    let session = RoomSession {
+        room_id: resolved.room_id,
+        ..Default::default()
+    };
+    let emotes = provider
+        .emotes(resolved.room_id, &session)
+        .await
+        .context("拉取表情包失败")?;
+    println!("# 房间 {} 可用表情：{} 个", resolved.room_id, emotes.len());
+    for emote in emotes.iter().take(20) {
+        println!("  [{:?}] {:?} -> {}", emote.package_kind, emote.text, emote.url);
     }
     Ok(())
 }

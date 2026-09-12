@@ -759,6 +759,11 @@ stateDiagram-v2
 
 本表是**唯一**允许承载「未实测事实」的位置。表中条目在核对完成前，实现中不得硬编码依赖具体下标 / 枚举值的解析路径。采集一律以 `DANMUBOX_LOG=debug` 运行并抓取 debug 日志（方法见附录 B）。
 
+> **端点发现方法（2026-09-11 起）**：上游端点若猜测无果，逐个试路径是下策——直接读直播页自己的前端产物：
+> 在已登录的浏览器里打开 `https://live.bilibili.com/<room>`，取 `performance.getEntriesByType("resource")`
+> 中全部 `.js`，正则检索 `xlive/…` 路径。A26 / A28 / A29 的真实端点都是这样得到的（A29 的四个候选猜测全是 404）。
+> 产物里还能直接读到调用参数，例如 `GetEmoticons` 的真实 `platform` 值是 `pc` 而非 `web`。
+
 ### A.0 本轮实测结论（2026-09-11）
 
 采集条件：游客态，两个在播房间（含一个在线约 20 万的大房间；房间号不写入仓库），累计约 80 秒真实流量。结论已回填 §10.0 / §10.1 / §10.4 / §10.7。
@@ -810,10 +815,10 @@ stateDiagram-v2
 | A23 | 人气值口径 | `POPULARITY_CHANGE.data.popularity` 与 `op=3` 心跳回应的数值是否为同一口径、更新频率差异 | 同一房间同时记录两类来源各 ≥10 个值 | 比对数值序列，确认展示时以哪个为准 | §2.1 人气值展示（阶段 3） |
 | A24 | 上游主动断连的周期与诱因 | 是否为常态轮换、是否与心跳节奏或房间热度相关 | 连续多次 ≥2 小时长连，记录每次断连的时刻与间隔 | **已实测（2 小时 4 分）**：共 4 次断连，**全部由上游发起**（TLS `close_notify` / `Connection reset by peer`），间隔约 1 分钟 / 40 分钟 / 18 分钟，**无固定周期**；退避按 `5s→10s→20s→40s` 升级；期间 **HTTP 心跳失败 0 次**；每次断连后均自动恢复。结论：属上游常态轮换，不应视为故障 | §13.2、S1-AC2 |
 | A25 | `msg/send` 的请求形态 | 参数放 body 还是 query；`rnd` 的取值语义；`csrf` 与 `csrf_token` 是否必须是同一值；`w_rid` 是否必需 | 登录态下各发一条，用抓包或对照官方 web 客户端请求 | **已验证**：`application/x-www-form-urlencoded` body（含 `w_rid`、`csrf` / `csrf_token`）的上报被上游接受且弹幕成功出现；`rnd` 语义仍未知但不影响发送 | §11.1、`send.rs` |
-| A26 | 表情包库接口 | 端点路径、查询参数、是否需 WBI 签名、响应信封与字段名（包 id/名、表情文本/图片地址）、包分类（通用 / 粉丝牌 / 大航海 / 房管）的判定依据 | 登录态下用 `DANMUBOX_LOG=debug` 请求一次并比对原始响应 | 逐项确认后收敛候选表；分类若无法从响应判定，改由身份二次过滤并记录 | `emote.rs`、`Emote`/`EmotePackage` |
-| A27 | 举报接口 | 端点路径与表单字段集、理由的合法取值与映射、结果码集合、是否需要 WBI 签名 | 对照官方 web 端一次真实举报的请求（DevTools 抓包）；在公开测试房间 `1` 对**自己刚发的那条**弹幕举报 | 确认后写死字段与理由列表；**未确认前理由按不透明字符串传递，不映射不校验语义** | `report.rs`、`chat_report` |
-| A28 | 关注列表接口 | 端点路径、分页参数名与页大小上限、响应信封、`room_id`/`uname`/`face`/`live_status`/分组名的真实字段名、`live_status` 口径 | 登录态下拉取并比对原始响应 | 收敛候选名到单一字段；确认分页终止条件 | `follow.rs`、`follow_list` |
-| A29 | 电池余额口径 | 端点路径、数值字段名（电池 / 金瓜子 / 银瓜子）、三者之间的关系与单位 | 登录态下请求一次，并与官方「电池」页显示值对照 | 确认字段与单位后把候选表收敛为单一字段；口径未确认前原样透传上游整数，不做换算 | `wallet.rs`、`wallet_balance` |
+| A26 | 表情包库接口 | 端点路径、查询参数、是否需 WBI 签名、响应信封与字段名（包 id/名、表情文本/图片地址）、包分类（通用 / 粉丝牌 / 大航海 / 房管）的判定依据 | 登录态下用 `DANMUBOX_LOG=debug` 请求一次并比对原始响应 | **已实测（2026-09-11）**：`GET /xlive/web-ucenter/v2/emoticon/GetEmoticons?platform=pc&room_id=<id>`；**`platform=web` 被上游拒为 `code=500`「参数错误，平台来源错误」**。信封 `data.data[]`；包字段 `pkg_id`/`pkg_name`/`pkg_type`/`pkg_perm`/`unlock_identity`/`unlock_need_gift`；表情字段 `emoji`（显示文本）/`url`/`emoticon_unique`/`emoticon_id`——**不存在 `text` 字段**（原实现读 `text`，界面会显示空白文本）。实测房间 `1`（`room_id=5440`）返回 1 包 38 个表情，文本如「啊」「冲鸭」。**仍未知**：包分类判据——`pkg_type`/`pkg_perm`/`unlock_identity` 疑为真实判据，但只有「通用包」一个样本（`pkg_type=1, pkg_perm=1, unlock_identity=0`），暂保留包名启发式 | `emote.rs` |
+| A27 | 举报接口 | 端点路径与表单字段集、理由的合法取值与映射、结果码集合、是否需要 WBI 签名 | 对照官方 web 端一次真实举报的请求（DevTools 抓包）；在公开测试房间 `1` 对**自己刚发的那条**弹幕举报 | **部分实测（2026-09-11）**：端点 `/xlive/web-ucenter/v1/dMReport/Report` 确认存在（与实现一致）；**理由清单端点 `/xlive/web-ucenter/v1/dMReport/ForReason` 实测返回 7 条 `{id, reason}`**（理由可改为下拉，不必让用户自由输入）。**仍未知**：Report 的表单字段集与结果码集合——真实举报未执行，需用户配合（只能在公开测试房间 `1` 举报自己刚发的弹幕） | `report.rs`、`chat_report` |
+| A28 | 关注列表接口 | 端点路径、分页参数名与页大小上限、响应信封、`room_id`/`uname`/`face`/`live_status`/分组名的真实字段名、`live_status` 口径 | 登录态下拉取并比对原始响应 | **部分实测（2026-09-11）**：端点 `GET /xlive/web-ucenter/v1/xfetter/GetWebList`——**原猜测的 `/xlive/web-interface/v1/relation/getUserFollowList` 不成立**；分页 `page`/`page_size` 实测可用；信封 `data.{rooms, list, count, not_living_num}`，**没有 `has_more`**（终止条件改为「本页条数 == page_size」）。**仍未知**：`rooms` 与 `list` 哪个是房间列表、以及条目字段名——该账号关注数为 0，两者皆空数组；实现取 `data.list`，待有非空关注时复核 | `follow.rs`、`follow_list` |
+| A29 | 电池余额口径 | 端点路径、数值字段名（电池 / 金瓜子 / 银瓜子）、三者之间的关系与单位 | 登录态下请求一次，并与官方「电池」页显示值对照 | **已实测（2026-09-11）**：端点 `GET /xlive/revenue/v1/wallet/myWallet`——**此前四个候选（`revenue/v1|v2`、`app-ucenter`、`pay` 下的 `getUserWallet`）实测全部 404**；返回 `data.gold`（金瓜子）/`silver`/`bp`，**没有独立的「电池」字段**。口径：**电池 = gold / 100**，依据社区文档「金瓜子数量 / 100 = 电池数量」，并用同账号交叉验证（`gold=15000` ↔ 15 元 ↔ 150 电池）。`wallet_balance` 实测返回 **150** | `wallet.rs`、`wallet_balance` |
 
 ---
 

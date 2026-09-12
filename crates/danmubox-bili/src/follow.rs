@@ -4,28 +4,26 @@
 //! 排序不在这里自造：`followed()` 在返回前调用 `danmubox_core::sort_followed`，
 //! 后者把 `live_status == 1` 置顶、其余按房间号稳定升序。
 //!
-//! ## 未实测（校准项，由主 agent 统一登记到 `docs/protocol.md`）
+//! ## 实测结论（2026-09-11，校准项见 `docs/protocol.md` 附录 A28）
 //!
-//! 上游端点、分页参数与响应字段名**尚未实测**，以下均为「最可能形态」，不得当成
-//! 已核实事实：
+//! 端点与信封已用真实登录态实测；该账号关注数为 0，因此**条目字段名仍未能确认**。
 //!
-//! - **端点**：`GET /xlive/web-interface/v1/relation/getUserFollowList`。
-//!   候选：`/xlive/web-interface/v1/relation/getUserFollowList`、
-//!   `/xlive/web-interface/v1/index/getFollowList`、
-//!   `/xlive/web-interface/v1/relation/getFollowList`。
-//! - **分页参数**：`page` / `page_size` / `ignoreMyself`。
-//!   候选：`pn` / `ps`、`page_num` / `page_size`、`pageindex`。
-//! - **响应信封**：列表取 `data.list`。候选：`data.list`、`data.items`、`data` 直接为数组。
+//! - **端点**：`GET /xlive/web-ucenter/v1/xfetter/GetWebList`（实测 `code=0`）。
+//!   此前猜测的 `/xlive/web-interface/v1/relation/getUserFollowList` 不成立。
+//! - **分页参数**：`page` / `page_size` 实测可用。
+//! - **响应信封**：`data.{rooms, list, count, not_living_num}`。
+//!   `rooms` 与 `list` 哪个承载房间列表**尚未确认**（该账号 `count=0`，两者都是空数组），
+//!   代码取 `data.list`；等有非空关注时复核。
+//! - **分页终止**：响应里**没有** `has_more`。改为「本页条数 == page_size 则认为还有下一页」
+//!   （可观察且保守）；若上游某天真的给了 `has_more`，优先采信它。
 //! - **条目字段名**（每个字段按候选顺序取，全部缺失时用零值/空串并打 debug）：
-//!   - 房间号：`roomid`（最可能）/ `room_id`。
+//!   - 房间号：`roomid` / `room_id`。
 //!   - 昵称：`uname` / `name` / `nickname`。
 //!   - 头像：`face` / `cover` / `user_cover`。
-//!   - 直播状态：`live_status`（最可能）/ `liveStatus`。
+//!   - 直播状态：`live_status` / `liveStatus`。
 //!   - 分组名：`group_name` / `groupName` / `tag_name` / `group`。
 //! - **`live_status` 口径**：只按 JSON 整数值归一（`0` 未开播 / `1` 直播中 / `2` 轮播，
 //!   见 `docs/contract.md` §5）；**不**为任何其它整数值编造含义，非整数一律按 `0` 容错。
-//! - **分页终止字段**：`data.has_more`（bool 或 0/1 整数）。观测不到该字段时
-//!   `has_more()` 返回 `false`（单页返回），避免凭猜测继续翻页。
 //! - **结果码语义**：非 0 code 一律作为 `UPSTREAM_ERROR` 上报并保留原始 code，
 //!   不赋予「未登录 / 权限不足」等未实测语义。
 
@@ -40,7 +38,7 @@ use crate::http::BiliHttp;
 
 /// 关注列表端点（**未实测**，见模块文档候选列表）。
 const EP_FOLLOW_LIST: &str =
-    "https://api.live.bilibili.com/xlive/web-interface/v1/relation/getUserFollowList";
+    "https://api.live.bilibili.com/xlive/web-ucenter/v1/xfetter/GetWebList";
 
 /// 单页拉取条数（**未实测**，候选 20 / 30 / 50）。
 pub const PAGE_SIZE: i64 = 30;
@@ -109,16 +107,19 @@ pub fn map_followed(value: &Value) -> Vec<FollowedRoom> {
 
 /// 是否还有下一页。
 ///
-/// 只认能观察到的 `data.has_more`（候选 `data.hasMore`）：`bool` 直接取用，
-/// 整数 `0/1` 归一（非 0 为真）。观测不到、类型不认识时返回 `false`（单页返回）。
-pub fn has_more(value: &Value) -> bool {
+/// 上游响应里没有 `has_more`（实测），因此：
+///
+/// 1. 若某天真的出现 `data.has_more` / `data.hasMore`，优先采信它（bool 或 0/1 整数）；
+/// 2. 否则按「本页条数 == `page_size`」推断还有下一页——可观察且保守，
+///    少翻一页只是少几条数据，不会多打请求。
+pub fn has_more(value: &Value, page_size: i64) -> bool {
     let flag = value
         .pointer("/data/has_more")
         .or_else(|| value.pointer("/data/hasMore"));
     match flag {
         Some(Value::Bool(flag)) => *flag,
         Some(Value::Number(number)) => number.as_i64().map(|n| n != 0).unwrap_or(false),
-        _ => false,
+        _ => items(value).map(|list| list.len() as i64 >= page_size).unwrap_or(false),
     }
 }
 
@@ -165,7 +166,7 @@ impl RoomCatalog for BiliFollow {
             }
 
             let page_rooms = map_followed(&value);
-            let more = has_more(&value);
+            let more = has_more(&value, PAGE_SIZE);
             if page_rooms.is_empty() {
                 break;
             }
@@ -291,14 +292,23 @@ mod tests {
     }
 
     #[test]
-    fn follow_has_more_reads_flag() {
-        assert!(has_more(&json!({ "data": { "has_more": true } })));
-        assert!(has_more(&json!({ "data": { "has_more": 1 } })));
-        assert!(!has_more(&json!({ "data": { "has_more": false } })));
-        assert!(!has_more(&json!({ "data": { "has_more": 0 } })));
-        assert!(has_more(&json!({ "data": { "hasMore": 1 } })));
-        // 观测不到或类型不认识 → 单页返回。
-        assert!(!has_more(&json!({ "data": { "list": [] } })));
-        assert!(!has_more(&json!({ "data": { "has_more": "1" } })));
+    fn follow_has_more_prefers_flag_when_upstream_sends_one() {
+        assert!(has_more(&json!({ "data": { "has_more": true } }), 30));
+        assert!(has_more(&json!({ "data": { "has_more": 1 } }), 30));
+        assert!(!has_more(&json!({ "data": { "has_more": false } }), 30));
+        assert!(!has_more(&json!({ "data": { "has_more": 0 } }), 30));
+        assert!(has_more(&json!({ "data": { "hasMore": 1 } }), 30));
+    }
+
+    #[test]
+    fn follow_has_more_falls_back_to_full_page_rule() {
+        // 上游实测不给 has_more：满页认为还有下一页，不满页即终止。
+        let full: Vec<Value> = (0..30).map(|i| json!({ "roomid": i })).collect();
+        let short: Vec<Value> = (0..29).map(|i| json!({ "roomid": i })).collect();
+        assert!(has_more(&json!({ "data": { "list": full } }), 30));
+        assert!(!has_more(&json!({ "data": { "list": short } }), 30));
+        assert!(!has_more(&json!({ "data": { "list": [] } }), 30));
+        // 类型不认识的 has_more 不当作标志位，回落满页规则。
+        assert!(!has_more(&json!({ "data": { "has_more": "1", "list": [] } }), 30));
     }
 }

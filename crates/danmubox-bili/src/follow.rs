@@ -22,6 +22,9 @@
 //!   - 头像：`face` / `cover` / `user_cover`。
 //!   - 直播状态：`live_status` / `liveStatus`。
 //!   - 分组名：`group_name` / `groupName` / `tag_name` / `group`。
+//!   - 本场开播时刻：`liveTime`（Unix 秒，实测 2026-09-12）——注意同响应里
+//!     还有 `live_time`（已开播秒数），两者是不同的量，不能混用。
+//!   - 在线人数：`online`（实测 2026-09-12）。
 //! - **`live_status` 口径**：只按 JSON 整数值归一（`0` 未开播 / `1` 直播中 / `2` 轮播，
 //!   见 `docs/contract.md` §5）；**不**为任何其它整数值编造含义，非整数一律按 `0` 容错。
 //! - **结果码语义**：非 0 code 一律作为 `UPSTREAM_ERROR` 上报并保留原始 code，
@@ -91,6 +94,11 @@ fn map_item(item: &Value) -> FollowedRoom {
         face: str_field(item, &["face", "cover", "user_cover"]),
         live_status: int_field(item, &["live_status", "liveStatus"]) as i32,
         group_name: str_field(item, &["group_name", "groupName", "tag_name", "group"]),
+        // 开播时刻取 `liveTime`（Unix 秒）。**不要**误取 `live_time`：后者是
+        // 「已开播秒数」，两者相加约等于当前时间（实测同一响应里
+        // `liveTime=1789174974` 与 `live_time=12699` 同时存在）。
+        live_start_at: int_field(item, &["liveTime", "live_start_at"]),
+        online: int_field(item, &["online"]),
     }
 }
 
@@ -241,8 +249,33 @@ mod tests {
                 face: String::new(),
                 live_status: 0,
                 group_name: String::new(),
+                live_start_at: 0,
+                online: 0,
             }]
         );
+    }
+
+    #[test]
+    fn follow_map_uses_live_time_not_live_time_seconds() {
+        // 实测同响应里两个字段并存：`liveTime` 是开播时刻（Unix 秒），
+        // `live_time` 是已开播秒数。只能取前者。
+        let value = json!({
+            "data": { "list": [{
+                "roomid": 1,
+                "liveTime": 1789174974,
+                "live_time": 12699,
+                "online": 3739
+            }] }
+        });
+        let rooms = map_followed(&value);
+        assert_eq!(rooms[0].live_start_at, 1789174974);
+        assert_eq!(rooms[0].online, 3739);
+    }
+
+    #[test]
+    fn follow_map_accepts_snake_case_live_start_at() {
+        let value = json!({ "data": { "list": [{ "roomid": 1, "live_start_at": 123 }] } });
+        assert_eq!(map_followed(&value)[0].live_start_at, 123);
     }
 
     #[test]

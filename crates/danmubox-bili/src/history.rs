@@ -134,6 +134,13 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // 头像在 `user.base.face`（实测 2026-09-12：历史条目顶层没有 `face`，
+    // 与实时弹幕的 `info[0][15].user.base.face` 同层）。
+    message.face = item
+        .pointer("/user/base/face")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     message.content = text.to_string();
     // 历史条目没有文字颜色字段（实测字段清单里只有 uname_color），置 0 表示未知。
     message.color = 0;
@@ -268,7 +275,7 @@ mod tests {
                         "isadmin": 1,
                         "guard_level": 3,
                         "id_str": "aaa",
-                        "user": {"medal": {"name": "牌子", "level": 21}}
+                        "user": {"base": {"face": "https://f/h.png"}, "medal": {"name": "牌子", "level": 21}}
                     }
                 ]
             }
@@ -287,7 +294,12 @@ mod tests {
         assert_eq!(messages[0].medal_name, "牌子");
         assert_eq!(messages[0].upstream_id, "aaa", "举报需要上游标识");
         assert_eq!(messages[0].kind, MessageKind::Danmaku);
+        assert_eq!(messages[0].face, "https://f/h.png", "头像在 user.base.face");
         assert!(messages[1].medal_level == 0 && messages[1].medal_name.is_empty());
+        assert!(
+            messages[1].face.is_empty(),
+            "历史条目缺 user.base.face 时留空，不报错"
+        );
     }
 
     #[test]

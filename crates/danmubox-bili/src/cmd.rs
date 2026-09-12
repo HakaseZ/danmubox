@@ -192,6 +192,12 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        // 头像与昵称同层（`user.base.face`）；历史条目的布局见 `history.rs`。
+        message.face = user
+            .pointer("/base/face")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if let Some(level) = user.pointer("/medal/level").and_then(Value::as_i64) {
             message.medal_level = level;
         }
@@ -551,6 +557,7 @@ mod tests {
         assert_eq!(message.content, "亏爆57米");
         assert_eq!(message.uid, 123456789012345);
         assert_eq!(message.uname, "观众甲");
+        assert_eq!(message.face, "http://f/x.png", "头像在 info[0][15].user.base.face");
         assert_eq!(message.color, 16777215, "颜色在 info[0][3]");
         assert_eq!(message.ts, 1_789_134_601_006, "毫秒时间戳在 info[0][4]");
         assert_eq!(message.medal_level, 24);

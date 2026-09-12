@@ -39,6 +39,12 @@ pub struct RoomStats {
 }
 
 /// 事件总线上的事件。UI、会话缓冲、日志三个消费方共用同一份。
+///
+/// clippy 会建议把 `Message` 装箱以缩小枚举。**不采用**：`Message` 是域模型本体，
+/// 装箱意味着**每条消息**多发一次堆分配（热路径上真正要省的东西），而枚举本身只活在
+/// 固定容量的广播缓冲里，多出的字节有上界、也不参与逐条拷贝链。模型侧该省的已经省了
+/// （`Message.emote` 才有装箱，见 `model.rs`），这里保留内联是刻意的取舍。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Event {
     Message(Message),

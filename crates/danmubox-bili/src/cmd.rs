@@ -204,6 +204,18 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
         if let Some(name) = user.pointer("/medal/name").and_then(Value::as_str) {
             message.medal_name = name.to_string();
         }
+        // 粉丝牌配色：上游给的是 CSS 十六进制串（带 alpha），官方前端 getMedalHtml 就取这组
+        // （实测样本 `#3FB4F699` / `#FFFFFF`，见附录 A37）。缺失即空串，不拿 0 顶替。
+        let color = |key: &str| {
+            user.pointer(&format!("/medal/{key}"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        message.medal_color_start = color("v2_medal_color_start");
+        message.medal_color_end = color("v2_medal_color_end");
+        message.medal_color_border = color("v2_medal_color_border");
+        message.medal_color_text = color("v2_medal_color_text");
         message.guard_level = user
             .pointer("/guard/level")
             .and_then(Value::as_i64)
@@ -544,7 +556,16 @@ mod tests {
                     "user": {
                         "uid": 123456789012345i64,
                         "base": {"name": "观众甲", "face": "http://f/x.png"},
-                        "medal": {"level": 24, "name": "粉丝牌", "guard_level": 3}
+                        "medal": {
+                            "level": 24,
+                            "name": "粉丝牌",
+                            "guard_level": 3,
+                            "v2_medal_color_start": "#3FB4F699",
+                            "v2_medal_color_end": "#3FB4F699",
+                            "v2_medal_color_border": "#3FB4F699",
+                            "v2_medal_color_text": "#FFFFFF",
+                            "v2_medal_color_level": "#3FB4F6E6"
+                        }
                     }
                  }],
                 "亏爆57米",
@@ -563,6 +584,10 @@ mod tests {
         assert_eq!(message.medal_level, 24);
         assert_eq!(message.medal_name, "粉丝牌");
         assert_eq!(message.guard_level, 3);
+        assert_eq!(message.medal_color_start, "#3FB4F699");
+        assert_eq!(message.medal_color_end, "#3FB4F699");
+        assert_eq!(message.medal_color_border, "#3FB4F699");
+        assert_eq!(message.medal_color_text, "#FFFFFF");
         assert_eq!(
             message.upstream_id, "0123456789abcdef0123456789abcdef0123",
             "举报标识取自 extra.id_str"
@@ -654,6 +679,10 @@ mod tests {
         assert_eq!(message.uid, 0);
         assert!(message.uname.is_empty());
         assert_eq!(message.guard_level, 0);
+        assert!(
+            message.medal_color_start.is_empty() && message.medal_color_text.is_empty(),
+            "没有粉丝牌时配色留空，不得拿黑色顶替"
+        );
     }
 
     #[test]

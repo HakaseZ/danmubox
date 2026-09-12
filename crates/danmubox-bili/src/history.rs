@@ -155,6 +155,18 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // 配色与实时弹幕同一组键、同一层（`user.medal.v2_medal_color_*`，实测 2026-09-12：
+    // 历史条目同样给的是 CSS 十六进制串）。历史的顶层 `medal` 不是对象，取不到这组值。
+    let color = |key: &str| {
+        item.pointer(&format!("/user/medal/{key}"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    message.medal_color_start = color("v2_medal_color_start");
+    message.medal_color_end = color("v2_medal_color_end");
+    message.medal_color_border = color("v2_medal_color_border");
+    message.medal_color_text = color("v2_medal_color_text");
     message.guard_level = item.get("guard_level").and_then(Value::as_i64).unwrap_or(0);
     message.is_admin = item.get("isadmin").and_then(Value::as_i64).unwrap_or(0) != 0;
     message.upstream_id = item
@@ -275,7 +287,13 @@ mod tests {
                         "isadmin": 1,
                         "guard_level": 3,
                         "id_str": "aaa",
-                        "user": {"base": {"face": "https://f/h.png"}, "medal": {"name": "牌子", "level": 21}}
+                        "user": {"base": {"face": "https://f/h.png"}, "medal": {
+                            "name": "牌子", "level": 21,
+                            "v2_medal_color_start": "#919298CC",
+                            "v2_medal_color_end": "#919298CC",
+                            "v2_medal_color_border": "#919298CC",
+                            "v2_medal_color_text": "#FFFFFF"
+                        }}
                     }
                 ]
             }
@@ -292,6 +310,14 @@ mod tests {
         assert_eq!(messages[0].guard_level, 3);
         assert_eq!(messages[0].medal_level, 21);
         assert_eq!(messages[0].medal_name, "牌子");
+        assert_eq!(messages[0].medal_color_start, "#919298CC");
+        assert_eq!(messages[0].medal_color_end, "#919298CC");
+        assert_eq!(messages[0].medal_color_border, "#919298CC");
+        assert_eq!(messages[0].medal_color_text, "#FFFFFF");
+        assert!(
+            messages[1].medal_color_start.is_empty(),
+            "没有粉丝牌的条目配色留空"
+        );
         assert_eq!(messages[0].upstream_id, "aaa", "举报需要上游标识");
         assert_eq!(messages[0].kind, MessageKind::Danmaku);
         assert_eq!(messages[0].face, "https://f/h.png", "头像在 user.base.face");

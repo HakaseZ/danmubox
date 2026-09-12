@@ -71,6 +71,20 @@ pub struct Message {
     pub color: i64,
     pub medal_level: i64,
     pub medal_name: String,
+    /// 粉丝牌配色，取值是上游的 **CSS 十六进制串**（带 alpha，如 `#3FB4F699`）。
+    ///
+    /// 来源是弹幕载荷里 `user.medal` 的 `v2_medal_color_*` 一组（`docs/protocol.md` 附录 A37）。
+    /// 官方前端的 `getMedalHtml` 用的就是这四个；同层还有 `v2_medal_color_level`，
+    /// 本期不消费。缺失时为空串——**空串不是可用的颜色**，界面必须自备兜底色，
+    /// 不得拿空串当 `#000000` 渲染。
+    #[serde(default)]
+    pub medal_color_start: String,
+    #[serde(default)]
+    pub medal_color_end: String,
+    #[serde(default)]
+    pub medal_color_border: String,
+    #[serde(default)]
+    pub medal_color_text: String,
     pub guard_level: i64,
     pub is_admin: bool,
     /// 是否来自**进场回填**的历史弹幕（上游 `dM/gethistory`，上限 10+10，
@@ -110,6 +124,10 @@ impl Message {
             color: 0,
             medal_level: 0,
             medal_name: String::new(),
+            medal_color_start: String::new(),
+            medal_color_end: String::new(),
+            medal_color_border: String::new(),
+            medal_color_text: String::new(),
             guard_level: 0,
             is_admin: false,
             is_history: false,

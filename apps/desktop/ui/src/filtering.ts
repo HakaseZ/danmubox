@@ -238,9 +238,3 @@ export function formatLastLive(startAt?: number): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
-
-/** 弹幕颜色是十进制 RGB；0 表示未指定，用默认前景色。 */
-export function cssColor(value: number): string | undefined {
-  if (!value || value <= 0 || value > 0xffffff) return undefined;
-  return `#${value.toString(16).padStart(6, "0")}`;
-}

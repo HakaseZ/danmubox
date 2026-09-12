@@ -23,7 +23,6 @@ export function App() {
   const emotes = useApp((state) => state.emotes);
   const ownedEmotes = useApp((state) => state.ownedEmotes);
   const ownedError = useApp((state) => state.ownedError);
-  const recentSends = useApp((state) => state.recentSends);
   const accounts = useApp((state) => state.accounts);
   const loadAccounts = useApp((state) => state.loadAccounts);
   const switchAccount = useApp((state) => state.switchAccount);
@@ -125,7 +124,6 @@ export function App() {
           ownedEmotes={ownedEmotes}
           ownedError={ownedError}
           seenEmotes={seenEmotes}
-          recentSends={recentSends}
           balance={balance}
           onBack={closeRoom}
           onRefresh={() => void refresh(activeRoom.room_id)}

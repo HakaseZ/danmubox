@@ -331,6 +331,14 @@ export interface Emote {
   text: string;
   url: string;
   room_id: number;
+  /**
+   * **当前身份用不了**这个表情（契约 §5 `Emote.locked`；上游按调用者身份当场算，
+   * 因此换房间 / 换账号后要重新拉一次 `emotes_list`）。
+   *
+   * 界面只用它**置灰**（降视觉权重），不隐藏、不禁用：真正的闸门在上游发送侧。
+   * **缺失即视为可用**——老后端不给这个字段时不能把整面板画灰。
+   */
+  locked?: boolean;
 }
 
 export interface FollowedRoom {

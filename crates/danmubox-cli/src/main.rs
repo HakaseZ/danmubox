@@ -61,6 +61,9 @@ enum Command {
         /// 颜色（十进制 RGB，默认白色）
         #[arg(long)]
         color: Option<i64>,
+        /// 弹幕类型（A18 校准用）：1 滚动 / 4 底部 / 5 顶部。不给则由上游取默认。
+        #[arg(long)]
+        mode: Option<i64>,
         /// 以表情弹幕发送：给出表情的唯一键（`emotes` 子命令会打印）。给出后 `text` 仅用于日志。
         #[arg(long)]
         emote: Option<String>,
@@ -113,8 +116,9 @@ async fn main() -> Result<()> {
             room,
             text,
             color,
+            mode,
             emote,
-        } => send(&store, &room, &text, color, emote).await?,
+        } => send(&store, &room, &text, color, mode, emote).await?,
         Command::Wallet => wallet(&store).await?,
         Command::Follow => follow(&store).await?,
         Command::Emotes { room } => emotes(&store, &room).await?,
@@ -176,6 +180,7 @@ async fn send(
     room: &str,
     text: &str,
     color: Option<i64>,
+    mode: Option<i64>,
     emote_unique: Option<String>,
 ) -> Result<()> {
     let live = BiliLive::with_store(Arc::clone(store))?;
@@ -216,7 +221,7 @@ async fn send(
     };
 
     let report = sender
-        .send(resolved.room_id, text, color, None, token.as_ref(), None)
+        .send(resolved.room_id, text, color, mode, token.as_ref(), None)
         .await
         .context("发送失败")?;
     println!("# 房间 {} 发送结果：{:?}", resolved.room_id, report.outcome);

@@ -88,7 +88,18 @@
 | P74 | 审计：身份变化（`danmubox://session` / 切号）后不重拉 `emotes`，与 `auth.md`「身份变化后 MUST 重新加载，不得缓存跨身份表情库」不符 | 审计票 D | 已做（提交 `e9279f5`） | `emotes` 只在进房与开面板时拉；面板**已打开**时身份变了，面板里的 locked/分组仍是旧身份那套（严重度低：开面板必重拉）。**本轮结论**：可达路径已被 E 票 `resetIdentityState` 覆盖（`danmubox://session` 的登录态载荷当前没有发布点），未改代码，以证据结项 |
 | P75 | **删掉偏好键之后，旧 `prefs.json` 里的死键没有清理路径**：P61 删了 `filter.keywords*` 三键（P49 早先删过 `ui.merge_similar` / `ui.merge_window_ms`），但磁盘上既有的键仍留在文件里，每次启动都打 WARN（实测 2026-09-13 18:38 启动产物：三条 `忽略非法或未知的偏好键 key="filter.keywords…"`），而且没有任何时机把它们抹掉 | 启动产物实测（2026-09-13）；scout 复核提示（item 9 的「unknown-key / 迁移」待定项） | 未做 | 现象只在**加载**路径：`prefs.rs` 对未知键只忽略 + WARN（补丁路径才是 `BAD_REQUEST`），所以不影响功能，只是脏文件 + 每次启动刷三条 WARN。两条候选修法（择一，待用户定）：① 加载后写回时顺手 prune（把不在 SPECS 里的键删掉再落盘）；② 把加载路径的未知键降级为 debug 并保留文件原样。用户当前的实际文件：`~/Library/Application Support/danmubox/prefs.json` 仍带这三键 |
 
-**产品需求小计：75 条**（已做 71 / 部分 3 / 未做 1）。
+| P76 | 房管界面整体布局：禁言 / 黑名单 / 屏蔽词分三个 tab | `issue` 2609132259 #1；`CHANGELOG` Changed 同条；提交 `71de754` | 已做（待用户复测） | `AdminPanel` 改成 WAI-ARIA tabs（照搬表情分组那套：`role=tablist/tab/tabpanel`、roving tabindex、`←→` 与 Home/End 循环、`aria-selected`/`aria-controls`），一次只渲染当前 tab 的「错误条 + 列表 + 表单」，tab 文案带计数；行级 testid（`db-admin-silent-item` / `-blacklist-item` / `-keyword-item`）与 `db-admin-error` / `db-admin-close` 保留，新增 `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel`；`.adminSection`/`.panelTitle` 因改动成死代码已删；`ui.md` §4.9 / §9.1 |
+| P77 | 「回到最新」整个按钮删掉，改用「返回按钮旋转 90°」的圆形图标钮 | `issue` 2609132259 #2；`CHANGELOG` Changed 同条；提交 `ea4404e` | 已做（待用户复测） | 与房间头返回键、`⋯` **同一控件族**（`.ctlRound` 40×40 + `.ctlIcon` 24px），删掉文字节点，可访问名改由 `aria-label`/`title` 给（冒烟断言不能再读 `innerText`）；`.bottomAnchor` 只剩右下定位，强调色胶囊底与 `.bottomAnchorIcon` 删除；出现条件与点击行为未动，图标仍是返回键 path 绕 (12,12) 转 -90° 直写。**副作用**：图标盒由 1.5em 改 24px，不再随 `ui.font_scale` 缩放（与页头两枚一致）；`ui.md` §7.4 / §5.2 |
+| P78 | 账号对话框：「添加账号」按钮居中；二维码卡片宽度与间距与上方元素一致 | `issue` 2609132259 #3；`CHANGELOG` Changed 同条；提交 `ea4404e` | 已做（待用户复测） | `.accountAdd` 由 `align-self: flex-start` 改 `center`；`.qrPanel` 删 `width: fit-content`（改前实测 242px、贴左）与多余 `margin-top`（间距统一走 `.accountDialog` 的 gap = `--sp-3` 12px，改前 12+8 = 20px）→ 卡片撑满内容宽（宽屏 646px 量级、窄屏整宽 sheet）；`ui.md` §2.2.1 |
+| P79 | 同时只允许打开一个面板（房管面板 + 表情 / 短语 / 筛选 + 独立礼物栏，五者互斥） | `issue` 2609132259 #4（前半）；`CHANGELOG` Changed 同条；提交 `71de754` | 已做（待用户复测） | `panel` 状态从 `Composer` **提到 `RoomView`**（Composer 改收受控 `panel` / `onPanel`），三个入口收口一处：打开任一个即收起另外四个；两条老路保留（再点工具按钮收起、点面板与输入区之外收起）；切房 / 换号的本地重置照旧；`ui.md` §2.3 / §5.3 / §6.1 |
+| P80 | 进到有房管权限的直播间就把房管数据加载好（预载） | `issue` 2609132259 #4（中段）；`CHANGELOG` Changed 同条；提交 `71de754` | 已做（待用户复测） | `RoomView` 新增依赖 `[isAdmin, loadAdmin, room.room_id]` 的 effect（`isAdmin` 异步到达，必须进依赖，否则永远不拉），`isAdmin === true` 即 `loadAdmin`；打开面板时仍静默重拉一次保证新鲜 |
+| P81 | 移除黑名单 / 删除等单点动作绑右键，另给「批量处理键」 | `issue` 2609132259 #4（后半）；`CHANGELOG` Added 同条；提交 `71de754` | 已做（待用户复测） | 用户裁决「多选 + 批量动作条」：面板头「批量」开关（`aria-pressed`）+ 行前勾选框 + 全选 + 底部动作条（按 tab 给批量解除禁言 / 批量移出黑名单 / 批量删除屏蔽词）；单点动作用右键菜单（复用 `ContextMenu`）；`AdminAction` 增 `{ kind: "batch", actions: […] }`，`adminActionText` / `ADMIN_CONFIRM_LABEL` / `adminDoneText` 与 `runAdmin`（改 `adminCalls` 返回有序调用串）同批改齐：**一次确认覆盖整批**、按序 await、失败即停并写「已执行 N 项，第 N+1 项失败」，成功部分照旧重读三块 |
+| P82 | 「你是本直播间房管」与「刷新」都不需要；打开界面时静默刷新 | `issue` 2609132259 #5；`CHANGELOG` Changed 同条；提交 `71de754` | 已做（待用户复测） | 删身份提示与刷新按钮，`isAdmin` / `onRefresh` 两个 prop 一并从 `AdminPanel` 与 `RoomView` 调用处删除（保留「关闭」）；`loadAdmin` 本来就不置 `adminBusy`、无 spinner，打开面板即静默重拉；因不再有手动重试入口，三块的错误条按 tab 保留（否则失败彻底没反馈） |
+| P83 | 主题切换模仿安卓 / iOS 的日月按钮，分亮 / 暗 / 自动三态（**是按钮不是滑块**） | `issue` 2609132259 #7；`CHANGELOG` Changed 同条；提交 `aa0b437` | 已做（待用户复测） | 页头 `<select>` 换成**单个圆形图标按钮**（复用 `.ctlRound` / `.ctlIcon`），点一下循环 **亮 → 暗 → 自动**；图标自绘日 / 月 / 日月三枚（同 `viewBox`、`stroke-width` 1.75、round、墨迹居中 (12,12)、主轴 16 单位）；无文字，`title` 与 `aria-label` = 「主题：<当前>（点一下切到<下一>）」；`data-testid="db-pref-theme"` 保留在按钮上；`ui.md` §8.3 重写 |
+| P84 | 账号面板改为点「头像所在的圆角长方形」直接进入，去掉独立的「账号」按钮 | `issue` 2609132259 #8；`CHANGELOG` Changed 同条；提交 `aa0b437` | 已做（待用户复测） | `db-account-open` 按钮删除；`.account` 行本身成为入口（`role="button"` + `tabIndex=0` + `aria-label="账号管理"` + Enter/Space，Space 已 `preventDefault` 挡滚动），游客态同一入口（作用是去登录）；hover / focus-visible 用现有令牌；行内已确认无其它可点元素；`ui.md` §2.1 / §2.2 / §2.2.1 / §2.5 |
+| P85 | bug：房管面板报 `upstream error: 响应解析失败: error decoding response body（UPSTREAM_ERROR）` | `issue` 2609132259 #6；`CHANGELOG` Fixed 同条；提交 `966775d` | 已做（待用户复测） | **根因（实测）**：该文案全仓只有 `crates/danmubox-bili/src/http.rs` 两处解码点（`get_with_cookies` / `post_form`），二者都不看状态码与 `content-type`，把响应直接交给 `.json::<Value>()`；上游用非 JSON 页面应答时（**实测 412 风控验证页 `text/html`**；同域还有纯文本 404 / 405）reqwest 只吐固定的 `error decoding response body`，端点 / 状态 / 响应体全丢，且与「字段漂移」在文案上无法区分（全仓从不做强类型反序列化，故字段问题**不可能**报此错）。修法：解码失败时带上**脱敏后**的端点路径、HTTP 状态、`content-type`、响应体前 128 字节（抹掉 `SESSDATA`/`bili_jct`/`DedeUserID`/`csrf`/`qrcode_key` 的值）；GET 仅在「非 JSON 且状态非 4xx」时重试一次，POST 一律不重试；新增 5 条单测（**未跑**）；`protocol.md` 附录 A45。⚠ 未把用户那次失败钉到具体端点（房管面板三条只读都可能），但同端点同类突发下的 412 形状已实测 |
+
+**产品需求小计：83 条**（已做 79 / 部分 3 / 未做 1）。
 
 ## 2. 工程与过程规矩
 
@@ -146,10 +157,10 @@
 
 | 部分 | 条数 | 已做 | 部分 | 未做 | 不做 / 待核 |
 |---|---|---|---|---|---|
-| §1 产品需求 | 75 | 71 | 3 | 1 | 0 |
+| §1 产品需求 | 83 | 79 | 3 | 1 | 0 |
 | §2 工程与过程规矩 | 13 | 11 | 0 | 0 | 2（待核） |
 | §3 `issue` 20 条 | 20 | 18 | 2 | 0 | 0 |
-| **合计** | **108** | **100** | **5** | **1** | **2** |
+| **合计** | **116** | **108** | **5** | **1** | **2** |
 
-> 计数口径：每节「条数」= 该表实际行数；每行之和 = 条数、每列之和 = 合计（`75 + 13 + 20 = 108`；`71 + 11 + 18 = 100`；`3 + 0 + 2 = 5`；未做 `1 + 0 + 0 = 1`；待核 `0 + 2 + 0 = 2`；校验 `100 + 5 + 1 + 2 = 108`）。数字若有出入，以 §1 / §2 / §3 三处小计为准并同一次改齐；本轮状态截止 `501d10c` 之后（P53–P64 的 12 条结项，P65–P74 的 10 条审计缺陷经复核后全部收口，P75 为新登记的占位待办；A–H 八票均已合入 main，冒烟场景文件同批对齐、**冒烟本体按用户指示未跑**）。
+> 计数口径：每节「条数」= 该表实际行数；每行之和 = 条数、每列之和 = 合计（`83 + 13 + 20 = 116`；`79 + 11 + 18 = 108`；`3 + 0 + 2 = 5`；未做 `1 + 0 + 0 = 1`；待核 `0 + 2 + 0 = 2`；校验 `108 + 5 + 1 + 2 = 116`）。数字若有出入，以 §1 / §2 / §3 三处小计为准并同一次改齐；本轮状态截止 `d6efcc5` 合入之后（P53–P64 的 12 条、P65–P74 的 10 条审计缺陷、P76–P85 的 8 条新批次均已结项，仅 P75 待办；A–I 九票全部合入 main，冒烟场景文件同批对齐、**冒烟本体按用户指示未跑**）。
 > 待核两项（E1「清单外动作先问」、E3「重建攒批做」）是对话内规矩但尚未固化成仓库条文；证据栏给了最接近的已有条文与出处，并各留了一条落地建议。

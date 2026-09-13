@@ -26,6 +26,28 @@
 
 ### Removed
 
+- **「关键词命中」整条机制删除**（用户 2026-09-13：「关键词命中功能删掉，用不上」）。删掉的是三个偏好键
+  `filter.keywords` / `filter.keywords_mode` / `filter.keywords_alert`（`crates/danmubox-core/src/prefs.rs` 的
+  SPECS + `docs/contract.md` §8 **17 → 14 键** + `docs/ipc.md` 的 `PrefsSnapshot` + 前端 `types.ts`）、
+  `filtering.ts` 的 `passesFilter` 命中分支与整个 `alertsOn`、`MessageRow` 的高亮消费、CSS `.highlight`、
+  筛选面板的「关键词」整段。**与房管屏蔽词不是一回事**：`admin_keywords_*`（平台 / 房间词库那套）一字未动。
+  规格：`docs/ui.md` §8.1（过滤求值顺序 1→5 改 1→4）/ §8.5、`docs/operations.md`、`docs/protocol.md`、
+  `docs/testing.md` C-9。
+- **「手填 Cookie」登录整条链路删除**（用户 2026-09-13：「手填 cookie 这个功能直接去掉，现在的登录方式很合理」）。
+  删除范围：账号管理对话框的折叠块与两处文案、Tauri 命令 `account_login_cookie`、core 端口
+  `AuthProvider::login_cookie`、bili 的 `login_cookie` / `profile_from_cookie_string` / `cookie_pairs`
+  及其单测、CLI `accounts --cookie/--name`（含 stdin 分支）。**扫码登录共用的 `profile_from_cookies` 保留**。
+  `docs/ipc.md` 命令数 37 → 36（async 28 → 27）。凭据文件仍可手工编辑，但那条路**没有程序入口**，
+  也失去了落盘前的三字段护栏（`docs/auth.md` §8.4 已改写为「没有程序入口」）。
+- **提示文案清理：只留「错误 / 加载 / 空态 / 操作后果」**（用户 2026-09-13：「有一些提示可以不用写…
+  全局检查一下还有没有类似的，能删就删」，并逐组批准了删除清单）。删掉的是教学类段落：账号对话框的三段说明、
+  输入区「未登录：仅能接收弹幕，发送需要先扫码登录」整块（`db-send-hint`）、输入框 placeholder 里的键位说明、
+  主界面「游客态：可接收弹幕，发送需先登录」（缩为「游客态」）、房管确认条的「时长在确认条上选」；
+  把内部口径改成产品口径：「没有关注的人，或接口未实测通过（见 docs/protocol.md 的 A28）」→「还没有关注的主播」、
+  去掉 title 里的上游字段名 `liveTime` 与「协议 §10.7 的 ONLINE_RANK_COUNT / WATCHED_CHANGE」、
+  去掉已不存在的「关键词」；悬停 title 精简为字段名。**保留**错误提示、加载态、空态、`QR_HINT`、
+  placeholder、功能性命中说明与「会用新凭据覆盖该账号」这类操作后果警告。
+
 - **「合并相似消息」整条机制删除**（用户 2026-09-13：「这个合并功能直接去掉吧，不是我想的那种功能，
   而且不太有必要」）。触发这个决定的是界面上看到的 `×2`：同一房间被反复「进场」时，每次回填的最近 10 条
   历史带的是**上游原始时间戳**，同一条弹幕第二次进来 `ts` 完全一致 → 落进「同 uid + 逐字相同正文 +
@@ -56,6 +78,45 @@
   不是「为了再发出去」）与 `crates/danmubox-bili/src/emote.rs`、`crates/danmubox-core/src/model.rs` 的同款说明。
 
 ### Changed
+
+- **主题开关从房间页搬到主界面「弹幕框」右侧**（用户 2026-09-13 #10：「切换跟随系统暗色还是亮色的功能放在
+  主界面『弹幕框』右边，全局切换」）。「弹幕框」就是房间列表页那颗 `<h1>`，页头因此改成一行：标题左、
+  主题控件右（`.listHeader`，标题可缩、控件 `flex: none`，360px 不换行不横向滚动）；`RoomList` 新增
+  `theme` / `onTheme` 两个 prop，`App.tsx` 用 `prefs["ui.theme"]` 与 `updatePrefs` 接线。控件仍是原生
+  `<select>`，**testid `db-pref-theme` 与三档取值 / 顺序都不变**；落到 `<html data-theme>` 的全局 effect
+  一行未动（主题本来就是全局的，只是入口藏在「进房间 + 展开筛选面板」后面）。旧入口（筛选面板「显示」块）
+  同批删除。规格：`docs/ui.md` §2.2 / §8.3。
+- **「回到最新」改用下箭头图标**（用户 2026-09-13 #1：「回到最新图标改为下箭头（返回键旋转90度）按钮」）。
+  与房间头返回键**同源几何**（同一 `viewBox="0 0 24 24"`、`stroke-width 1.75`、round 线帽与接合、
+  墨迹居中 (12,12)、主轴 16 单位）：把返回键的 path 绕 (12,12) 转 -90° **直写**，不挂 CSS `rotate()`
+  （`rotate(90deg)` 会把左箭头转成**向上**）。按钮可访问名（文本「回到最新」）与点击行为、出现条件均未变。
+  规格：`docs/ui.md` §7.4（引用 §3.1 的矢量规范）。
+- **切 tab / 切号都做界面隔离**（用户 2026-09-13 #2 / #4：「不同 tab 中的界面要做隔离，切换了 tab 界面也要
+  重新打开，而不是开着界面切换」/「切换用户也要做隔离」）。根因是 `App.tsx` 渲染 `RoomView` 时没有 `key`，
+  React 复用实例 → 上一个房间的面板、菜单、举报条、房管面板与确认条、@ 目标全部残留（最严重的是房管面板
+  还开着）。改法：`RoomView` 按 `room.room_id` 重置这些本地状态、`MessageList` 随 `key` 重建（滚动与跟随
+  回初始）；切号走 store 新增的 `resetIdentityState`，清上一个身份的界面切片与全部房间定时器后再按新会话重拉。
+  **输入草稿是例外**：按 `${identityKey}:${roomId}` 在 `Composer` 的模块级 Map 里各留一份（不落盘、
+  不进 store），切号后 identityKey 变化即不恢复。规格：`docs/ui.md` §2.3 / §2.4 / §2.2.1、`docs/ipc.md` §8。
+- **账号切换改成点整行**（用户 2026-09-13 #5：「用户直接点击切换，不要那个专门的切换按钮」）。非当前账号的
+  整行可点（`role="button"` + `tabIndex=0` + `aria-label="切到「昵称」"`，Enter / Space 等价）；
+  行内动作（重新登录 / 退出登录 / 删除）`stopPropagation`，键鼠都不会顺手切号；`db-account-switch` 删除。
+  规格：`docs/ui.md` §2.2.1。
+- **房管入口只在有房管身份时出现**（用户 2026-09-13 #3：「有房管身份才能有房管界面的选项，这个可以参照官方
+  web 的实现方式」）。`is_admin !== true` 时 `⋯` 菜单里**不渲染**「房管面板」（不是置灰）；身份被撤销时
+  自动收起面板与待确认条。判据沿用官方那一条（`getInfoByUser` 的 `data.badge.is_room_admin ||
+  admin_level > 0`，`docs/protocol.md` A38）。`docs/ui.md` §4.9 的旧口径「无权限也允许打开面板」作废。
+- **短语 / 筛选面板去掉顶部标题与关闭按钮，展开高度看齐表情面板**（用户 2026-09-13 #8：「短语和筛选顶部的
+  提示和关闭也删掉，展开高度看齐表情界面」）。`db-panel-close` 自此**整个界面不再提供**；收起仍只有两条路
+  ——再点一次工具按钮、点面板与输入区之外（`panelSurvivesTabSwitch` 一族钉的就是它们）。高度改为三面板共用的
+  定高 `--panel-h = --emote-grid-h + 2 × --panel-pad-y`，`.phrases` / `.filterPanel` 取 `height`
+  （表情面板由内容自然得到同一高度），窄屏覆盖同步。规格：`docs/ui.md` §6.2 / §8.5 / §9.1。
+- **筛选与快捷短语面板重排**（用户 2026-09-13 #11：「筛选与布局&快捷短语界面重新做一下布局，要清晰整洁，
+  同时兼顾竖屏和宽屏 2 种视觉效果」）。沿用现有令牌与 WhatsApp 设计语言自行重排（不照搬官方结构）：
+  筛选面板只剩「消息类型」「显示」两块（关键词已删），类型选项改胶囊芯片，字号与礼物栏各占一行、滑杆填满，
+  `.filterGrid` 的列宽由 `minmax(220px, 1fr)` 改 `minmax(16em, 1fr)`（放得下并排、放不下上下排）；
+  短语面板同批重排并取得同一定高。**未新增断点**（全仓库仍只有 `max-width: 520px`）。
+  规格：`docs/ui.md` §8.5 / §6.2 / §9.1。
 
 - **发送与回播解耦：发出的那条从第一帧就是「别人看到的我」，回播只换字段、不重建节点；被 ban 的那条
   留着划线并写原因**（用户 2026-09-13 的三条原话：「我在客户端发了一个弹幕出去，如果成功发到服务端了，
@@ -261,6 +322,21 @@
 
   规格：`docs/ui.md` §15（冒烟维度与截图命名）、§9.2（深浅两套令牌）。
 - 文档索引：`docs/requests.md`（需求与 issue 台账）补进 `README.md` §7、`AGENT.md` §10、`docs/roadmap.md` §1。
+- **弹幕字数上限：输入侧就限制并提示**（用户 2026-09-13 #12：「弹幕字数有上限，在输入框限制&提示一下，
+  免得发出去才发现超长了」）。**上限不写死**，取上游：`getInfoByUser` 的 `data.property.danmu.length`
+  （2026-09-13 实测当前账号 × 8 个房间 = **40**；官方前端对该字段缺失时的缺省是 20），经 `RoomSession.
+  danmaku_length` 随 `room_session` / `danmubox://session` 下发（`docs/contract.md` §5、`docs/ipc.md`）。
+  输入侧三条规则都对照官方产物（`app.<hash>.js` 的 `inputLengthLimit = danmakuLengthLimit +
+  tempAtUserName.length`）：有效上限 = 上限 + 当前 `@昵称 ` 前缀长度；按 `String.length` 截断
+  （官方页面实测 60 个汉字 → 截到 40）；显示 `已用/上限` 计数并在超限时提示「最多输入 N 个字哦~」。
+  标定口径写在 `docs/protocol.md` 附录 A44 与校准行（**只声明「对照官方产物 + 只读取数」，不声称做过
+  逐字符发送标定**）；界面口径 `docs/ui.md` §6.1。
+
+> **本轮验证口径**：用户 2026-09-13 明令「我说要测再测」，因此上面这些 UI 改动**没有跑冒烟**
+> （Chromium 与宿主引擎 WebKit 两遍都没跑）。已跑的是秒级三道与静态门禁：`tsc -b`、`npm run build`、
+> `node smoke/run-headless.mjs --precheck`，以及 `cargo clippy --workspace --all-targets -- -D warnings`
+> （零告警）。冒烟场景文件已按新契约对齐（新增的下箭头、字数上限、tab 隔离、房管入口、整行切号等断言
+> 都在里面），待用户要测时执行。
 
 ### Fixed
 

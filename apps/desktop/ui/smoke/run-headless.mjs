@@ -50,7 +50,8 @@ import { webkit } from "playwright";
 
 /** 期望为 false 的布尔字段（其余布尔断言都必须为 true）。 */
 const EXPECTED_FALSE = new Set([
-  // 断言：头部不再展示人气值；系统通知默认关闭；历史与实时之间没有分界提示
+  // 断言：头部不再展示人气值；**系统类默认不在 filter.kinds 白名单里**（因此 system 行默认不渲染）；
+  // 历史与实时之间没有分界提示
   "step3_headerHasPopularity",
   "step3_systemRendered",
   "step3_dividerTextPresent",

@@ -958,10 +958,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.highlight {
-  background: color-mix(in srgb, var(--warn) 30%, transparent);
-}
-
 .merged {
   margin-left: var(--sp-1);
   color: var(--fg-dim);
@@ -1580,10 +1576,13 @@
   border-top: 1px solid var(--border);
 }
 
-/* 筛选与显示面板（issue #8：不再常驻占一行） */
+/* 筛选与显示面板（issue #8：不再常驻占一行；issue #11：只留「消息类型」与「显示」两块） */
 .filterGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* 放得下两块就并排（宽屏），放不下就一块一行（竖屏 360）。用 auto-fit 让排布自己跟着
+     宽度走，断点仍然只有 docs/ui.md §9.1 的那一条（520px），这里不再多写媒体查询：
+     16em 是最窄那格的下限（面板字号 0.86em ≈ 12px，即 ≈ 193px）。 */
+  grid-template-columns: repeat(auto-fit, minmax(16em, 1fr));
   gap: var(--sp-3);
   font-size: var(--fs-2);
 }
@@ -1592,6 +1591,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
+  min-width: 0;
 }
 
 .filterSection h3 {
@@ -1608,10 +1608,39 @@
   gap: var(--sp-1);
 }
 
+/* 显示块内部：字号滑杆与礼物栏下拉各占一行（需要整行的地方），三枚开关同排换行 ——
+   360 下正好一行放得下，宽屏下也跟着那一行的自然宽度排。 */
+.filterFields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.filterRange,
+.filterSelect {
+  flex: 1 1 100%;
+  justify-content: space-between;
+}
+
+.filterRange input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 消息类型：芯片（走同一套下沉面 / 发丝线 / 圆角令牌，深浅两套自动成立） */
 .filterKinds {
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-2);
+}
+
+.filterKinds label {
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  cursor: pointer;
 }
 
 /* 弹幕里的表情图：尺寸走 `--emote`（= 1.1 × 行盒），随 `ui.font_scale` 联动（docs/ui.md §4.1）。

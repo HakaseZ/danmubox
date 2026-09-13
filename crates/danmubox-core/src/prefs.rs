@@ -106,23 +106,6 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec("ui.show_timestamp", Ty::Bool, json!(false), None, None, None),
         // 自定义短语（需求 §2.2）；短语面板里唯一的内容来源（内置颜文字已删，见 issue #19）。
         spec("composer.phrases", Ty::StrArr, json!([]), None, None, None),
-        spec("filter.keywords", Ty::StrArr, json!([]), None, None, None),
-        spec(
-            "filter.keywords_mode",
-            Ty::Str,
-            json!("hide"),
-            None,
-            None,
-            Some(&["hide", "only"]),
-        ),
-        spec(
-            "filter.keywords_alert",
-            Ty::Bool,
-            json!(false),
-            None,
-            None,
-            None,
-        ),
         spec("filter.uids", Ty::IntArr, json!([]), None, None, None),
         spec("filter.kinds", Ty::KindArr, json!(KINDS), None, None, None),
         spec(
@@ -386,7 +369,6 @@ mod tests {
         assert_eq!(prefs.get("ui.gift_panel_mode").unwrap(), json!("merged"));
         assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
         assert_eq!(prefs.get("ui.system_notice").unwrap(), json!(false));
-        assert_eq!(prefs.get("filter.keywords_mode").unwrap(), json!("hide"));
         assert_eq!(prefs.get("history.buffer_rows").unwrap(), json!(5000));
         assert_eq!(prefs.buffer_rows(), 5000);
         assert_eq!(
@@ -463,7 +445,7 @@ mod tests {
         let path = dir.join("prefs.json");
         let mut prefs = Prefs::new();
         prefs
-            .set_patch(&json!({ "ui.font_scale": 1.14, "filter.keywords": ["抽奖"] }))
+            .set_patch(&json!({ "ui.font_scale": 1.14, "filter.uids": [7] }))
             .unwrap();
         prefs.save(&path).unwrap();
 

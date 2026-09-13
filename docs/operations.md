@@ -181,7 +181,7 @@ sid = ""
 
 ### 1.5 偏好文件 `prefs.json`
 
-界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为契约 §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_panel_mode`、`filter.keywords`、`history.buffer_rows`）。只存被显式改过的键，缺失的键回落到默认值（契约 §4.2）。
+界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为契约 §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_panel_mode`、`filter.kinds`、`history.buffer_rows`）。只存被显式改过的键，缺失的键回落到默认值（契约 §4.2）。
 
 | 操作 | 方法 |
 |---|---|

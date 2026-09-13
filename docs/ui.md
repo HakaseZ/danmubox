@@ -182,7 +182,7 @@
 | `AccountManager.tsx` | 账号对话框：账号列表、状态、切换 / 重登 / 登出 / 删除、确认条、扫码、Cookie（§2.2.1） |
 | `ContextMenu.tsx` | 通用右键菜单：视口内夹取、Esc / 点外部关闭、`role="menu"` |
 | `Avatar.tsx` | 头像：空 URL 不渲染、首字回退、加载失败回退（§4.2） |
-| `filtering.ts` | 纯函数层（不含 React、不碰 store）：徽标派生、粉丝牌兜底色、过滤判据、关键词告警、计数格式、关注排序、房间命名、分页、**显示行管线**（过滤 + 礼物连击折叠，§8.4）、时间格式化 |
+| `filtering.ts` | 纯函数层（不含 React、不碰 store）：徽标派生、粉丝牌兜底色、过滤判据、计数格式、关注排序、房间命名、分页、**显示行管线**（过滤 + 礼物连击折叠，§8.4）、时间格式化 |
 
 ---
 
@@ -869,14 +869,12 @@
 | 系统通知 | `ui.system_notice` | 布尔 | 关闭时 `system` 行一律不渲染（见 §4.8） | 2 |
 | 粉丝牌等级 | `filter.medal_level_min` | 数值下限（0 不限） | `medal_level` 小于该值的消息丢弃；阈值 > 0 时无牌（`medal_level == 0`）消息一并丢弃 | 3 |
 | 用户 | `filter.uids` | UID 屏蔽列表 | 精确匹配 `uid`；`uid == 0` 的游客不参与匹配 | 4 |
-| 关键词 | `filter.keywords` + `filter.keywords_mode` | 关键词列表 + 模式 | 对 `content` 做 Unicode 大小写折叠后子串匹配；多个关键词之间为 OR；`hide` 命中即丢弃，`only` 未命中即丢弃 | 5 |
 
-求值顺序固定为 1→5，通过后进入虚拟列表。第 3 步只作用于 `danmaku` / `gift` / `guard`；`superchat` / `interact` / `system` 不受 `filter.medal_level_min` 影响。
+求值顺序固定为 1→4，通过后进入虚拟列表。第 3 步只作用于 `danmaku` / `gift` / `guard`；`superchat` / `interact` / `system` 不受 `filter.medal_level_min` 影响。
 
 - 付费消息保底：`superchat` 与 `guard` 在类型白名单中的开关**必须**保留在设置面板上，但允许用户取消；取消后列表顶部显示一次性提示条「已隐藏付费消息」，可撤销。
 - `filter.kinds` 为空数组时列表恒为空，显示「全部消息被过滤」空态并提供「恢复全部类型」按钮（写回六种 `kind` 全集）。
 - `ui.gift_panel_mode = separate` 时，`gift` / `guard` 的渲染位置变为礼物栏，但白名单语义不变（移除即两处都不渲染）。
-- 关键词告警：`filter.keywords_alert = true` 时，命中关键词的消息**高亮**（判据 `filtering.alertsOn`，契约 §8）；隐藏模式（`hide`）同理只作用于命中项。
 
 ### 8.2 字号
 
@@ -930,13 +928,12 @@
 
 ### 8.5 筛选与显示面板（工具行「筛选」）
 
-房间页不再有常驻的一整行控制条（用户 2026-09-12：「筛选功能全部列到展开菜单中」）。所有筛选与显示开关都在输入区上方的**筛选面板**里，分三块：
+房间页不再有常驻的一整行控制条（用户 2026-09-12：「筛选功能全部列到展开菜单中」）。所有筛选与显示开关都在输入区上方的**筛选面板**里，分两块；两块放得下就并排（宽屏）、放不下就上下排（竖屏 360，§9.1）：
 
 | 分区 | 内容 | 相关键 |
 |---|---|---|
-| 消息类型 | 六种 `kind` 白名单（`filter.kinds`，全选=不过滤） | `filter.kinds` |
-| 关键词 | 关键词输入（空格分隔）、模式（命中隐藏 / 仅显示命中）、命中高亮 | `filter.keywords` / `filter.keywords_mode` / `filter.keywords_alert` |
-| 显示 | 字号滑杆、**时间戳开关**、互动消息自动消失、系统通知、礼物栏模式 | `ui.font_scale` / `ui.show_timestamp` / `ui.interact_auto_hide` / `ui.system_notice` / `ui.gift_panel_mode` |
+| 消息类型 | 六种 `kind` 白名单（`filter.kinds`，全选=不过滤），芯片式多选 | `filter.kinds` |
+| 显示 | 字号滑杆、**时间戳开关**、互动消息自动消失、系统通知、礼物栏模式；字号与礼物栏各占一行，其余开关按宽度换行 | `ui.font_scale` / `ui.show_timestamp` / `ui.interact_auto_hide` / `ui.system_notice` / `ui.gift_panel_mode` |
 
 | 时间戳开关 | 规则 |
 |---|---|

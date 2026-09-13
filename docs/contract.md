@@ -393,9 +393,6 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.system_notice` | boolean | `false` | 是否显示系统通知（开播 / 下播 / 标题变更 / 公告） |
 | `ui.show_timestamp` | boolean | `false` | 弹幕前是否显示时间戳（用户 2026-09-12 反馈：要可开关） |
 | `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
-| `filter.keywords` | string[] | `[]` | 关键词列表 |
-| `filter.keywords_mode` | string | `"hide"` | `hide` 命中隐藏 / `only` 仅显示命中 |
-| `filter.keywords_alert` | boolean | `false` | 命中关键词时高亮 |
 | `filter.uids` | integer[] | `[]` | 用户 UID 过滤列表 |
 | `filter.kinds` | string[] | 六种 kind 全集 | 参与展示的消息类型白名单 |
 | `filter.medal_level_min` | integer | `0` | 粉丝牌最低等级 |
@@ -445,7 +442,6 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 主站「我的表情」可发送（#8） | §5 `Emote.package_kind=owned`、§7 `emotes_owned` |
 | 房管功能：禁言 / 黑名单 / 屏蔽词（#3） | §7 `admin_*`、`protocol.md` A36 |
 | 过滤与显示开关 | §8 `filter.*` / `ui.show_timestamp` / `ui.system_notice` / `ui.interact_auto_hide` |
-| 关键词过滤与命中高亮 | §8 `filter.keywords` / `filter.keywords_mode` / `filter.keywords_alert` |
 | 多房间标签页 | `ui.md` |
 | 多账号（单文件多 profiles，界面统一叫「账号」） | §4.1、§5 `Account`、§7 `accounts_list` / `account_switch` |
 | 草稿与最近发送记录（会话内） | §4.3 |

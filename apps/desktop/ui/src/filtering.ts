@@ -78,7 +78,7 @@ export function medalColors(message: Message): {
   };
 }
 
-/** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 系统通知 → 粉丝牌 → 用户 → 关键词）。 */
+/** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 系统通知 → 粉丝牌 → 用户）。 */
 export function passesFilter(message: Message, prefs: Prefs): boolean {
   if (prefs["filter.kinds"].length > 0 && !prefs["filter.kinds"].includes(message.kind)) {
     return false;
@@ -87,22 +87,7 @@ export function passesFilter(message: Message, prefs: Prefs): boolean {
   if (message.kind === "system" && !prefs["ui.system_notice"]) return false;
   if (message.medal_level < prefs["filter.medal_level_min"]) return false;
   if (prefs["filter.uids"].includes(message.uid)) return false;
-
-  const keywords = prefs["filter.keywords"].filter((word) => word.length > 0);
-  if (keywords.length > 0) {
-    const hit = keywords.some((word) => message.content.includes(word));
-    if (prefs["filter.keywords_mode"] === "hide" && hit) return false;
-    if (prefs["filter.keywords_mode"] === "only" && !hit) return false;
-  }
   return true;
-}
-
-/** 命中关键词告警（高亮）：仅当偏好开启且命中时。 */
-export function alertsOn(message: Message, prefs: Prefs): boolean {
-  if (!prefs["filter.keywords_alert"]) return false;
-  return prefs["filter.keywords"]
-    .filter((word) => word.length > 0)
-    .some((word) => message.content.includes(word));
 }
 
 /**

@@ -176,6 +176,7 @@ sessdata = ""
 | `color` | i64 | 弹幕颜色十进制 RGB |
 | `medal_level` | i64 | 发送者粉丝牌等级，0 无 |
 | `medal_name` | string | 发送者粉丝牌名 |
+| `medal_lit` | bool | 这块粉丝牌**亮着**吗（上游 `user.medal.is_light`，1 = 亮）。**界面只在为真时画牌**——官方前端的弹幕行渲染分支就是这么判的（`protocol.md` A43）。字段缺失按 `true`（不因为上游少给一个键就少画一块牌） |
 | `guard_level` | i64 | 发送者**在本房间**的大航海等级：0 无 / 1 总督 / 2 提督 / 3 舰长（实时取 `info[7]`、历史取顶层 `guard_level`，两者同义）。**本房间的舰长标只认它** |
 | `medal_guard_level` | i64 | 发送者**粉丝牌自身**的舰长标记（上游 `user.medal.guard_level`）——那是**牌子所属房间**的身份，只用于牌面样式，**不得**拿来画本房间的舰长标（`protocol.md` A39：拿它画标就是把别的房间的身份按到本房间头上） |
 | `is_admin` | bool | 发送者是否房管（REQUIREMENTS.md 需求） |
@@ -215,8 +216,8 @@ sessdata = ""
 | 取值 | 含义 | 判定 |
 |---|---|---|
 | `ok` | 已发出且进入公开弹幕流 | 上游返回成功 |
-| `blocked_platform` | 被平台风控吞掉 | 上游响应 `msg`/`message` == `"f"` |
-| `blocked_room` | 被直播间（主播/房管）吞掉 | 上游响应 `msg`/`message` == `"k"` |
+| `blocked_platform` | 被平台吞（界面写「**全局屏蔽词**」，见下注） | 上游响应 `msg`/`message` == `"f"` |
+| `blocked_room` | 被本直播间吞（界面写「**房间屏蔽词**」） | 上游响应 `msg`/`message` == `"k"` |
 | `rate_limited` | 频率限制 | 上游对应错误码 |
 | `medal_required` | 粉丝牌等级不足 | 上游对应错误码 |
 | `muted` | 已被禁言 | 上游对应错误码 |
@@ -233,6 +234,11 @@ sessdata = ""
 > 纪律：`SendOutcome` 只表达**已经敢下结论**的取值；一切未知 code 进 `failed`，其原始 `code` 与 `message` 通过 `SendReport` 一路带到界面（`REQUIREMENTS.md` §2.3 要求给出禁言 / 频率 / 粉丝牌等原因）。码表映射见 `protocol.md` 附录 A17。
 
 > `blocked_platform` / `blocked_room` 的判定规则来自一个可复现的社区实现（见 `protocol.md` 发送章节），阶段 1 必须用真实发送复核后写死。
+>
+> **界面怎么称呼这两档**（用户 2026-09-13：「被吞写明理由，如 发送失败 · 全局屏蔽词 / 发送失败 · 房间屏蔽词」）：
+> `blocked_platform` → 「发送失败 · **全局屏蔽词**」、`blocked_room` → 「发送失败 · **房间屏蔽词**」。
+> 上游只给 `f` / `k` 一个标记，**「是哪一份词库」是界面替它说清的**（可操作的原因：一个是平台的词库、
+> 一个是主播 / 房管在本直播间配的那张表，即房管面板第三块）；上游成因本身仍未完全闭环（`protocol.md` A16）。
 
 `RoomStats`（**房间观众数**，会话级、不落盘、不入缓冲，规范性）：
 
@@ -251,6 +257,7 @@ sessdata = ""
 | `room_id` | i64 | 房间号 |
 | `my_medal_level` | i64 | 我在**该直播间**的粉丝牌等级，0 表示无牌 |
 | `my_medal_name` | string | 我在该直播间的粉丝牌名 |
+| `my_medal_worn` | bool | 我**是否佩戴着**这块牌（上游 `data.medal.is_weared`）。与 `my_medal_level` 是两回事：**持有 ≠ 佩戴**，界面只在为真时画（`protocol.md` A43、`ui.md` §4.4） |
 | `my_guard_level` | i64 | 我在该直播间的大航海等级 |
 | `is_admin` | bool | 我在该直播间是否房管 |
 

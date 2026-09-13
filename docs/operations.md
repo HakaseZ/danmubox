@@ -251,8 +251,8 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 | `SendOutcome` | 判定依据 | 含义与动作 |
 |---|---|---|
 | `ok` | 上游返回成功 | 已进入公开弹幕流；若直播间看不到，多为房间侧延迟或屏蔽，换账号/换视角复核 |
-| `blocked_platform` | 上游响应 `msg` / `message` == `"f"` | 被平台风控/拦截吞掉，**不是**普通错误码；内容会回显在 `data.mode_info.extra`（JSON 字符串）的 `content` 字段。改写内容后重试，勿连点 |
-| `blocked_room` | 上游响应 `msg` / `message` == `"k"` | 被直播间（主播/房管）吞掉；内容同样回显在 `data.mode_info.extra.content`。换房间验证，属房间侧设置 |
+| `blocked_platform` | 上游响应 `msg` / `message` == `"f"` | 命中平台那份**全局屏蔽词**（界面文案「发送失败 · 全局屏蔽词」），**不是**普通错误码；内容会回显在 `data.mode_info.extra`（JSON 字符串）的 `content` 字段。改写内容后重试，勿连点 |
+| `blocked_room` | 上游响应 `msg` / `message` == `"k"` | 命中本直播间的**房间屏蔽词**（主播 / 房管配的那张表，即房管面板第三块；界面文案「发送失败 · 房间屏蔽词」）；内容同样回显在 `data.mode_info.extra.content`。换房间验证，属房间侧设置 |
 | `rate_limited` | 上游对应错误码 | 频率限制：同房间最小间隔 2s，相同内容 5s 内去重。等待后重试，不自动重发 |
 | `medal_required` | 上游对应错误码 | 粉丝牌等级不足：需先在本房间达到要求等级 |
 | `muted` | 上游对应错误码 | 已被禁言（全局或直播间）：等待解禁或换账号，重试无用 |

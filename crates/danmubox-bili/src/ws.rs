@@ -79,6 +79,14 @@ pub fn parse_room_identity(room_id: i64, value: &Value) -> RoomSession {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        // 「是否**佩戴**着这块牌」—— 画不画它的唯一判据（弹幕侧同一个判据是 `medal_lit`）。
+        // 实测（2026-09-13）：`up_medal` 只说明**持有**（level/medal_name/medal_color），
+        // 佩戴与否在同层的 `is_weared` 上。字段缺失按"没戴"：宁可少画一块牌，
+        // 也不画出一块别人都看不到的牌（用户报的就是这块幻影牌）。
+        my_medal_worn: value
+            .pointer("/data/medal/is_weared")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         my_guard_level: value
             .pointer("/data/uinfo/guard/level")
             .and_then(Value::as_i64)
@@ -542,7 +550,10 @@ mod tests {
             "code": 0,
             "data": {
                 "badge": {"admin_level": 0, "is_room_admin": true, "permissions": null},
-                "medal": {"up_medal": {"level": 21, "medal_name": "牌子", "uid": 1}},
+                "medal": {
+                    "is_weared": true,
+                    "up_medal": {"level": 21, "medal_name": "牌子", "uid": 1}
+                },
                 "uinfo": {"guard": {"level": 3}}
             }
         });
@@ -552,10 +563,36 @@ mod tests {
                 room_id: 5440,
                 my_medal_level: 21,
                 my_medal_name: "牌子".into(),
+                my_medal_worn: true,
                 my_guard_level: 3,
                 is_admin: true,
             }
         );
+    }
+
+    /// **持有 ≠ 佩戴**（形状照抄 2026-09-13 的真实只读取数）：`up_medal` 只说明**持有**
+    /// 这房间的牌，佩戴与否在同层的 `is_weared` 上。用户当天报的「刚发出去多出一块 1 级
+    /// 本房间粉丝牌」正是这一格：持有 Lv1 牌、`is_weared = false`（没戴）。
+    /// 这条断言是那个 bug 的回归护栏：谁再把 `my_medal_worn` 删掉、或让界面忽略它，这里先红。
+    #[test]
+    fn room_identity_separates_held_medal_from_worn_one() {
+        let value = serde_json::json!({
+            "code": 0,
+            "data": {
+                "badge": {"admin_level": 0, "is_room_admin": false},
+                "medal": {
+                    "cnt": 38,
+                    "is_weared": false,
+                    "curr_weared": null,
+                    "up_medal": {"level": 1, "medal_color": 6067854, "medal_name": "牌子", "uid": 1}
+                },
+                "uinfo": {"guard": {"level": 0}}
+            }
+        });
+        let session = parse_room_identity(7, &value);
+        assert_eq!(session.my_medal_level, 1, "持有：等级仍然带出来");
+        assert_eq!(session.my_medal_name, "牌子");
+        assert!(!session.my_medal_worn, "没佩戴 —— 界面不许画这块牌");
     }
 
     #[test]

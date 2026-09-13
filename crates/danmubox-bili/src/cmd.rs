@@ -210,6 +210,13 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
         if let Some(name) = user.pointer("/medal/name").and_then(Value::as_str) {
             message.medal_name = name.to_string();
         }
+        // 「这块牌亮不亮」= 官方决定画不画它的判据（见 `Message.medal_lit` 的注释）。
+        // 字段缺失按"亮"处理：上游本会给，缺了是异常，不该因此少画一块牌。
+        message.medal_lit = user
+            .pointer("/medal/is_light")
+            .and_then(Value::as_i64)
+            .map(|value| value != 0)
+            .unwrap_or(true);
         // 粉丝牌配色：上游给的是 CSS 十六进制串（带 alpha），官方前端 getMedalHtml 就取这组
         // （实测样本 `#3FB4F699` / `#FFFFFF`，见附录 A37）。缺失即空串，不拿 0 顶替。
         let color = |key: &str| {

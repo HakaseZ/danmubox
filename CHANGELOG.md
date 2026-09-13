@@ -264,6 +264,33 @@
 
 ### Fixed
 
+- **刚发出去的弹幕不再多出一块「没戴的粉丝牌」**（用户 2026-09-13：「还是有区别，刚发出去会有一个
+  1级本直播间粉丝牌，但是不应该有才对」）。根因是**把「持有」当成了「佩戴」**：`getInfoByUser` 的
+  `data.medal.up_medal` 只说我在这个房间**持有**这块牌（level / medal_name / medal_color），
+  佩戴与否在同层的 `is_weared` —— 实测（只读取数）某账号在某房间 `up_medal.level = 1` 而
+  `is_weared = false`，官方前端因此**不画**它，我们却照 `up_medal.level` 画了一块**别人都看不到的牌**
+  （插入那一帧就有，回播到了再消失）。
+  同一条口径也漏在**弹幕侧**：官方只在 `user.medal.is_light` 为真时才画牌（2026-09-13 读官方前端产物
+  取证：`if (F?.is_lighted) { 追加粉丝牌 }`，`is_lighted` 由 `medal.is_light` 派生），
+  **没点亮的牌官方不画**、上游连配色都给灰（实测 `#919298*`），而我们按 `medal_level > 0` 一律画。
+  处置：新增 `Message.medal_lit`（← `user.medal.is_light`）与 `RoomSession.my_medal_worn`
+  （← `data.medal.is_weared`），`filtering.badgesFor`（所有行）与 `store.insertPending`（本地行）
+  两处都按它们过滤 —— **没点亮 / 没佩戴就不画**，与官方同一个判据；牌面真彩色的取材也顺带只认
+  **点亮**的行（未点亮那套是灰的，拿它会把真彩牌画成灰的）。
+  取舍写进字段注：字段缺失时弹幕侧按「亮」（缺一个键不该导致少画一块牌）、身份侧按「没戴」
+  （宁可少画一块，也不画出别人看不到的牌）。
+  规格：`docs/contract.md` §5（两个新字段）、`docs/protocol.md` A43（含官方分支与实测载荷全文）、
+  `docs/ui.md` §4.2 / §4.3 / §4.4、`docs/ipc.md` §3.1 / §5 / §7。
+  冒烟：新增 `medalHiddenWhenNotLit` / `medalShownWhenLit`（同一正文、同一牌名，只差 `medal_lit`
+  一个布尔的正反对照）与 `sendLocalHidesUnwornMedal` / `sendLocalShowsWornMedal`（乐观行同理）；
+  Rust 侧新增 `room_identity_separates_held_medal_from_worn_one`（形状照抄实测响应）。
+  实测：`cargo test --workspace` **209 通过 / 0 失败**（含新增的 `room_identity_separates_held_medal_from_worn_one`）、
+  `npx tsc -b` 通过、`node smoke/run-headless.mjs --precheck` 通过、桌面二进制重建成功。
+  **两引擎全量冒烟按用户指示未跑**（2026-09-13：「我说要测再测吧，每次测太浪费时间了」）——
+  为此新增的 4 条 UI 断言（`medalHiddenWhenNotLit` / `medalShownWhenLit` /
+  `sendLocalHidesUnwornMedal` / `sendLocalShowsWornMedal`）**尚未实跑**，登记为待验证；
+  该声明的解析侧已由上面那条 Rust 断言钉住。
+
 - **同一房间不再同时跑两份连接**（用户 2026-09-13：「界面上出现 ×2，哪里来的」）。界面上的 `×2` 不是合并逻辑的错（它按 `uid + 正文 + ts` 盖住**真重复**，`filtering.ts` 的 `toDisplayRows` 不动），而是**同一条弹幕真的进了两次列表**：
   1. **会话结束没有停掉在途连接（根因）**。`RoomRuntime::spawn_on` 的驱动把连接 `spawn` 成**独立任务**，而 `close()` / `Drop` 只 `abort` 驱动、`cancel()` 的也只是会话令牌——驱动被 abort 之后，没人再去执行 `connection.cancel()`，那条连接就成了**孤儿**：照样读包、照样往总线上投弹幕。此后重进同一房间，就有两条 WS 同时投递。`/tmp/standalone.log` 实测同一房间 **4.5 秒内被建了两次会话**（`session.rs` 两次「进场回填历史弹幕」+ 两次 WS 握手），且第二次握手之后**旧会话仍在收包**（同一条 `DANMU_MSG` 在 `04:44:14.944184` 与 `04:44:15.077618` 各解一次，相差 133ms；04:44:18、04:46:31 同形）。改法：连接令牌改 `Cancel::child(&session)`（`danmubox-core` 的 `Cancel` 新增父子关系）——会话取消 → 在途连接跟着取消，不再依赖「驱动被 abort 前刚好走到那一行」。
   2. **同一条弹幕从上游两条路各来一份**。`gethistory` 的回填与 WS 实时都会带同一条（同一帧里压缩子包与明文子包各一份也是同形）。第二份现在在**进总线之前**就被丢掉（`MessageSink::publish_with`，按 `uid + ts + 正文 + 表情` 认同一性，256 条环形窗口，只对 `danmaku` 生效）——界面消费的是事件流（`danmubox://message`）与 `history_query` 快照**两条**路，只挡缓冲挡不住事件；而界面列表里出现两份，就会被画成一行 ×2。

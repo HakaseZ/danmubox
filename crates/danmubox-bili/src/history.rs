@@ -155,6 +155,13 @@ fn map_item(room_id: i64, item: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // 历史条目有没有 `is_light` 未实测（实测到的字段清单只到 `{name, level, v2_*}`）；
+    // 取不到就按"亮"处理 —— 与实时弹幕同一口径：缺键不该导致少画一块牌。
+    message.medal_lit = item
+        .pointer("/user/medal/is_light")
+        .and_then(Value::as_i64)
+        .map(|value| value != 0)
+        .unwrap_or(true);
     // 配色与实时弹幕同一组键、同一层（`user.medal.v2_medal_color_*`，实测 2026-09-12：
     // 历史条目同样给的是 CSS 十六进制串）。历史的顶层 `medal` 不是对象，取不到这组值。
     let color = |key: &str| {

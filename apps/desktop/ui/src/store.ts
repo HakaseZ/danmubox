@@ -283,6 +283,9 @@ function ownMedalPalette(messages: Message[], uid: number): {
     const item = messages[index];
     // 只认带真彩色的弹幕行：回填的历史条目**没有**颜色字段（A30），拿它当来源等于没取到。
     if (item.uid !== uid || item.kind !== "danmaku") continue;
+    // 也不认**没点亮**的行：上游给未点亮的牌发的是一套灰（实测 `#919298*`），
+    // 拿它当配色会把真彩色的牌画成灰的。
+    if (!item.medal_lit) continue;
     if ((item.medal_color_start ?? "").length === 0) continue;
     return {
       medal_color_start: item.medal_color_start ?? "",
@@ -333,7 +336,12 @@ function insertPending(
   // 头像不在 `session` 里（`SessionState` 只有 `logged_in` / `uid` / `nickname` /
   // `active_profile`，契约 §5），它在当前生效账号上 —— 同样是 `nav` 求证时拿到的 `data.face`。
   const face = state.accounts.find((item) => item.active)?.face ?? "";
-  const hasMedal = (identity?.my_medal_name ?? "").length > 0;
+  // **牌只在"佩戴着"时才画**（`my_medal_worn` ← 上游 `data.medal.is_weared`）：
+  // `up_medal` 只说明**持有**这块牌 —— 实测（2026-09-13）某账号在某房间持有 Lv1 牌
+  // 却 `is_weared = false`，官方因此不画它；照旧画就会先多出一块「别人都看不到的牌」、
+  // 回播到了再消失（用户当天报的正是这个）。判据与弹幕侧同一个（`Message.medal_lit`）。
+  const worn = identity?.my_medal_worn === true;
+  const hasMedal = worn && (identity?.my_medal_name ?? "").length > 0;
   const pending: Message = {
     local_id: localId,
     room_id: roomId,
@@ -343,8 +351,10 @@ function insertPending(
     uname: session?.nickname ?? "",
     content,
     color: 0,
-    medal_level: identity?.my_medal_level ?? 0,
-    medal_name: identity?.my_medal_name ?? "",
+    medal_level: hasMedal ? (identity?.my_medal_level ?? 0) : 0,
+    medal_name: hasMedal ? (identity?.my_medal_name ?? "") : "",
+    // 画了才说它"亮"：`badgesFor` 用同一个判据过滤，这里给的必须与画出来的一致。
+    medal_lit: hasMedal,
     ...ownMedalPalette(state.messages, uid),
     guard_level: identity?.my_guard_level ?? 0,
     medal_guard_level: hasMedal ? (identity?.my_guard_level ?? 0) : 0,

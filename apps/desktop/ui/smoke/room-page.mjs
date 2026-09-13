@@ -304,6 +304,8 @@ function messageFromDanmakuPayload(payload, roomId = 5440) {
     color: num(meta[3]),
     medal_level: num(pointer(user, "medal/level")),
     medal_name: str(pointer(user, "medal/name")),
+    // 缺键按「亮」（与后端 parse 同一口径）：is_light 是官方画不画牌的唯一判据。
+    medal_lit: num(pointer(user, "medal/is_light") ?? 1) !== 0,
     medal_color_start: str(pointer(user, "medal/v2_medal_color_start")),
     medal_color_end: str(pointer(user, "medal/v2_medal_color_end")),
     medal_color_border: str(pointer(user, "medal/v2_medal_color_border")),
@@ -395,7 +397,7 @@ const MOCK = (theme) => `(function () {
     var base = {
       local_id: nextLocal, room_id: 5440, kind: kind, ts: Date.now(),
       uid: 500 + nextLocal, uname: kind === "interact" ? "进场观众" + nextLocal : "观众" + nextLocal,
-      content: content, color: 0, medal_level: 0, medal_name: "", guard_level: 0,
+      content: content, color: 0, medal_level: 0, medal_name: "", medal_lit: true, guard_level: 0,
       medal_guard_level: 0, reply_to_uid: 0, reply_to_uname: "",
       is_admin: false, face: "", is_history: !!isHistory, amount: 0, combo_id: "",
       emote: null, upstream_id: "smoke-" + nextLocal
@@ -585,7 +587,14 @@ const MOCK = (theme) => `(function () {
           return Promise.resolve(sendPayload);
         }
         // 房内身份（房管权限前置）+ 房管只读三块 + 写操作（替身只记调用，不动真上游）。
-        case "room_session": return Promise.resolve({ room_id: args.roomId, my_medal_level: 0, my_medal_name: "", my_guard_level: 0, is_admin: window.__admin });
+        case "room_session": return Promise.resolve({
+          room_id: args.roomId,
+          my_medal_level: 0,
+          my_medal_name: "",
+          my_medal_worn: false,
+          my_guard_level: 0,
+          is_admin: window.__admin
+        });
         case "admin_silent_list": return window.__adminFail
           ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
           : Promise.resolve([{ uid: 900, uname: "被禁言的观众", face: "" }]);
@@ -2621,6 +2630,33 @@ const MOCK = (theme) => `(function () {
     // 草稿留着：被拒之后要能照着行上划掉的正文 + 原因自己改一条再发（用户 2026-09-13：
     // 「便于我对照修改」）—— 发出去（outcome 为 ok）才清空。
     out.sendFailKeepsDraft = document.querySelector("textarea").value === "这条会发失败";
+    // **被吞写明理由**（用户 2026-09-13：「被吞写明理由，如 发送失败 · 全局屏蔽词 /
+    //  发送失败 · 房间屏蔽词」）：两档各发一条，行尾标记必须把那句话写出来
+    // （上游只给 f / k 一个标记，「是哪一份词库」由界面说清）。
+    // 放在草稿那条断言**之后**：这两次发送会把草稿清空，插在前面会把上面那条弄红。
+    window.__setSendOutcome("blocked_platform", "msg=f");
+    typeIntoArea(document.querySelector("textarea"), "被平台吞的样本");
+    await sleep(200);
+    sendButton.click();
+    await sleep(400);
+    var blockedRow = rowWith("被平台吞的样本");
+    var blockedMark = blockedRow
+      ? blockedRow.querySelector('[data-testid="db-msg-send-state"]') : null;
+    out.blockedRowNamesGlobalWords = !!blockedMark &&
+      blockedMark.innerText.indexOf("发送失败 · 全局屏蔽词") >= 0;
+    window.__setSendOutcome("blocked_room", "msg=k");
+    typeIntoArea(document.querySelector("textarea"), "被房间吞的样本");
+    await sleep(200);
+    sendButton.click();
+    await sleep(400);
+    var roomBlockedRow = rowWith("被房间吞的样本");
+    var roomBlockedMark = roomBlockedRow
+      ? roomBlockedRow.querySelector('[data-testid="db-msg-send-state"]') : null;
+    out.blockedRowNamesRoomWords = !!roomBlockedMark &&
+      roomBlockedMark.innerText.indexOf("发送失败 · 房间屏蔽词") >= 0;
+    typeIntoArea(document.querySelector("textarea"), "");
+    window.__setSendOutcome("ok", null);
+    await sleep(200);
     snap();
     await sleep(3200);
     out.sendFailToastGone = !byTestId("db-toast");
@@ -2745,6 +2781,66 @@ const MOCK = (theme) => `(function () {
     out.sendOptimisticEchoRendersLikeConfirmed = !!echoLook && !!confirmedLookAfterEcho &&
       JSON.stringify(echoLook) === JSON.stringify(confirmedLookAfterEcho);
     typeIntoArea(document.querySelector("textarea"), "");
+    snap();
+
+    // ---- 粉丝牌只在**佩戴着 / 亮着**时才画（用户 2026-09-13：「还是有区别，刚发出去会有一个
+    //      1级本直播间粉丝牌，但是不应该有才对」）。官方判据（2026-09-13 读官方前端产物取证）：
+    //      弹幕侧看 medal.is_light（官方分支 if (F?.is_lighted) { 追加粉丝牌 }），
+    //      身份侧看 data.medal.is_weared —— **持有 ≠ 佩戴**，没戴就不画。
+    // 这块整体包一层：里面一次发送 / 一次身份事件出岔子时要**让断言红**，而不是把整个场景
+    // 卡到 300s（那样只能看到「未跑完」这一句、定位不到原因）。异常文本一并进快照。
+    var medalBlockOk = false;
+    try {
+    //      ① 上游行：同一正文、同一牌名，只差 medal_lit 一个布尔，看画不画。
+    window.__emit("danmubox://message", window.__mk("danmaku", "没点亮的牌样本", false, {
+      uname: "灰牌观众", medal_level: 7, medal_name: "本房间牌", medal_lit: false
+    }));
+    window.__emit("danmubox://message", window.__mk("danmaku", "亮着的牌样本", false, {
+      uname: "亮牌观众", medal_level: 7, medal_name: "本房间牌", medal_lit: true
+    }));
+    await sleep(300);
+    var unlitRow = rowWith("没点亮的牌样本");
+    var litRow = rowWith("亮着的牌样本");
+    out.medalHiddenWhenNotLit = !!unlitRow &&
+      !unlitRow.querySelector('[data-testid="db-msg-badges"]');
+    out.medalShownWhenLit = !!litRow &&
+      !!litRow.querySelector('[data-testid="db-msg-badges"]') &&
+      litRow.innerText.indexOf("本房间牌") >= 0;
+    //      ② 本地乐观行：身份说「持有 Lv1 但没佩戴」→ 一行里**不许**出现牌；
+    //         改成「佩戴」后同一条路径必须画出来（正面对照，防止过滤过头）。
+    window.__setSendOutcome("ok", null);
+    window.__emit("danmubox://session", {
+      room_id: 5440, my_medal_level: 1, my_medal_name: "本房间牌",
+      my_medal_worn: false, my_guard_level: 0, is_admin: false
+    });
+    await sleep(200);
+    typeIntoArea(document.querySelector("textarea"), "持有但没戴牌");
+    await sleep(150);
+    sendButton.click();
+    await sleep(250);
+    var unwornLocal = rowWith("持有但没戴牌");
+    out.sendLocalHidesUnwornMedal = !!unwornLocal &&
+      !unwornLocal.querySelector('[data-testid="db-msg-badges"]');
+    typeIntoArea(document.querySelector("textarea"), "");
+    window.__emit("danmubox://session", {
+      room_id: 5440, my_medal_level: 1, my_medal_name: "本房间牌",
+      my_medal_worn: true, my_guard_level: 0, is_admin: false
+    });
+    await sleep(200);
+    typeIntoArea(document.querySelector("textarea"), "戴着牌发的");
+    await sleep(150);
+    sendButton.click();
+    await sleep(250);
+    var wornLocal = rowWith("戴着牌发的");
+    out.sendLocalShowsWornMedal = !!wornLocal &&
+      !!wornLocal.querySelector('[data-testid="db-msg-badges"]') &&
+      wornLocal.innerText.indexOf("本房间牌") >= 0;
+    typeIntoArea(document.querySelector("textarea"), "");
+      medalBlockOk = true;
+    } catch (e) {
+      out.medalBlockError = String((e && e.stack) || e);
+    }
+    out.medalBlockRan = medalBlockOk;
     snap();
 
     // ---- 面板展开会改可视高度：**正在看的位置不能被弹走**

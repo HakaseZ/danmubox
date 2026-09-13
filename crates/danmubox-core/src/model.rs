@@ -51,6 +51,14 @@ impl std::str::FromStr for MessageKind {
     }
 }
 
+/// `#[serde(default = …)]` 的辅助：字段缺失时取 `true`。
+///
+/// 只用在「**缺失不该导致少画东西**」的开关上（目前是 `Message.medal_lit`）：
+/// 上游本会给这个键，缺了是异常而不是「否定」，按缺失就否掉会让人白白少看见一块牌。
+fn default_true() -> bool {
+    true
+}
+
 /// 归一化消息。字段集合见 `docs/contract.md` §5，不得增删。
 ///
 /// `local_id` 由会话缓冲分配（0 表示尚未分配）；`upstream_id` 是举报所需的上游标识，
@@ -71,6 +79,15 @@ pub struct Message {
     pub color: i64,
     pub medal_level: i64,
     pub medal_name: String,
+    /// **这块粉丝牌该不该画**：上游 `user.medal.is_light`（1 = 亮着）。
+    ///
+    /// 官方前端的弹幕行渲染分支就取它（2026-09-13 读官方产物取证：`if (F?.is_lighted)
+    /// { 追加粉丝牌 }`，而 `is_lighted` 由 `medal.is_light` 派生）——**没点亮的牌官方根本不画**，
+    /// 上游甚至会把它的配色发成灰（实测 `#919298*`）。界面必须按同一个判据过滤，
+    /// 否则会画出一块**别人都看不到**的牌。
+    /// 字段缺失按**亮**（不因为上游少给一个键就少画一块牌）。
+    #[serde(default = "default_true")]
+    pub medal_lit: bool,
     /// 粉丝牌配色，取值是上游的 **CSS 十六进制串**（带 alpha，如 `#3FB4F699`）。
     ///
     /// 来源是弹幕载荷里 `user.medal` 的 `v2_medal_color_*` 一组（`docs/protocol.md` 附录 A37）。
@@ -164,6 +181,7 @@ impl Message {
             color: 0,
             medal_level: 0,
             medal_name: String::new(),
+            medal_lit: true,
             medal_color_start: String::new(),
             medal_color_end: String::new(),
             medal_color_border: String::new(),
@@ -255,6 +273,15 @@ pub struct RoomSession {
     pub room_id: i64,
     pub my_medal_level: i64,
     pub my_medal_name: String,
+    /// **我在这房间是否佩戴着粉丝牌**（上游 `getInfoByUser` 的 `data.medal.is_weared`）。
+    ///
+    /// 与 `my_medal_level` 是两回事：**持有 ≠ 佩戴**。实测（2026-09-13，真实房间，只读取数）：
+    /// 某账号在该房间 `up_medal.level = 1`（持有 Lv1 牌）而 `is_weared = false`（没戴）——
+    /// 官方前端因此**不画**这块牌。界面发弹幕时插的那条乐观行若只看 `my_medal_level`，
+    /// 就会先画出一块"别人都看不到的牌"、回播到达后再消失（用户 2026-09-13 报的正是这个）。
+    /// 字段缺失按**没戴**（保守：宁可少画一块牌，也不画出别人看不到的牌）。
+    #[serde(default)]
+    pub my_medal_worn: bool,
     pub my_guard_level: i64,
     pub is_admin: bool,
 }

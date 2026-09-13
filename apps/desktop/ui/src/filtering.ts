@@ -12,14 +12,24 @@ export interface Badges {
   medalName: string;
 }
 
-/** 徽标派生：主播由 uid == anchor_uid 派生，房管与大航海取消息字段。 */
+/**
+ * 徽标派生：主播由 uid == anchor_uid 派生，房管与大航海取消息字段。
+ *
+ * **粉丝牌只在「亮着」时才算数**（`Message.medal_lit` ← 上游 `user.medal.is_light`）：
+ * 官方前端的弹幕行渲染分支就是这么判的（`if (F?.is_lighted) { 追加粉丝牌 }`，
+ * `is_lighted` 由 `medal.is_light` 派生 —— 2026-09-13 读官方产物取证）：
+ * **没点亮的牌官方不画**，上游连配色都给灰（实测 `#919298*`）。
+ * 过滤放在这里而不是渲染处：`hasBadges` 与牌面都从这几个字段派生，在这里归零最省事。
+ */
 export function badgesFor(message: Message, anchorUid?: number): Badges {
+  const lit =
+    message.medal_lit && message.medal_level > 0 && message.medal_name.length > 0;
   return {
     anchor: anchorUid !== undefined && anchorUid !== 0 && message.uid === anchorUid,
     admin: message.is_admin,
     guardLevel: message.guard_level,
-    medalLevel: message.medal_level,
-    medalName: message.medal_name,
+    medalLevel: lit ? message.medal_level : 0,
+    medalName: lit ? message.medal_name : "",
   };
 }
 

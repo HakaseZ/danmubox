@@ -366,6 +366,8 @@
 | 底色 | `linear-gradient(45deg, v2_medal_color_start, v2_medal_color_end)` | 主播 / 房管 / 大航海用本地 token 的同款 45° 渐变；粉丝牌见下 |
 | 等级格 | 右侧独立一格、宽度固定（1 位 `4px` / 3 位 `15px`），白字 | 右侧独立一格（`tabular-nums`，深色半透明底） |
 
+**粉丝牌只在「亮着」时才画**（`Message.medal_lit` ← 上游 `user.medal.is_light`）：官方前端的弹幕行渲染分支就是这么判的（`if (F?.is_lighted) { 追加粉丝牌 }`，而 `is_lighted` 由 `medal.is_light` 派生 —— 2026-09-13 读官方产物取证，`protocol.md` A43）：**没点亮的牌官方不画**，上游连 `v2_medal_color_*` 都给灰（实测 `#919298*`）。`filtering.badgesFor` 因此把未点亮的牌按「没有牌」处理（`medalLevel` / `medalName` 归零），`hasBadges` 与牌面都随之不出现。
+
 **粉丝牌配色**：契约 §5 转发了上游四件套 `Message.medal_color_start` / `_end` / `_border` / `_text`（`user.medal.v2_medal_color_*`，带 alpha 的 CSS 十六进制串，如 `#3FB4F699` / `#FFFFFF`），界面**优先用真彩色**：`start` / `end` 作 45° 渐变两端，`border` 作描边色，`text` 作牌面文字色。
 
 | 情况 | 渲染 |
@@ -404,7 +406,7 @@
 | `guard` | `ts` `uname` `content` `guard_level` `amount` `uid` |
 | `system` | `ts` `content` |
 
-统一规则：`uid == 0` 且 `uname` 为空时昵称显示「游客」；`medal_level == 0` 不渲染粉丝牌；`guard_level == 0` 不渲染大航海徽标。
+统一规则：`uid == 0` 且 `uname` 为空时昵称显示「游客」；`medal_level == 0`（或 `medal_lit == false`，见 §4.2）不渲染粉丝牌；`guard_level == 0` 不渲染大航海徽标。
 
 `Message.color` 仍在契约 §5 里（引擎原样带出；发送侧的 `chat_send.color` 照旧透传），但**界面一处都不消费它**：正文与昵称都用主题 token，因此 `0` / `0xFFFFFF`（上游给普通弹幕的白）/ 越界值都不需要特判，也没有 `cssColor` 一类的换算。依据是用户 2026-09-12 的两次实测反馈——先报「他人用户名是白色、看不见」（浅色主题下白字等于隐形），后报「正文偏黄」；统一后**同屏所有正文一个颜色、所有昵称一个颜色**（冒烟按 `rowBodyNotPaintedByDanmakuColor` / `rowNameNotPaintedByDanmakuColor` / `rowAllBodiesSameColor` / `namesAllSameColor` / `rowLightBodyNotPaintedByDanmakuColor` 断言）。正文里的 `@昵称` 是唯一被强调的一段，但它只动**字色**：用专为正文取的 `--mention`（深色 `#fb7299` / 浅色 `#c2185b`，见 §4.1 与 §9.2），没有底色、没有渐变，也不消费 `reply_uname_color`。
 
@@ -420,7 +422,10 @@
    服务端了，从另一个客户端看到是什么样子，现在发出去就应该是什么样子」）—— 插入的那一帧就要带齐
    上游行会显示的一切（昵称 / 头像 / 粉丝牌与等级 / 大航海 / 房管 / 表情 / 间距），回播到达时再把
    **上游权威值**换进来：`ts` / 头像 / 牌面真彩色 / `upstream_id`（本地那套是界面按 `room_session` 与
-   本人上一条上游行凑的近似）。
+   本人上一条上游行凑的近似）。**粉丝牌只有佩戴着才画**（`RoomSession.my_medal_worn` ←
+   `data.medal.is_weared`）：`room_session` 的 `my_medal_level` 说的是**持有**这块牌 —— 实测某账号
+   在某房间持有 Lv1 牌却没戴，照它画就会先多出一块「别人都看不到的牌」，回播到了再消失
+   （用户 2026-09-13 报的正是这个；`protocol.md` A43）。
 2. **看不出中间有回播**（原话：「那个时候根本看不出来有回播」）—— 换字段时必须**保留同一行身份**：
    `local_id` 照抄本地那个负数，React key 因此不变 ⇒ DOM 节点不重建、样式逐项不变；而且是**原位替换**
    （期间可能有别人插进来，不许挪到末尾）。
@@ -748,8 +753,8 @@
 | `SendOutcome` | 含义 | UI 文案 | 位置 | 草稿 | 回显（§4.4） |
 |---|---|---|---|---|---|
 | `ok` | 已发出并进入公开弹幕流 | 无（静默） | — | 清空 | 点下发送就已经画出来了（本地行，与「别的客户端看到的我」渲染逐项相同，§4.4）；上游回播时把权威字段换进**同一行**（节点不重建） |
-| `blocked_platform` | 被平台风控吞掉 | 「被平台风控吞掉」[ · detail] | 浮动提示（§6.5.1）+ 行内标记（§4.4） | **保留** | 那条**留在列表里**、标成**被拒**：正文划线 + 行尾写上面那句 |
-| `blocked_room` | 被直播间吞掉 | 「被直播间吞掉」[ · detail] | 同上 | **保留** | 同上 |
+| `blocked_platform` | 被平台吞（命中**全局屏蔽词**） | 「发送失败 · 全局屏蔽词」[ · detail] | 浮动提示（§6.5.1）+ 行内标记（§4.4） | **保留** | 那条**留在列表里**、标成**被拒**：正文划线 + 行尾写上面那句 |
+| `blocked_room` | 被本直播间吞（命中**房间屏蔽词**） | 「发送失败 · 房间屏蔽词」[ · detail] | 同上 | **保留** | 同上 |
 | `rate_limited` | 频率限制 | 「发送过于频繁」[ · detail] + 倒计时（本地最小间隔 2s，契约 §4） | 浮动提示（§6.5.1） | **保留** | 同上 |
 | `medal_required` | 粉丝牌等级不足 | 「粉丝牌等级不足」[ · detail] | 浮动提示（§6.5.1） | **保留** | 同上 |
 | `muted` | 已被禁言 | 「已被禁言」[ · detail] | 浮动提示（§6.5.1） | **保留** | 同上 |

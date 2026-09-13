@@ -584,8 +584,8 @@ sid = ""
 | 上游响应特征 | `SendOutcome`（契约 §5） | 用户可见文案（建议） |
 |---|---|---|
 | 正常成功 | `ok` | 无（正常入列） |
-| 业务响应 `msg`/`message` == `"f"` | `blocked_platform` | 「弹幕被平台风控拦截，未公开显示」 |
-| 业务响应 `msg`/`message` == `"k"` | `blocked_room` | 「弹幕被本直播间拦截，未公开显示」 |
+| 业务响应 `msg`/`message` == `"f"` | `blocked_platform` | 「发送失败 · 全局屏蔽词」 |
+| 业务响应 `msg`/`message` == `"k"` | `blocked_room` | 「发送失败 · 房间屏蔽词」 |
 | 上游频次类错误码 | `rate_limited` | 「发送太频繁，请稍后再试」 |
 | 粉丝牌等级不足错误码 | `medal_required` | 「粉丝牌等级不足，无法发言」 |
 | 已禁言错误码 | `muted` | 「你已被禁言（全局或本直播间）」 |

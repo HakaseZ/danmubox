@@ -20,6 +20,15 @@ export interface Message {
   medal_level: number;
   medal_name: string;
   /**
+   * **这块粉丝牌该不该画**（契约 §5）：上游 `user.medal.is_light`（1 = 亮着）。
+   *
+   * 官方前端的弹幕行渲染分支就取它（`if (F?.is_lighted) { 追加粉丝牌 }`，`is_lighted`
+   * 由 `medal.is_light` 派生 —— 2026-09-13 读官方产物取证）：**没点亮的牌官方不画**，
+   * 上游连配色都给灰（实测 `#919298*`）。界面按同一判据过滤（`filtering.badgesFor`），
+   * 否则会画出一块**别人都看不到**的牌。后端保证给这个字段；缺了按 `true`。
+   */
+  medal_lit: boolean;
+  /**
    * 粉丝牌真彩色（契约 §5）：上游 `user.medal.v2_medal_color_*`，取值是带 alpha 的
    * CSS 十六进制串（如 `#3FB4F699`）。**空串不是颜色**——缺失时界面用按牌名派生的
    * 色相兜底（见 `filtering.medalColors`），不拿黑色顶替。
@@ -166,6 +175,14 @@ export interface RoomSession {
   room_id: number;
   my_medal_level: number;
   my_medal_name: string;
+  /**
+   * **我在这房间是否佩戴着粉丝牌**（契约 §5，上游 `data.medal.is_weared`）。
+   *
+   * 与 `my_medal_level` 是两回事：**持有 ≠ 佩戴** —— 实测某账号在该房间持有 Lv1 牌却
+   * `is_weared = false`，官方因此不画它。发送时插的那条乐观行只有这里为 `true` 才画牌，
+   * 否则会先多出一块"别人都看不到的牌"、回播到了又消失（用户 2026-09-13 报的正是这个）。
+   */
+  my_medal_worn: boolean;
   my_guard_level: number;
   is_admin: boolean;
 }
@@ -395,8 +412,12 @@ export const EMOTE_PACKAGE_LABEL: Record<EmotePackage, string> = {
 /** 发送结果的用户可见文案（docs/ui.md §6.5）。 */
 export const SEND_OUTCOME_TEXT: Record<SendOutcome, string> = {
   ok: "已发出",
-  blocked_platform: "被平台风控吞掉",
-  blocked_room: "被直播间吞掉",
+  // 被吞这两档**把原因写进文案**（用户 2026-09-13：「被吞写明理由，如 发送失败 · 全局屏蔽词 /
+  // 发送失败 · 房间屏蔽词」）。上游只给一个 `f` / `k` 标记（`protocol.md` §11.2），
+  // 说清是哪一份词库由我们负责：「全局屏蔽词」= 平台那份，「房间屏蔽词」= 主播 / 房管在本直播间
+  // 配的那份（就是房管面板第三块「屏蔽词」管的那张表）。
+  blocked_platform: "发送失败 · 全局屏蔽词",
+  blocked_room: "发送失败 · 房间屏蔽词",
   rate_limited: "发送过于频繁",
   medal_required: "粉丝牌等级不足",
   muted: "已被禁言",
@@ -405,8 +426,8 @@ export const SEND_OUTCOME_TEXT: Record<SendOutcome, string> = {
 
 /**
  * 发送结果那句话 —— **浮片（§6.5.1）与行尾标记（§4.4）共用同一句**，两者必须说同一件事。
- * 这里不再加「发送失败：」前缀：`SEND_OUTCOME_TEXT` 本身已把它说全了，
- * 加了会拼成「发送失败：发送失败 · …」。
+ * 「发送失败」这个前缀**由表里那句自带**（被吞那两档是「发送失败 · 原因」；`failed` 本身就是
+ * 「发送失败」，所以这里不再统一加前缀，否则会拼成「发送失败：发送失败 · …」）。
  */
 export function sendOutcomeText(outcome: SendOutcome, detail?: string | null): string {
   return `${SEND_OUTCOME_TEXT[outcome]}${detail ? ` · ${detail}` : ""}`;

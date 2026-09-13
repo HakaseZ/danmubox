@@ -657,6 +657,7 @@ mod tests {
             room_id: 7,
             my_medal_level: 21,
             my_medal_name: "牌子".into(),
+            my_medal_worn: true,
             my_guard_level: 3,
             is_admin: true,
         };

@@ -428,10 +428,11 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
                 Ok(Event::Session(session)) => {
                     if !quiet {
                         println!(
-                            "# 本人身份 room_id={} 粉丝牌={} Lv{} 大航海={} 房管={}",
+                            "# 本人身份 room_id={} 粉丝牌={} Lv{} 佩戴={} 大航海={} 房管={}",
                             session.room_id,
                             session.my_medal_name,
                             session.my_medal_level,
+                            session.my_medal_worn,
                             session.my_guard_level,
                             session.is_admin
                         );

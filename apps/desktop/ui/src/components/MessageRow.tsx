@@ -2,7 +2,6 @@ import { Avatar } from "./Avatar";
 import type { MenuPoint } from "./ContextMenu";
 import type { ReactNode } from "react";
 import {
-  alertsOn,
   badgesFor,
   formatClock,
   GUARD_TITLE,
@@ -51,7 +50,6 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   const medal = medalColors(message);
   // 正文统一用主题前景色：上游允许发送者自定义弹幕颜色（舰长/老爷常见金黄），
   // 用户 2026-09-12 要求「所有文本统一一下」，因此不再照色渲染。
-  const highlight = alertsOn(message, prefs) ? styles.highlight : undefined;
   // 一枚徽标都没有时不渲染空徽标组：空的 flex 项会白吃掉簇内的一道间距
   const hasBadges =
     badges.anchor ||
@@ -188,15 +186,13 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
                   : message.emote.width >= message.emote.height * 2
                     ? styles.contentEmoteWide
                     : ""
-              } ${highlight ?? ""}`}
+              }`}
               src={message.emote.url}
               alt={message.content}
               title={message.content}
             />
           ) : (
-            <span
-              className={`${highlight ?? ""} ${rejected ? styles.rejectedText : ""}`}
-            >
+            <span className={rejected ? styles.rejectedText : undefined}>
               {withMentions(text)}
             </span>
           )}

@@ -329,9 +329,6 @@ export interface Prefs {
   "ui.show_timestamp": boolean;
   /** 自定义短语（需求 §2.2）；短语面板里唯一的内容来源，点选插到光标处。 */
   "composer.phrases": string[];
-  "filter.keywords": string[];
-  "filter.keywords_mode": "hide" | "only";
-  "filter.keywords_alert": boolean;
   "filter.uids": number[];
   "filter.kinds": MessageKind[];
   "filter.medal_level_min": number;

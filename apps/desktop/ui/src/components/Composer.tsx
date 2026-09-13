@@ -788,9 +788,7 @@ export function Composer({
         <textarea
           ref={areaRef}
           value={draft}
-          placeholder={
-            loggedIn ? "说点什么…（Enter 发送，Shift+Enter 换行）" : "未登录，只能看弹幕"
-          }
+          placeholder={loggedIn ? "说点什么…" : "未登录，只能看弹幕"}
           disabled={disabled || !loggedIn}
           onChange={(event) => applyDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -805,7 +803,7 @@ export function Composer({
           <button
             className={panel === "emotes" ? styles.toolActive : undefined}
             disabled={disabled || !loggedIn}
-            title="表情包库（在输入框上方展开）"
+            title="表情包库"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => togglePanel("emotes")}
           >
@@ -814,7 +812,7 @@ export function Composer({
           <button
             className={panel === "phrases" ? styles.toolActive : undefined}
             disabled={disabled || !loggedIn}
-            title="快捷短语（右键短语可改名 / 删除）"
+            title="快捷短语"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => togglePanel("phrases")}
           >
@@ -822,7 +820,7 @@ export function Composer({
           </button>
           <button
             className={panel === "filter" ? styles.toolActive : undefined}
-            title="筛选与显示（类型 / 字号 / 时间戳…）"
+            title="筛选与显示"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => togglePanel("filter")}
           >
@@ -885,14 +883,6 @@ export function Composer({
           </span>
         </div>
       </div>
-      {/* 最下方只留**一直成立**的静态说明（未登录）。发送失败不再在这里出行：
-          用户 2026-09-12：「发送失败也不要在最下出提示，弹窗提示然后渐隐消失即可」——
-          那一条改成了输入区上方的 .toast（见上）。 */}
-      {!loggedIn && (
-        <div className={styles.composerHint} data-testid="db-send-hint">
-          未登录：仅能接收弹幕，发送需要先扫码登录
-        </div>
-      )}
     </>
   );
 }

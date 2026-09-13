@@ -512,12 +512,12 @@ export function RoomView({
             </span>
           </span>
           {roomStats?.online !== undefined && (
-            <span className={styles.balance} title="当前在线（协议 §10.7 的 ONLINE_RANK_COUNT）">
+            <span className={styles.balance} title="当前在线">
               在线 {formatCount(roomStats.online)}
             </span>
           )}
           {roomStats?.watched !== undefined && (
-            <span className={styles.balance} title="累计看过（协议 §10.7 的 WATCHED_CHANGE）">
+            <span className={styles.balance} title="累计看过">
               看过 {formatCount(roomStats.watched)}
             </span>
           )}

@@ -56,7 +56,7 @@
 | 区块 | 内容 | 排序 / 规则 |
 |---|---|---|
 | **页头** | **一行**：左「弹幕框」标题（`--fs-8`），右**主题开关**（`ui.theme` 三档：跟随系统 / 浅色 / 深色） | 主题是**全局**的，因此开关放在主界面页头，而不是房间页的筛选面板里（用户 2026-09-13 #10；控件口径见 §8.3）。标题可缩、控件不缩，360px 宽也不换行、不溢出 |
-| **账号区** | **只占一行**：当前身份（头像 + 昵称 + `uid`；未登录时是「游客态：可接收弹幕，发送需先登录」）+ 一个「账号」按钮，按钮打开**账号管理对话框**（§2.2.1）。下拉、删除、新增、扫码、登出这些控件**不再内联在这一行** | — |
+| **账号区** | **只占一行**：当前身份（头像 + 昵称 + `uid`；未登录时只显示「游客态」）+ 一个「账号」按钮，按钮打开**账号管理对话框**（§2.2.1）。下拉、删除、新增、扫码、登出这些控件**不再内联在这一行** | — |
 | **添加房间** | 输入短号 / URL / 房间号 → `rooms_add` | 房间不存在时提示「房间不存在或短号无效」并保留输入 |
 | **我的房间** | `rooms_list` 中手动添加的房间，带删除按钮（`rooms_remove`）。行内是「**主播名 · 直播间名**」（`anchor_uname` · `title`）+ 直播状态 + 连接状态，**不显示房间号**（用户 #17） | 上游返回顺序 |
 | **关注列表** | `follow_list` 全量（**含未开播**；2026-09-13 修正：未开播那一份由主站关注关系 + 批量房间接口取得，直播侧 `GetWebList` 只给在播，见 `docs/protocol.md` A28 修正），头像 + 主播名 + 直播标题 + 状态标签 + 最后开播时间（**不显示房间号、不显示关注分组名**，用户 #14/#15/#16） | 排序：`live_status == 1` 置顶 → **最近观看降序**（`ui.recent_watched`；没看过的不在这一档、排在看过的之后）→ `live_start_at` 降序 → `online` 降序 → `room_id` 升序。前端分页，每页 `FOLLOW_PAGE_SIZE = 30`，>1 页时显示上一页/下一页与页码。**未开播条目没有「最后开播时间」可显示**（上游不给，`live_start_at` 恒为 0，界面就不渲染那个元素），排序在这档落回 `online` / 房间号 |
@@ -148,7 +148,7 @@
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-send-hint` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
 
 ### 2.4 会话缓冲生命周期（契约 §4.3）
 
@@ -777,7 +777,7 @@
 | 位置 | **弹幕列表与输入区之间**（文档流里的一张浮片，`align-self: center`）。它**不是浮层**：矩形与弹幕列表区域**不相交**，只会短暂把列表压矮一点（冒烟 `sendFailToastClearsList`），也绝不覆盖输入框（`sendFailToastAboveComposer`） |
 | 不挡操作 | `pointer-events: none` —— 提示期间弹幕区照常滚动、照常右键、照常点表情（冒烟 `sendFailToastPassive`） |
 | 出现 → 渐隐 | 出现 → 停留 → 淡出全在 CSS 动画（`.toast` 的 `toastFade`）里；`SEND_TOAST_MS`（2600ms）同时决定动画时长与「什么时候把元素摘掉」（摘掉后列表高度还原）。**不叠提示**：连续失败复用同一个元素、重新计时（`sendSeq` 每次发送落定 +1 才重跑效果） |
-| 最下方 | 最下方**不再有**发送结果那一行：`db-send-hint` 只留给**一直成立**的「未登录」静态说明（冒烟 `sendFailNoBottomHint` / `sendFailToastGone`） |
+| 最下方 | 最下方**不渲染任何提示元素**：输入区以下既没有发送结果那一行，也没有未登录的静态说明（旧 `db-send-hint` 已按用户 2026-09-13 第 7 条「能删的提示就删」删除）。冒烟 `sendFailNoBottomHint` / `sendFailToastGone` 断言底部无提示，删除后仍成立 |
 | 主题 | 底色 / 文字色走 `--toast-bg` / `--toast-fg`（本主题的失败色混表面色），深浅两套都 ≥ 12:1 |
 1. 文案**不猜测**上游细节；`failed` 必须展示上游原始 code 与 message，不改写语义。
    上游原话与 code 由 `chat_send` 返回的 `detail` 字段携带（契约 §5 `ChatSendResult`），
@@ -945,6 +945,8 @@
 | 打开 | 每行行首渲染 `HH:mm:ss`（本地时区）一列，定宽 `8ch` + 等宽数字，逐行纵向对齐 |
 | 关闭 | 整列不渲染（行从徽标/头像开始），不是渲染成空白 |
 
+> 悬停提示（`title`）在这些开关与其他同类控件上只写**字段名**（控件名，如「时间戳」「系统通知」「主题」），不写操作教学、不写上游字段名与协议章节号（用户 2026-09-13 第 7 条：能删的提示就删）。
+
 账号相关（登录态 / 多账号切换 / 新增 / 删除 / 扫码 / 登出）在**房间列表页的账号管理对话框**（§2.2.1），不占房间页空间。
 其余键的读写仍走 `prefs_get` / `prefs_set`（写接受部分键值补丁，未知键或非法值返回 `BAD_REQUEST`）。
 界面不提供粘贴 Cookie 的入口（用户 2026-09-13 移除「手填 Cookie」）：登录只有扫码一条路，改凭据只能直接编辑 `config.toml`（契约 §4.1、`auth.md` §8.4），因此凭据值不会经过前端。
@@ -1041,7 +1043,7 @@
 
 | 状态 | 触发条件 | 聊天流区域 | 提示 | 可用操作 |
 |---|---|---|---|---|
-| 未登录（游客） | `session_status` 为游客 | 正常渲染 | 细横幅「游客模式：部分消息字段不可见」 | 打开账号管理对话框：扫码添加 / 重新登录 |
+| 未登录（游客） | `session_status` 为游客 | 正常渲染 | 列表页账号区显示「游客态」；输入区占位「未登录，只能看弹幕」（输入框、发送、表情与短语入口禁用；筛选面板仍可开）。**不另起横幅** | 打开账号管理对话框：扫码添加 / 重新登录 |
 | 登录中（扫码） | `account_qr_start` 已发起、未完成 | 不受影响 | 对话框内显示二维码与轮询状态 | 关闭二维码、过期或失败后「重新获取」 |
 | 连接中 | 连接请求已发出 | 列表照常渲染（无占位骨架） | 状态点转**灰**（未连接档，§3.1） | 断开（刷新按钮禁用） |
 | 已断开 | 非主动断开的连接中断 | 保留已渲染行，不再新增 | 状态点**灰**；退避详情只在 `⋯` 菜单与标签页圆点里体现（不另起横幅，§3.3） | 刷新连接（立即重连）、断开 |

@@ -102,10 +102,7 @@ export function RoomList({
       */}
       <div className={styles.listHeader}>
         <h1>弹幕框</h1>
-        <label
-          className={styles.themePicker}
-          title="跟随系统 = 随操作系统外观自动切换；整应用一套深浅配色"
-        >
+        <label className={styles.themePicker} title="主题">
           主题
           <select
             data-testid="db-pref-theme"
@@ -138,14 +135,14 @@ export function RoomList({
             </>
           ) : (
             <span className={styles.accountGuest} data-testid="db-account-guest">
-              游客态：可接收弹幕，发送需先登录
+              游客态
             </span>
           )}
           {info && <span className={styles.accountMeta}>v{info.version}</span>}
         </div>
         <button
           data-testid="db-account-open"
-          title="管理账号：切换 / 添加 / 重新登录 / 退出登录"
+          title="账号管理"
           onClick={onOpenAccounts}
         >
           账号
@@ -211,9 +208,7 @@ export function RoomList({
             <button onClick={onRefreshFollowed}>刷新</button>
           </div>
           {sortedFollowed.length === 0 ? (
-            <div className={styles.empty}>
-              没有关注的人，或接口未实测通过（见 docs/protocol.md 的 A28）
-            </div>
+            <div className={styles.empty}>还没有关注的主播</div>
           ) : (
             <>
               {paged.items.map((item) => {
@@ -257,7 +252,7 @@ export function RoomList({
                       <span
                         className={styles.followLastLive}
                         data-testid="db-follow-last-live"
-                        title="最后开播时间（上游 liveTime）"
+                        title="最后开播时间"
                       >
                         最后开播 {lastLive}
                       </span>

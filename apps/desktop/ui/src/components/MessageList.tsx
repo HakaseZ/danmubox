@@ -163,22 +163,27 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
       </div>
       {showJumpButton && (
         <button
-          className={styles.bottomAnchor}
+          className={`${styles.ctlRound} ${styles.bottomAnchor}`}
           data-testid="db-bottom-anchor"
+          title="回到最新"
+          aria-label="回到最新"
           onClick={() => {
             setFollowing(true);
             pinToBottom(virtualizer, rows.length);
           }}
         >
           {/*
-            下箭头（用户 2026-09-13 #1：「回到最新」的图标改为下箭头 = 返回键旋转 90°）。
-            与房间头的返回键**同源几何**（docs/ui.md §3.1 的矢量规范）：`viewBox="0 0 24 24"`、
-            同一条 `stroke-width 1.75`、round 线帽、墨迹居中 (12,12)、主轴 16 单位 ——
-            把返回键 `M15 4.875 9 12l6 7.125` 绕 (12,12) 转 -90°（朝下）即得下面这条 path
-            （**不**挂 CSS `rotate()`：省一层 transform，描边宽度 / 墨迹居中都不必再跟变换打架）。
-            图标是装饰，`aria-hidden`；按钮的可访问名仍是文字「回到最新」。
+            下箭头（用户 2026-09-13 #2：「回到最新图标改为下箭头，指这整个按钮删掉，
+            用一个返回按钮旋转 90° 来代替」）：所以这里**不另造控件**，直接挂房间里那两枚
+            圆形控件用的 `.ctlRound`（40 × 40 正圆、透明底 + hover 洗色）与 `.ctlIcon`
+            （60% 盒 = 24px，与 viewBox 1:1）—— 图标因此与返回键**同源几何**
+            （docs/ui.md §3.1 的矢量规范）：`viewBox="0 0 24 24"`、同一条 `stroke-width 1.75`、
+            round 线帽、墨迹居中 (12,12)、主轴 16 单位。把返回键 `M15 4.875 9 12l6 7.125`
+            绕 (12,12) 转 -90°（朝下）即得下面这条 path（**不**挂 CSS `rotate()`：`rotate(90deg)`
+            会把左箭头转成向上，而且直写省一层 transform，描边宽度 / 墨迹居中不必再跟变换打架）。
+            文字已删，可访问名改由 `aria-label` 给（冒烟按可访问名断言）；图标是装饰，`aria-hidden`。
           */}
-          <svg className={styles.bottomAnchorIcon} viewBox="0 0 24 24" aria-hidden="true">
+          <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
             <path
               d="M4.875 9 12 15l7.125-6"
               fill="none"
@@ -188,7 +193,6 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
               strokeLinejoin="round"
             />
           </svg>
-          回到最新
         </button>
       )}
     </div>

@@ -202,8 +202,10 @@ export function paginate<T>(
  * 过滤 + 合并相似消息。合并规则：同一 uid、同一内容、且在 `ui.merge_window_ms`
  * 窗口内连续出现的消息合成一行，`count` 记录条数（docs/ui.md §8.4）。
  *
- * **本地待确认那一行不参与任何合并**（用户 2026-09-13 的决定，docs/ui.md §4.4）：
- * 刚发出的那条必须自己单独站一行，否则「我这条到底发出去没有」会被折进上一行的 ×N 里。
+ * **本地乐观行不参与任何合并**（用户 2026-09-13 的决定，docs/ui.md §4.4）：刚发出的那条必须
+ * 自己单独站一行，否则「我这条到底发出去没有」会被折进上一行的 ×N 里。判据取 `local_id < 0`
+ * （本地行恒为负，见 `store.insertPending`）而不是 `send_state` —— 乐观行插入时**不带**
+ * `send_state`（它与已确认行渲染逐项相同），只有这条负数前缀能一直认出它。
  */
 export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
   const rows: DisplayRow[] = [];
@@ -214,8 +216,8 @@ export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
     if (!passesFilter(message, prefs)) continue;
 
     const last = rows[rows.length - 1];
-    const pending = message.send_state !== undefined ||
-      (last !== undefined && last.message.send_state !== undefined);
+    const pending = message.local_id < 0 ||
+      (last !== undefined && last.message.local_id < 0);
     // 礼物连击：同一次连击的每条礼物共享 `combo_id`，一律折叠成一行。
     // 它不受「合并相似消息」开关影响——连击刷屏本来就是同一个动作的重复。
     const sameCombo =

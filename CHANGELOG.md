@@ -43,6 +43,27 @@
 
 ### Changed
 
+- **乐观渲染不再有「发送中」这一档视觉**（用户 2026-09-13 更正：「我不需要发送中这个状态啊，
+  发出去就是和已发送一样的状态，这个要求前面讲过啊，上游返回的数据只做校验」）。
+  改前（`c573af2` 那一版）：点击后插进来的那条被标成「发送中」—— 整行 `opacity: .6`（CSS 类 `.pending`）
+  + 行尾一枚 `--fg-subtle` 的「发送中」标记，`SendState` 也是三档 `sending / unconfirmed / failed`。
+  改后：**乐观行与已确认行渲染逐项相同** —— 插入时**不带** `send_state`（缺省即普通行），
+  `.pending` 那档弱化与「发送中」文案一起删除；`SendState` 只剩失败族两档
+  （`unconfirmed` / `failed`），只有**上游明确拒绝**或**8s 没等到回推**才写上它。
+  对账判据从 `send_state` 换成 **`local_id < 0`**（乐观行插入时已无状态字段，只有这条负数前缀
+  能一直认出它）：`store.matchPending`、`store.markPendingFailed`、`toDisplayRows` 的「不参与合并」
+  三处同步。**保留不删的**：8 秒超时兜底（`SEND_CONFIRM_TIMEOUT_MS`）—— 它标的是**失败族**的
+  「未确认」（`--warn`），被 ban 且上游不回执时用户仍然看得到；失败那行的浮动提示（§6.5.1）照旧。
+  冒烟：删掉钉旧行为的 `sendOptimisticMarkedSending`（以及 `sendPendingRowShown` 这个截图触发位），
+  换成「乐观行与已确认行**逐项相同**」的实测比对（`sendOptimisticRendersLikeConfirmed`：同屏显式推一条
+  本人的上游弹幕当对照行，逐项比 `opacity` / 行、昵称、正文字色 / 字号，并确认两边都没有标记）、
+  「转正后同样逐项相同」（`sendOptimisticEchoRendersLikeConfirmed`）、
+  「失败标记**只在**回执明确拒绝之后出现」（`__holdSend` 扣住回执 → `sendFailRowNoMarkBeforeOutcome` /
+  `sendFailRowNoFadeBeforeOutcome` → `__releaseSend` → `sendFailRowMarked`）、
+  以及超时那轮的「点击后无标记」（`sendTimeoutStartsUnmarked`）。
+  截图 `…-pending.png` 换成 `…-optimistic.png`（同一屏里刚发的那条与已确认的对照行并排，四档各一张）。
+  规格：`docs/ui.md` §4.4（发送：本地乐观渲染 + 回执校验）。
+
 - **发送弹幕改成「本地乐观渲染 + 回执校验」**（用户 2026-09-13：「为啥要等上游，上游只校验发送成功与否，
   无论成功与否我都是发了，发送应该即刻响应，上游校验如果发送失败再修正弹幕状态」）。
   改前：点发送 → 等 `chat_send`（实测往返 460.6ms）→ **再等上游把自己那条从弹幕流回播回来**（1.36s）
@@ -71,6 +92,8 @@
   **实测（两引擎四档，exit 0 / 1932 项快照 / 48 张）**：点击 → 本地那条出现 **11 / 12 / 12 / 13 ms**
   （改前同一路径实测 1820ms）；回推到达后同一正文**只有一条**、状态标记消失；失败那一轮
   行标记与浮动提示**同时**在场；8s 到点那条变成「未确认」。
+  ⚠ **本条里的「发送中」视觉与 `sending` 取值已被同日的更正覆盖**（见上面第一条 Changed：
+  用户明确不要这一档状态）—— 保留原文只为记录当时发生了什么，现状以那条为准。
 
 - **`@` 高亮改成正文里读得清的粉**（用户 2026-09-13 第二次更正：「@的颜色之前不是粉色吗，白色看不清啊」）。
   改前 `.mention` 取的是身份牌上的文字色 `--badge-fg`（= 白）：那是**彩底上的文字色**，只对彩色渐变负责，

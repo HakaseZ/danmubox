@@ -178,7 +178,7 @@ function clearSendTimer(localId: number) {
  * 残留的超时回调只会对着另一个房间的同号消息空转。
  *
  * **拨偏好不走这里**：`updatePrefs` 里动 `ui.interact_auto_hide` 只该重排互动消息的定时器，
- * 顺手清掉发送定时器会让那条永远停在「发送中」。
+ * 顺手清掉发送定时器会让那条永远停在「无状态」—— 超时兜底也就永远不会到点。
  */
 function clearRoomTimers() {
   clearInteractTimers();
@@ -207,13 +207,14 @@ function appended(messages: Message[], message: Message): Message[] {
  * - 时间窗：`SEND_MATCH_WINDOW_MS` 以内（`ts` 之差取绝对值）。
  *
  * 命中多条时取**列表里最靠前**的那条：连发两条同样内容时按先来后到一一对上。
- * 只有 `sending` / `unconfirmed` 的行参与 —— `failed` 那条上游已明确拒绝，不会有回推。
- * 这也正是**不会重复**的根据：一次发送只可能对上一条本地行，对上之后那条就被换掉。
+ * 参与范围 = **本地行且尚未判失败**（`local_id` 为负，见 `insertPending`）—— `failed` 那条上游
+ * 已明确拒绝，不会有回推；`unconfirmed` 仍参与（回推迟到也能转正）；已确认的行 `local_id` 恒为正，
+ * 天然出局。这也正是**不会重复**的根据：一次发送只可能对上一条本地行，对上之后那条就被换掉。
  */
 function matchPending(messages: Message[], incoming: Message): number {
   if (incoming.kind !== "danmaku") return -1;
   return messages.findIndex((item) => {
-    if (item.send_state !== "sending" && item.send_state !== "unconfirmed") return false;
+    if (item.local_id >= 0 || item.send_state === "failed") return false;
     if (item.kind !== incoming.kind || item.uid !== incoming.uid) return false;
     if (item.content !== incoming.content) return false;
     const mine = item.emote?.emoticon_unique ?? "";
@@ -229,6 +230,10 @@ function matchPending(messages: Message[], incoming: Message): number {
  *
  * 身份字段取自会话与 `room_session`：本地行因此带着与本人实时弹幕一样的昵称与身份牌；
  * 转正时整行被上游那条**替换**，口径一律以远端为准。
+ *
+ * **刻意不设 `send_state`**（用户 2026-09-13 的更正）：它要的就是「发出去 = 已发送的样子」，
+ * 上游返回只做校验、不作为展示前置，因此插入的这一行在渲染上与已确认行**逐项相同**；
+ * 只有上游明确拒绝或超时没等到回推，才由 `markPendingFailed` / 超时回调写进失败族的取值。
  */
 function insertPending(
   store: StoreApi<AppStore>,
@@ -274,7 +279,6 @@ function insertPending(
             bulge_display: emote.bulge_display,
           },
     upstream_id: "",
-    send_state: "sending",
   };
   if (state.activeRoomId === roomId) {
     store.setState((current) => ({ messages: appended(current.messages, pending) }));
@@ -283,9 +287,11 @@ function insertPending(
     sendTimers.delete(localId);
     // 房间切走之后这条本地行已经不在了（离开房间即清空，契约 §4.3），别去改别人房里同号的行。
     if (store.getState().activeRoomId !== roomId) return;
+    // 到点还没等到回推 → 标成**失败族**的「未确认」（不删）。只动仍无状态的那条：
+    // 上游若已明确拒绝（`failed`）就不覆盖它的原因。
     store.setState((current) => ({
       messages: current.messages.map((item): Message =>
-        item.local_id === localId && item.send_state === "sending"
+        item.local_id === localId && item.send_state === undefined
           ? { ...item, send_state: "unconfirmed" }
           : item,
       ),
@@ -296,15 +302,15 @@ function insertPending(
 }
 
 /**
- * 把本地那条待确认行**就地修正**成失败态（上游明确拒绝 `outcome != ok`，或传输层出错）。
- * 已转正 / 已被上限裁掉时是空操作 —— 绝不凭空造出一条行。
+ * 把本地那条行**就地修正**成失败态（上游明确拒绝 `outcome != ok`，或传输层出错）。
+ * 已转正 / 已被上限裁掉时是空操作 —— 绝不凭空造出一条行；已判失败的不改（保留原判）。
  */
 function markPendingFailed(store: StoreApi<AppStore>, roomId: number, localId: number) {
   clearSendTimer(localId);
   if (store.getState().activeRoomId !== roomId) return;
   store.setState((state) => ({
     messages: state.messages.map((item): Message =>
-      item.local_id === localId && item.send_state !== undefined
+      item.local_id === localId && item.send_state !== "failed"
         ? { ...item, send_state: "failed" }
         : item,
     ),
@@ -588,8 +594,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
     try {
       const result = await api.chatSend(roomId, content, emote, reply);
       set({ lastSend: result });
-      // 上游说这条没发出去（code 非 0）→ 就地把它标成失败；`ok` 则保持待确认，
-      // 等上游把自己那条回推回来**转正**（onMessage 里的对账）。
+      // 上游说这条没发出去（code 非 0）→ 就地把它标成失败；`ok` 则保持不动（它已经按
+      // 与已确认行相同的样子画在列表里了），等上游把自己那条回推回来**转正**。
       if (result.outcome !== "ok") markPendingFailed(store, roomId, localId);
       return result.outcome;
     } catch (error) {

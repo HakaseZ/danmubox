@@ -79,14 +79,12 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   // 关掉 `ui.interact_auto_hide` 则常驻。
   const autoHide = message.kind === "interact" && prefs["ui.interact_auto_hide"];
 
-  // 本地待确认行：整行降不透明度（`.pending`，用现有手段表达「还没落定」，不新造颜色）。
-  // `failed` 那一档不降 —— 它要读得清，由行尾那枚 `--danger` 标记说明它没发出去。
-  const pending = message.send_state !== undefined && message.send_state !== "failed";
-
+  // 本地乐观行**不加任何待确认视觉**（用户 2026-09-13 的更正：「发出去就是和已发送一样的状态，
+  // 上游返回的数据只做校验」）：插入时不带 `send_state`，因此这一行与已确认行渲染逐项相同。
+  // 只有失败族（判失败 / 超时未确认）才由行尾那枚标记说明，整行不做弱化。
   const variant = [
     kindClass[message.kind] ?? "",
     autoHide ? styles.autoHide : "",
-    pending ? styles.pending : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -202,16 +200,15 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             <span className={styles.merged}>×{count}</span>
           )}
           {message.send_state !== undefined && (
-            // 本地待确认标记（乐观渲染，用户 2026-09-13）：发送中 / 未确认 / 发送失败。
+            // 修正标记（乐观渲染，用户 2026-09-13）：只可能是失败族的「发送失败」/「未确认」——
+            // 正常那条（含刚插入、还在等回执的本地行）不带这个字段，因此不渲染任何标记。
             // 与合并计数一样是正文里的**行内**一格，只有本地那条有；配色走现有令牌
-            // （--fg-subtle / --warn / --danger），不新造颜色。整行的弱化由 `.pending` 给。
+            // （--warn / --danger），不新造颜色。整行不加弱化（乐观行要与已确认行逐项相同）。
             <span
               className={`${styles.sendState} ${
                 message.send_state === "failed"
                   ? styles.sendStateFailed
-                  : message.send_state === "unconfirmed"
-                    ? styles.sendStateUnconfirmed
-                    : ""
+                  : styles.sendStateUnconfirmed
               }`}
               data-testid="db-msg-send-state"
               data-state={message.send_state}

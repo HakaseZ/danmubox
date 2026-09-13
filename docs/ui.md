@@ -441,13 +441,23 @@
 发送应该即刻响应，上游校验如果发送失败再修正弹幕状态」）：点下发送**立刻**把这条画出来，
 `chat_send` 的回执与上游 `danmubox://message` 的回推只用来**校验与修正**这一行。
 
+同一天用户对执行口径作了更正（原话：「我不需要发送中这个状态啊，发出去就是和已发送一样的状态，
+这个要求前面讲过啊，上游返回的数据只做校验」）：**乐观行不加任何待确认视觉** —— 点击后插进来的
+那一条与已确认行**渲染逐项相同**（不透明度 / 行、昵称、正文的字色 / 字号全等，也没有任何标记）；
+`SendState` 里因此只剩**失败族**两档（`unconfirmed` / `failed`），插入时**不设** `send_state`，
+只有上游明确拒绝或超时没等到回推才写上它。
+
 | 时刻 | 列表里那一条 | 行内标记 | 视觉 | 冒烟断言 |
 |---|---|---|---|---|
-| 点下「发送」（请求还没回来） | **已经插入**一条 `danmaku` 行（`send_state="sending"`，本地 `local_id` 为负） | 「发送中」 | 整行 `opacity: .6`（`.pending`），标记用 `--fg-subtle` | `sendOptimisticAppearsImmediately` / `sendOptimisticSingleRow` / `sendOptimisticMarkedSending` |
-| `chat_send` 返回 `ok` | 保持上面那条，等上游回推 | 「发送中」 | 同上 | — |
-| 上游把自己那条回推回来 | 本地那条被**换掉**成上游那条（`send_state` 消失） | 无 | 恢复正常行（昵称 / 身份牌 / 时间戳一律以远端为准） | `sendOptimisticEchoSingleRow` / `sendOptimisticEchoConverted` / `sendOptimisticEchoAbsorbedLocal` |
-| `chat_send` 返回非 `ok`，或传输层出错 | 本地那条**就地**标成失败，**不删** | 「发送失败」 | 不降不透明度（要读得清），标记用 `--danger`；原因照旧走 §6.5.1 的浮片 | `sendFailRowMarked` / `sendFailRowSingle` / `sendFailRowMarkedWithToast` |
-| 8 秒还没等到回推（`SEND_CONFIRM_TIMEOUT_MS`） | 本地那条标成未确认，**不删** | 「未确认」 | 整行 `opacity: .6`，标记用 `--warn` | `sendTimeoutMarkedUnconfirmed` |
+| 点下「发送」（回执还没回来） | **已经插入**一条 `danmaku` 行（本地 `local_id` 为负；**不带** `send_state`） | 无 | **与已确认行逐项相同**（不透明度 / 行·昵称·正文字色 / 字号全等，无待确认视觉） | `sendOptimisticAppearsImmediately` / `sendOptimisticSingleRow` / `sendOptimisticRendersLikeConfirmed` |
+| `chat_send` 返回 `ok` | 保持上面那条，等上游回推 | 无 | 同上 | — |
+| 上游把自己那条回推回来 | 本地那条被**换掉**成上游那条 | 无 | 与普通行无差别（昵称 / 身份牌 / 时间戳一律以远端为准） | `sendOptimisticEchoSingleRow` / `sendOptimisticEchoConverted` / `sendOptimisticEchoAbsorbedLocal` / `sendOptimisticEchoRendersLikeConfirmed` |
+| `chat_send` 返回非 `ok`，或传输层出错（**回执到之前不作任何预告**） | 本地那条**就地**标成失败，**不删** | 「发送失败」 | 整行不弱化（要读得清），标记用 `--danger`；原因照旧走 §6.5.1 的浮片 | `sendFailRowNoMarkBeforeOutcome` / `sendFailRowNoFadeBeforeOutcome` / `sendFailRowMarked` / `sendFailRowSingle` / `sendFailRowMarkedWithToast` |
+| 8 秒还没等到回推（`SEND_CONFIRM_TIMEOUT_MS`） | 本地那条标成**失败族**的未确认，**不删** | 「未确认」 | 整行不弱化，标记用 `--warn` | `sendTimeoutStartsUnmarked` / `sendTimeoutMarkedUnconfirmed` |
+
+「回执到之前不作任何预告」这条是可验的：冒烟的失败那一轮**先把 `chat_send` 的回执扣住**
+（`__holdSend`），此时断言那条本地行既没有标记（`sendFailRowNoMarkBeforeOutcome`）也没有弱化
+（`sendFailRowNoFadeBeforeOutcome`，`opacity` 逐位等于 `1`），`__releaseSend` 之后才断言标记出现。
 
 对账规则（`store.matchPending`）——为什么**不会重复、也不会认错**：
 
@@ -455,17 +465,17 @@
 |---|---|---|
 | `uid` | 回推那条的 `uid` == 本地行的 `uid`（= 本人的 uid） | 别人顶不了我们的 uid，这就是「是我们自己那条」的判据 |
 | 正文 | 逐字相同；表情弹幕两侧都带 `emote` 时再比 `emoticon_unique`（上游那条没带表情字段就只比正文） | 宁可多认一条自己的，也不要把回推漏成第二条 |
-| 时间窗 | `SEND_MATCH_WINDOW_MS`（60s）内 | 挡掉「很久以前发过同样的话」；已确认的行不参与对账（它们没有 `send_state` 了） |
+| 时间窗 | `SEND_MATCH_WINDOW_MS`（60s）内 | 挡掉「很久以前发过同样的话」；已确认的行 `local_id` 恒为正，压根不参与对账 |
 | 取哪一条 | 命中的第一条（列表序） | 连发两条同样内容时按先来后到一一对上 |
-| 参与范围 | 只有 `sending` / `unconfirmed` | `failed` 的行上游已明确拒绝，不会有回推 |
+| 参与范围 | **本地行**（`local_id < 0`）且尚未判失败 | `failed` 的行上游已明确拒绝，不会有回推；`unconfirmed` 仍参与（回推迟到也能转正） |
 
 **收包侧拿不到客户端关联 id**（2026-09-13 实测：收包 `extra` 的键里没有发送时用的 `replay_dmid`），
 所以对账只能靠上面这三件事。命中之后是**一次 `set` 里摘掉本地那条、接上上游那条**：
 净条数不变，「只出现一条」因此是构造性的，不是靠事后去重。
 
-几条既有行为不受影响：待确认行**不参与**相似消息合并与礼物连击折叠（`toDisplayRows` 里先看
-`send_state`）；插入与转正都照常走自动跟随（贴底时贴底、用户已上滚时不拽他下来）；
-历史回填、右键菜单、`@` 高亮、时间戳开关一律沿用原规则。
+几条既有行为不受影响：本地乐观行**不参与**相似消息合并与礼物连击折叠（`toDisplayRows` 里先看
+`local_id` 的负号 —— 乐观行插入时没有 `send_state`，只有这个前缀能一直认出它）；插入与转正都照常走
+自动跟随（贴底时贴底、用户已上滚时不拽他下来）；历史回填、右键菜单、`@` 高亮、时间戳开关一律沿用原规则。
 
 本地行用什么当 id：`local_id` 取**负数**（`-1`、`-2`…）。真实 `local_id` 由后端按会话单调分配、
 恒为正（契约 §5），因此两者永不碰撞 —— React key 不会重，「比末尾更新的才收」那条单调判定也不会被带偏。
@@ -776,7 +786,7 @@
 
 | `SendOutcome` | 含义 | UI 文案 | 位置 | 草稿 | 回显（§4.4） |
 |---|---|---|---|---|---|
-| `ok` | 已发出并进入公开弹幕流 | 无（静默） | — | 清空 | 点下发送就已经画出来了（待确认行）；上游回推时**转正**为上游那条 |
+| `ok` | 已发出并进入公开弹幕流 | 无（静默） | — | 清空 | 点下发送就已经画出来了（本地行，**与已确认行渲染逐项相同**，§4.4）；上游回推时**转正**为上游那条 |
 | `blocked_platform` | 被平台风控吞掉 | 「已发送，但未出现在公开弹幕流（平台侧处置）」 | 浮动提示（§6.5.1）+ 行内标记（§4.4） | 清空 | 本地那条标成**发送失败**（红 / 黄分档未落地，见 §4.4 末条） |
 | `blocked_room` | 被直播间吞掉 | 「已发送，但被本直播间处置（主播或房管）」 | 浮动提示（§6.5.1）+ 行内标记（§4.4） | 清空 | 同上（本地那条标成发送失败） |
 | `rate_limited` | 频率限制 | 「发送过于频繁，请稍后再试」+ 倒计时（本地最小间隔 2s，契约 §4） | 浮动提示（§6.5.1） | **保留** | 本地那条标成发送失败（不删） |
@@ -1203,6 +1213,6 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"     
 | 几何口径 | `layoutShortContentBottomGap` = 滚动容器底边与末行底边之差（贴底时只剩容器 `padding-bottom`，8px）；`layoutNameLefts` = 三行昵称左边缘（头像列占位后完全一致）；`layoutBadgeNameGap` / `layoutNameBodyGap` = 徽标组→昵称 / 昵称→正文两道间距（前者必须更小）；`layoutHangIndentFirstLeft` / `layoutHangIndentLastLeft` / `layoutHangIndentLines` = 折行后首行与末行的文字左边缘（相等）与行数（≥2 才不算空对空）；`layoutAvatarFirstLineDelta` = 头像中心 − 首行行盒中心（首行居中口径，≈0）；`rowEmoteFirstLineTops` = 表情弹幕行里头像列 / 身份簇 / 正文三者的顶边（`rowIdentityOnFirstLineBox` 要求三者差 < 1.5px）；`rowScale` = 行盒 / 头像 / 徽标 / 表情四个实测高度（`rowScaleCoherent` 要求 0.9 / 0.9 / 1.1 的比例关系）；`layoutHeaderOverlapPx` = 滚到顶部时滚动容器顶边 − 第一条行盒顶边（≥0 即没被头部压住）；`panelChildLefts` = 面板直接子元素的左边缘（必须只有一个值）；`layoutPanelScrollStablePx` = 展开面板前后、同一行在视口里的位移 |
 | 覆盖 | 关注列表自动加载与排序分页（**真实取样下未开播项第 1 页可见、翻页到底一条不少**）、**关注项排布（宽屏单排 / 窄屏两排，两档都不出现房间号）、按最近观看降序（"看过"压过"没看过"）、标签条显示主播名而非房间号**、账号区（一行身份 + 对话框：单账号也有添加入口、扫码添加不覆盖、重新登录需确认、删除当前自动切走、退出登录回游客态）、弹幕列表是唯一生长区、面板向上展开不遮挡最新弹幕、行右键菜单、时间戳默认关且打开后等宽对齐、礼物栏在输入区下方且不抢宽度、系统通知与互动自动消失、历史与实时同款、**内容不足视口时整体贴底**、**头像列永远占位（昵称三列纵向对齐）**、**粉丝牌真彩色与兜底色**、**回复关系可见（非回复不画标记）+ 被 @ 名字用 `reply_uname_color` 上色、空串不上色**、**舰长标只认本房间的 `guard_level`**、**主站「我的表情」分组可见且发出去带唯一键**、**@ 目标与文本同源**、**房管权限前置 / 写操作二次确认与请求形状 / 面板三块列表增删 / 无权限时原样展示上游 code + message**、**行排版的整体感（两种间距、徽标贴昵称、悬挂缩进、头像钉首行、身份簇与正文同起点（含大表情那一行）、头像/徽标/表情三条尺度同源）**、**昵称不吃弹幕颜色 + 颜色只落正文 + 默认白按未指定处理（暗色与浅色两套主题各量一遍：`rowLightNameReadable` / `rowLightBodyKeepsDanmakuColor` / `rowLightDefaultWhiteTreatedAsUnset`，因为用户报的「用户名是白色、看不见」正是只在浅色主题下成立的）**、**行内不再有菜单按钮（房间头 `⋯` 保留）**、**工具行只有三个面板入口**、**表情面板：竖向 tab 轨道（语义 / 选中态 / 键盘可达）/ 一屏一组 / 每格图完整落在格内且溢出记账（`panelEmoteFitsCell` / `panelEmoteOverflowPx`）/ 置灰不隐藏 / 置灰仍可选**、**短语：加一条固定行、聊天输入框不被挤占**、**发送成功不再有「上次发送」提示**、**面板：只挤列表 / 不遮最新一条 / 内容对齐一条左边缘 / 展开不弹走滚动位置**、**窄屏：无横向滚动、面板与对话框限高且内部滚动、有关闭入口、热区 ≥ 40px、工具行不溢出、礼物折叠条不挤列表、账号行不叠字**、**真实弹幕夹具派生行（正文列 ≥ 50%、正文不越出列、窄屏折行且悬挂缩进对齐、行内表情图见方 + `contain` 且不随原图尺寸变、200×60 与 162×162 同盒）**、**表情面板三条 UX：面板里没有搜索框、网格区高度 = 两行表情格且超出滚动、点一次表情格立刻发出 `chat_send`（带唯一键、不动草稿、面板不关，置灰的那批同样能发）** |
 | 两个视口 | 同一份场景代码在两个视口各跑一遍，**断言集合相同、没有例外名单**：面板在窄屏也是文档流里的一块（§9.1），所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真。视口专属的补充断言按 `narrow_*` / `wide_*` 前缀分开存放 |
-| 产物 | 快照 JSON + **八十八张**截图（2 引擎 × 2 视口 × 2 主题，每次运行十一张）：`-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`-rooms.png` 连接中的房间列表（卡片报「主播名 · 直播间名」，用户 #17）、`-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-toast.png` 发送失败的浮动提示、`-final.png` 结束时。命名 = `danmubox-ui[-narrow]-<theme>-<场景>.png`（如 `danmubox-ui-dark-follow.png`、`danmubox-ui-narrow-light-follow.png`）——**主题后缀是必须的**，否则深浅两遍互相覆盖、验收矩阵里只剩一套图。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
+| 产物 | 快照 JSON + **九十六张**截图（2 引擎 × 2 视口 × 2 主题，每次运行十二张）：`-follow.png` 关注列表排布（宽屏单排 / 窄屏两排，用户 #14/#15）、`-rooms.png` 连接中的房间列表（卡片报「主播名 · 直播间名」，用户 #17）、`-short-content.png` 内容不足视口时贴底、`-room.png` 表情面板展开时、`-admin.png` 房管面板三块、`-admin-confirm.png` 二次确认条、`-account-area.png` 账号区一行身份、`-account.png` 账号管理对话框、`-account-qr.png` 添加账号的二维码、`-toast.png` 发送失败的浮动提示、`-optimistic.png` 乐观行与已确认行同屏（两条外观应当一致，用户 2026-09-13）、`-final.png` 结束时。命名 = `danmubox-ui[-narrow]-<theme>-<场景>.png`（如 `danmubox-ui-dark-follow.png`、`danmubox-ui-narrow-light-follow.png`）——**主题后缀是必须的**，否则深浅两遍互相覆盖、验收矩阵里只剩一套图。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
 | 维护约定 | 场景代码整段是一个模板字符串：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩（踩过两次） |
 | 失败判读 | 退出码非 0 时打印不成立的布尔字段名（带 `wide:` / `narrow:` 前缀）；`EXPECTED_FALSE` 里列的是「本来就该是 false」的字段（如人气值不展示、系统通知默认关） |

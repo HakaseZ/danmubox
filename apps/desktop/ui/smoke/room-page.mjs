@@ -365,6 +365,16 @@ const MOCK = (theme) => `(function () {
   window.__setSendOutcome = function (outcome, detail) {
     sendOutcome = { outcome: outcome, detail: detail || null };
   };
+  // 「上游还没回」的那一刻：扣住 chat_send 的回执，直到 __releaseSend 才 resolve。
+  // 用来断言「失败标记只在（且必然在）上游明确拒绝之后才出现」—— 回执没到之前，
+  // 那条本地行必须与已确认行逐项相同（用户 2026-09-13：上游返回只做校验）。
+  var sendGate = null;
+  window.__holdSend = function () { sendGate = { release: null }; };
+  window.__releaseSend = function () {
+    var gate = sendGate;
+    sendGate = null;
+    if (gate && gate.release) gate.release();
+  };
   var nextId = 1;
   var prefs = {
     "ui.font_scale": 1, "ui.theme": "${theme}", "ui.auto_scroll": true,
@@ -564,8 +574,16 @@ const MOCK = (theme) => `(function () {
         case "report_reasons": return Promise.resolve([{ id: 1, reason: "垃圾广告" }]);
         // 主站「我的表情」：用户点名要的那条必须能从面板发回去（issue #8）。
         case "emotes_owned": return Promise.resolve(EMOTES.owned);
-        case "chat_send": return Promise.resolve(Object.assign(
-          { room_id: args.roomId, content: args.content }, sendOutcome));
+        case "chat_send": {
+          var sendPayload = Object.assign(
+            { room_id: args.roomId, content: args.content }, sendOutcome);
+          if (sendGate) {
+            // 回执被扣住：把 release 挂到这一次调用上，__releaseSend 时才 resolve。
+            var gate = sendGate;
+            return new Promise(function (resolve) { gate.release = function () { resolve(sendPayload); }; });
+          }
+          return Promise.resolve(sendPayload);
+        }
         // 房内身份（房管权限前置）+ 房管只读三块 + 写操作（替身只记调用，不动真上游）。
         case "room_session": return Promise.resolve({ room_id: args.roomId, my_medal_level: 0, my_medal_name: "", my_guard_level: 0, is_admin: window.__admin });
         case "admin_silent_list": return window.__adminFail
@@ -2544,11 +2562,23 @@ const MOCK = (theme) => `(function () {
     //      ③ 浮片的矩形与弹幕列表区域**不相交**（这才是「不挡弹幕」的可验形式）；
     //      ④ 渐隐之后元素被摘掉（不是「透明地占着位置」）。
     window.__setSendOutcome("failed", "上游拒绝：弹幕被吞");
+    // 回执先**扣住**：这一步要看的正是「上游还没回的」那一瞬间 —— 那条行此时必须与已确认行
+    // 一模一样（无标记、无弱化），失败标记只允许在回执明确说没发出去之后才出现。
+    window.__holdSend();
     typeIntoArea(document.querySelector("textarea"), "这条会发失败");
     await sleep(250);
     var sendButton = [].slice.call(byTestId("db-composer-tools").querySelectorAll("button"))
       .filter(function (b) { return b.innerText.trim() === "发送"; })[0];
     if (sendButton) sendButton.click();
+    await sleep(250);
+    var heldFailRow = rowWith("这条会发失败");
+    out.sendFailRowNoMarkBeforeOutcome = !!heldFailRow &&
+      !heldFailRow.querySelector('[data-testid="db-msg-send-state"]');
+    // 用户 2026-09-13：「发出去就是和已发送一样的状态」—— 回执没回之前那一行不许有任何弱化
+    // （被删掉的那档弱化是 opacity: .6，这里逐位钉回 1）。
+    out.sendFailRowNoFadeBeforeOutcome = !!heldFailRow &&
+      getComputedStyle(heldFailRow).opacity === "1";
+    window.__releaseSend();
     await sleep(500);
     var toastEl = byTestId("db-toast");
     var toastBox = rect(toastEl);
@@ -2585,11 +2615,20 @@ const MOCK = (theme) => `(function () {
     snap();
 
     // ---- 乐观渲染 + 回执校验（用户 2026-09-13：「发送应该即刻响应，上游只校验发送成功与否，
-    //      无论成功与否我都是发了；失败再修正弹幕状态」）。四步各自取证：
+    //      无论成功与否我都是发了；失败再修正弹幕状态」；同一天再更正：「我不需要发送中这个状态，
+    //      发出去就是和已发送一样的状态，上游返回的数据只做校验」）。四步各自取证：
     //      ① 点击后**本地那条立刻在列表里**（量「点击 → 行出现」的毫秒数；改前要等上游回推 ≈1.36s）；
-    //      ② 这条行带「发送中」的状态标记（不是无声地混在别人的弹幕里）；
-    //      ③ 上游把自己那条回推回来 → 本地那条**转正**：仍然只有一条，且状态标记消失；
+    //      ② 这条行与**已确认行渲染逐项相同** —— 不透明度 / 行、昵称、正文的字色 / 字号逐项相等，
+    //         且两边都没有修正标记（本次要钉的契约：不许有「发送中」那类待确认视觉）；
+    //      ③ 上游把自己那条回推回来 → 本地那条**转正**：仍然只有一条，且各项与普通行无差别；
     //      ④ 「转正」是**换掉**不是「再插一条」——总量也不许多出来。
+    // 对照行：先显式推一条**上游来的、本人的**弹幕（uid 与本地行相同、走的是同一条渲染路径），
+    // 它就是「已确认行」的样本；下面拿它与点击后插进来的那条逐项比对。
+    var confirmedText = "已确认对照行";
+    window.__emit("danmubox://message", window.__mk("danmaku", confirmedText, false, {
+      uid: 1000, uname: "本地测试"
+    }));
+    await sleep(300);
     var optimisticText = "乐观渲染样本弹幕";
     var optimisticRow = function () { return rowWith(optimisticText); };
     var optimisticRowCount = function () {
@@ -2615,13 +2654,32 @@ const MOCK = (theme) => `(function () {
     out.sendOptimisticRowsBeforeEcho = optimisticRowCount();
     out.sendOptimisticSingleRow = optimisticRowCount() === 1;
     var optimisticEl = optimisticRow();
-    var optimisticMark = optimisticEl
-      ? optimisticEl.querySelector('[data-testid="db-msg-send-state"]') : null;
-    out.sendOptimisticMarkedSending = !!optimisticMark &&
-      optimisticMark.getAttribute("data-state") === "sending" &&
-      optimisticMark.innerText.indexOf("发送中") >= 0;
-    // 停下让跑脚本的进程抓一张「待确认态」的截图（它每 250ms 读一次 data-smoke）
-    out.sendPendingRowShown = out.sendOptimisticMarkedSending;
+    // 「与已确认行渲染逐项相同」的可验形式：取**同一组计算样式**逐项比对，并各自确认
+    // 没有修正标记。两条都是本人（uid 1000）的 danmaku 行（同 kind、同身份来源），
+    // 这一组值本就该等价；任何「待确认」弱化（不透明度 / 字色 / 字号）或标记都会当场露出来。
+    var lookOf = function (el) {
+      if (!el) return null;
+      var nameEl = el.querySelector('[data-testid="db-msg-name"]');
+      var bodyEl = el.querySelector('[data-testid="db-msg-body"]');
+      var rowStyle = getComputedStyle(el);
+      return {
+        opacity: rowStyle.opacity,
+        color: rowStyle.color,
+        fontSize: rowStyle.fontSize,
+        nameColor: nameEl ? getComputedStyle(nameEl).color : null,
+        bodyColor: bodyEl ? getComputedStyle(bodyEl).color : null,
+        hasState: !!el.querySelector('[data-testid="db-msg-send-state"]')
+      };
+    };
+    out.sendOptimisticLook = lookOf(optimisticEl);
+    out.sendOptimisticConfirmedLook = lookOf(rowWith(confirmedText));
+    out.sendOptimisticRendersLikeConfirmed = !!optimisticEl &&
+      out.sendOptimisticConfirmedLook !== null &&
+      JSON.stringify(out.sendOptimisticLook) === JSON.stringify(out.sendOptimisticConfirmedLook) &&
+      out.sendOptimisticLook.hasState === false;
+    // 停下让跑脚本的进程抓一张截图：同一屏里上下两条（刚发的 + 已确认的）外观应当一致，
+    // 这张图就是「两者无法区分」的证据（它每 250ms 读一次 data-smoke）。
+    out.sendOptimisticShown = out.sendOptimisticRendersLikeConfirmed;
     snap();
     await sleep(700);
     // 上游把自己那条回推回来（uid 与正文对得上，见 store.matchPending 的对账规则）
@@ -2640,6 +2698,11 @@ const MOCK = (theme) => `(function () {
     // 而且它身上不再挂「待确认」标记（那一条已经从「本地」变成「上游」）。
     out.sendOptimisticEchoAbsorbedLocal = optimisticRowCount() === 1 && !!convertedRow &&
       !convertedRow.querySelector('[data-testid="db-msg-send-state"]');
+    // 转正后的那条与**已确认行**同样逐项相同（转正 = 换成上游那条，不是留一个「本地痕迹」）。
+    var echoLook = lookOf(convertedRow);
+    var confirmedLookAfterEcho = lookOf(rowWith(confirmedText));
+    out.sendOptimisticEchoRendersLikeConfirmed = !!echoLook && !!confirmedLookAfterEcho &&
+      JSON.stringify(echoLook) === JSON.stringify(confirmedLookAfterEcho);
     typeIntoArea(document.querySelector("textarea"), "");
     snap();
 
@@ -2794,7 +2857,9 @@ const MOCK = (theme) => `(function () {
     snap();
 
     // ---- 超时兜底（用户 2026-09-13：不要永远停在「发送中」）：这条**故意不回推**，
-    //      看它在 SEND_CONFIRM_TIMEOUT_MS（8s）到点后是否被标成「未确认」。
+    //      看它在 SEND_CONFIRM_TIMEOUT_MS（8s）到点后是否被标成失败族的「未确认」。
+    //      点击后那一瞬间它**不带任何标记**（与已确认行同款）——「发送中」那档已按用户
+    //      当天的更正删掉，因此这里钉的是「没有待确认视觉」，8s 后才出现修正标记。
     //      发送放在这里（而不是紧挨着 step5 那段 8.6s 等待）有个必须的理由：**成功的发送会把
     //      编辑面板收起**（Composer 的成功路径 setPanel(null)），而紧接着的 step5 / step6 /
     //      礼物栏三块都要在**同一个筛选面板节点**上操作 —— 面板一关一开，旧节点就成了游离节点，
@@ -2806,8 +2871,8 @@ const MOCK = (theme) => `(function () {
     sendButton.click();
     await sleep(150);
     var timeoutRow = rowWith(timeoutText);
-    out.sendTimeoutStartsSending = !!timeoutRow &&
-      !!timeoutRow.querySelector('[data-testid="db-msg-send-state"][data-state="sending"]');
+    out.sendTimeoutStartsUnmarked = !!timeoutRow &&
+      !timeoutRow.querySelector('[data-testid="db-msg-send-state"]');
 
     // ---- time 时间戳（默认关 → 打开后等宽对齐）
     out.timeCellsDefault = allByTestId("db-msg-time").length;

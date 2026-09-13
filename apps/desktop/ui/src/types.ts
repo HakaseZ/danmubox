@@ -60,9 +60,10 @@ export interface Message {
   emote?: EmoteRef | null;
   upstream_id: string;
   /**
-   * **本地乐观渲染**这条弹幕的待确认状态（UI 专用字段，后端不认识它；缺省 = 上游已回推、
-   * 这条已确认）。用户 2026-09-13 的决定：点击**即刻**画出来，上游回执只用来**校验与修正**
-   * （`docs/contract.md` §7 `chat_send`、`docs/ui.md` §4.4）。取值见 `SendState`。
+   * **本地乐观行**被修正后的状态（UI 专用字段，后端不认识它）。**缺省 = 正常行**：既包括
+   * 上游回推的已确认行，也包括刚插入、还在等回执的那条本地行 —— 后者按用户 2026-09-13 的
+   * 更正必须与已确认行**渲染逐项相同**，因此不许用它表达「发送中」。只有上游明确拒绝
+   * （`failed`）或超时没等到回推（`unconfirmed`）才写上它（`docs/ui.md` §4.4）。
    */
   send_state?: SendState;
 }
@@ -421,32 +422,33 @@ export const INTERACT_AUTO_HIDE_MS = 8000;
 export const SEND_TOAST_MS = 2600;
 
 /**
- * 本地待确认弹幕（`Message.send_state`）的状态机：
+ * 本地乐观行的**修正**状态（`Message.send_state`）—— 只走「失败族」这两条路，
+ * 正常那条从插入到转正**都不带这个字段**（缺省即普通行）：
  *
- * - `sending` —— 请求已发出（或刚要发），等上游把这条回推回来转正；
  * - `unconfirmed` —— 超时（`SEND_CONFIRM_TIMEOUT_MS`）还没等到回推：**不一定**发失败，
  *   但界面不能再假装它「发送中」（用户 2026-09-13：不要永远停在发送中）；
  * - `failed` —— `chat_send` 明确说了没发出去（`outcome != ok`）或传输层出错。
  *
- * `sending` / `unconfirmed` 仍参与对账（回推迟到也能转正）；`failed` 不再参与 ——
+ * 用户 2026-09-13 更正：乐观行插入时**不设**该字段 —— 它必须与已确认行**渲染逐项相同**，
+ * 不许有「发送中」那类待确认视觉（上游返回只做校验，不作为展示前置）。
+ * `unconfirmed` 仍参与对账（回推迟到也能转正）；`failed` 不再参与 ——
  * 上游已经拒绝，不会有对应的回推（见 `store.matchPending`）。
  */
-export type SendState = "sending" | "unconfirmed" | "failed";
+export type SendState = "unconfirmed" | "failed";
 
-/** 待确认行尾那枚状态标记的文案（行内就地显示，配色见 `app.module.css` 的 `.sendState`）。 */
+/** 修正标记的文案（行内就地显示，配色见 `app.module.css` 的 `.sendState`）。 */
 export const SEND_STATE_TEXT: Record<SendState, string> = {
-  sending: "发送中",
   unconfirmed: "未确认",
   failed: "发送失败",
 };
 
 /**
- * 等上游回推的上限：到点把那条从「发送中」改成「未确认」。
+ * 等上游回推的上限：到点把那条标成**失败族**的「未确认」（不删，也不再假装它「发送中」）。
  *
  * 取值理由（2026-09-13 实测）：点击 → 我方请求往返 460.6ms（nav 133.5 + POST 326.9），
  * 上游把自己那条回推回来要 1.36s，界面出现自己那条合计约 1.82s。
- * **8s ≈ 实测回推延迟的 6 倍**：正常房间的排队抖动都在这以内，又短到不会让人对着
- * 一条「发送中」发呆 —— 票据给的区间是 5–10s，取上限侧是为了别把慢房间误判成失败。
+ * **8s ≈ 实测回推延迟的 6 倍**：正常房间的排队抖动都在这以内，又短到不会让一条始终等不到
+ * 回推的本地行长久无从分辨 —— 票据给的区间是 5–10s，取上限侧是为了别把慢房间误判成失败。
  */
 export const SEND_CONFIRM_TIMEOUT_MS = 8000;
 

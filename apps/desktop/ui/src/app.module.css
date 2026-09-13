@@ -284,9 +284,38 @@
      而且「有没有滚动条都不跳」。见 index.css 里那条「不写滚动条样式」的注释。 */
 }
 
-.listPage h1 {
+/* 页头一行：左「弹幕框」标题、右主题开关（用户 2026-09-13 #10）。
+   两个都是 flex item：标题可缩（`min-width: 0`，长标题不会把控件挤出容器），
+   控件不缩（`flex: none`）——360px 宽（窗口最小宽度）下这一行也不会溢出、不换行。 */
+.listHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  /* 与下面各区块之间留原来 h1 那点间距 */
+  margin-bottom: var(--sp-1);
+}
+
+.listHeader h1 {
   font-size: var(--fs-8);
-  margin: 0 0 var(--sp-1);
+  margin: 0;
+  min-width: 0;
+}
+
+/* 主题开关：`<label>` 里的「主题」就是它的可访问名（原生 `select`，键盘可达）。
+   字号比正文小一档：它挨着一个 `--fs-8` 的大标题，跟着正文走会显得抢。 */
+.themePicker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+  font-size: var(--fs-3);
+  color: var(--fg-dim);
+}
+
+/* 「主题」二字是次级标签（`--fg-dim`），控件里的当前档位是**要读的内容**，回到正文色 */
+.themePicker select {
+  color: var(--fg);
 }
 
 /* 账号区（用户 2026-09-12：切换不再做成下拉，只留「当前身份 + 账号按钮」） */
@@ -1113,6 +1142,21 @@
   color: var(--on-accent);
   border: none;
   font-weight: 600;
+  /* 下箭头 + 文字排一行（图标盒子由 `.bottomAnchorIcon` 给，间距走令牌） */
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/* 「回到最新」的下箭头（用户 2026-09-13 #1）：与房间头的返回键**同源几何**
+   （docs/ui.md §3.1 的矢量规范 —— `viewBox="0 0 24 24"`、`stroke-width 1.75`、round 线帽、
+   墨迹居中 (12,12)、主轴 16 单位），只是方向朝下。
+   盒子取 `1.5em`：24 单位的盒里那 16 单位的墨迹因此正好 **1em** 高，与按钮里的文字同一档，
+   并随字号档（`ui.font_scale`，em 传递）一起缩放。 */
+.bottomAnchorIcon {
+  width: 1.5em;
+  height: 1.5em;
+  flex: none;
 }
 
 /* ---------------------------------------------------------------- 输入区 */

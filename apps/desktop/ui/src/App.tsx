@@ -161,6 +161,8 @@ export function App() {
           session={session}
           followed={followed}
           recentWatched={prefs?.["ui.recent_watched"] ?? {}}
+          theme={prefs?.["ui.theme"] ?? "system"}
+          onTheme={(value) => void updatePrefs({ "ui.theme": value })}
           onAdd={(input) => void addRoom(input)}
           onOpen={(roomId) => void openRoom(roomId)}
           accounts={accounts}

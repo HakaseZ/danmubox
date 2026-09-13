@@ -79,6 +79,12 @@
 
 ### Changed
 
+- **删掉偏好键之后的旧值会在下次落盘时自愈，加载不再逐键刷警告**（P75）。`prefs.json` 是应用自己写的
+  文件：删键（`filter.keywords*`、`ui.merge_similar`）之后残留的旧值此前**每次启动都打一条 WARN**，
+  而用户无从处置。现在加载路径把「未知键 / 非法值」聚合成**一条 debug**；补丁路径（`prefs_set`）对未知键
+  仍然 `BAD_REQUEST` —— 那里的未知键属于代码写错，必须炸出来。`save` 本来就只写白名单内的键，因此
+  **下一次任何偏好变更落盘时文件即自愈**（这点写进 `save` 的文档与 `contract.md` §4.2）。
+  测试 `unknown_keys_in_file_are_ignored` 扩写为「载入忽略 → 落盘清掉」（已跑：prefs 8 项全过）。
 - **房管面板分三个 tab，单点动作进右键、批量走动作条，进房即预载**（用户 2026-09-13 `2609132259` #1 / #4 / #5）。
   面板改成 WAI-ARIA tabs（禁言 / 黑名单 / 屏蔽词，照搬表情分组那套：`role=tablist/tab/tabpanel`、roving
   tabindex、`←→` 与 Home/End、`aria-selected`/`aria-controls`），一次只渲染当前 tab 的「错误条 + 列表 +

@@ -86,7 +86,7 @@
 | P72 | 审计：切号不清 `ownedEmotes`/`ownedLoaded`/`emotes`/`balance`，账号级数据跨号残留 | 审计票 D | 已做（提交 `e9279f5`） | `store.ts` 的 `loadOwnedEmotes`/`switchAccount` + `RoomView` 的余额 effect（只依赖 `loggedIn`，true→true 不重跑）。复现：账号 1 开过表情面板 → 切账号 2 再开，仍是账号 1 的「我的表情」；余额同理。**本轮结论**：表情库那一半已被 E 票 `resetIdentityState` 覆盖，仍漏的是 `balance`，已在 `resetIdentityState` 一并清空 |
 | P73 | 审计：`lastSend` 全局单份、事件与返回值都不带房间校验，失败浮片会跨房间弹出 | 审计票 D | 已做（提交 `e9279f5`） | `store.ts` 的 `onSend` 事件与 `send` 的 `set({ lastSend })` → `App.tsx` 透传给 `RoomView`→`Composer`。复现：A 房间发一条（上游慢）→ 立刻切 B，B 的输入区弹出 A 那条的失败提示 |
 | P74 | 审计：身份变化（`danmubox://session` / 切号）后不重拉 `emotes`，与 `auth.md`「身份变化后 MUST 重新加载，不得缓存跨身份表情库」不符 | 审计票 D | 已做（提交 `e9279f5`） | `emotes` 只在进房与开面板时拉；面板**已打开**时身份变了，面板里的 locked/分组仍是旧身份那套（严重度低：开面板必重拉）。**本轮结论**：可达路径已被 E 票 `resetIdentityState` 覆盖（`danmubox://session` 的登录态载荷当前没有发布点），未改代码，以证据结项 |
-| P75 | **删掉偏好键之后，旧 `prefs.json` 里的死键没有清理路径**：P61 删了 `filter.keywords*` 三键（P49 早先删过 `ui.merge_similar` / `ui.merge_window_ms`），但磁盘上既有的键仍留在文件里，每次启动都打 WARN（实测 2026-09-13 18:38 启动产物：三条 `忽略非法或未知的偏好键 key="filter.keywords…"`），而且没有任何时机把它们抹掉 | 启动产物实测（2026-09-13）；scout 复核提示（item 9 的「unknown-key / 迁移」待定项） | 未做 | 现象只在**加载**路径：`prefs.rs` 对未知键只忽略 + WARN（补丁路径才是 `BAD_REQUEST`），所以不影响功能，只是脏文件 + 每次启动刷三条 WARN。两条候选修法（择一，待用户定）：① 加载后写回时顺手 prune（把不在 SPECS 里的键删掉再落盘）；② 把加载路径的未知键降级为 debug 并保留文件原样。用户当前的实际文件：`~/Library/Application Support/danmubox/prefs.json` 仍带这三键 |
+| P75 | **删掉偏好键之后，旧 `prefs.json` 里的死键没有清理路径**：P61 删了 `filter.keywords*` 三键（P49 早先删过 `ui.merge_similar` / `ui.merge_window_ms`），但磁盘上既有的键仍留在文件里，每次启动都打 WARN（实测 2026-09-13 18:38 启动产物：三条 `忽略非法或未知的偏好键 key="filter.keywords…"`），而且没有任何时机把它们抹掉 | 启动产物实测（2026-09-13）；scout 复核提示（item 9 的「unknown-key / 迁移」待定项） | 已做（提交见本条末） | 现象只在**加载**路径：`prefs.rs` 对未知键只忽略 + WARN（补丁路径才是 `BAD_REQUEST`），所以不影响功能，只是脏文件 + 每次启动刷三条 WARN。两条候选修法（择一，待用户定）：① 加载后写回时顺手 prune（把不在 SPECS 里的键删掉再落盘）；② 把加载路径的未知键降级为 debug 并保留文件原样。用户当前的实际文件：`~/Library/Application Support/danmubox/prefs.json` 仍带这三键。**处置（2026-09-14，Main 决定）**：① 加载路径把未知键/非法值降级为**一条聚合 debug**（不再逐键 WARN）——文件是应用自己写的，这类残值不是用户能处置的事；补丁路径（`prefs_set`）对未知键仍返回 `BAD_REQUEST`（那里的未知键属代码写错，必须炸出来）；② `save` 本来只写白名单内的键，因此**下次落盘即自愈**，这一点写进 `save` 的文档与 `contract` §4.2；③ 扩写 `unknown_keys_in_file_are_ignored`，断言「载入时忽略 → 落盘后未知键消失」；④ 不去手动改用户那份文件（新产物上任意一次偏好变更即清理）。证据：`cargo test --workspace -- prefs::` 8 项全过 |
 
 | P76 | 房管界面整体布局：禁言 / 黑名单 / 屏蔽词分三个 tab | `issue` 2609132259 #1；`CHANGELOG` Changed 同条；提交 `71de754` | 已做（待用户复测） | `AdminPanel` 改成 WAI-ARIA tabs（照搬表情分组那套：`role=tablist/tab/tabpanel`、roving tabindex、`←→` 与 Home/End 循环、`aria-selected`/`aria-controls`），一次只渲染当前 tab 的「错误条 + 列表 + 表单」，tab 文案带计数；行级 testid（`db-admin-silent-item` / `-blacklist-item` / `-keyword-item`）与 `db-admin-error` / `db-admin-close` 保留，新增 `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel`；`.adminSection`/`.panelTitle` 因改动成死代码已删；`ui.md` §4.9 / §9.1 |
 | P77 | 「回到最新」整个按钮删掉，改用「返回按钮旋转 90°」的圆形图标钮 | `issue` 2609132259 #2；`CHANGELOG` Changed 同条；提交 `ea4404e` | 已做（待用户复测） | 与房间头返回键、`⋯` **同一控件族**（`.ctlRound` 40×40 + `.ctlIcon` 24px），删掉文字节点，可访问名改由 `aria-label`/`title` 给（冒烟断言不能再读 `innerText`）；`.bottomAnchor` 只剩右下定位，强调色胶囊底与 `.bottomAnchorIcon` 删除；出现条件与点击行为未动，图标仍是返回键 path 绕 (12,12) 转 -90° 直写。**副作用**：图标盒由 1.5em 改 24px，不再随 `ui.font_scale` 缩放（与页头两枚一致）；`ui.md` §7.4 / §5.2 |
@@ -99,7 +99,7 @@
 | P84 | 账号面板改为点「头像所在的圆角长方形」直接进入，去掉独立的「账号」按钮 | `issue` 2609132259 #8；`CHANGELOG` Changed 同条；提交 `aa0b437` | 已做（待用户复测） | `db-account-open` 按钮删除；`.account` 行本身成为入口（`role="button"` + `tabIndex=0` + `aria-label="账号管理"` + Enter/Space，Space 已 `preventDefault` 挡滚动），游客态同一入口（作用是去登录）；hover / focus-visible 用现有令牌；行内已确认无其它可点元素；`ui.md` §2.1 / §2.2 / §2.2.1 / §2.5 |
 | P85 | bug：房管面板报 `upstream error: 响应解析失败: error decoding response body（UPSTREAM_ERROR）` | `issue` 2609132259 #6；`CHANGELOG` Fixed 同条；提交 `966775d` | 已做（待用户复测） | **根因（实测）**：该文案全仓只有 `crates/danmubox-bili/src/http.rs` 两处解码点（`get_with_cookies` / `post_form`），二者都不看状态码与 `content-type`，把响应直接交给 `.json::<Value>()`；上游用非 JSON 页面应答时（**实测 412 风控验证页 `text/html`**；同域还有纯文本 404 / 405）reqwest 只吐固定的 `error decoding response body`，端点 / 状态 / 响应体全丢，且与「字段漂移」在文案上无法区分（全仓从不做强类型反序列化，故字段问题**不可能**报此错）。修法：解码失败时带上**脱敏后**的端点路径、HTTP 状态、`content-type`、响应体前 128 字节（抹掉 `SESSDATA`/`bili_jct`/`DedeUserID`/`csrf`/`qrcode_key` 的值）；GET 仅在「非 JSON 且状态非 4xx」时重试一次，POST 一律不重试；新增 5 条单测（**未跑**）；`protocol.md` 附录 A45。⚠ 未把用户那次失败钉到具体端点（房管面板三条只读都可能），但同端点同类突发下的 412 形状已实测 |
 
-**产品需求小计：83 条**（已做 79 / 部分 3 / 未做 1）。
+**产品需求小计：83 条**（已做 80 / 部分 3 / 未做 0）。
 
 ## 2. 工程与过程规矩
 
@@ -157,10 +157,10 @@
 
 | 部分 | 条数 | 已做 | 部分 | 未做 | 不做 / 待核 |
 |---|---|---|---|---|---|
-| §1 产品需求 | 83 | 79 | 3 | 1 | 0 |
+| §1 产品需求 | 83 | 80 | 3 | 0 | 0 |
 | §2 工程与过程规矩 | 13 | 11 | 0 | 0 | 2（待核） |
 | §3 `issue` 20 条 | 20 | 18 | 2 | 0 | 0 |
-| **合计** | **116** | **108** | **5** | **1** | **2** |
+| **合计** | **116** | **109** | **5** | **0** | **2** |
 
-> 计数口径：每节「条数」= 该表实际行数；每行之和 = 条数、每列之和 = 合计（`83 + 13 + 20 = 116`；`79 + 11 + 18 = 108`；`3 + 0 + 2 = 5`；未做 `1 + 0 + 0 = 1`；待核 `0 + 2 + 0 = 2`；校验 `108 + 5 + 1 + 2 = 116`）。数字若有出入，以 §1 / §2 / §3 三处小计为准并同一次改齐；本轮状态截止 `d6efcc5` 合入之后（P53–P64 的 12 条、P65–P74 的 10 条审计缺陷、P76–P85 的 8 条新批次均已结项，仅 P75 待办；A–I 九票全部合入 main，冒烟场景文件同批对齐、**冒烟本体按用户指示未跑**）。
+> 计数口径：每节「条数」= 该表实际行数；每行之和 = 条数、每列之和 = 合计（`83 + 13 + 20 = 116`；`80 + 11 + 18 = 109`；`3 + 0 + 2 = 5`；未做 `0 + 0 + 0 = 0`；待核 `0 + 2 + 0 = 2`；校验 `109 + 5 + 0 + 2 = 116`）。数字若有出入，以 §1 / §2 / §3 三处小计为准并同一次改齐；本轮状态截止 `d6efcc5` 合入之后（P53–P64 的 12 条、P65–P74 的 10 条审计缺陷、P76–P85 的 8 条新批次均已结项，仅 P75 待办；A–I 九票全部合入 main，冒烟场景文件同批对齐、**冒烟本体按用户指示未跑**）。
 > 待核两项（E1「清单外动作先问」、E3「重建攒批做」）是对话内规矩但尚未固化成仓库条文；证据栏给了最接近的已有条文与出处，并各留了一条落地建议。

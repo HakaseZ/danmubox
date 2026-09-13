@@ -266,22 +266,33 @@ impl Prefs {
         };
 
         let mut prefs = Self::new();
+        let mut unknown: Vec<&str> = Vec::new();
         if let Some(obj) = parsed.as_object() {
             for (key, value) in obj {
                 match find_spec(key) {
                     Some(spec) if validate(spec, value).is_ok() => {
                         prefs.overrides.insert(key.clone(), value.clone());
                     }
-                    _ => {
-                        tracing::warn!(key, "忽略非法或未知的偏好键");
-                    }
+                    // 未知键与非法值都只忽略：文件是应用自己写的，最常见的成因是
+                    // **删掉某个偏好键之后留下的旧值**（`filter.keywords*`、`ui.merge_similar`
+                    // 都是这么来的），不是用户能处置的事，所以只留一条聚合 debug。
+                    // 补丁路径（`set_patch`）对未知键仍返回 `BAD_REQUEST` —— 那里的未知键是
+                    // 代码写错，必须炸出来。下次落盘时 `save` 只写白名单内的键，文件即自愈。
+                    _ => unknown.push(key.as_str()),
                 }
             }
+        }
+        if !unknown.is_empty() {
+            tracing::debug!(keys = ?unknown, "忽略文件里未知或非法的偏好键（下次落盘即清理）");
         }
         prefs
     }
 
     /// 原子写入：临时文件 + rename（`docs/contract.md` §4.2）。
+    ///
+    /// 只写**白名单内的键**（`overrides` 里的每一项都过了 `find_spec` + `validate`），
+    /// 因此文件里残留的未知键会在这次落盘时被清掉 —— `load` 忽略它们，`save` 顺手清掉，
+    /// 不必再单独做一次迁移。
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -484,6 +495,14 @@ mod tests {
         let loaded = Prefs::load(&path);
         assert_eq!(loaded.get("ui.theme").unwrap(), json!("dark"));
         assert_eq!(loaded.overrides().len(), 1);
+
+        // 落盘即自愈：`save` 只写白名单内的键，所以「删掉某个偏好键之后残留的旧值」
+        // 会在下一次写入时被清掉（P75），不需要另做一次迁移。
+        loaded.save(&path).unwrap();
+        let rewritten: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(rewritten.get("ui.nope").is_none(), "未知键应在落盘时被清掉");
+        assert_eq!(rewritten.get("ui.theme").unwrap(), &json!("dark"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

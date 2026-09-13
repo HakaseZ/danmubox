@@ -214,6 +214,7 @@ Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desk
 
 | 需要什么 | 去哪看 |
 |---|---|
+| 三合一综述（需求 → 代码 → 界面，先读这篇） | `docs/overview.md` |
 | 需求基线 | `REQUIREMENTS.md` |
 | 规范性契约（唯一事实源） | `docs/contract.md` |
 | 项目边界与状态 | `README.md` |

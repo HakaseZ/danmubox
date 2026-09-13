@@ -123,6 +123,7 @@ danmubox/
 
 | 文档 | 内容 | 主要读者 |
 |---|---|---|
+| [`docs/overview.md`](docs/overview.md) | **三合一综述（先读这篇）**：业务需求总览（按主题归类，回指台账编号）→ 代码执行逻辑 → 界面逻辑，事实以 `文件:行号` 为准 | 全体；第一次接触本仓库 |
 | [`docs/contract.md`](docs/contract.md) | **规范性契约（唯一事实源）**：命名、共享常量、领域模型、端口边界、IPC 与本地文件契约、偏好键、写作要求 | 全体；写代码前必读 |
 | [`REQUIREMENTS.md`](REQUIREMENTS.md) | 需求基线（用户手写），契约由它翻译而来 | 全体 |
 | [`docs/architecture.md`](docs/architecture.md) | 分层、crate 依赖图、core 模块划分、并发模型、会话编排 | 实现者 |

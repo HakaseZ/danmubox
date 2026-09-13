@@ -21,7 +21,7 @@
 #### 桌面端运行方式（2026-09-11 实测）
 
 **当前 `tauri.conf.json` 里配置了 `devUrl`，因此 debug 与 release 构建都会从 `http://localhost:5173` 加载界面**——
-也就是说**必须先起 Vite dev server**，否则窗口是空白的（且不会有任何报错，只有 `webview 页面加载` 日志缺失）。这是实测踩过的坑，不是推测。
+也就是说**必须先起 Vite dev server**，否则窗口是空白的（且不会有任何报错，只有 `webview 页面加载` 日志缺失）。
 
 ```bash
 # 终端 1：前端 dev server（保持运行）
@@ -39,7 +39,7 @@ DANMUBOX_LOG=debug cargo run -p danmubox-desktop
 # 只看到 "web content process terminated" 而没有页面加载 → dev server 没起或端口不对
 ```
 
-要得到**不依赖 dev server 的独立产物**见 §1.6；三端打安装包见 §5。单独 `cargo build --release` **不会**产生可独立运行的产物——它加载不出前端（窗口全白，日志里既无 `webview 页面加载` 也无任何 IPC），已实测（2026-09-13 实测 A/B，见 `../AGENT.md` §9）。
+要得到**不依赖 dev server 的独立产物**见 §1.6；三端打安装包见 §5。单独 `cargo build --release` **不会**产生可独立运行的产物——它加载不出前端（窗口全白，日志里既无 `webview 页面加载` 也无任何 IPC）；实测 A/B 记录与门槛见 `../AGENT.md` §9。
 
 ### 1.2 日志级别 `DANMUBOX_LOG`
 
@@ -119,7 +119,7 @@ adb shell dumpsys package dev.kksk.danmubox | grep -i dataDir   # 辅助确认
 
 ### 1.4 凭据文件 `config.toml`：查看、权限与手工填 Cookie
 
-需求直接来源：REQUIREMENTS.md「cookie 弄个配置文件存进去，默认扫码登录，如果本地有 cookie 则直接读取」。凭据以**明文 TOML** 存放，靠文件权限（`0600`）与「只在本机数据目录」约束，不加密（契约 §4.1）。
+凭据以**明文 TOML** 存放，靠文件权限（`0600`）与「只在本机数据目录」约束，不加密（契约 §4.1；需求来源与本取舍的完整论证见 [`decisions/0007-credential-file.md`](decisions/0007-credential-file.md)）。
 
 文件形态（示例值全部为空串；多账号用 `[profiles.<name>]` 承载，`active_profile` 指定当前生效者，契约 §4.1）：
 
@@ -165,9 +165,9 @@ sid = ""
 
 登出（界面登出，对应 `account_logout`）会清空当前账号的**账号级**凭据并回到游客态：**账号条目保留**（列表里显示为未登录，可再登录回来），`buvid3` / `buvid4` 为设备标识一并保留。
 
-#### 命令行入口（阶段 2 起可用）
+#### 命令行入口
 
-阶段 2 的登录能力已在 `danmubox-cli` 上可用，界面（阶段 3）落地前可先用它验证与操作：
+`danmubox-cli` 的账号相关子命令（能力交付的阶段史见 [`../CHANGELOG.md`](../CHANGELOG.md)）：
 
 | 用途 | 命令 |
 |---|---|
@@ -407,12 +407,7 @@ Rust 产物目录在 workspace 下由 Cargo 决定，本节统一用 `<target-di
 
 #### macOS
 
-```bash
-# 日常出包（实测，见 §1.6）：独立可执行文件，前端已内嵌
-cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
-```
-
-需要 `.app` / `.dmg` 时：先补应用图标并打开 `bundle.active`，再执行
+日常出包命令与产物见 §1.6（独立可执行文件，前端已内嵌）。需要 `.app` / `.dmg` 时：先补应用图标并打开 `bundle.active`，再执行
 
 ```bash
 cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles app,dmg
@@ -488,20 +483,14 @@ Tauri 官方把依赖分为「系统依赖 + Rust + 移动端附加依赖」三�
 - **Windows 目标机需要 WebView2 运行时**。Windows 10/11 较新版本通常已预装；缺失时按 §5.6 处理。
 - **Android 的四个 ABI target 与 NDK 缺一不可**；`--split-per-abi` 只影响打包粒度，不影响编译目标是否已安装。
 
-#### Android 前置条件（2026-09-12 实际核查）
+#### Android 与 Windows 前置条件（当前缺口）
 
-要在本机构建 Android 端，当前**缺**以下东西（已装的只有 `adb` 与 `java`）：
+两端都属独立工程，开工前先补齐（2026-09-12 本机核查；缺口登记见 [`../CHANGELOG.md`](../CHANGELOG.md) 阶段 5 与 [`roadmap.md`](roadmap.md) §2.2）：
 
-| 需要 | 现状 |
-|---|---|
-| Android SDK（`sdkmanager`） | **缺**；`ANDROID_HOME` 未设置 |
-| Android NDK | **缺**；`ANDROID_NDK_HOME` 未设置 |
-| Gradle | **缺** |
-| Rust 的 Android target（`aarch64-linux-android` 等） | **缺**（当前只装了 `aarch64-apple-darwin`）|
-| `adb`、`java`/`javac` | 已有 |
-
-Windows 端同理需要先加 `x86_64-pc-windows-msvc`（或 `-gnu`）target 与对应的链接器/工具链。
-两端都属于独立工程，开工前先补齐这些前置条件。
+| 端 | 缺 | 已有 |
+|---|---|---|
+| Android | Android SDK（`sdkmanager`，`ANDROID_HOME` 未设置）、Android NDK（`ANDROID_NDK_HOME` 未设置）、Gradle、Rust 的 Android target（`aarch64-linux-android` 等；当前只装了 `aarch64-apple-darwin`） | `adb`、`java`/`javac` |
+| Windows | `x86_64-pc-windows-msvc`（或 `-gnu`）target 与对应的链接器 / 工具链（macOS 无法交叉编译） | — |
 
 ### 5.5 macOS 本地运行与签名策略
 
@@ -579,7 +568,7 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 ### 5.10 产物体积与内存目标（量级，非精确值）
 
-只给量级与来源，不写具体数字；目的是给实现阶段一个可比的锚点。实测登记见文末指针。
+只给量级与来源，不写具体数字；目的是给实现阶段一个可比的锚点。
 
 | 指标 | 预期量级 | 依据 |
 |---|---|---|

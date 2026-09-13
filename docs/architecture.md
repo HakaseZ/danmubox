@@ -262,8 +262,7 @@ sequenceDiagram
 | 幂等 | 正在建连 / 正在退避 / 已连接三种状态下均可调用；已在连接中时不叠加第二条连接 |
 | 错误 | 房间不存在 → `ROOM_NOT_FOUND`；本地上游解析失败 → `UPSTREAM_ERROR`；建连后的失败由 driver 在后台按退避处理 |
 | 通知 | 连接状态与重连原因经 `danmubox://room` 下发（`reason` 区分 `reconnect` / `backoff` / `closed`） |
-| 退避回落 | 自动重连的等待由 `wait_after_break`（`bili/ws.rs:468`）决定：一次连接活了 ≥ `HEALTHY_SESSION`（30s，`ws.rs:34`）才算健康，**健康掉线回到 5s 起点**；没活过阈值（连不上、认证失败、刚握手就被断）继续按 `next_backoff`（`ws.rs:455`）翻倍递增、60s 封顶 |
-| 抖动 | 每次等待另加 ±20% 抖动（`jitter`，`ws.rs:477`） |
+| 退避与抖动 | 与 §8「建连失败 / 中途断开」「健康掉线回落」两行同一条规则：序列 5s / 10s / 20s / 40s / 60s 封顶，健康掉线回到 5s 起点，每次等待另加 ±20% 抖动 |
 | 与自动重连的关系 | 手动重连只是把「下一次尝试」提前到当下：取消当前连接后立即进入下一轮，不等退避、也不改变退避计数的判据 |
 
 ### 4.5 端到端数据流
@@ -292,7 +291,7 @@ graph LR
 
 `close()`（`session.rs:356`）做四件事：广播 `RoomClosed` → 取消会话令牌 → abort 三个受监督任务 → 清空缓冲；`Drop`（`session.rs:371`）兜底。
 
-> 这条不变量的由来（用户报的「界面上出现 ×2」）：此前子令牌不是从会话派生的，`close()` 只能 abort driver，abort 之后没人再取消在途连接——于是留下一条**孤儿连接**继续往总线投弹幕，重进同一房间就有两条 WS 同时投递，界面把同一条合成一行「×2」。回归测试：`closing_a_session_stops_its_connection_for_good`（`session.rs:855`）与 `a_backfilled_danmaku_is_not_repeated_by_the_live_path`（`session.rs:902`）。
+> 这条不变量的由来（用户报的「界面上出现 ×2」）见 [`../CHANGELOG.md`](../CHANGELOG.md) 与 [`decisions/0006-room-supervisor-tasks.md`](decisions/0006-room-supervisor-tasks.md)：此前子令牌不是从会话派生的，`close()` 只能 abort driver，在途连接无人取消而成为**孤儿连接**，重进同一房间即有两条 WS 同时投递。回归测试：`closing_a_session_stops_its_connection_for_good`（`session.rs:855`）与 `a_backfilled_danmaku_is_not_repeated_by_the_live_path`（`session.rs:902`）。
 
 ### 4.7 三道去重闸
 

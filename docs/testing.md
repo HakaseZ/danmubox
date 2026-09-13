@@ -34,6 +34,8 @@ graph TD
 
 目录约定（规划路径，本期为文档阶段不创建）：协议与适配器测试放 `crates/danmubox-bili/tests/`，二进制 fixture 放同级 `tests/fixtures/`；会话、本地文件与端口契约测试放 `crates/danmubox-core/tests/`；前端测试与被测文件同目录，命名 `*.test.ts` / `*.test.tsx`。
 
+现状（与上段规划的差距）：上述三个测试目录与前端的 `*.test.ts` 均尚未创建，已有 Rust 测试全部是各 `src/*.rs` 内的 `#[cfg(test)] mod tests`（`crates/danmubox-core/src/` 六个文件、`crates/danmubox-bili/src/` 十五个文件、`apps/desktop/src-tauri/src/lib.rs`）；已落地的端到端验证在 `apps/desktop/ui/smoke/`（`run-headless.mjs` + `room-page.mjs` + `fixtures/`，引擎门槛见 `AGENT.md` §9）。新增测试先按规划落位，在规划目录建立前按现有同文件内联写法。
+
 ## 3. 协议层测试（`danmubox-bili`）
 
 ### 3.1 包结构断言基础
@@ -279,13 +281,12 @@ graph TD
 
 ## 14. 测试数据与安全
 
-| 规则 | 内容 |
+| 规则 | 内容与落点 |
 |---|---|
-| 凭证 | 测试与 fixture 中不得出现真实 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`；自动化测试不注入真实凭证 |
-| 日志断言 | 断言日志**不含**凭证时，用关键词检索而非打印凭证本身 |
-| 脱敏 | 回放 fixture 按 §8.3 处理；同一用户在多条样本中保持同一映射 |
-| 提交前检查 | 对新增 fixture 与快照做一次敏感关键词检索，命中即修复 |
-| 文档同步 | 协议 `cmd`、IPC 命令、偏好键、会话语义或发送结果语义变更时，同步更新本文的用例清单与 [`operations.md`](operations.md) 的对应章节；阶段的验收标准与历史记录见 [`../CHANGELOG.md`](../CHANGELOG.md) |
+| 凭证 / 日志断言 | 与 §1「凭证零泄漏」同一条：测试与 fixture 中不得出现真实 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`；自动化测试不注入真实凭证；断言日志不含凭证时用关键词检索而非打印凭证本身 |
+| fixture 脱敏与提交前检查 | 与 §8.3 同一条：回放 fixture 按 §8.3 处理（同一用户在多条样本中保持同一映射）；提交前对新增 fixture 与快照做一次敏感关键词检索，命中即修复 |
+| 写操作边界 | 只允许公开测试房间 `1`（5440）或当次明确指定的房间，一经指定不得更换，失败即停不重试；见 [`../AGENT.md`](../AGENT.md) §8 第 14–16 条 |
+| 文档同步 | 同步时机见文首「更新时机」；阶段的验收标准与历史记录见 [`../CHANGELOG.md`](../CHANGELOG.md) |
 
 ## 15. 与其他文档的关系
 

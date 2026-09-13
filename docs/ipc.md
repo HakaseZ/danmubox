@@ -371,7 +371,7 @@ type AppStore = {
   // 弹幕：只有「当前房间」一份，随一次房内会话生死（离开 / 切房即清空）
   messages: Message[];             // 显示上限 2000 条，见 §8
   seeding: boolean;                // 首屏历史回填进行中
-  lastSend?: ChatSendResult;
+  lastSend?: ChatSendResult;       // **只属于当前房间**：切房即清、非当前房间的结果不落（§8）
   roomStats: Record<number, { online?: number; watched?: number }>;
 
   // 表情、关注、钱包、身份
@@ -380,8 +380,8 @@ type AppStore = {
   ownedLoaded: boolean;
   ownedError?: string;
   followed: FollowedRoom[];
-  balance?: number;                // 电池余额（整数；`wallet_balance` 的返回）
-  roomIdentities: Record<number, RoomSession>;   // 按房间缓存，离开即删
+  balance?: number;                // 电池余额（整数；`wallet_balance` 的返回）；换人即作废（§8）
+  roomIdentities: Record<number, RoomSession>;   // 按房间缓存，**会话结束**即删（切房保留，§8）
 
   // 房管（会话级）
   adminSilent: SilentUser[];
@@ -414,21 +414,21 @@ type SendState = "unconfirmed" | "rejected";   // Message.send_state（另有 Me
 | store 动作 | 调用 | 说明 |
 |---|---|---|
 | `bootstrap()` | `app_info` + `session_status` + `rooms_list` + `prefs_get` + `accounts_list`（并行） | 启动入口：先铺数据，再 `subscribeEvents` 订阅事件（§8） |
-| `refreshIdentity()` / `loadAccounts()` / `applySession(session)` | `session_status` / `accounts_list` | 登录态或账号变化后的统一善后；**不吃** `account_*` 的返回值，以重拉结果为准 |
-| `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `startAccountQr(target?)` / `pollAccountQr()` / `cancelAccountQr()` | `account_switch` / `account_remove` / `account_logout` / `account_qr_start` / `account_qr_poll` | 账号族；成功后按新会话重拉房间与关注。**换人时先清掉上一个身份的界面切片**（房间与房内缓冲、身份快照、房管三块、表情库等，见 §8） |
+| `refreshIdentity()` / `loadAccounts()` / `applySession(session)` | `session_status` / `accounts_list` | 登录态或账号变化后的统一善后；**不吃** `account_*` 的返回值，以重拉结果为准。并发换人时以**最后点击的那一代**为准（身份世代，见 §8） |
+| `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `startAccountQr(target?)` / `pollAccountQr()` / `cancelAccountQr()` | `account_switch` / `account_remove` / `account_logout` / `account_qr_start` / `account_qr_poll` | 账号族；成功后按新会话重拉房间与关注。**换人时先清掉上一个身份的界面切片**（房间与房内缓冲、身份快照、房管三块、表情库、余额等，见 §8）。取号在命令之前：晚到的旧续作直接放弃（§8） |
 | `addRoom(input)` | `rooms_add` | 成功后重拉 `rooms_list` 并 `openRoom` |
-| `openRoom(roomId)` | `history_query`（`limit: 0`）+ `rooms_connect` | 开一次新房内会话：清空 `messages` 与房管/身份，回填历史，再建连；同时记 `ui.recent_watched` |
+| `openRoom(roomId)` | `history_query`（`limit: 0`）+ `rooms_connect` | 开一次新房内会话：清空 `messages`、房管三块与 `lastSend`，回填历史，再建连；同时记 `ui.recent_watched`。历史落地前复核 `activeRoomId` 仍是它（§8）；**该房间的身份快照保留**（切房不结束会话） |
 | `closeRoom()` | — | 关标签：清空 `messages` / 房管数据，删该房间 `roomIdentities` |
 | `removeRoom(roomId)` | `rooms_remove` | 移除并断连；若是当前房间则与 `closeRoom` 同款清理 |
-| `connect(roomId)` / `disconnect(roomId)` / `refresh(roomId)` | `rooms_connect` / `rooms_disconnect` / `rooms_reconnect` | 三个都只 `invoke` 再重拉 `rooms_list`——连接态以重拉结果为准 |
-| `send(roomId, content, emote?, reply?)` | `chat_send` | 乐观渲染 + 回执校验，见 §7 |
+| `connect(roomId)` / `disconnect(roomId)` / `refresh(roomId)` | `rooms_connect` / `rooms_disconnect` / `rooms_reconnect` | 三个都只 `invoke` 再重拉 `rooms_list`——连接态以重拉结果为准，快照按序号复核（§8）。`disconnect` 另按「离开房间」口径删该房间 `roomIdentities` 与房管三块 |
+| `send(roomId, content, emote?, reply?)` | `chat_send` | 乐观渲染 + 回执校验，见 §7；结果只登记在当前房间（§8） |
 | `report(message, reason)` | `chat_report` | 与命令同参：整条 `Message` + `ReportReason` |
 | `loadReportReasons()` | `report_reasons` | 首次拉取后缓存；失败不覆盖已有清单 |
-| `loadEmotes(roomId)` / `loadOwnedEmotes(retryFailedOnly?)` | `emotes_list` / `emotes_owned` | 由 `RoomView` 的 effect 在登录态就绪时触发；主站表情成功一次后不再重复拉 |
+| `loadEmotes(roomId)` / `loadOwnedEmotes(retryFailedOnly?)` | `emotes_list` / `emotes_owned` | 由 `RoomView` 的 effect 在登录态就绪时触发；主站表情成功一次后不再重复拉。房间表情落地前复核 `activeRoomId`（§8） |
 | `loadFollowed()` | `follow_list` | 会话就绪后与登录/换号后各自动调用一次；返回后按 `ui.md` §2.2 的排序链渲染 |
-| `loadBalance()` | `wallet_balance` | 状态栏展示；进入房间时刷新 |
-| `loadRoomIdentity(roomId)` | `room_session` | 进房取一次快照；之后靠 `danmubox://session` 更新 |
-| `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块 |
+| `loadBalance()` | `wallet_balance` | 状态栏展示；进入房间时刷新；换人即作废（§8） |
+| `loadRoomIdentity(roomId)` | `room_session` | 进房取一次快照；之后靠 `danmubox://session` 更新。落地前复核身份世代（§8） |
+| `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块；落地前复核 `activeRoomId` 仍是它（§8） |
 | `runAdmin(roomId, action)` | `admin_mute` / `admin_unmute` / `admin_blacklist_add` / `admin_blacklist_del` / `admin_keywords_add` / `admin_keywords_del` | 一次一个写操作；成功后就地重读三块，`adminBusy` 期间禁用按钮 |
 | `updatePrefs(patch)` | `prefs_set` | 用返回的全量生效值覆盖 `prefs` |
 | `openProfile(uid)` | `open_url` | 点昵称跳用户主页 |
@@ -499,12 +499,27 @@ sequenceDiagram
 | 阶段 | 动作 |
 |---|---|
 | 应用启动 | `bootstrap`：并行 `app_info` + `session_status` + `rooms_list` + `prefs_get` + `accounts_list`，再 `subscribeEvents` 订阅 §4 的 7 个事件名（每类 handler 可选） |
-| 进入房间 | `openRoom`：清空 `messages` 与房管/身份 → `history_query`（`limit: 0`）回填 → `rooms_connect`；`RoomView` 渲染时按登录态触发 `loadEmotes` / `loadOwnedEmotes` / `loadRoomIdentity` / `loadBalance` |
-| 切换房间 | 只切 `activeRoomId` 并清掉上一间的 `messages`；事件继续到达，非激活房间的弹幕直接丢弃（`onMessage` 判 `room_id`）。**界面本地状态同时重置**：`RoomView` 收起弹出面板 / 房管面板 / 菜单 / 举报条 / 房管确认条并清掉 @·回复目标，`MessageList` 随 `key` 重建、滚动与跟随回到初始；只有输入草稿按房间各留一份（`ui.md` §2.3、§6.5.1） |
-| 切号（`account_switch` / 登出当前账号 / 删掉当前账号 / 扫码确认新账号） | 先清掉上一个身份的界面切片（`rooms` / `activeRoomId` / `messages` / `roomIdentities` / 房管三块 / `emotes` / `ownedEmotes` / `seeding` / `lastSend`）与所有房间定时器，再按新会话重拉 `rooms_list` 与 `follow_list`；core 侧各房间以新凭据重建连接（契约 §7 `account_switch`）。草稿按「身份 + 房间」分键，切号后不恢复（`ui.md` §2.2.1） |
-| 离开房间（关标签 / 移除房间） | 清空 `messages`、清掉互动与发送定时器、删该房间 `roomIdentities`、清空房管三块；core 侧缓冲同步销毁 |
-| 手动重连 | 不触碰 store 切片；`rooms_reconnect` 后重拉 `rooms_list` 取连接态 |
+| 进入房间 | `openRoom`：清空 `messages` / 房管三块 / `lastSend`（**不删**该房间的身份快照）→ `history_query`（`limit: 0`）回填（落地前复核 `activeRoomId` 仍是它）→ `rooms_connect`；`seeding` 由**当下一代**收尾；`RoomView` 渲染时按登录态触发 `loadEmotes` / `loadOwnedEmotes` / `loadRoomIdentity` / `loadBalance` |
+| 切换房间 | 只切 `activeRoomId` 并清掉上一间的 `messages` 与发送浮片；事件继续到达，非激活房间的弹幕直接丢弃（`onMessage` 判 `room_id`）。该房间的**身份快照保留**（切房不结束会话）、晚到的旧回包按目标复核后丢弃（见下表）。**界面本地状态同时重置**：`RoomView` 收起弹出面板 / 房管面板 / 菜单 / 举报条 / 房管确认条并清掉 @·回复目标，`MessageList` 随 `key` 重建、滚动与跟随回到初始；只有输入草稿按房间各留一份（`ui.md` §2.3、§6.5.1） |
+| 切号（`account_switch` / 登出当前账号 / 删掉当前账号 / 扫码确认新账号） | 先清掉上一个身份的界面切片（`rooms` / `activeRoomId` / `messages` / `roomIdentities` / 房管三块 / `emotes` / `ownedEmotes` / `ownedLoaded` / `ownedError` / `balance` / `seeding` / `lastSend`）与所有房间定时器，再按新会话重拉 `rooms_list` 与 `follow_list`；core 侧各房间以新凭据重建连接（契约 §7 `account_switch`）。并发切号以**最后点击的那一代**为准（身份世代，见下表）。草稿按「身份 + 房间」分键，切号后不恢复（`ui.md` §2.2.1） |
+| 离开房间（关标签 / 移除房间 / 断开连接） | 关标签 / 移除房间：清空 `messages`、清掉互动与发送定时器、删该房间 `roomIdentities`、清空房管三块。**断开连接**：同样删该房间 `roomIdentities` 与当前房间的房管三块（断开即这次会话结束，身份不再成立），但 `messages` 与本地待确认行的侧表不动 —— 重连时按 `(kind, uid, 正文, ts)` 去重（`alreadyListed`）。core 侧缓冲随会话结束销毁 |
+| 手动重连 | 不触碰 store 切片；`rooms_reconnect` 后重拉 `rooms_list` 取连接态（快照按序号复核）。会话已被「断开连接」结束时 core 当场**重建**一次会话，身份随之重取并经 `danmubox://session` 覆盖（`session.rs`） |
 | 应用卸载 / HMR | `bootstrap` 每次订阅前先 `unsubscribe?.()`；订阅函数由模块级变量持有，**不允许匿名 `listen` 后丢弃句柄**（热重载后会重复监听） |
+
+### 8.1 乱序落地的复核（异步回包 vs 界面现状）
+
+界面上的 `messages` / 房间列表 / 身份 / 表情库 / 房管三块都是**全局单份**，而读命令的回包可能晚于用户的下一次操作（切房、换人）。因此每个异步落地都要在写之前复核「这次结果属于的那一代 / 那个目标」是否还是当下的：
+
+| 落地的东西 | 复核什么 | 不复核会怎样（审计 P65–P73） |
+|---|---|---|
+| `openRoom` 的 `history_query` 结果与 `seeding` 收尾 | `activeRoomId === roomId` | 连点 A→B 时 A 的历史整批写进 `messages`，B 的列表被换成 A 的；`seeding` 也被提前撤掉 |
+| 每次 `rooms_list` 重拉（`connect` / `disconnect` / `refresh` / `addRoom` / `removeRoom` / `applySession`） | **快照序号**：发起时取号，落地时丢掉已被更新快照越过的那些（失败的请求不占号） | 晚到的旧快照把「已连接 / 会话条数」指回旧值，要等下一次事件才纠正 |
+| 换人链路（`switchAccount` / `removeAccount` / `logoutAccount` / `pollAccountQr`）与 `refreshIdentity` / `applySession` | **身份世代**：换人时递增；取号在**命令之前**（按点击顺序，不按回包顺序） | 并发切号以后到的响应为准，账号列表的「当前」不是最后点击的那个 |
+| `loadRoomIdentity` 的 `room_session` 结果 | 身份世代 | 晚到的旧凭据身份写进 `roomIdentities`，房管入口按上一个账号放行 |
+| `loadEmotes` / `loadAdmin` 的结果 | `activeRoomId === roomId` | `emotes` 与房管三块是全局单份，写进去就是拿 A 的身份与名单渲染 B |
+| `send` 的返回值与 `danmubox://send` 事件 | `ChatSendResult.room_id === activeRoomId` | B 的输入区弹 A 那条的失败浮片；`lastSend` 因此只在发出它的房间还在前台时才登记，切房即清 |
+
+世代号与快照序号都是 `store.ts` 的**模块级计数器**（`identityEpoch` / `roomsSeq`）：不进 store 形状、不影响渲染，只在落地那一刻做一次比较。身份快照（`roomIdentities`）的生命周期因此是「一次房内会话」：**切房保留**（房间没断，切回来还是同一次会话），关标签 / 移除房间 / 断开连接 / 换人各自删它，换人另由世代号挡住旧凭据的回包。
 
 内存边界：
 
@@ -513,7 +528,7 @@ sequenceDiagram
 | core 会话缓冲（权威，`history.buffer_rows`） | 见 `contract.md` §8 | 丢最旧；前端显示上限只影响渲染侧 |
 | 前端 `messages` | `CLIENT_MESSAGE_CAP` = 2000 条 | 丢最旧 |
 | 前端 `logs` | `LOG_CAP` = 200 行 | 丢最旧 |
-| `emotes` / `ownedEmotes` | 无独立上限 | 随房间 / 会话变化整体替换 |
+| `emotes` / `ownedEmotes` | 无独立上限 | 随房间 / 会话变化整体替换；换人即清空（同 `ownedLoaded` / `ownedError` / `balance`） |
 | 非激活房间 | 只丢弃弹幕事件 | 切回时按 `history_query` 重取（一次房内会话一份 `messages`） |
 
 ## 9. 新增一个 IPC 命令需要同步改哪些文件

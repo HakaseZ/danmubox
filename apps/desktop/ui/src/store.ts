@@ -534,6 +534,32 @@ function scheduleInteractHide(store: StoreApi<AppStore>, roomId: number, message
   }
 }
 
+/**
+ * 一条房管动作 → **按序执行的一串上游调用**（批量就是多个成员展开的结果）。
+ *
+ * 写操作只有这一条通道（`runAdmin` 循环 await，失败即停）：单点与批量因此共享同一份
+ * 「哪个动作打哪条 IPC」的映射，不存在「批量另写一套」的旁路。批量成员按屏幕顺序排列，
+ * 执行顺序因此与用户在列表里看到的顺序一致。
+ */
+function adminCalls(roomId: number, action: AdminAction): (() => Promise<unknown>)[] {
+  switch (action.kind) {
+    case "mute":
+      return [() => api.adminMute(roomId, action.uid, action.hour)];
+    case "unmute":
+      return [() => api.adminUnmute(roomId, action.uid)];
+    case "blacklist_add":
+      return [() => api.adminBlacklistAdd(roomId, action.uid)];
+    case "blacklist_del":
+      return [() => api.adminBlacklistDel(roomId, action.uid)];
+    case "keyword_add":
+      return [() => api.adminKeywordsAdd(roomId, action.word)];
+    case "keyword_del":
+      return [() => api.adminKeywordsDel(roomId, action.word)];
+    case "batch":
+      return action.actions.flatMap((step) => adminCalls(roomId, step));
+  }
+}
+
 export const useApp = create<AppStore>((set, get, store) => ({
   rooms: [],
   messages: [],
@@ -1127,34 +1153,27 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async runAdmin(roomId, action) {
     set({ adminBusy: true });
+    // 一条待确认动作 = **按序执行的一串上游调用**（批量就是多个），失败即停。
+    // 单点与批量因此走同一条通道，store 里不为批量另开旁路（见 types.AdminAction）。
+    const calls = adminCalls(roomId, action);
+    let done = 0;
     try {
-      switch (action.kind) {
-        case "mute":
-          await api.adminMute(roomId, action.uid, action.hour);
-          break;
-        case "unmute":
-          await api.adminUnmute(roomId, action.uid);
-          break;
-        case "blacklist_add":
-          await api.adminBlacklistAdd(roomId, action.uid);
-          break;
-        case "blacklist_del":
-          await api.adminBlacklistDel(roomId, action.uid);
-          break;
-        case "keyword_add":
-          await api.adminKeywordsAdd(roomId, action.word);
-          break;
-        case "keyword_del":
-          await api.adminKeywordsDel(roomId, action.word);
-          break;
+      for (const call of calls) {
+        await call();
+        done += 1;
       }
       set({ notice: adminDoneText(action) });
       // 写成功后就地重读三块：不猜上游怎么变，以远端为准。
       await get().loadAdmin(roomId);
       return true;
     } catch (error) {
-      // 非 0 code 原样展示、不赋语义（契约 §7）。
-      set({ error: describeError(error) });
+      // 非 0 code 原样展示、不赋语义（契约 §7）。批量停下来时前半段可能已经生效：
+      // 进度必须说出来（否则用户不知道停在哪一项），并且照样重读三块。
+      const reason = describeError(error);
+      set({
+        error: done > 0 ? `已执行 ${done} 项，第 ${done + 1} 项失败：${reason}` : reason,
+      });
+      if (done > 0) await get().loadAdmin(roomId);
       return false;
     } finally {
       set({ adminBusy: false });

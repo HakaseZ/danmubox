@@ -194,6 +194,12 @@ sessdata = ""
 | `medal_color_text` | string | 同上（`v2_medal_color_text`）。**空串不是颜色**，界面必须自备兜底色，不得拿黑色顶替 |
 | `upstream_id` | string | **上游弹幕标识，举报必需**（来源待实测，见 `protocol.md` 附录） |
 
+> **界面自造的行（乐观渲染，2026-09-13）**：发送弹幕时界面会**先**在列表末尾插一条自己的行，
+> 它带两个**只在界面内存里存在**的东西：`local_id` 取**负数**（真实 `local_id` 恒为正，因此永不碰撞）
+> 与 UI 专用字段 `send_state`（`sending` / `unconfirmed` / `failed`，缺省 = 上游已回推、这条已确认）。
+> 它们**不在本契约内**：后端不产生、不解析、`history_query` 也不会返回；那一行被上游回推的那条替换之后
+> 两者都消失（`docs/ui.md` §4.4）。
+
 
 > **收包侧区分不了「纯 @」与「回复」（2026-09-12 实测结论）**：收包载荷里**没有任何指回被回复弹幕的 id** —— `extra` 的 45 个键枚举下来，发送侧用的 `replay_dmid` 在收包侧**不存在**。所以「这条回复了哪条弹幕」在客户端**无法恢复**；界面一律渲染 `回复 @昵称`（官方前端同样不展示被回复的那条）。**能准确区分的只有我们自己发出的那条**：发送时 `reply.dmid` 非空 = 回复某条、为空 = 纯 @。
 
@@ -332,7 +338,7 @@ Frontend → Rust 命令（`invoke`）：
 | `rooms_connect` / `rooms_disconnect` | 连接控制 |
 | `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |
 | `history_query` | 查询**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`） |
-| `chat_send` | 发弹幕（可带 `emote` 与 `reply`）——`emote` 非空时按表情弹幕发送（`docs/protocol.md` §11.4），返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现 |
+| `chat_send` | 发弹幕（可带 `emote` 与 `reply`）——`emote` 非空时按表情弹幕发送（`docs/protocol.md` §11.4），返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现。**回显口径（2026-09-13 起）**：界面**不等**这条命令才画——点下发送就本地乐观渲染一条待确认行，`ok` 只是「请求已受理」，那条行保持待确认直到上游 `danmubox://message` 把它**回推**回来（对账规则：同一 uid + 逐字相同的正文 + 时间窗，命中即把本地行换成上游那条）；`outcome != ok` 则把本地行**修正**成发送失败。也就是说 `chat_send` 的返回**只用于校验与修正**，界面不再靠它决定「有没有这条弹幕」（`docs/ui.md` §4.4） |
 | `chat_report` | 举报弹幕，理由取自上一步的清单（`{id, reason}`） |
 | `report_reasons` | 举报理由清单（上游固定 7 条） |
 | `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)` |

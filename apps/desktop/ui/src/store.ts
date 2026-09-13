@@ -3,7 +3,7 @@
 import { create, type StoreApi } from "zustand";
 
 import { api, describeError, subscribeEvents } from "./ipc";
-import { adminDoneText, INTERACT_AUTO_HIDE_MS } from "./types";
+import { adminDoneText, INTERACT_AUTO_HIDE_MS, SEND_CONFIRM_TIMEOUT_MS, SEND_MATCH_WINDOW_MS } from "./types";
 import type {
   Account,
   AccountQr,
@@ -154,6 +154,163 @@ function clearInteractTimers() {
   interactTimers = [];
 }
 
+/**
+ * 本地待确认行（乐观渲染）的 `local_id` 序号：取**负数**（`-1`、`-2`、…），
+ * 负号就是「本地生成」这个前缀。真实 `local_id` 由后端按会话单调分配、恒为正，
+ * 因此两者永不碰撞：React key 不会重、`onMessage` 的单调判定也不会被带偏
+ * （负数只出现在列表末尾，真实号永远比它大）。
+ */
+let pendingSeq = 0;
+
+/** 待确认行的超时兜底定时器（键 = 本地行的 `local_id`）。 */
+const sendTimers = new Map<number, number>();
+
+/** 摘掉一条待确认行的定时器（转正 / 判失败 / 离开房间都要）。 */
+function clearSendTimer(localId: number) {
+  const timer = sendTimers.get(localId);
+  if (timer !== undefined) window.clearTimeout(timer);
+  sendTimers.delete(localId);
+}
+
+/**
+ * 离开房间（返回列表 / 关标签 / 移除房间）时把两类定时器一起清掉。
+ * 待确认行随 `messages` 一起清空（契约 §4.3：缓冲的生命周期 = 一次房内会话），
+ * 残留的超时回调只会对着另一个房间的同号消息空转。
+ *
+ * **拨偏好不走这里**：`updatePrefs` 里动 `ui.interact_auto_hide` 只该重排互动消息的定时器，
+ * 顺手清掉发送定时器会让那条永远停在「发送中」。
+ */
+function clearRoomTimers() {
+  clearInteractTimers();
+  for (const timer of sendTimers.values()) window.clearTimeout(timer);
+  sendTimers.clear();
+}
+
+/** 追加一条并守住前端显示上限（真正的会话缓冲在后端，docs/contract.md §4.3）。 */
+function appended(messages: Message[], message: Message): Message[] {
+  const next = [...messages, message];
+  if (next.length > CLIENT_MESSAGE_CAP) {
+    next.splice(0, next.length - CLIENT_MESSAGE_CAP);
+  }
+  return next;
+}
+
+/**
+ * 对账：这条上游回推是不是我们刚发、还在等确认的那条？返回它在列表里的下标（没命中 = -1）。
+ *
+ * 三条依据（`docs/ui.md` §4.4）：**uid + 正文 + 时间窗**。
+ * - `uid`：回推那条的 uid 要与本地行相同 —— 也就是「这是我们自己那条」。收包侧拿不到
+ *   客户端关联 id（2026-09-13 实测：收包 `extra` 里没有发送时用的 `replay_dmid`），
+ *   而 uid 是上游给的、别人顶不了，这就是**不会认错**的根据；
+ * - 正文：逐字相同。表情弹幕两侧都带 `emote` 时再比 `emoticon_unique`；上游那条没带
+ *   表情字段就只比正文 —— 宁可多认一条自己的，也不要把回推漏成第二条；
+ * - 时间窗：`SEND_MATCH_WINDOW_MS` 以内（`ts` 之差取绝对值）。
+ *
+ * 命中多条时取**列表里最靠前**的那条：连发两条同样内容时按先来后到一一对上。
+ * 只有 `sending` / `unconfirmed` 的行参与 —— `failed` 那条上游已明确拒绝，不会有回推。
+ * 这也正是**不会重复**的根据：一次发送只可能对上一条本地行，对上之后那条就被换掉。
+ */
+function matchPending(messages: Message[], incoming: Message): number {
+  if (incoming.kind !== "danmaku") return -1;
+  return messages.findIndex((item) => {
+    if (item.send_state !== "sending" && item.send_state !== "unconfirmed") return false;
+    if (item.kind !== incoming.kind || item.uid !== incoming.uid) return false;
+    if (item.content !== incoming.content) return false;
+    const mine = item.emote?.emoticon_unique ?? "";
+    const theirs = incoming.emote?.emoticon_unique ?? "";
+    if (mine.length > 0 && theirs.length > 0 && mine !== theirs) return false;
+    return Math.abs(incoming.ts - item.ts) <= SEND_MATCH_WINDOW_MS;
+  });
+}
+
+/**
+ * **立刻**把这条弹幕画出来（乐观渲染，用户 2026-09-13：「发送应该即刻响应」），
+ * 并给它排一个超时兜底的定时器。返回本地行的 `local_id`（对账 / 修正都用它定位）。
+ *
+ * 身份字段取自会话与 `room_session`：本地行因此带着与本人实时弹幕一样的昵称与身份牌；
+ * 转正时整行被上游那条**替换**，口径一律以远端为准。
+ */
+function insertPending(
+  store: StoreApi<AppStore>,
+  roomId: number,
+  content: string,
+  emote?: EmoteToken,
+  reply?: ReplyTarget,
+): number {
+  pendingSeq += 1;
+  const localId = -pendingSeq;
+  const state = store.getState();
+  const session = state.session;
+  const identity = state.roomIdentities[roomId];
+  const pending: Message = {
+    local_id: localId,
+    room_id: roomId,
+    kind: "danmaku",
+    ts: Date.now(),
+    uid: session?.uid ?? 0,
+    uname: session?.nickname ?? "",
+    content,
+    color: 0,
+    medal_level: identity?.my_medal_level ?? 0,
+    medal_name: identity?.my_medal_name ?? "",
+    guard_level: identity?.my_guard_level ?? 0,
+    medal_guard_level: 0,
+    reply_to_uid: reply?.mid ?? 0,
+    reply_to_uname: reply?.uname ?? "",
+    is_admin: identity?.is_admin ?? false,
+    is_history: false,
+    amount: 0,
+    combo_id: "",
+    emote:
+      emote === undefined
+        ? null
+        : {
+            emoticon_unique: emote.emoticon_unique,
+            url: emote.url,
+            width: emote.width,
+            height: emote.height,
+            is_dynamic: emote.is_dynamic,
+            in_player_area: emote.in_player_area,
+            bulge_display: emote.bulge_display,
+          },
+    upstream_id: "",
+    send_state: "sending",
+  };
+  if (state.activeRoomId === roomId) {
+    store.setState((current) => ({ messages: appended(current.messages, pending) }));
+  }
+  const timer = window.setTimeout(() => {
+    sendTimers.delete(localId);
+    // 房间切走之后这条本地行已经不在了（离开房间即清空，契约 §4.3），别去改别人房里同号的行。
+    if (store.getState().activeRoomId !== roomId) return;
+    store.setState((current) => ({
+      messages: current.messages.map((item): Message =>
+        item.local_id === localId && item.send_state === "sending"
+          ? { ...item, send_state: "unconfirmed" }
+          : item,
+      ),
+    }));
+  }, SEND_CONFIRM_TIMEOUT_MS);
+  sendTimers.set(localId, timer);
+  return localId;
+}
+
+/**
+ * 把本地那条待确认行**就地修正**成失败态（上游明确拒绝 `outcome != ok`，或传输层出错）。
+ * 已转正 / 已被上限裁掉时是空操作 —— 绝不凭空造出一条行。
+ */
+function markPendingFailed(store: StoreApi<AppStore>, roomId: number, localId: number) {
+  clearSendTimer(localId);
+  if (store.getState().activeRoomId !== roomId) return;
+  store.setState((state) => ({
+    messages: state.messages.map((item): Message =>
+      item.local_id === localId && item.send_state !== undefined
+        ? { ...item, send_state: "failed" }
+        : item,
+    ),
+  }));
+}
+
 /** 丢掉某个房间的状态键：会话结束（关标签/移除房间）即销毁，不跨会话复用。 */
 function dropRoom<T>(map: Record<number, T>, roomId: number): Record<number, T> {
   const rest = { ...map };
@@ -227,16 +384,29 @@ export const useApp = create<AppStore>((set, get, store) => ({
         onMessage: (message) => {
           if (message.room_id !== get().activeRoomId) return;
           const current = get().messages;
+          // 先对账：上游回推我们自己那条时，把本地待确认行**换成**它，而不是再插一条
+          // （用户 2026-09-13：本地乐观渲染 + 回执校验，见 docs/ui.md §4.4）。
+          const pendingIndex = matchPending(current, message);
+          if (pendingIndex >= 0) {
+            clearSendTimer(current[pendingIndex].local_id);
+            // 一次 set 里同时摘掉本地那条、接上上游这条：净条数不变，
+            // 「只出现一条」因此是构造性的，不是靠事后去重。
+            set({
+              messages: appended(
+                current.filter((_, index) => index !== pendingIndex),
+                message,
+              ),
+            });
+            return;
+          }
           // `local_id` 是会话内的单调序号（契约 §5）。进场时我们会用 `history_query`
           // 整批覆盖一次，其间到达的事件可能已经包含在那批快照里；此外运行时若被
           // 重建，序号会从头开始。两种情况下都只能接受「比现有末尾更新」的消息，
           // 否则同一 local_id 会进列表两次（React 会报重复 key，渲染也会错乱）。
+          // 待确认行用的是负数，排在末尾也不会把这个判定带偏：真实号恒为正、永远更大。
           const last = current.length > 0 ? current[current.length - 1].local_id : 0;
           if (message.local_id !== 0 && message.local_id <= last) return;
-          const messages = [...current, message];
-          if (messages.length > CLIENT_MESSAGE_CAP) {
-            messages.splice(0, messages.length - CLIENT_MESSAGE_CAP);
-          }
+          const messages = appended(current, message);
           set({ messages });
           if (get().prefs?.["ui.interact_auto_hide"]) {
             scheduleInteractHide(store, message.room_id, [message]);
@@ -311,7 +481,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
     try {
       await api.roomsRemove(roomId);
       if (get().activeRoomId === roomId) {
-        clearInteractTimers();
+        clearRoomTimers();
         set((state) => ({
           activeRoomId: undefined,
           messages: [],
@@ -329,7 +499,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   async openRoom(roomId) {
-    clearInteractTimers();
+    clearRoomTimers();
     // 「最近观看」记号（用户 #16）：打开房间就记一次时刻，关注列表据此降序。
     // 不 await：它只是记一笔，不该挡在历史回填与建连前面；失败走既有的错误条。
     void get().updatePrefs({
@@ -366,7 +536,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   closeRoom() {
-    clearInteractTimers();
+    clearRoomTimers();
     set((state) => ({
       activeRoomId: undefined,
       messages: [],
@@ -411,12 +581,21 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   async send(roomId, content, emote, reply) {
+    // **乐观渲染**（用户 2026-09-13：「发送应该即刻响应，上游校验如果发送失败再修正弹幕状态」）：
+    // 先把这条画出来，**再**发请求。实测改前要等 1.36s 才见自己那条（上游回推），
+    // 现在点击那一帧就在列表末尾（docs/contract.md §7 / docs/ui.md §4.4）。
+    const localId = insertPending(store, roomId, content, emote, reply);
     try {
       const result = await api.chatSend(roomId, content, emote, reply);
       set({ lastSend: result });
+      // 上游说这条没发出去（code 非 0）→ 就地把它标成失败；`ok` 则保持待确认，
+      // 等上游把自己那条回推回来**转正**（onMessage 里的对账）。
+      if (result.outcome !== "ok") markPendingFailed(store, roomId, localId);
       return result.outcome;
     } catch (error) {
+      // 传输层出错同样等于「这条没发出去」：本地行标失败，错误条照旧（两个都保留）。
       set({ error: describeError(error) });
+      markPendingFailed(store, roomId, localId);
       return undefined;
     }
   },

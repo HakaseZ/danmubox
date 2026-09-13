@@ -968,6 +968,30 @@
   font-size: var(--fs-2);
 }
 
+/* 本地待确认行（乐观渲染，用户 2026-09-13）：整行降不透明度 —— 用现有手段表达
+   「这条还没落定」，不新造颜色。`failed` 那一档不加它（要读得清，由行尾标记说明）。 */
+.pending {
+  opacity: 0.6;
+}
+
+/* 待确认行尾那枚状态标记：与 `.merged` 同为正文里的**行内**一格。
+   三档配色全部取现有令牌：发送中 = 三级弱化字（--fg-subtle）、
+   未确认 = 警告色（--warn）、发送失败 = 危险色（--danger）。不做删除线 ——
+   「未确认」的这条很可能已经发出去了，划掉会说出界面不知道的事。 */
+.sendState {
+  margin-left: var(--sp-1);
+  color: var(--fg-subtle);
+  font-size: var(--fs-1);
+}
+
+.sendStateUnconfirmed {
+  color: var(--warn);
+}
+
+.sendStateFailed {
+  color: var(--danger);
+}
+
 .kindGift {
   color: var(--ok);
 }

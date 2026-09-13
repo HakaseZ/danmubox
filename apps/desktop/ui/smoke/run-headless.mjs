@@ -504,6 +504,7 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height, them
   let accountQrShot = false;
   let followShot = false;
   let toastShot = false;
+  let pendingShot = false;
   let roomsShot = false;
   // 宽屏沿用既有文件名（docs/ui.md §15 列了它们），窄屏加 `-narrow`；末尾一律带主题后缀
   const prefix = `${name === "narrow" ? "danmubox-ui-narrow" : "danmubox-ui"}-${theme}`;
@@ -541,6 +542,12 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height, them
       if (!toastShot && snapshot.sendFailToastShown) {
         toastShot = true;
         await shoot(join(shotDir, `${prefix}-toast.png`));
+      }
+      // 乐观渲染：点击后立刻出现的那条**待确认**行（用户 2026-09-13）——
+      // 它只在「点了发送、还没等到回推」的窗口里有，所以在这一格抓。
+      if (!pendingShot && snapshot.sendPendingRowShown) {
+        pendingShot = true;
+        await shoot(join(shotDir, `${prefix}-pending.png`));
       }
       // 关注列表排布（#14/#15）：宽屏一张单排、窄屏一张两排，两处都不许出现房间号
       if (!followShot && snapshot.followListRendered) {

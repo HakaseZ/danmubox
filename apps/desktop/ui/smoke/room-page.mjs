@@ -650,6 +650,16 @@ const MOCK = (theme) => `(function () {
   var openRowMenu = function (row) {
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
   };
+  // 「别人的最新一条」：**乐观渲染之后最后一行不再保证是别人**——自己刚发的那条就排在末尾
+  // （uid == 我，房管项与 @/回复按设计置灰）。凡是要拿「最新的一条弹幕」当目标的地方都走这里：
+  // 显式推一条上游来的行（uid ≠ 我、有昵称、有 upstream_id），目标因此是确定的。
+  var emitOtherRow = async function (label) {
+    window.__emit("danmubox://message", window.__mk("danmaku", label, false, {
+      uid: 77001, uname: "隔壁观众"
+    }));
+    await sleep(300);
+    return rowWith(label);
+  };
   // 离底部还有多远（0 = 贴底）。「跟随最新」是否还活着，看这个数就知道。
   var bottomGap = function (el) {
     return Math.round((el.scrollHeight - el.scrollTop - el.clientHeight) * 10) / 10;
@@ -2553,12 +2563,84 @@ const MOCK = (theme) => `(function () {
         toastBox.right > chatBoxForToast.left + 1 && toastBox.left < chatBoxForToast.right - 1);
     out.sendFailToastAboveComposer = !!toastEl &&
       toastBox.bottom <= rect(document.querySelector("textarea")).top + 1;
+    // 失败修正（用户 2026-09-13）：上游说没发出去时，**那一条本地行**要就地标成失败，
+    // 而既有的浮动提示一并保留（提示是用户此前明确要求的，不许为了加行标记把它删掉）。
+    var failRow = rowWith("这条会发失败");
+    var failMark = failRow
+      ? failRow.querySelector('[data-testid="db-msg-send-state"]') : null;
+    out.sendFailRowMarked = !!failMark &&
+      failMark.getAttribute("data-state") === "failed" &&
+      failMark.innerText.indexOf("发送失败") >= 0;
+    // 失败的那条**只有一条**：修正不是「再插一条失败行」。
+    out.sendFailRowSingle = rows().filter(function (r) {
+      return r.innerText.indexOf("这条会发失败") >= 0;
+    }).length === 1;
+    out.sendFailRowMarkedWithToast = out.sendFailRowMarked && out.sendFailToastShown === true;
     snap();
     await sleep(3200);
     out.sendFailToastGone = !byTestId("db-toast");
     typeIntoArea(document.querySelector("textarea"), "");
     window.__setSendOutcome("ok", null);
     await sleep(200);
+    snap();
+
+    // ---- 乐观渲染 + 回执校验（用户 2026-09-13：「发送应该即刻响应，上游只校验发送成功与否，
+    //      无论成功与否我都是发了；失败再修正弹幕状态」）。四步各自取证：
+    //      ① 点击后**本地那条立刻在列表里**（量「点击 → 行出现」的毫秒数；改前要等上游回推 ≈1.36s）；
+    //      ② 这条行带「发送中」的状态标记（不是无声地混在别人的弹幕里）；
+    //      ③ 上游把自己那条回推回来 → 本地那条**转正**：仍然只有一条，且状态标记消失；
+    //      ④ 「转正」是**换掉**不是「再插一条」——总量也不许多出来。
+    var optimisticText = "乐观渲染样本弹幕";
+    var optimisticRow = function () { return rowWith(optimisticText); };
+    var optimisticRowCount = function () {
+      return rows().filter(function (r) { return r.innerText.indexOf(optimisticText) >= 0; }).length;
+    };
+    typeIntoArea(document.querySelector("textarea"), optimisticText);
+    await sleep(200);
+    var optimisticT0 = performance.now();
+    sendButton.click();
+    var optimisticAppearMs = null;
+    for (var optimisticTry = 0; optimisticTry < 60 && optimisticAppearMs === null; optimisticTry += 1) {
+      if (optimisticRow()) optimisticAppearMs = performance.now() - optimisticT0;
+      else await sleep(8);
+    }
+    out.sendOptimisticAppearMs = optimisticAppearMs === null
+      ? null : Math.round(optimisticAppearMs * 10) / 10;
+    // 「立刻」的判据取 250ms 这个宽松档（含一帧渲染 + WebKit 的抖动）：改前实测是 1820ms，
+    // 两者差一个数量级，所以这个阈值能拦住「又回去等上游回播」的退步。
+    out.sendOptimisticAppearsImmediately = optimisticAppearMs !== null && optimisticAppearMs <= 250;
+    // **按正文数行**，不按渲染行数：虚拟列表的渲染窗口是定长的（可视 + overscan），
+    // 在末尾插一行时「渲染出来的行数」可能一个都不变（窗口上沿丢一行、下沿进一行），
+    // 拿它当「插了几条」的判据会假失败。
+    out.sendOptimisticRowsBeforeEcho = optimisticRowCount();
+    out.sendOptimisticSingleRow = optimisticRowCount() === 1;
+    var optimisticEl = optimisticRow();
+    var optimisticMark = optimisticEl
+      ? optimisticEl.querySelector('[data-testid="db-msg-send-state"]') : null;
+    out.sendOptimisticMarkedSending = !!optimisticMark &&
+      optimisticMark.getAttribute("data-state") === "sending" &&
+      optimisticMark.innerText.indexOf("发送中") >= 0;
+    // 停下让跑脚本的进程抓一张「待确认态」的截图（它每 250ms 读一次 data-smoke）
+    out.sendPendingRowShown = out.sendOptimisticMarkedSending;
+    snap();
+    await sleep(700);
+    // 上游把自己那条回推回来（uid 与正文对得上，见 store.matchPending 的对账规则）
+    window.__emit("danmubox://message", window.__mk("danmaku", optimisticText, false, {
+      uid: 1000, uname: "本地测试"
+    }));
+    await sleep(300);
+    var convertedRow = optimisticRow();
+    out.sendOptimisticRowsAfterEcho = optimisticRowCount();
+    out.sendOptimisticEchoSingleRow = optimisticRowCount() === 1;
+    // 转正后：状态标记没了（这条已经是上游的事实），昵称/正文以远端那条为准。
+    out.sendOptimisticEchoConverted = !!convertedRow &&
+      !convertedRow.querySelector('[data-testid="db-msg-send-state"]') &&
+      convertedRow.innerText.indexOf("本地测试") >= 0;
+    // 本地那条**被换掉**而不是又插一条：同一正文的行数回推前后都是 1（不是 2），
+    // 而且它身上不再挂「待确认」标记（那一条已经从「本地」变成「上游」）。
+    out.sendOptimisticEchoAbsorbedLocal = optimisticRowCount() === 1 && !!convertedRow &&
+      !convertedRow.querySelector('[data-testid="db-msg-send-state"]');
+    typeIntoArea(document.querySelector("textarea"), "");
     snap();
 
     // ---- 面板展开会改可视高度：**正在看的位置不能被弹走**
@@ -2657,8 +2739,8 @@ const MOCK = (theme) => `(function () {
       text().indexOf("上次发送") < 0;
     snap();
 
-    // ---- menu 右键菜单
-    var target = rows()[rows().length - 1];
+    // ---- menu 右键菜单（目标行显式造：见 emitOtherRow 的注释）
+    var target = await emitOtherRow("菜单目标样本");
     target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
     await sleep(250);
     var menu = byTestId("db-context-menu");
@@ -2710,6 +2792,22 @@ const MOCK = (theme) => `(function () {
     out.replySendCarriesTarget = !!sendWithReply && !!sendWithReply.args.reply &&
       sendWithReply.args.reply.dmid.length > 0 && sendWithReply.args.content === "收到";
     snap();
+
+    // ---- 超时兜底（用户 2026-09-13：不要永远停在「发送中」）：这条**故意不回推**，
+    //      看它在 SEND_CONFIRM_TIMEOUT_MS（8s）到点后是否被标成「未确认」。
+    //      发送放在这里（而不是紧挨着 step5 那段 8.6s 等待）有个必须的理由：**成功的发送会把
+    //      编辑面板收起**（Composer 的成功路径 setPanel(null)），而紧接着的 step5 / step6 /
+    //      礼物栏三块都要在**同一个筛选面板节点**上操作 —— 面板一关一开，旧节点就成了游离节点，
+    //      后续 clickLabelIn(filterPanel, …) 会静默失效（改前实测：step6 的开关点了不生效、
+    //      礼物栏根本不出现）。这里发送时面板还没开，因此不碰它。
+    var timeoutText = "超时兜底样本弹幕";
+    typeIntoArea(document.querySelector("textarea"), timeoutText);
+    await sleep(150);
+    sendButton.click();
+    await sleep(150);
+    var timeoutRow = rowWith(timeoutText);
+    out.sendTimeoutStartsSending = !!timeoutRow &&
+      !!timeoutRow.querySelector('[data-testid="db-msg-send-state"][data-state="sending"]');
 
     // ---- time 时间戳（默认关 → 打开后等宽对齐）
     out.timeCellsDefault = allByTestId("db-msg-time").length;
@@ -2770,8 +2868,15 @@ const MOCK = (theme) => `(function () {
     out.step4_systemRenderedAfterToggle = text().indexOf("分区变更二号") >= 0;
     snap();
 
-    // ---- step5 互动行 8 秒后自动消失（语义不得改）
+    // ---- step5 互动行 8 秒后自动消失（语义不得改）。这段等待同时也盖过了前面那条超时兜底
+    //      （发送 → 这里 ≈ 14s > 8s），所以「未确认」在同一格验掉，不额外增加一轮的墙钟时间。
     await sleep(8600);
+    timeoutRow = rowWith(timeoutText);
+    var timeoutMark = timeoutRow
+      ? timeoutRow.querySelector('[data-testid="db-msg-send-state"]') : null;
+    out.sendTimeoutMarkedUnconfirmed = !!timeoutMark &&
+      timeoutMark.getAttribute("data-state") === "unconfirmed" &&
+      timeoutMark.innerText.indexOf("未确认") >= 0;
     out.step5_interactGoneAfter8s = text().indexOf("进入直播间") < 0;
     snap();
 
@@ -2896,7 +3001,7 @@ const MOCK = (theme) => `(function () {
 
     // ---- admin 房管（issue #3）：权限前置、写操作二次确认、面板三块与错误原样展示
     out.adminIdentityFetched = calls.indexOf("room_session") >= 0;
-    var adminTarget = rows()[rows().length - 1];
+    var adminTarget = await emitOtherRow("房管目标样本");
     adminTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
     await sleep(250);
     var adminMenu = byTestId("db-context-menu");
@@ -3007,7 +3112,7 @@ const MOCK = (theme) => `(function () {
     out.adminPanelErrorRaw = panelText.indexOf("不是管理员") >= 0 && panelText.indexOf("UPSTREAM_ERROR") >= 0;
     document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     await sleep(200);
-    adminTarget = rows()[rows().length - 1];
+    adminTarget = await emitOtherRow("无权限目标样本");
     adminTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200 }));
     await sleep(300);
     var noPermItems = adminItemsOf(byTestId("db-context-menu"));

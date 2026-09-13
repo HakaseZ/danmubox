@@ -10,7 +10,7 @@ import {
   type DisplayRow,
 } from "../filtering";
 import type { Message, Prefs } from "../types";
-import { INTERACT_AUTO_HIDE_MS } from "../types";
+import { INTERACT_AUTO_HIDE_MS, SEND_STATE_TEXT } from "../types";
 import styles from "../app.module.css";
 
 /** 正文里的 @昵称（用户 2026-09-13 第 1 条）：`@` 之后到空白或句读为止都算名字
@@ -79,9 +79,14 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   // 关掉 `ui.interact_auto_hide` 则常驻。
   const autoHide = message.kind === "interact" && prefs["ui.interact_auto_hide"];
 
+  // 本地待确认行：整行降不透明度（`.pending`，用现有手段表达「还没落定」，不新造颜色）。
+  // `failed` 那一档不降 —— 它要读得清，由行尾那枚 `--danger` 标记说明它没发出去。
+  const pending = message.send_state !== undefined && message.send_state !== "failed";
+
   const variant = [
     kindClass[message.kind] ?? "",
     autoHide ? styles.autoHide : "",
+    pending ? styles.pending : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -195,6 +200,24 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
               它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。 */}
           {(count > 1 || message.kind === "gift") && (
             <span className={styles.merged}>×{count}</span>
+          )}
+          {message.send_state !== undefined && (
+            // 本地待确认标记（乐观渲染，用户 2026-09-13）：发送中 / 未确认 / 发送失败。
+            // 与合并计数一样是正文里的**行内**一格，只有本地那条有；配色走现有令牌
+            // （--fg-subtle / --warn / --danger），不新造颜色。整行的弱化由 `.pending` 给。
+            <span
+              className={`${styles.sendState} ${
+                message.send_state === "failed"
+                  ? styles.sendStateFailed
+                  : message.send_state === "unconfirmed"
+                    ? styles.sendStateUnconfirmed
+                    : ""
+              }`}
+              data-testid="db-msg-send-state"
+              data-state={message.send_state}
+            >
+              {SEND_STATE_TEXT[message.send_state]}
+            </span>
           )}
         </span>
       </span>

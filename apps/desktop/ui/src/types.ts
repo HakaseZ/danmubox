@@ -59,6 +59,12 @@ export interface Message {
   /** 表情弹幕的表情信息（渲染与「发回去」共用）；非表情弹幕为 null。 */
   emote?: EmoteRef | null;
   upstream_id: string;
+  /**
+   * **本地乐观渲染**这条弹幕的待确认状态（UI 专用字段，后端不认识它；缺省 = 上游已回推、
+   * 这条已确认）。用户 2026-09-13 的决定：点击**即刻**画出来，上游回执只用来**校验与修正**
+   * （`docs/contract.md` §7 `chat_send`、`docs/ui.md` §4.4）。取值见 `SendState`。
+   */
+  send_state?: SendState;
 }
 
 export interface Room {
@@ -413,3 +419,41 @@ export const INTERACT_AUTO_HIDE_MS = 8000;
  * 「什么时候把元素摘掉」同一个数 —— 两者错位就会出现「已经透明了还占着位置」。
  */
 export const SEND_TOAST_MS = 2600;
+
+/**
+ * 本地待确认弹幕（`Message.send_state`）的状态机：
+ *
+ * - `sending` —— 请求已发出（或刚要发），等上游把这条回推回来转正；
+ * - `unconfirmed` —— 超时（`SEND_CONFIRM_TIMEOUT_MS`）还没等到回推：**不一定**发失败，
+ *   但界面不能再假装它「发送中」（用户 2026-09-13：不要永远停在发送中）；
+ * - `failed` —— `chat_send` 明确说了没发出去（`outcome != ok`）或传输层出错。
+ *
+ * `sending` / `unconfirmed` 仍参与对账（回推迟到也能转正）；`failed` 不再参与 ——
+ * 上游已经拒绝，不会有对应的回推（见 `store.matchPending`）。
+ */
+export type SendState = "sending" | "unconfirmed" | "failed";
+
+/** 待确认行尾那枚状态标记的文案（行内就地显示，配色见 `app.module.css` 的 `.sendState`）。 */
+export const SEND_STATE_TEXT: Record<SendState, string> = {
+  sending: "发送中",
+  unconfirmed: "未确认",
+  failed: "发送失败",
+};
+
+/**
+ * 等上游回推的上限：到点把那条从「发送中」改成「未确认」。
+ *
+ * 取值理由（2026-09-13 实测）：点击 → 我方请求往返 460.6ms（nav 133.5 + POST 326.9），
+ * 上游把自己那条回推回来要 1.36s，界面出现自己那条合计约 1.82s。
+ * **8s ≈ 实测回推延迟的 6 倍**：正常房间的排队抖动都在这以内，又短到不会让人对着
+ * 一条「发送中」发呆 —— 票据给的区间是 5–10s，取上限侧是为了别把慢房间误判成失败。
+ */
+export const SEND_CONFIRM_TIMEOUT_MS = 8000;
+
+/**
+ * 对账的时间窗：上游回推那条的 `ts` 与本地行的 `ts` 差超过它就不再认成同一条。
+ * 一声发送对应一条回推，正常只差 1–2 秒；放宽到 60s 是为了容忍慢房间的排队，
+ * 而「很久以前发过同样的话」不会被误认 —— 那些行早已转正（`send_state` 缺省），
+ * 压根不参与对账（见 `store.matchPending`）。
+ */
+export const SEND_MATCH_WINDOW_MS = 60_000;

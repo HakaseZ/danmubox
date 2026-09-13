@@ -184,14 +184,6 @@ export function AccountManager({
             {session?.logged_in ? "已登录" : "游客态"}
             {` · ${accounts.length} 个账号`}
           </span>
-          <span className={styles.headerSpacer} />
-          <button
-            data-testid="db-account-close"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={onClose}
-          >
-            关闭
-          </button>
         </div>
 
         <div className={styles.accountList}>

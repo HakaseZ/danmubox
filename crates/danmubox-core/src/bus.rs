@@ -1,10 +1,11 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Notify};
 
-use crate::model::{Message, Room, RoomSession};
+use crate::model::{Message, MessageKind, Room, RoomSession};
 
 /// 连接状态。UI 的四种呈现以此为准（`docs/ui.md`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +149,30 @@ pub struct MessageSink {
     bus: EventBus,
     counters: Arc<Counters>,
     next_local_id: Arc<AtomicU64>,
+    /// 本会话最近发布过的弹幕指纹（环形窗口）。见 [`MessageSink::publish_with`]。
+    seen_danmaku: Arc<Mutex<VecDeque<u64>>>,
+}
+
+/// 记住多少条「刚发过的弹幕」用于去重：同一条被送两遍的时间差是毫秒级，
+/// 256 条在再热闹的房间里也覆盖得住（按每秒上百条算仍有 2 秒余量）。
+const SEEN_DANMAKU_WINDOW: usize = 256;
+
+/// 弹幕指纹：`uid + ts + 正文 + 表情`。**同一帧/同一秒里同一个人说同样的话**是常态，
+/// 但那种情况每条各有各的上游 `ts`，指纹不同；指纹相同只可能是**同一条**。
+fn danmaku_fingerprint(message: &Message) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    message.uid.hash(&mut hasher);
+    message.ts.hash(&mut hasher);
+    message.content.hash(&mut hasher);
+    message
+        .emote
+        .as_ref()
+        .map(|emote| emote.emoticon_unique.as_str())
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
 }
 
 impl MessageSink {
@@ -156,6 +181,7 @@ impl MessageSink {
             bus,
             counters,
             next_local_id: Arc::new(AtomicU64::new(0)),
+            seen_danmaku: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -174,7 +200,34 @@ impl MessageSink {
         self.publish_with(message, false);
     }
 
+    /// 投递一条消息；**同一条弹幕的第二份在这里就被挡下**，不进总线
+    /// （`docs/ui.md` §4.7：界面与缓冲必须看到同一份事实）。
+    ///
+    /// 为什么必须挡在这一层：界面消费的是**事件**（`danmubox://message`）与
+    /// `history_query` 快照两条路，只挡缓冲挡不住事件；而界面按 `(uid, 正文, ts)`
+    /// 合并行，同一条的两份会被画成一行 `×2` —— 看着像用户重复发言，其实是同一条
+    /// 被送了两遍。上游两条路都会带它：`gethistory` 的回填与 WS 实时、
+    /// 或者同一帧里压缩子包与明文子包各一份。
+    ///
+    /// 只认 `danmaku`：它是唯一「回填 + 实时回推」两条路都有的类型；礼物/互动允许
+    /// 上游反复推同一条（连击、榜单刷新），按内容去重会误伤真实重复。
     fn publish_with(&self, mut message: Message, count: bool) {
+        if message.kind == MessageKind::Danmaku {
+            let fingerprint = danmaku_fingerprint(&message);
+            let mut seen = self.seen_danmaku.lock().expect("seen poisoned");
+            if seen.contains(&fingerprint) {
+                tracing::debug!(
+                    room_id = message.room_id,
+                    uid = message.uid,
+                    "同一条弹幕又来了（回填/实时两条路），丢弃第二份"
+                );
+                return;
+            }
+            seen.push_back(fingerprint);
+            while seen.len() > SEEN_DANMAKU_WINDOW {
+                seen.pop_front();
+            }
+        }
         message.local_id = self.next_local_id.fetch_add(1, Ordering::Relaxed) + 1;
         if count {
             Counters::bump(&self.counters.messages);
@@ -222,11 +275,34 @@ impl MessageSink {
 pub struct Cancel {
     flag: Arc<AtomicBool>,
     notify: Arc<Notify>,
+    /// 父令牌（见 [`Cancel::child`]）。子令牌自己不一定要被 `cancel()`，父取消时它同样算取消。
+    parent: Option<Arc<Cancel>>,
 }
 
 impl Cancel {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 子令牌：**父令牌取消时它跟着取消**。一次连接的取消信号用它——会话结束必须
+    /// 把在途的那一次连接一起停掉。会话的 `close()` 只能 abort 驱动任务，而连接跑在
+    /// 驱动另起的一个任务里（abort 驱动不会连带停它），取消信号不跟着父走就会留下
+    /// 一条孤儿连接：它照样读包、照样往总线上投弹幕，界面于是收到同一房间的第二份。
+    pub fn child(parent: &Cancel) -> Self {
+        // 拍平到根：`cancelled()` 只并两个 `cancelled_here()`（免得异步递归），
+        // 祖辈的取消也不会被漏掉。
+        Self {
+            parent: Some(Arc::new(parent.root())),
+            ..Self::default()
+        }
+    }
+
+    /// 取消链的根（没有父就是自己）。
+    fn root(&self) -> Cancel {
+        match &self.parent {
+            Some(parent) => parent.root(),
+            None => self.clone(),
+        }
     }
 
     pub fn cancel(&self) {
@@ -236,15 +312,33 @@ impl Cancel {
 
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.is_cancelled())
     }
 
     pub async fn cancelled(&self) {
+        match self.parent.clone() {
+            None => self.cancelled_here().await,
+            // 父已经拍平成根了，两个 `cancelled_here()` 就够。
+            Some(parent) => {
+                tokio::select! {
+                    _ = self.cancelled_here() => {}
+                    _ = parent.cancelled_here() => {}
+                }
+            }
+        }
+    }
+
+    /// 只看本令牌自己的标志位（父的那份由调用方 select 进来）。
+    async fn cancelled_here(&self) {
         loop {
-            if self.is_cancelled() {
+            if self.flag.load(Ordering::SeqCst) {
                 return;
             }
             let waiter = self.notify.notified();
-            if self.is_cancelled() {
+            if self.flag.load(Ordering::SeqCst) {
                 return;
             }
             waiter.await;
@@ -284,6 +378,28 @@ mod tests {
         let bus = EventBus::default();
         bus.publish(Event::RoomClosed(1));
         assert_eq!(bus.subscriber_count(), 0);
+    }
+
+    /// 子令牌必须跟着父令牌取消：会话一结束，在途的那次连接就得停
+    /// （`session.rs` 的连接信号是 `Cancel::child(&session)`，见那里的注释）。
+    #[tokio::test]
+    async fn child_cancel_follows_its_parent() {
+        let parent = Cancel::new();
+        let child = Cancel::child(&parent);
+        assert!(!child.is_cancelled());
+
+        parent.cancel();
+        assert!(child.is_cancelled(), "父取消后子必须算已取消");
+        tokio::time::timeout(std::time::Duration::from_secs(1), child.cancelled())
+            .await
+            .expect("父取消后子的 cancelled() 必须立即返回");
+
+        // 子自己取消不牵连父：单次连接被「刷新」掐掉，会话仍要继续。
+        let parent = Cancel::new();
+        let child = Cancel::child(&parent);
+        child.cancel();
+        assert!(child.is_cancelled());
+        assert!(!parent.is_cancelled(), "子取消不得反噬父（会话还要接着用）");
     }
 
     #[tokio::test]

@@ -225,6 +225,30 @@ function matchPending(messages: Message[], incoming: Message): number {
 }
 
 /**
+ * 这条弹幕是不是列表里已经有的**同一条**（`docs/ui.md` §4.5）？
+ *
+ * `(kind, uid, 正文, ts)` 逐字相同 = 上游给的**同一条**，不是「同一个人说了同样的话」：
+ * 真人重复发言每条各有自己的上游 `ts`，合并判据（`filtering.ts` 的 `toDisplayRows`）
+ * 照旧把它们合成 ×2 —— 那正是合并该管的事。只有「同一条被送了两遍」才会命中这里，
+ * 实测有两类来源：
+ * - 「断开连接 → 刷新连接」重建会话时，新会话的回填与界面上残留的旧会话行重合；
+ * - 同一条弹幕既在进场回填里、又从实时路径来（上游两条路都会带它）。
+ *
+ * 只认 `danmaku`：它是唯一有「回填 + 实时回推」两条路进来的类型；礼物/互动本来就允许
+ * 同一条被上游反复推（连击、榜单刷新），按内容去重会误伤。
+ */
+function alreadyListed(messages: Message[], incoming: Message): boolean {
+  if (incoming.kind !== "danmaku") return false;
+  return messages.some(
+    (item) =>
+      item.kind === incoming.kind &&
+      item.uid === incoming.uid &&
+      item.ts === incoming.ts &&
+      item.content === incoming.content,
+  );
+}
+
+/**
  * **立刻**把这条弹幕画出来（乐观渲染，用户 2026-09-13：「发送应该即刻响应」），
  * 并给它排一个超时兜底的定时器。返回本地行的 `local_id`（对账 / 修正都用它定位）。
  *
@@ -405,6 +429,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
             });
             return;
           }
+          // 同一条弹幕的第二份不再入列（`docs/ui.md` §4.5）：合并逻辑会把它画成一行
+          // ×2，看着像「用户重复发言」，其实只是同一条走了两条路。真人重复发言各有
+          // 各的 `ts`，不受影响。
+          if (alreadyListed(current, message)) return;
           // `local_id` 是会话内的单调序号（契约 §5）。进场时我们会用 `history_query`
           // 整批覆盖一次，其间到达的事件可能已经包含在那批快照里；此外运行时若被
           // 重建，序号会从头开始。两种情况下都只能接受「比现有末尾更新」的消息，

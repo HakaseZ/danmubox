@@ -203,6 +203,13 @@
 
 ### Fixed
 
+- **同一房间不再同时跑两份连接**（用户 2026-09-13：「界面上出现 ×2，哪里来的」）。界面上的 `×2` 不是合并逻辑的错（它按 `uid + 正文 + ts` 盖住**真重复**，`filtering.ts` 的 `toDisplayRows` 不动），而是**同一条弹幕真的进了两次列表**：
+  1. **会话结束没有停掉在途连接（根因）**。`RoomRuntime::spawn_on` 的驱动把连接 `spawn` 成**独立任务**，而 `close()` / `Drop` 只 `abort` 驱动、`cancel()` 的也只是会话令牌——驱动被 abort 之后，没人再去执行 `connection.cancel()`，那条连接就成了**孤儿**：照样读包、照样往总线上投弹幕。此后重进同一房间，就有两条 WS 同时投递。`/tmp/standalone.log` 实测同一房间 **4.5 秒内被建了两次会话**（`session.rs` 两次「进场回填历史弹幕」+ 两次 WS 握手），且第二次握手之后**旧会话仍在收包**（同一条 `DANMU_MSG` 在 `04:44:14.944184` 与 `04:44:15.077618` 各解一次，相差 133ms；04:44:18、04:46:31 同形）。改法：连接令牌改 `Cancel::child(&session)`（`danmubox-core` 的 `Cancel` 新增父子关系）——会话取消 → 在途连接跟着取消，不再依赖「驱动被 abort 前刚好走到那一行」。
+  2. **同一条弹幕从上游两条路各来一份**。`gethistory` 的回填与 WS 实时都会带同一条（同一帧里压缩子包与明文子包各一份也是同形）。第二份现在在**进总线之前**就被丢掉（`MessageSink::publish_with`，按 `uid + ts + 正文 + 表情` 认同一性，256 条环形窗口，只对 `danmaku` 生效）——界面消费的是事件流（`danmubox://message`）与 `history_query` 快照**两条**路，只挡缓冲挡不住事件；而界面列表里出现两份，就会被画成一行 ×2。
+  3. 前端 `store.onMessage` 再加一道**同一条不入列**的闸（`alreadyListed`，同键同判据，只认 `danmaku`）：覆盖「断开连接 → 刷新连接」重建会话时，新会话的回填与界面上**残留的旧会话行**重合这一类（后端那次去重是新会话、新 `MessageSink`，看不到旧会话投过的行）。
+  回归断言（改前必失败，A/B 逐条验过）：`danmubox-core::session::tests::closing_a_session_stops_its_connection_for_good`（改前 `active` 左 1 / 右 0）、`danmubox-core::session::tests::a_backfilled_danmaku_is_not_repeated_by_the_live_path`（改前缓冲行数左 2 / 右 1）、`danmubox-core::bus::tests::child_cancel_follows_its_parent`。
+  口径写入 `docs/ui.md` §4.7（入场回填那行表格新增「同一条只出现一次」）与 §8.4（合并规则第 6 条：合并的前提是上游真有 N 条）。
+
 - **断连之后再点「刷新连接」（房间头 `⋯` 菜单）能把连接拉回来了**（用户 2026-09-13：「现在断连后再刷新无法直接重连了？」）。两个独立原因，都已修：
   1. **`rooms_reconnect` 在会话已经结束时直接报 `ROOM_NOT_FOUND`**。菜单里的「断开连接」（`rooms_disconnect`）会把整个 `RoomRuntime` 摘掉，
      之后再点「刷新连接」就命中 `ok_or_else`，界面只弹一条「房间 X 尚未连接」——连接回不来，用户只能返回列表再进来；

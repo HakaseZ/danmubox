@@ -276,7 +276,11 @@ impl RoomRuntime {
                         return;
                     }
                     // 每次连接一个子取消信号：会话取消或「刷新」都能只终止当前连接。
-                    let connection = Cancel::new();
+                    // **必须是子令牌**：驱动跑在自己的任务里，`close()` 只能 abort 驱动；
+                    // 连接跑在驱动另起的任务里，不会被连带 abort。取消信号不跟着会话走，
+                    // 会话结束后就留下一条孤儿连接 —— 它照样往总线上投弹幕，界面收到
+                    // 同一房间的第二份（用户 2026-09-13 报的「界面上出现 ×2」）。
+                    let connection = Cancel::child(&session);
                     let attempt = {
                         let source = Arc::clone(&source);
                         let sink = sink.clone();
@@ -808,6 +812,121 @@ mod tests {
             Some(ConnState::Connected),
             "最后的状态不得停在断连"
         );
+        runtime.close().await.unwrap();
+    }
+
+    /// 记「此刻还有几条 stream 活着」的假适配器：进出各动一次计数。
+    /// 界面上的 ×2 永远来自「同一个房间有两份消息」，所以这份计数就是判据。
+    struct CountingSource {
+        active: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl LiveSource for CountingSource {
+        async fn recent(&self, _room_id: i64) -> Result<Vec<Message>> {
+            Ok(Vec::new())
+        }
+
+        async fn resolve_room(&self, _input: &str) -> Result<Room> {
+            Ok(Room::default())
+        }
+
+        async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {
+            Ok(RoomSession {
+                room_id,
+                ..Default::default()
+            })
+        }
+
+        async fn stream(&self, _room_id: i64, _sink: MessageSink, cancel: Cancel) -> Result<()> {
+            use std::sync::atomic::Ordering;
+            self.active.fetch_add(1, Ordering::SeqCst);
+            cancel.cancelled().await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// 会话结束（`close()`）必须把**在途的那一次连接**一起停掉：杀驱动任务并不会
+    /// 取消它（连接由驱动另起一个任务跑），孤儿连接照样读包、照样往总线上投弹幕。
+    /// 于是「断开再重进」之后同一房间有两条连接，界面收到两份同样的弹幕 → ×2
+    /// （用户 2026-09-13 报的「界面上出现 ×2」）。
+    #[tokio::test]
+    async fn closing_a_session_stops_its_connection_for_good() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let bus = EventBus::default();
+        let counters = Arc::new(Counters::default());
+        let active = Arc::new(AtomicUsize::new(0));
+        let source: Arc<dyn LiveSource> = Arc::new(CountingSource {
+            active: Arc::clone(&active),
+        });
+        let room = Room {
+            room_id: 7,
+            ..Default::default()
+        };
+
+        let runtime = RoomRuntime::spawn(
+            room.clone(),
+            5000,
+            bus.clone(),
+            Arc::clone(&counters),
+            Arc::clone(&source),
+        );
+        settle().await;
+        assert_eq!(active.load(Ordering::SeqCst), 1, "进房必须真的去连");
+
+        runtime.close().await.unwrap();
+        settle().await;
+        assert_eq!(
+            active.load(Ordering::SeqCst),
+            0,
+            "会话结束后在途的连接必须跟着停（否则它是一条孤儿连接，照样往总线投弹幕）"
+        );
+
+        // 重进同一房间：只能有一条连接 —— 两条就是界面上 ×2 的源头。
+        let again = RoomRuntime::spawn(room, 5000, bus, counters, source);
+        settle().await;
+        assert_eq!(
+            active.load(Ordering::SeqCst),
+            1,
+            "重进同一房间后只允许一条连接，否则界面必然出现 ×2"
+        );
+        again.close().await.unwrap();
+    }
+
+    /// 同一条弹幕不得既从进场回填来一次、又从实时路径来一次。上游两种情形都会这样：
+    /// ① `gethistory` 与 WS 都带了它；② 同一帧里压缩子包与明文子包各带一份。
+    /// 两份都进会话缓冲的话，界面按 (uid, 正文, ts) 把同一条合并成一行 ×2。
+    #[tokio::test]
+    async fn a_backfilled_danmaku_is_not_repeated_by_the_live_path() {
+        let bus = EventBus::default();
+        let counters = Arc::new(Counters::default());
+        let room = Room {
+            room_id: 7,
+            ..Default::default()
+        };
+        let backfilled = history_msg(100, 9, "好");
+        let mut echoed_live = backfilled.clone();
+        echoed_live.is_history = false;
+        let source: Arc<dyn LiveSource> = Arc::new(FakeSource {
+            history: vec![backfilled],
+            messages: vec![echoed_live],
+            history_fails: false,
+            identity: RoomSession::default(),
+            identity_fails: false,
+        });
+
+        let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
+        settle().await;
+
+        let rows = runtime.query(&HistoryQuery::default());
+        assert_eq!(
+            rows.len(),
+            1,
+            "同一条弹幕只能留下一份：既从回填又从实时各来一份就是界面上那行 ×2"
+        );
+        assert!(rows[0].is_history, "留下的是先到的那份（进场回填）");
         runtime.close().await.unwrap();
     }
 }

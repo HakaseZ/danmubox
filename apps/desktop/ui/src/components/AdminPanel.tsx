@@ -63,8 +63,11 @@ function parseUid(value: string): number | undefined {
  * - 所有写操作（禁言 / 拉黑 / 解除 / 增删词）都只提交给上层，由那里出**二次确认**——
  *   这些动作会不可逆地影响他人。
  * - **单点动作收在行的右键菜单里**，「批量」模式才是行内的多选（用户 2026-09-13 第 4 条）：
- *   打开批量后每行前出现勾选框、列表上方有「全选」、底部升起当前 tab 的批量动作条。
+ *   打开批量后每行前出现勾选框，全选 / 已选 / 批量动作在第 2 排。
  *   批量同样走上层的二次确认（一次确认覆盖整批，文案含数量）。
+ * - **排布是两排、都贴顶**（用户 2026-09-14 第 5 条「不要竖着排版」）：
+ *   第 1 排 = 输入框（唯一可缩项）+ 该 tab 的主操作 + 批量图标钮；批量模式下第 2 排
+ *   （全选 / 已选 N 项 / 批量动作）紧贴第 1 排下方，仍是横向一排。列表与错误条在两者之下。
  * - 增删的输入沿用输入区已有的样式（input + 按钮，屏蔽词回车即可添加）。
  */
 export function AdminPanel({
@@ -87,12 +90,9 @@ export function AdminPanel({
   const [word, setWord] = useState("");
   const railRef = useRef<HTMLDivElement>(null);
 
-  const counts: Record<AdminTab, number> = {
-    silent: silent.length,
-    blacklist: blacklist.length,
-    keywords: keywords.length,
-  };
-
+  // tab 文案**不再带计数**（issue #3：「禁言 3」→「禁言」）：条数就是三块列表自己的长度
+  // （`silent` / `blacklist` / `keywords`），屏幕上由 `.adminList` 里的芯片数直接给出，
+  // 不在这里另算一份渲染出去。
   const userKey = (user: AdminUser) => `u:${user.uid}`;
   const wordKey = (item: string) => `w:${item}`;
   const currentKeys =
@@ -218,6 +218,71 @@ export function AdminPanel({
       </div>
     );
 
+  /**
+   * 第 1 排末尾的**批量图标钮**（issue #5：文字开关从 tab 行挪下来、换成图标，tab 行于是只留关闭）。
+   * `aria-pressed` 说明它是**模式**不是一次性动作，打开态换成强调色填充；图标没有文字可读，
+   * 因此 `aria-label` / `title` 都要写全。打开后第 2 排出现在**本排正下方**。
+   */
+  const batchToggle = (
+    <button
+      type="button"
+      className={`${styles.ctlRound}${batch ? ` ${styles.adminToggleOn}` : ""}`}
+      data-testid="db-admin-batch"
+      aria-pressed={batch}
+      aria-label={batch ? "退出批量处理" : "批量处理"}
+      title={batch ? "退出批量处理" : "批量处理（多选后一次处理）"}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => {
+        setBatch((value) => !value);
+        setPicked([]);
+        setMenu(null);
+      }}
+    >
+      {/* 「清单 + 勾」：两行「勾选框 + 名字」，正是打开批量后名单的样子。
+          规范与房间头两枚同一套（§3.1）：墨迹居中于 (12,12)、主轴 16 单位（横向量到的
+          4 → 20）、`stroke-width` 1.75 + round 线帽 / 接合。 */}
+      <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M4.875 8.75 6.875 10.75 10.875 6.75M13 8.75h6.125M4.875 15.25 6.875 17.25 10.875 13.25M13 15.25h6.125"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+
+  /**
+   * 第 2 排（**只在批量模式下**、紧贴第 1 排下方，横向一排不竖排）：全选 / 已选 N 项 / 批量动作。
+   * 这一排把原来分居两处的「名单上方的全选头」与「表单下方的动作条」合到了一起（issue #5），
+   * testid 一个没动。全选与勾选都只作用**当前 tab**，动作条只提交当前 tab 的成员。
+   */
+  const batchBar = batch ? (
+    <div className={styles.adminBatchBar} data-testid="db-admin-batch-bar">
+      <button
+        type="button"
+        data-testid="db-admin-select-all"
+        disabled={currentKeys.length === 0}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={toggleAll}
+      >
+        {allPicked ? "取消全选" : "全选"}
+      </button>
+      <span className={styles.previewLabel}>已选 {pickedKeys.length} 项</span>
+      <button
+        type="button"
+        data-testid="db-admin-batch-action"
+        disabled={busy || pickedKeys.length === 0}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={confirmBatch}
+      >
+        {BATCH_LABEL[tab]}
+      </button>
+    </div>
+  ) : null;
+
   return (
     <div className={styles.adminPanel} data-testid="db-admin-panel">
       <div className={styles.panelHead}>
@@ -245,31 +310,34 @@ export function AdminPanel({
               onClick={() => selectTab(item)}
             >
               {TAB_LABEL[item]}
-              <span className={styles.adminTabCount}>（{counts[item]}）</span>
             </button>
           ))}
         </div>
         <span className={styles.composerSpacer} />
+        {/* tab 行右侧**只留关闭**（issue #4）：原来的文字「关闭」与「批量」开关都从这里挪走了
+            —— 批量搬进第 1 排（issue #5），关闭换成 X 号图标（没有文字，可访问名靠
+            `aria-label` + `title`）。控件族与房间头那两枚同一套：`.ctlRound` + `.ctlIcon`
+            （40 × 40 正圆、透明底 + hover 洗色），图标规范见 `docs/ui.md` §3.1。 */}
         <button
-          data-testid="db-admin-batch"
-          aria-pressed={batch}
-          className={batch ? styles.adminToggleOn : undefined}
-          title={batch ? "退出批量处理" : "批量处理（多选后一次处理）"}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            setBatch((value) => !value);
-            setPicked([]);
-            setMenu(null);
-          }}
-        >
-          批量
-        </button>
-        <button
+          type="button"
+          className={styles.ctlRound}
           data-testid="db-admin-close"
+          aria-label="关闭"
+          title="关闭"
           onMouseDown={(event) => event.preventDefault()}
           onClick={onClose}
         >
-          关闭
+          <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+            {/* X：两条对角线的墨迹居中于 (12,12)，主轴（对角线盒的边长）16 单位 = 返回箭头的高 */}
+            <path
+              d="M4.875 4.875 19.125 19.125M19.125 4.875 4.875 19.125"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </button>
       </div>
 
@@ -279,21 +347,31 @@ export function AdminPanel({
         aria-labelledby={adminTabId(tab)}
         data-testid="db-admin-tabpanel"
       >
-        {batch && (
-          <div className={styles.adminPickHead}>
-            <button
-              data-testid="db-admin-select-all"
-              disabled={currentKeys.length === 0}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={toggleAll}
-            >
-              {allPicked ? "取消全选" : "全选"}
-            </button>
-          </div>
-        )}
-
         {tab === "silent" && (
           <>
+            <div className={styles.adminForm}>
+              <input
+                className={styles.adminInput}
+                value={muteUid}
+                placeholder="观众 uid"
+                onChange={(event) => setMuteUid(event.target.value)}
+              />
+              <button
+                type="button"
+                disabled={busy || parseUid(muteUid) === undefined}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  const uid = parseUid(muteUid);
+                  if (uid !== undefined) {
+                    onConfirm({ kind: "mute", uid, uname: "", hour: 0 });
+                  }
+                }}
+              >
+                禁言
+              </button>
+              {batchToggle}
+            </div>
+            {batchBar}
             {errorRow(errors.silent)}
             <div className={styles.adminList}>
               {silent.length === 0 ? (
@@ -315,31 +393,34 @@ export function AdminPanel({
                 )
               )}
             </div>
-            <div className={styles.adminForm}>
-              <input
-                className={styles.adminInput}
-                value={muteUid}
-                placeholder="观众 uid"
-                onChange={(event) => setMuteUid(event.target.value)}
-              />
-              <button
-                disabled={busy || parseUid(muteUid) === undefined}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const uid = parseUid(muteUid);
-                  if (uid !== undefined) {
-                    onConfirm({ kind: "mute", uid, uname: "", hour: 0 });
-                  }
-                }}
-              >
-                禁言
-              </button>
-            </div>
           </>
         )}
 
         {tab === "blacklist" && (
           <>
+            <div className={styles.adminForm}>
+              <input
+                className={styles.adminInput}
+                value={blackUid}
+                placeholder="观众 uid"
+                onChange={(event) => setBlackUid(event.target.value)}
+              />
+              <button
+                type="button"
+                disabled={busy || parseUid(blackUid) === undefined}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  const uid = parseUid(blackUid);
+                  if (uid !== undefined) {
+                    onConfirm({ kind: "blacklist_add", uid, uname: "" });
+                  }
+                }}
+              >
+                拉黑
+              </button>
+              {batchToggle}
+            </div>
+            {batchBar}
             {errorRow(errors.blacklist)}
             <div className={styles.adminList}>
               {blacklist.length === 0 ? (
@@ -361,31 +442,42 @@ export function AdminPanel({
                 )
               )}
             </div>
-            <div className={styles.adminForm}>
-              <input
-                className={styles.adminInput}
-                value={blackUid}
-                placeholder="观众 uid"
-                onChange={(event) => setBlackUid(event.target.value)}
-              />
-              <button
-                disabled={busy || parseUid(blackUid) === undefined}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const uid = parseUid(blackUid);
-                  if (uid !== undefined) {
-                    onConfirm({ kind: "blacklist_add", uid, uname: "" });
-                  }
-                }}
-              >
-                拉黑
-              </button>
-            </div>
           </>
         )}
 
         {tab === "keywords" && (
           <>
+            <div className={styles.adminForm}>
+              <input
+                className={styles.adminInput}
+                value={word}
+                placeholder="屏蔽词，回车添加"
+                onChange={(event) => setWord(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  const value = word.trim();
+                  if (value.length === 0) return;
+                  onConfirm({ kind: "keyword_add", word: value });
+                  setWord("");
+                }}
+              />
+              <button
+                type="button"
+                disabled={busy || word.trim().length === 0}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  const value = word.trim();
+                  if (value.length === 0) return;
+                  onConfirm({ kind: "keyword_add", word: value });
+                  setWord("");
+                }}
+              >
+                添加屏蔽词
+              </button>
+              {batchToggle}
+            </div>
+            {batchBar}
             {errorRow(errors.keywords)}
             <div className={styles.adminList}>
               {keywords.length === 0 ? (
@@ -403,49 +495,7 @@ export function AdminPanel({
                 )
               )}
             </div>
-            <div className={styles.adminForm}>
-              <input
-                className={styles.adminInput}
-                value={word}
-                placeholder="屏蔽词，回车添加"
-                onChange={(event) => setWord(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
-                  event.preventDefault();
-                  const value = word.trim();
-                  if (value.length === 0) return;
-                  onConfirm({ kind: "keyword_add", word: value });
-                  setWord("");
-                }}
-              />
-              <button
-                disabled={busy || word.trim().length === 0}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const value = word.trim();
-                  if (value.length === 0) return;
-                  onConfirm({ kind: "keyword_add", word: value });
-                  setWord("");
-                }}
-              >
-                添加屏蔽词
-              </button>
-            </div>
           </>
-        )}
-
-        {batch && (
-          <div className={styles.adminBatchBar} data-testid="db-admin-batch-bar">
-            <span className={styles.previewLabel}>已选 {pickedKeys.length} 项</span>
-            <button
-              data-testid="db-admin-batch-action"
-              disabled={busy || pickedKeys.length === 0}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={confirmBatch}
-            >
-              {BATCH_LABEL[tab]}
-            </button>
-          </div>
         )}
       </div>
 

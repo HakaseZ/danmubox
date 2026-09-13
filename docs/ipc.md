@@ -15,7 +15,7 @@
 
 约束（规范性）：命令名与事件名的集合是**封闭**的，与 `contract.md` §7 逐条一致（命令清单见 §3、事件清单见 §4）；新增面必须同时改 `contract.md` §7、本文与实现，不允许前端私自定义字符串。
 
-> 「手填 Cookie」不设独立命令：按 `contract.md` §4.1，它等于**直接编辑 `config.toml`**，界面只提供数据目录路径与文件说明。
+> 「手填 Cookie」不再有对应命令（用户 2026-09-13：登录方式只保留扫码与游客，界面 / CLI 的 Cookie 入口已从全链路移除）。要改凭据只能直接编辑 `config.toml`（`contract.md` §4.1、`auth.md` §8.4）。
 
 > 后期想法（本期不实现）：接入 MCP，让 Agent 直接消费弹幕数据。因此 IPC 只是 core 的一个消费面，core 的端口与事件总线不得假设消费方是 UI；新增能力先落 core 端口，再决定是否暴露成命令。
 
@@ -26,7 +26,7 @@
 | 命令注册 | 全部集中在 `apps/desktop/src-tauri/src/lib.rs` 的 `tauri::generate_handler![…]`；命令函数也在该文件（没有 `commands.rs`） |
 | 命令名 | `snake_case`，与 `contract.md` §7 字面一致 |
 | 参数名 | Rust 侧 `snake_case`；Tauri 2 把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId`、`query`、`patch`、`upstreamId` 等 camelCase 键 |
-| 同步/异步 | 37 条命令：28 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` |
+| 同步/异步 | 36 条命令：27 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` |
 | 成功返回 | §3 签名表「返回」列的 JSON 值；`void` = 无返回体 |
 | 失败返回 | `invoke` reject，值为 `ApiError`：`{ "code": string, "message": string }`（`lib.rs`）。前端按 `code` 分支；`message` 是给人看的文案（Rust `Display` 或上游原文），**不得**解析它做逻辑，也没有 `detail` 这类嵌套字段 |
 | 错误码 | `code` 取自 `core::error::Error::code()`，共八个（下表）；错误对象的集合以本文为准 |
@@ -50,7 +50,7 @@
 
 ## 3. 命令签名表
 
-37 条，与 `generate_handler!` 逐条对应；除表中注明的同步命令外均为 `async fn`。所有命令都接收 `State<'_, AppState>`（下表省略）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
+36 条，与 `generate_handler!` 逐条对应；除表中注明的同步命令外均为 `async fn`。所有命令都接收 `State<'_, AppState>`（下表省略）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
 
 | 命令 | 参数 | 返回 | 错误 | 说明 |
 |---|---|---|---|---|
@@ -59,7 +59,6 @@
 | `accounts_list` | 无 | `Account[]` | `INTERNAL` | 列出全部账号：`Account { name, nickname, uid, face, logged_in, active }`；游客态不是账号，没有凭据就没有条目 |
 | `account_qr_start` | `target: Option<String>` | `QrStart { key, url, svg }` | `BAD_REQUEST` `INTERNAL` | 不带 `target` = **新增账号**（确认后按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并写明覆盖哪个账号）。二维码由后端离线渲染成 SVG，`target` 由界面侧补记、后端不认这个字段 |
 | `account_qr_poll` | `key: String` | `QrPoll { state, account }` | `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`；确认那一次凭据已落盘、账号已存在，`account` 非空；未确认时 `account` 为 `null` |
-| `account_login_cookie` | `cookie: String, name: Option<String>` | `Account` | `BAD_REQUEST` `INTERNAL` | 手填 Cookie（需求 §2.5 三种方式之一）；必填 `SESSDATA` / `bili_jct` / `DedeUserID`，缺一 → `BAD_REQUEST`；`name` 缺省按昵称自动生成 |
 | `account_switch` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换当前账号并以新凭据重建各房间连接 |
 | `account_logout` | `name: Option<String>` | `SessionState` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省 = 当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
 | `account_remove` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
@@ -415,7 +414,7 @@ type SendState = "unconfirmed" | "rejected";   // Message.send_state（另有 Me
 |---|---|---|
 | `bootstrap()` | `app_info` + `session_status` + `rooms_list` + `prefs_get` + `accounts_list`（并行） | 启动入口：先铺数据，再 `subscribeEvents` 订阅事件（§8） |
 | `refreshIdentity()` / `loadAccounts()` / `applySession(session)` | `session_status` / `accounts_list` | 登录态或账号变化后的统一善后；**不吃** `account_*` 的返回值，以重拉结果为准 |
-| `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `loginCookie(cookie, name?)` / `startAccountQr(target?)` / `pollAccountQr()` / `cancelAccountQr()` | `account_switch` / `account_remove` / `account_logout` / `account_login_cookie` / `account_qr_start` / `account_qr_poll` | 账号族；成功后按新会话重拉房间与关注 |
+| `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `startAccountQr(target?)` / `pollAccountQr()` / `cancelAccountQr()` | `account_switch` / `account_remove` / `account_logout` / `account_qr_start` / `account_qr_poll` | 账号族；成功后按新会话重拉房间与关注。**换人时先清掉上一个身份的界面切片**（房间与房内缓冲、身份快照、房管三块、表情库等，见 §8） |
 | `addRoom(input)` | `rooms_add` | 成功后重拉 `rooms_list` 并 `openRoom` |
 | `openRoom(roomId)` | `history_query`（`limit: 0`）+ `rooms_connect` | 开一次新房内会话：清空 `messages` 与房管/身份，回填历史，再建连；同时记 `ui.recent_watched` |
 | `closeRoom()` | — | 关标签：清空 `messages` / 房管数据，删该房间 `roomIdentities` |
@@ -501,6 +500,7 @@ sequenceDiagram
 | 应用启动 | `bootstrap`：并行 `app_info` + `session_status` + `rooms_list` + `prefs_get` + `accounts_list`，再 `subscribeEvents` 订阅 §4 的 7 个事件名（每类 handler 可选） |
 | 进入房间 | `openRoom`：清空 `messages` 与房管/身份 → `history_query`（`limit: 0`）回填 → `rooms_connect`；`RoomView` 渲染时按登录态触发 `loadEmotes` / `loadOwnedEmotes` / `loadRoomIdentity` / `loadBalance` |
 | 切换房间 | 只切 `activeRoomId` 并清掉上一间的 `messages`；事件继续到达，非激活房间的弹幕直接丢弃（`onMessage` 判 `room_id`） |
+| 切号（`account_switch` / 登出当前账号 / 删掉当前账号 / 扫码确认新账号） | 先清掉上一个身份的界面切片（`rooms` / `activeRoomId` / `messages` / `roomIdentities` / 房管三块 / `emotes` / `ownedEmotes` / `seeding` / `lastSend`）与所有房间定时器，再按新会话重拉 `rooms_list` 与 `follow_list`；core 侧各房间以新凭据重建连接（契约 §7 `account_switch`）。草稿按「身份 + 房间」分键，切号后不恢复（`ui.md` §2.2.1） |
 | 离开房间（关标签 / 移除房间） | 清空 `messages`、清掉互动与发送定时器、删该房间 `roomIdentities`、清空房管三块；core 侧缓冲同步销毁 |
 | 手动重连 | 不触碰 store 切片；`rooms_reconnect` 后重拉 `rooms_list` 取连接态 |
 | 应用卸载 / HMR | `bootstrap` 每次订阅前先 `unsubscribe?.()`；订阅函数由模块级变量持有，**不允许匿名 `listen` 后丢弃句柄**（热重载后会重复监听） |

@@ -54,10 +54,10 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 
 三种模式互斥，任一时刻只有一套生效凭据，落盘位置是 `config.toml` 中 `active_profile` 指向的那一份（契约 §4.1）——对外把这一份具名凭据叫**账号**（存储表键仍叫 `[profiles.<name>]`）；切换模式等于覆盖写回该账号。**扫码是默认入口**（契约 §2、§4.1）。
 
-| 维度 | 游客 `anonymous` | 手填 Cookie `cookie` | 扫码 `qrcode` |
+| 维度 | 游客 `anonymous` | 文件凭据 `cookie` | 扫码 `qrcode` |
 |---|---|---|---|
-| 默认性 | 未登录时的回退态 | 备选（排障与快速恢复） | **默认入口** |
-| 用户动作 | 无 | 粘贴 Cookie（`account_login_cookie`）或直接编辑 `config.toml`（§8.4） | 手机 B 站 App 扫一次码并确认 |
+| 默认性 | 未登录时的回退态 | 手工编辑 `config.toml` 后的状态（没有程序入口） | **默认入口** |
+| 用户动作 | 无 | 用编辑器把 Cookie 填进 `config.toml`（§8.4） | 手机 B 站 App 扫一次码并确认 |
 | 本地凭据 | 仅 `buvid3` / `buvid4`（非账号凭据） | 该账号的全套字段 | 该账号的全套字段 |
 | 收弹幕 | 可收大部分 `danmaku` / `gift` / `superchat` / `interact` / `guard` / `system` | 完整 | 完整 |
 | 昵称与 UID | **与登录态一样完整**（2026-09-12 实测：`uid` 非 0、昵称不掩码，A3 / A21） | 完整 | 完整 |
@@ -72,7 +72,7 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 ### 2.1 模式选择的实现规则（规范性）
 
 1. 启动时 `config.toml` 缺失、或 `active_profile` 指向的账号凭据不全 → `mode = "anonymous"`、`logged_in = false`，用已有的 `buvid3` 走游客链路（§8.2）。
-2. 用户点击登录 → 默认进入扫码流程；扫码有两个用法：**不带目标 = 新增账号**（账号名在确认后按昵称生成，用户不必先起名），**带目标 = 给该账号重新登录**。手填 Cookie 走 `account_login_cookie`（§8.4）。
+2. 用户点击登录 → 默认进入扫码流程；扫码有两个用法：**不带目标 = 新增账号**（账号名在确认后按昵称生成，用户不必先起名），**带目标 = 给该账号重新登录**。界面与 CLI 都不再提供粘贴 Cookie 的入口（§8.4）。
 3. 扫码成功后 `mode = "qrcode"`；启动时读到齐全凭据则 `mode = "cookie"`。
 4. 登出（`account_logout`，缺省 = 当前账号）只清空该账号的**账号级**凭据并回到 `anonymous`，**保留账号条目**（它在 `accounts_list` 里继续以 `logged_in = false` 出现，可再登录回来），其它账号不受影响；`buvid3` / `buvid4` 一并保留，见 §3.3。
 5. 切换账号（`account_switch`）= 改 `active_profile` + 以新凭据重建连接，**不复制多份文件**（契约 §4.1）；切换后按新账号的凭据重新判定 `mode` 与 `logged_in`。删除账号（`account_remove`）保留两条护栏：不许删掉最后一个、删当前项自动切到剩下的第一个。
@@ -403,19 +403,22 @@ sid = ""
 - 写回的目标是本次登录的**目标账号**：重新登录（`account_qr_start` 带 target）写它；新增账号先按昵称派生账号名（§8.4 的命名规则）再写出新条目。字段集为本次登录获得的完整凭据集，`buvid3` / `buvid4` 若该账号已有则保留（§3.3）；新增账号时设备级 `buvid` 从当前账号继承一份（`buvid` 不绑定账号）。
 - 登出清空该账号的**账号级**凭据字段（`sessdata` / `bili_jct` / `dede_user_id` / `dede_user_id_ck_md5` / `sid`），保留 `buvid3` / `buvid4`，其它账号不动；清空同样走原子写回。**账号条目本身保留**——退游客态不等于把账号删掉。
 
-### 8.4 手填 Cookie
+### 8.4 手工编辑凭据文件（没有程序入口）
 
-有两条路，落点相同（都是 `config.toml` 里那一份凭据）：
+界面与 CLI **不提供**导入 Cookie 的入口（用户 2026-09-13：登录方式只保留扫码与游客；
+此前的 `account_login_cookie` 命令与 CLI 的 `--cookie -` 已从全链路移除）。要把某份凭据换掉，
+只能自己编辑 `config.toml`：
 
-1. **程序入口** `account_login_cookie(cookie, name?)`（需求 §2.5 的三种方式之一）：用户把
-   `SESSDATA=…; bili_jct=…; DedeUserID=…` 粘进界面（或 CLI 的 `--cookie -` 从 stdin 读）。
-   - 解析宽容：`;` 或换行分隔、每段两侧空白、整串带 `Cookie:` 前缀都接受；值不做二次编解码。
-   - 校验必填三要素，缺一即 `BAD_REQUEST` 并点名缺了哪个（用户贴错键名时要能自己看出来）。
-   - **先向 `nav` 求证再落盘**：`code != 0` 说明凭据无效，直接 `BAD_REQUEST`，不写进文件——
-     否则界面会出现一个「已登录」却连不上的账号（S2-AC5 的同一类坑）。
-   - `name` 缺省时按昵称自动生成账号名（命名规则见下）；给了名字就写进那个账号，已存在即覆盖（= 用 Cookie 重新登录）。
-   - 凭据只在 Rust 侧接收与落盘：**不进日志**、不进 `prefs.json`、不回传前端（返回值是 §8.6 的脱敏 `Account`）。
-2. **直接编辑文件**：从浏览器 DevTools 复制值填进对应键，保存后重启应用（§8.2 的启动顺序会复核）。
+1. 退出应用（避免写入竞争）。
+2. 备份现有文件（复制为 `config.toml.bak`）。
+3. 从浏览器 DevTools 的 Application → Cookies → `bilibili.com` 复制 `SESSDATA` / `bili_jct` /
+   `DedeUserID`，填进 `active_profile` 指向的 `[profiles.<name>]` 的 `sessdata` / `bili_jct` /
+   `dede_user_id`；其余字段可留空。
+4. 保存后重启应用：三项齐全即直接进入登录态，无需扫码（§8.2 的启动顺序会复核）。
+
+代价是**没有落盘前的护栏**——凭据是否有效只能在启动复核（或下一次 `nav` 调用）时才发现，
+不会再有一个「提交前先求证」的入口把无效凭据挡在文件之外。凭据本身仍然只在 Rust 侧与磁盘之间
+移动：**不进日志**、不进 `prefs.json`、不回传前端（返回值只有 §8.6 的脱敏 `Account`）。
 
 **账号命名规则（规范性，新增账号时用）**：账号名只允许 `[A-Za-z0-9_-]{1,32}`（它同时是 TOML 表键与界面标识）。
 昵称常常是中文，而这里**不做转写**：只保留 ASCII 字母数字与 `-` / `_`，其余字符（含全部中文）直接丢掉；
@@ -423,7 +426,7 @@ sid = ""
 
 ### 8.5 与 `prefs.json` 分家的理由
 
-契约 §4.1 规定 `config.toml` 只放凭据、界面偏好一律走 `prefs.json`（契约 §4.2）。因此：账号凭据 → `config.toml`（低频写、用户可编辑、手填 Cookie 不被程序覆盖）；界面偏好 → `prefs.json`（高频写、程序管理）；两者互不包含对方内容。完整论证与被否方案见 `decisions/0007-credential-file.md`。
+契约 §4.1 规定 `config.toml` 只放凭据、界面偏好一律走 `prefs.json`（契约 §4.2）。因此：账号凭据 → `config.toml`（低频写、用户可编辑、用户自己填的凭据不会被程序的偏好写入碰到）；界面偏好 → `prefs.json`（高频写、程序管理）；两者互不包含对方内容。完整论证与被否方案见 `decisions/0007-credential-file.md`。
 
 ### 8.6 前端可见的脱敏对象（规范性）
 
@@ -612,7 +615,7 @@ sid = ""
 6. `config.toml` 只存在于本机应用数据目录，权限 MUST 为 0600（Windows 为等价的用户私有 ACL）；不得把该文件路径或内容交给任何远程服务。
 7. 凭据只经 HTTPS / WSS 传输；本项目不提供任何供外部读取凭据的本地服务（无本地监听端口、无 token 文件），凭据只在本进程内使用。
 8. 二维码内容（`data.url`）只做本地渲染，不得提交给任何第三方二维码生成服务，否则等同于把登录凭证转发给第三方。
-9. 手填 Cookie 走 `account_login_cookie`（§8.4）：凭据从界面直达 Rust 侧，**只在进程内与磁盘之间移动**——不写日志、不进 `prefs.json`、不回传前端、不落任何中间文件；返回值只有 §8.6 的脱敏 `Account`。CLI 的对应入口只允许从 stdin 读（`--cookie -`），不得把凭据放进命令行参数（进程表与 shell 历史会泄漏）。文档与截图中的示例一律用明显的伪造值，禁止贴出真实值。
+9. 界面与 CLI 都没有「粘贴 Cookie」的入口（§8.4）：程序只在扫码流程里接收凭据，凭据**只在进程内与磁盘之间移动**——不写日志、不进 `prefs.json`、不回传前端、不落任何中间文件。因此也不存在把凭据写进命令行参数（进程表与 shell 历史）的路径。文档与截图中的示例一律用明显的伪造值，禁止贴出真实值。
 10. 提供「登出」时，必须真正清空当前账号的**账号级**凭据字段（§8.3），而不是仅把内存状态置为未登录；账号条目与 `buvid3` / `buvid4` 保留。
 11. 凭据相关代码的任何改动都必须在变更说明中显式声明是否影响上述任一条；不影响也需说明。
 
@@ -646,7 +649,7 @@ sid = ""
 
 - `contract.md`：唯一事实源；`config.toml`（§4.1）、`prefs.json`（§4.2）、`SendOutcome`（§5）、协议要点（§6）、IPC 命令（§7）、安全红线的总纲。
 - `protocol.md`：WS 帧格式、认证包 / 心跳包精确格式、命令目录、重连状态机、发送与风控（含 `upstream_id` 与举报相关字段的实测记录）。
-- `ipc.md`：`session_status` / `accounts_list` / `account_qr_start` / `account_qr_poll` / `account_login_cookie` / `account_switch` / `account_logout` / `account_remove` / `chat_send` / `chat_report` / `emotes_list` / `follow_list` / `wallet_balance` 的签名与 `danmubox://session` 载荷。
+- `ipc.md`：`session_status` / `accounts_list` / `account_qr_start` / `account_qr_poll` / `account_switch` / `account_logout` / `account_remove` / `chat_send` / `chat_report` / `emotes_list` / `follow_list` / `wallet_balance` 的签名与 `danmubox://session` 载荷。
 - `architecture.md`：`AuthProvider` 端口的实现位置、`core` / `bili` 的依赖方向与并发模型。
 - `ui.md`：登录界面、扫码状态展示、关注列表与礼物栏的身份徽标渲染。
 - `operations.md`：凭据相关故障的排查决策树与日志脱敏规则。

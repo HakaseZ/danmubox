@@ -106,8 +106,6 @@ interface AppStore {
   removeAccount: (name: string) => Promise<void>;
   /** 清掉某账号的凭据（缺省 = 当前账号）：该账号退回未登录，界面回到游客态。 */
   logoutAccount: (name?: string) => Promise<void>;
-  /** 手填 Cookie 登录（需求 §2.5）；成功返回 true。凭据值只进这一次调用，不落任何界面状态。 */
-  loginCookie: (cookie: string, name?: string) => Promise<boolean>;
   /** 会话变化后的统一善后（房间列表 / 关注列表跟着账号走）。 */
   applySession: (session: SessionState) => Promise<void>;
   /**
@@ -442,6 +440,36 @@ function dropRoom<T>(map: Record<number, T>, roomId: number): Record<number, T> 
   const rest = { ...map };
   delete rest[roomId];
   return rest;
+}
+
+/**
+ * 丢掉上一个身份留下的界面状态（用户 2026-09-13：「切换用户也要做隔离」）。
+ *
+ * 为什么连房间列表、表情库、房管三块也一起丢：它们全按凭据算出来——房间的连接态属于旧凭据，
+ * 表情包按房内身份下发，房管数据只对旧身份成立；留下任何一块都等于把上一个人的视角摆在新账号
+ * 面前。后端在切号时已用新凭据重建各房间连接（契约 §7 `account_switch`），这里只管清前端。
+ * 草稿不在这里：`Composer` 按「身份 + 房间」分键，切号后自然不恢复（`docs/ui.md` §2.2.1）。
+ */
+function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
+  // 定时器先停：残留的超时回调会对着另一个身份/房间的同号消息继续动。
+  clearRoomTimers();
+  set({
+    rooms: [],
+    activeRoomId: undefined,
+    messages: [],
+    roomIdentities: {},
+    adminSilent: [],
+    adminBlacklist: [],
+    adminKeywords: [],
+    adminErrors: {},
+    adminBusy: false,
+    emotes: [],
+    ownedEmotes: [],
+    ownedLoaded: false,
+    ownedError: undefined,
+    seeding: false,
+    lastSend: undefined,
+  });
 }
 
 /**
@@ -817,6 +845,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
   async switchAccount(name) {
     try {
       await api.accountSwitch(name);
+      // 切号成功：上一个身份的界面状态先清干净，再按新会话重铺（需求 2026-09-13）。
+      // 后端已用新凭据重建各房间连接（契约 §7），界面这边不能留着旧身份的视角。
+      resetIdentityState(set);
       await get().refreshIdentity();
     } catch (error) {
       set({ error: describeError(error) });
@@ -825,7 +856,12 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async removeAccount(name) {
     try {
+      // 删的若是当前账号，后端会切到剩下的第一个 —— 那也是换人，与切号同款隔离。
+      // 判定必须在命令之前取：后端切换后会推 `danmubox://session`，store 里的
+      // `active_profile` 可能先一步变成新账号，回头再比就对不上了。
+      const wasCurrent = name === get().session?.active_profile;
       await api.accountRemove(name);
+      if (wasCurrent) resetIdentityState(set);
       // 被删的可能正是当前账号（后端会切到别个），进行中的扫码也随之作废。
       set({ qr: null, qrState: null, qrError: null });
       await get().refreshIdentity();
@@ -836,25 +872,16 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async logoutAccount(name) {
     try {
+      // 登出当前账号 = 身份退回游客，同样要把上一个身份的界面状态清掉；
+      // 登出别的账号不动当前界面（`active_profile` 不因登出改名，所以这里不必抢在命令前取值）。
+      const wasCurrent = name === undefined || name === get().session?.active_profile;
       await api.accountLogout(name);
+      if (wasCurrent) resetIdentityState(set);
       // 清掉凭据后该账号退回未登录：会话变游客、关注列表清空（refreshIdentity 里做）。
       set({ qr: null, qrState: null, qrError: null });
       await get().refreshIdentity();
     } catch (error) {
       set({ error: describeError(error) });
-    }
-  },
-
-  async loginCookie(cookie, name) {
-    try {
-      const account = await api.accountLoginCookie(cookie, name);
-      await get().refreshIdentity();
-      set({ notice: `已登录「${account.nickname || account.name}」` });
-      return true;
-    } catch (error) {
-      // 凭据值不回显、不进日志：错误里只可能有后端给的 code + message。
-      set({ error: describeError(error) });
-      return false;
     }
   },
 
@@ -884,6 +911,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
         // 后端在这一步已落盘并让房间重连；界面把登录态、账号、房间、关注重新拉一遍。
         // 新增时说清「加了哪个账号」，重新登录时说清「覆盖了谁的凭据」。
         const who = account ? account.nickname || account.name : "";
+        // 确认即意味着账号集合或凭据变了（新账号会被设为当前）——与切号同款清一遍，
+        // 表情库与身份快照按新身份重新取（对话框只在房间列表页可达，这里通常已经不在房里）。
+        resetIdentityState(set);
         set({
           qr: null,
           qrState: null,

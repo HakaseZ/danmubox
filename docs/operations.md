@@ -117,7 +117,7 @@ adb shell dumpsys package dev.kksk.danmubox | grep -i dataDir   # 辅助确认
 
 不要在文档或脚本里硬编码 Android 的 `/data/data/...` 路径：设备用户、系统版本与分区方案都会影响实际位置。
 
-### 1.4 凭据文件 `config.toml`：查看、权限与手工填 Cookie
+### 1.4 凭据文件 `config.toml`：查看、权限与手工编辑
 
 凭据以**明文 TOML** 存放，靠文件权限（`0600`）与「只在本机数据目录」约束，不加密（契约 §4.1；需求来源与本取舍的完整论证见 [`decisions/0007-credential-file.md`](decisions/0007-credential-file.md)）。
 
@@ -148,20 +148,19 @@ sid = ""
 
 安全提醒：`config.toml` 整文件等同账号控制权，**不要**贴进聊天、issue、日志或截图；排查时只看「哪个字段是否为空」，不要展示取值。
 
-#### 手工填入 Cookie（「手填 Cookie」入口）
+#### 手工编辑凭据（排障兜底）
 
-两条路都落在同一个文件上：
-
-- **界面 / CLI**（推荐）：界面的「用 Cookie 登录」走 `account_login_cookie`；CLI 用
-  `danmubox accounts --cookie -` 从标准输入收（`--cookie` 直接写命令行会让凭据进进程表与 shell 历史，别那么用）。
-  好处是落盘前会先向 `nav` 求证，凭据无效当场报错，不会留下一个「显示已登录、其实连不上」的账号。
-- **直接编辑文件**（排障兜底）：
+界面与 CLI **没有**粘贴 Cookie 的入口（用户 2026-09-13：登录方式只保留扫码与游客）。
+要换掉某份凭据只能编辑这个文件：
 
 1. 退出应用（避免写入竞争）。
 2. 备份现有文件（复制为 `config.toml.bak`）。
 3. 从浏览器 DevTools 的 Application → Cookies → `bilibili.com` 复制 `SESSDATA`、`bili_jct`、`DedeUserID`，填入 `active_profile` 指向的 `[profiles.<name>]` 的 `sessdata` / `bili_jct` / `dede_user_id`；其余字段可留空。
 4. 确认文件权限为 `0600`（见上表）。
 5. 重新启动应用：三项齐全即直接进入登录态，无需扫码。
+
+注意这里没有落盘前的护栏：凭据是否有效要到启动复核（或下一次 `nav` 调用）才知道，
+填错就是启动后仍显示未登录（`auth.md` §8.4）。
 
 登出（界面登出，对应 `account_logout`）会清空当前账号的**账号级**凭据并回到游客态：**账号条目保留**（列表里显示为未登录，可再登录回来），`buvid3` / `buvid4` 为设备标识一并保留。
 
@@ -176,6 +175,8 @@ sid = ""
 | 扫码登录 / 新增账号 | `danmubox login [账号名]`（终端直接渲染二维码；不带账号名 = 新增账号，确认后按昵称自动起名；`--timeout` 可调） |
 | 登出 | `danmubox logout [账号名]`（缺省 = 当前账号；只清凭据，条目保留） |
 | 切换 / 删除账号 | `danmubox accounts --use <名字>`、`danmubox accounts --remove <名字>` |
+
+界面与 CLI 的账号入口都只保留扫码与登出：没有「粘贴 Cookie」这一类命令（用户 2026-09-13 移除，见 `auth.md` §8.4）。
 
 数据目录默认取平台路径（`paths::data_dir`）；调试或多环境并存时可用环境变量 `DANMUBOX_HOME` 覆盖，例如 `DANMUBOX_HOME=/tmp/db danmubox session`。
 
@@ -228,7 +229,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 | 1 | 登录态（`session_status` / 界面） | 显示未登录 → 先扫码，或按 §1.4 编辑 `config.toml` 后重启 |
 | 2 | 认证回应是否 `code=0` | `code=0` 为成功；非 0 一律视为认证失败，按重连退避处理，日志保留原始 code，**不得**在未知 code 上编造含义 |
 | 3 | 是否游客模式 | 游客 `uid=0`、`key=""` 属预期；游客能力受限（昵称掩码、字段缺失），不代表故障 |
-| 4 | `SESSDATA` 是否过期／失效 | 手填的凭据过期 → 重新扫码，或按 §1.4 更新 `config.toml` |
+| 4 | `SESSDATA` 是否过期／失效 | 凭据过期（含手工编辑进去的那份）→ 重新扫码，或按 §1.4 更新 `config.toml` |
 | 5 | WBI 签名相关报错 | 说明签名实现或系统时间异常；先校准系统时间，再查 `auth.md` 的签名步骤 |
 | 6 | 换房间是否同样失败 | 全房间失败 → 账号级问题；单房间失败 → 房间级问题（房间号、权限、风控） |
 
@@ -331,7 +332,7 @@ grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或日
 
 ## 4. 卸载与残留清理
 
-卸载前务必确认：`config.toml` 含账号控制权凭据，删除或卸载即**永久丢失**，重装后需重新扫码或重新手填。
+卸载前务必确认：`config.toml` 含账号控制权凭据，删除或卸载即**永久丢失**，重装后需重新扫码（或手工编辑凭据文件，§1.4）。
 
 ### 4.1 macOS
 
@@ -368,7 +369,7 @@ grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或日
 | 1 | 无进程残留 | 三端均无 `danmubox` 进程 |
 | 2 | 无数据目录残留 | §1.3 列出的路径均已清理 |
 | 3 | 凭据文件已删 | `config.toml` 不再存在（含备份副本） |
-| 4 | 重装可用 | 重新安装后能正常启动；因凭据已随文件删除，需重新扫码或按 §1.4 手填 |
+| 4 | 重装可用 | 重新安装后能正常启动；因凭据已随文件删除，需重新扫码（或按 §1.4 手工编辑凭据文件） |
 
 ---
 

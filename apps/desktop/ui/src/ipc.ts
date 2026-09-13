@@ -81,12 +81,6 @@ export const api = {
     call<AccountQr>("account_qr_start", target === undefined ? {} : { target }),
   accountQrPoll: (key: string) =>
     call<AccountQrPoll>("account_qr_poll", { key }),
-  /** 手填 Cookie（需求 §2.5 的三种方式之一）；`name` 缺省时后端按昵称自动生成。 */
-  accountLoginCookie: (cookie: string, name?: string) =>
-    call<Account>(
-      "account_login_cookie",
-      name === undefined ? { cookie } : { cookie, name },
-    ),
   /** 清掉某个账号的凭据（缺省 = 当前账号）；账号条目保留，`logged_in=false` = 退回游客态。 */
   accountLogout: (name?: string) =>
     call<SessionState>("account_logout", name === undefined ? {} : { name }),

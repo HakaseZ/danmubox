@@ -107,13 +107,6 @@ pub trait AuthProvider: Send + Sync {
     /// `key` 从未开始或已被消费 → `NOT_FOUND`（终态：确认与失效都会消费掉 `key`）。
     async fn poll_qr(&self, key: &str) -> Result<QrPoll>;
 
-    /// 手填 Cookie 建成一个账号。
-    ///
-    /// `SESSDATA` / `bili_jct` / `DedeUserID` 缺一即 `BAD_REQUEST`；`name` 缺省时
-    /// 按昵称自动生成，给了名字就写进那个账号（已存在 = 重新登录，覆盖其凭据）。
-    /// 返回的账号即当前账号。
-    async fn login_cookie(&self, cookie: &str, name: Option<&str>) -> Result<Account>;
-
     /// 切换当前账号，返回切换后的会话。
     async fn switch_account(&self, name: &str) -> Result<SessionState>;
 

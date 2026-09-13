@@ -1,7 +1,7 @@
-//! 登录：账号列表、扫码入口、手填 Cookie 与账号切换（`docs/auth.md`）。
+//! 登录：账号列表、扫码入口与账号切换（`docs/auth.md`）。
 //!
-//! 三种模式共用一套凭据文件：游客态 = 文件里没有可用凭据；「手填 Cookie」=
-//! 由 [`BiliAuth::login_cookie`] 把用户粘贴的 Cookie 归一化后写回；扫码 = 本模块写回文件。
+//! 三种模式共用一套凭据文件：游客态 = 文件里没有可用凭据；扫码 = 本模块写回文件；
+//! 手工编辑该文件（`docs/auth.md` §8.4）是用户自己的事，程序不提供导入入口。
 //!
 //! 一个**账号** = `config.toml` 里的一份具名凭据（契约 §4.1）。扫码有两种用法，都在这里：
 //! 不带目标 = **新增账号**（确认后按昵称自动起名，用户不必先想名字再扫码），
@@ -12,9 +12,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use danmubox_core::ports::{Account, AuthProvider, QrChallenge, QrPoll, QrState, SessionState};
-use danmubox_core::{
-    account_name_from, validate_account_name, ConfigStore, Error, Profile, Result,
-};
+use danmubox_core::{account_name_from, ConfigStore, Error, Profile, Result};
 use futures_util::future::join_all;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -72,55 +70,6 @@ pub fn profile_from_cookies(
     }
 
     profile.is_complete().then_some(profile)
-}
-
-/// 手填 Cookie 串 → 键值对。
-///
-/// 容忍从浏览器或文档里复制来的形态：`;` 或换行分隔、每段两侧空白、
-/// 整串前面带 `Cookie:` 前缀、结尾多一个分号。值原样保留（不做 URL 解码——
-/// 上游 Cookie 的值本来就是编码后的形态，改了反而对不上）。
-fn cookie_pairs(raw: &str) -> Vec<(String, String)> {
-    let raw = raw.trim();
-    let raw = raw
-        .strip_prefix("Cookie:")
-        .or_else(|| raw.strip_prefix("cookie:"))
-        .unwrap_or(raw);
-    raw.split([';', '\n'])
-        .filter_map(|part| {
-            let (name, value) = part.trim().split_once('=')?;
-            let name = name.trim();
-            if name.is_empty() {
-                return None;
-            }
-            Some((name.to_string(), value.trim().to_string()))
-        })
-        .collect()
-}
-
-/// 手填 Cookie 串 → 凭据。
-///
-/// 三要素（`SESSDATA` / `bili_jct` / `DedeUserID`）缺一即 `BAD_REQUEST`，
-/// 并把**缺了哪几个**写进错误信息——用户贴错一两个键名时要能自己看出来。
-/// `previous` 用于保留同一账号原有的设备标识（`buvid3` / `buvid4`）。
-pub fn profile_from_cookie_string(raw: &str, previous: Option<Profile>) -> Result<Profile> {
-    let pairs = cookie_pairs(raw);
-    let mut missing = Vec::new();
-    for required in ["SESSDATA", "bili_jct", "DedeUserID"] {
-        let present = pairs
-            .iter()
-            .any(|(name, value)| name.eq_ignore_ascii_case(required) && !value.is_empty());
-        if !present {
-            missing.push(required);
-        }
-    }
-    if !missing.is_empty() {
-        return Err(Error::BadRequest(format!(
-            "Cookie 缺少必填字段：{}（需要 SESSDATA / bili_jct / DedeUserID）",
-            missing.join(" / ")
-        )));
-    }
-    profile_from_cookies(&pairs, previous)
-        .ok_or_else(|| Error::BadRequest("Cookie 里没有可用的登录凭据".into()))
 }
 
 /// 把「文件里的一个账号 + 它的 `nav` 求证结果」拼成对外的 [`Account`]。
@@ -426,44 +375,6 @@ impl AuthProvider for BiliAuth {
         })
     }
 
-    async fn login_cookie(&self, cookie: &str, name: Option<&str>) -> Result<Account> {
-        let name = name.map(validate_account_name).transpose()?;
-        let previous = name.as_deref().and_then(|name| self.store.profile(name));
-        let profile = profile_from_cookie_string(cookie, previous)?;
-
-        // 先向 nav 求证再落盘：写进文件的凭据必须是**有效**的，否则界面会显示一个
-        // 「已登录」却连不上的账号（S2-AC5 的同一类坑）。求证的副产品正是账号身份。
-        let header = profile.cookie_header();
-        let identity = self
-            .http
-            .nav_identity(header.as_deref())
-            .await?
-            .ok_or_else(|| Error::BadRequest("Cookie 无效：nav 未返回登录态".into()))?;
-
-        let name = match name {
-            Some(name) => name,
-            None => {
-                let base = account_name_from(&identity.nickname, identity.uid);
-                self.store.unique_account_name(&base)
-            }
-        };
-        let uid = if identity.uid > 0 {
-            identity.uid
-        } else {
-            profile.uid()
-        };
-        self.store.save_profile(&name, profile, true)?;
-        *self.nickname.lock().await = None;
-        Ok(Account {
-            name,
-            nickname: identity.nickname,
-            uid,
-            face: identity.face,
-            logged_in: true,
-            active: true,
-        })
-    }
-
     async fn switch_account(&self, name: &str) -> Result<SessionState> {
         self.store.set_active(name)?;
         *self.nickname.lock().await = None;
@@ -576,65 +487,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(profile.uid(), 9);
-    }
-
-    #[test]
-    fn pasted_cookie_string_parses_into_a_profile() {
-        // 浏览器里复制出来的形态：`Cookie:` 前缀、分号分隔、值带空白、结尾多一个分号
-        let profile = profile_from_cookie_string(
-            "Cookie: SESSDATA=abc%2Fx; bili_jct=JCT; DedeUserID=42; buvid3=B3;",
-            None,
-        )
-        .unwrap();
-        assert_eq!(profile.uid(), 42);
-        assert_eq!(profile.sessdata, "abc%2Fx", "值不做二次编解码");
-        assert_eq!(profile.buvid3, "B3");
-
-        // 换行分隔同样接受（从配置文件里一行一个复制的情况）
-        let profile =
-            profile_from_cookie_string("SESSDATA=s\nbili_jct=j\nDedeUserID=7\n", None).unwrap();
-        assert_eq!(profile.uid(), 7);
-    }
-
-    #[test]
-    fn pasted_cookie_string_must_have_the_three_required_fields() {
-        // 只给 SESSDATA：错误信息要点名缺了谁，用户才知道是贴错了键名
-        let err = profile_from_cookie_string("SESSDATA=s", None).unwrap_err();
-        assert_eq!(err.code(), "BAD_REQUEST");
-        let message = format!("{err}");
-        assert!(message.contains("bili_jct"), "{message}");
-        assert!(message.contains("DedeUserID"), "{message}");
-
-        // 空值等于没给
-        assert_eq!(
-            profile_from_cookie_string("SESSDATA=; bili_jct=j; DedeUserID=1", None)
-                .unwrap_err()
-                .code(),
-            "BAD_REQUEST"
-        );
-        assert_eq!(
-            profile_from_cookie_string("", None).unwrap_err().code(),
-            "BAD_REQUEST"
-        );
-    }
-
-    #[test]
-    fn pasted_cookie_string_replaces_account_level_fields() {
-        // 重新登录同一个账号：新 Cookie 里的 sid/ckMd5 覆盖旧的，旧的不能残留
-        let previous = Profile {
-            sid: "OLD-SID".into(),
-            dede_user_id_ck_md5: "OLD-MD5".into(),
-            dede_user_id: "1".into(),
-            ..Default::default()
-        };
-        let profile = profile_from_cookie_string(
-            "SESSDATA=s; bili_jct=j; DedeUserID=2; DedeUserID__ckMd5=new-md5",
-            Some(previous),
-        )
-        .unwrap();
-        assert_eq!(profile.dede_user_id, "2");
-        assert_eq!(profile.dede_user_id_ck_md5, "new-md5");
-        assert_eq!(profile.sid, "OLD-SID", "上游没下发时保留原值");
     }
 
     #[test]

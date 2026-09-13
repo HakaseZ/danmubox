@@ -52,7 +52,7 @@
 | P30 | 主页「不对称」实为**高度**问题：**高度缩到出现滚动条之后，元素右侧回缩**（原描述「右边距比左边宽」系误判，用户亲自更正） | 用户 2026-09-12 对话（含更正） | 已做（待用户复测） | 静态定位到 `.listPage`（padding 对称 + max-width + margin auto + overflow-y auto）与 `index.css` 的占宽滚动条；修法与改前/改后左右距离数字见该票报告 |
 | P31 | 发送失败不要在页面最下方出常驻提示；改为**浮动提示 + 渐隐消失**，且提示期间**不得遮挡或阻断弹幕区的滚动** | 用户 2026-09-12 对话 | 已做（待用户复测） | 落点 `Composer.tsx` + `app.module.css`；可验形式：浮层矩形不与弹幕列表区域相交 + `pointer-events: none` + 渐隐后移除 |
 
-**产品需求小计：31 条**（已做 27 / 部分 1 / 未做 3）。
+**产品需求小计：31 条**（已做 27 / 部分 2 / 未做 2）。
 
 ---
 
@@ -73,7 +73,7 @@
 | E9 | 虚报禁令：未实测的事实必须标注「按文档核对，未实测」，与实测区分开 | `AGENT.md` §8 第 7 条；`docs/testing.md` §3.3；`CHANGELOG` 多处 | 已做 | 例：房管写操作按 A36「决定不验证」处理，实现只做参数拼装与原样透传；`docs/protocol.md` 附录 A 以「待实测校准」表承载 |
 | E10 | 派单时划清共享文件归属（曾因 `smoke/room-page.mjs` 两边同时改而撞车） | `history://Kaomoji` / `history://MainListLayout` / `history://RealAnchorName` / `history://EmotePanelOfficial` 收到的 `Main` IRC；`history://WebKitVerify` 的冲突善后 | 已做 | IRC 明文划出「A 票负责 `ui.md` §6.2 / §4.1、CHANGELOG #19；B 票负责 §2.2、`contract.md`、`ipc.md`、CHANGELOG #14–#18、`smoke/fixtures/` 房间 json；C 票负责 §6.3 与表情 json」，并定「真冲突时小票让步」 |
 
-**工程规矩小计：9 条**（已做 7 / 待核 2）。
+**工程规矩小计：10 条**（已做 8 / 待核 2）。
 
 ---
 
@@ -104,7 +104,7 @@
 | 19 短语删颜文字 | 已做 | 提交 `d6ba109`（worktree 内 `9db6e35`）；`CHANGELOG` Removed | 审计时未做 |
 | 20 表情 tab + 不溢出 | 已做 | 提交 `f19de72`（worktree 内 `0375f44`）；`ui.md` §6.3 | 溢出 24.9px → 0；另有三条 UX 补充（点选即发 / 去搜索框 / 两行高度）在 `RowEmoteFix` 票进行中，见 P23 |
 
-**issue 小计：20 条**（已做 19 / 部分 1 / 未做 0）。
+**issue 小计：20 条**（已做 18 / 部分 2 / 未做 0）。
 
 ---
 

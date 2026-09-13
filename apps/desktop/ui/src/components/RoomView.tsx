@@ -53,12 +53,36 @@ interface Props {
   onNotice: (text: string) => void;
 }
 
-/** 连接状态 → 圆点样式（房间头部与多房间标签页共用）。 */
-export const DOT: Record<ConnState, string> = {
-  connected: styles.dotConnected,
-  connecting: styles.dotConnecting,
-  disconnected: styles.dotDisconnected,
-  error: styles.dotError,
+/** 状态点三态：**开播 / 下播 / 未连接**（房间头与房间标签页**共用这一套**）。 */
+export type LiveKind = "on" | "off" | "idle";
+
+/** 连接态 × 上游 `live_status` → 三态。这是**唯一**的判据：两处圆点都走它，颜色因此必然一致。 */
+export function liveKindOf(
+  conn: ConnState | undefined,
+  connected: boolean,
+  liveStatus: number,
+): LiveKind {
+  // 两路「连没连上」的信号取**与**：事件驱动的连接态（`danmubox://status`）与列表载荷的
+  // `connected` 各自都可能落后 —— 刚开房间时事件还没到（那时以载荷为准），断开那一刻载荷
+  // 已经刷新而事件还在路上（那时以载荷为准）。**任一说没连上，这颗点就是未连接（灰）**：
+  // 宁可早一格变灰，也不许把「已经断了」一直显示成红 / 绿（用户 2026-09-13 报的就是它 ——
+  // 标题旁那颗点断连后没有变化，只有红绿）。
+  const live = conn === undefined ? connected : conn === "connected" && connected;
+  return live ? (liveStatus === 1 ? "on" : "off") : "idle";
+}
+
+/** 三态 → 圆点配色（`--live-*` 三枚令牌）。 */
+export const LIVE_DOT_CLASS: Record<LiveKind, string> = {
+  on: styles.liveOn,
+  off: styles.liveOff,
+  idle: styles.liveIdle,
+};
+
+/** 三态 → 文案：只进 `title` / `aria-label`，不上屏（用户 2026-09-12：房间头不再写字）。 */
+export const LIVE_TEXT: Record<LiveKind, string> = {
+  on: "开播",
+  off: "下播",
+  idle: "未连接",
 };
 
 /**
@@ -114,22 +138,16 @@ export function RoomView({
   // 举报理由改用上游固定清单（`dReport/ForReason`，实测 7 条）：
   // 官方客户端按文案反查 `reason_id` 后与文案一起上报，因此界面不该让用户手输。
   const [reasonId, setReasonId] = useState("");
-  // 直播状态点三态（用户 2026-09-13 的口径）：**红 = 下播 / 绿 = 开播 / 橙 = 未连接**。
-  // 判据是「本房间的连接态 + 上游的 live_status」两件事：没连上时根本不知道在不在播，
-  // 那一档是**未连接**（橙）；连上了再看 `live_status === 1` 才是**开播**（绿）；
-  // 其余（`0` 下播、`2` 轮播）都归**下播**（红）——轮播不是开播，不许借绿点冒充。
+  // 状态点三态（用户 2026-09-13 的口径 + 当天的更正）：**绿 = 开播 / 红 = 下播 / 灰 = 未连接**。
+  // 判据是「本房间的连接态 + 上游的 live_status」两件事，收在 `liveKindOf` 一处：
+  // 没连上时根本不知道在不在播，那一档是**未连接**（灰）；连上了再看 `live_status === 1`
+  // 才是**开播**（绿）；其余（`0` 下播、`2` 轮播）都归**下播**（红）——轮播不是开播，
+  // 不许借绿点冒充。**房间标签页上那颗点走的是同一个函数**，两处颜色因此永远一致。
   // 文案只进 title / aria-label，不上屏（用户 2026-09-12：房间头不再写字，靠小圆点区分）。
-  // 连接态取**事件驱动**的那一份（`danmubox://status`，与房间标签页上的圆点同源）；
-  // store 里还没有这个房间的状态时（刚加进来、还没连过）回落到列表载荷给的 `connected`。
+  // 连接态取**事件驱动**的那一份（`danmubox://status`，与房间标签页上的圆点同源）。
   const connState = useApp((store) => store.status[room.room_id]?.state);
-  const liveKind: "on" | "off" | "idle" =
-    (connState ?? (room.connected ? "connected" : "disconnected")) !== "connected"
-      ? "idle"
-      : room.live_status === 1
-        ? "on"
-        : "off";
-  const liveText =
-    liveKind === "idle" ? "未连接" : liveKind === "on" ? "开播" : "下播";
+  const liveKind = liveKindOf(connState, room.connected, room.live_status);
+  const liveText = LIVE_TEXT[liveKind];
   // 标题放不下就循环滚动（用户 2026-09-13 第 3 条）：量「一份文字」的宽度与可视宽度比，
   // 放不下才启动动画 —— 短标题因此一动不动（不是「一律滚」）。
   const titleText = room.title.length > 0 ? room.title : `房间 ${room.room_id}`;
@@ -395,12 +413,18 @@ export function RoomView({
             aria-label="返回房间列表"
             onClick={onBack}
           >
+            {/* 图标规范（返回与 ⋯ **共用同一套**，用户 2026-09-13：「可能他们本就不一致，
+                只调 size 没用？」——上一版只把两枚的墨迹粗细都调成 1.5，形状与光学尺寸仍各走各的）：
+                `viewBox="0 0 24 24"` + `.ctlIcon`（24 × 24 盒，缩放系数正好 1）+ `stroke-width 1.75`
+                + `stroke-linecap/linejoin="round"`；**墨迹居中于 (12,12)**，主轴尺寸都是 16 单位
+                （箭头的高 = ⋯ 的宽）。改前箭头是 `M15 4.5 7.5 12l7.5 7.5`（墨迹 9 × 16.5、
+                居中点偏左 0.75）。 */}
             <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
               <path
-                d="M15 4.5 7.5 12l7.5 7.5"
+                d="M15 4.875 9 12l6 7.125"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="1.5"
+                strokeWidth="1.75"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -419,13 +443,7 @@ export function RoomView({
             aria-label={liveText}
           >
             <span
-              className={`${styles.liveDot} ${
-                liveKind === "on"
-                  ? styles.liveOn
-                  : liveKind === "off"
-                    ? styles.liveOff
-                    : styles.liveIdle
-              }`}
+              className={`${styles.liveDot} ${LIVE_DOT_CLASS[liveKind]}`}
               data-testid="db-live-dot"
             />
           </span>
@@ -476,15 +494,16 @@ export function RoomView({
             }}
           >
             {/* ⋯ 画成**矢量**（三个圆点）而不是文字字形：文字字形的墨迹厚度由字体决定
-                （实测 Chromium 下 14px 的 U+22EF 墨迹只有 1px，WebKit 又是另一套字体），
-                两枚圆形控件因此「整体粗细」不一致（用户 2026-09-13 第 4 条：返回与右侧三点
-                磅重不一致）。圆点直径 = 返回那一笔的描边宽 = **1.5px**（两枚图标原来分别是
-                2px 与 1px，取折中），两个数在冒烟里逐个量（`iconStrokeBackPx` /
-                `iconStrokeMorePx`）。盒子仍是 `.ctlIcon`（24 × 24），控件尺寸一点没动。 */}
+                （实测 Chromium 下 14px 的 U+22EF 墨迹只有 1px，WebKit 又是另一套字体）。
+                与返回**同一套规范**：圆点直径 = **2 × 描边宽**（= 3.5。Material 同款比例 ——
+                一个圆点就是一个零长度描边段的圆头，所以「粗细」与描边同一件事），
+                相邻圆点中心距 6.25（缝 2.75），行宽 16 = 返回箭头的高，整体居中于 (12,12)。
+                改前是 r = 0.75（直径 1.5）、跨度 11.5、居中但明显偏轻。
+                盒子仍是 `.ctlIcon`（24 × 24），控件尺寸一点没动。 */}
             <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="7" cy="12" r="0.75" fill="currentColor" />
-              <circle cx="12" cy="12" r="0.75" fill="currentColor" />
-              <circle cx="17" cy="12" r="0.75" fill="currentColor" />
+              <circle cx="5.75" cy="12" r="1.75" fill="currentColor" />
+              <circle cx="12" cy="12" r="1.75" fill="currentColor" />
+              <circle cx="18.25" cy="12" r="1.75" fill="currentColor" />
             </svg>
           </button>
         </div>

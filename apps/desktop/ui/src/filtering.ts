@@ -95,14 +95,6 @@ export function alertsOn(message: Message, prefs: Prefs): boolean {
     .some((word) => message.content.includes(word));
 }
 
-/** 连接状态对应的圆点样式（房间头与多房间标签页共用）。 */
-export const DOT_CLASS: Record<string, string> = {
-  connecting: "_dotConnecting",
-  connected: "_dotConnected",
-  disconnected: "_dotDisconnected",
-  error: "_dotError",
-};
-
 /**
  * 观众数的展示格式：过万折成「x.x万」（官方客户端同款习惯）。
  * 在线人数与累计看过的取值路径见 docs/protocol.md §10.7。

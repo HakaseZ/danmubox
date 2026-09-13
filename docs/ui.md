@@ -180,7 +180,7 @@
 
 | 项 | 规则 |
 |---|---|
-| 标签条 | **只在房间页里渲染**：列表页已经有「已连接房间」卡片列表（§2.2），主页再挂一条标签条是重复（用户 2026-09-12）。已打开房间的标签，按打开顺序排列，可横向滚动；激活标签高亮，连接状态点见 §3。标签上的名字是**主播名**（`anchor_uname`，取不到才退回直播间标题，标题也没有才退到「房间 <号>」——口径同 §2.2），**不显示房间号**（用户 #18） |
+| 标签条 | **只在房间页里渲染**：列表页已经有「已连接房间」卡片列表（§2.2），主页再挂一条标签条是重复（用户 2026-09-12）。已打开房间的标签，按打开顺序排列，可横向滚动；激活标签高亮，标签上的圆点与房间头那颗**同一个东西**（同一判据、同一套 `--live-*` 令牌，见 §3.1）；标签的 `title` 里带这颗点的文案。标签上的名字是**主播名**（`anchor_uname`，取不到才退回直播间标题，标题也没有才退到「房间 <号>」——口径同 §2.2），**不显示房间号**（用户 #18） |
 | 多标签共存 | 已打开的房间保留各自的长连接与**会话缓冲**；切换标签只切换渲染，不断开、不清空 |
 | 新增标签 | 在房间列表点击房间：已打开则激活该标签，未打开则新开 |
 | 关闭标签 | 关闭该房间页，断开连接、销毁并清空该房间的会话缓冲；**不**删除房间数据（不调 `rooms_remove`） |
@@ -197,7 +197,7 @@
 |---|---|---|---|
 | 进入房间（打开标签） | 新建，空，`local_id` 从 1 开始 | 建立 | 开始一次新会话 |
 | 切换标签 | 保留 | 保持 | 不算离开房间 |
-| 点击「刷新」（`rooms_reconnect`） | **保留**，不清空 | 重连 | 仍属同一次会话 |
+| 点击「刷新」（`rooms_reconnect`） | **保留**，不清空 | 重连 | 仍属同一次会话；会话已被「断开连接」结束时改成**重建一次会话**（缓冲从空开始） |
 | 返回列表页 / 关闭标签 | **销毁并清空** | 断开 | 会话结束 |
 | 再次进入同一房间 | 全新会话，从空开始 | 新建 | 不复用上一次会话的缓冲 |
 
@@ -219,8 +219,8 @@
 | 元素 | 取值与来源 |
 |---|---|
 | 返回 | **圆形左箭头按钮**（几何由 `--ctl-round` 一处给出；可访问名仍是「返回房间列表」）。回到房间列表页（等同关闭当前房间页）。**顶栏的圆形控件只剩它**与 `⋯` |
-| 两枚图标的粗细 | **都是矢量、粗细都是 1.5px**（用户 2026-09-13 第 4 条：「返回和右侧的三点整体粗细不一致，2 者折中一下」）：返回是一笔 `stroke-width: 1.5`（`.ctlIcon` 24px 盒 / `viewBox` 24，缩放系数 1）；`⋯` 是三个 `r = 0.75` 的圆点（直径 1.5px）。改前两者分别是 **2px** 与 **1px**（后者是文字字形 U+22EF 的墨迹厚度，由字体决定、两引擎还不一样），1.5px 是二者的折中。控件尺寸一点没动（两枚仍是 `--ctl-round` = 40 × 40 正圆）。冒烟按 `iconWeightsCompromised` /`iconWeightsMatch`（两个数逐位相等）断言 —— `⋯` 不再是文字，因此也**不再随字体变化** |
-| 直播状态点 | **红 = 下播 / 绿 = 开播 / 橙 = 未连接**（用户 2026-09-13 的三态口径）。判据是「**本房间的连接态** × 上游 `live_status`」：连接态不是 `connected`（含 `connecting` / `disconnected` / `error`，取自 `danmubox://status`，与房间标签页上的圆点同源）→ **橙**（没连上就不知道在不在播）；连上了且 `live_status == 1` → **绿**；其余（`0` 下播、`2` 轮播）→ **红**（轮播不是开播）。色值走 `--live-on` / `--live-off` / `--live-idle`。**看得见的那颗点直径 `--live-dot` = 8px**（用户 2026-09-13：「并且要改小一点」——12 → 10 → 8 逐档缩小）：它画在**外壳**里（`db-live-dot-box`，仍是 `--sp-3` = 12px），因此**热区 / 悬停面不跟着缩**（用户明确要求可点面积不变）。文案只进 `title` / `aria-label`（「开播 / 下播 / 未连接」），**不上屏** |
+| 两枚图标的规范 | **共用同一套矢量规范**（用户 2026-09-13 第 4 条 → 追加：「可能他们本就不一致，只调 size 没用？」——上一版只把两枚的墨迹粗细都调成 1.5px，形状与光学尺寸仍各走各的，所以看着还是不一致）。规范四条：① 同一个 `viewBox="0 0 24 24"` 与同一个 `.ctlIcon` 盒（60% × `--ctl-round` = 24px，缩放系数正好 1）；② 同一条 `stroke-width: 1.75`（写死在 SVG 里，不随字号 / 字体变）+ `stroke-linecap/linejoin="round"`；③ 两枚的墨迹都**居中于 (12,12)**（改前返回那一笔的墨迹中心在 x = 11.25，偏左 0.75）；④ 主轴尺寸都是 **16 单位**（箭头的**高** = ⋯ 的**宽**），而 `⋯` 的圆点直径 = **2 × 描边宽**（= 3.5 —— 一个圆点就是一个零长度描边段的圆头，Material 同款比例）。改前：返回是 `stroke-width 1.5` 的 `M15 4.5 7.5 12l7.5 7.5`（墨迹 9 × 16.5），`⋯` 是三个 `r = 0.75` 的圆点（跨度只有 11.5、明显偏轻）；更早的 `⋯` 还是文字字形 U+22EF（墨迹厚度由字体决定，两引擎还不一样）。控件尺寸一点没动（两枚仍是 `--ctl-round` = 40 × 40 正圆）。冒烟按 `iconDotsTwiceStroke` / `iconSameBox` / `iconCapsShared` / `iconInkCentered` / `iconSameDominantExtent` / `iconControlsSameSize` 断言，量到的两个墨迹厚度进 `iconBackInkThicknessPx` / `iconMoreInkThicknessPx` |
+| 状态点 | **绿 = 开播 / 红 = 下播 / 灰 = 未连接**（用户 2026-09-13 的三态口径 + 当天的更正：「我觉得灰色也不错，橙色的需求改成灰色」）。判据只有一条 —— `RoomView.tsx` 的 `liveKindOf`：连接态（`danmubox://status`）不是 `connected`，**或**列表载荷的 `connected` 为假 → **灰**（没连上就不知道在不在播）；连上了且 `live_status == 1` → **绿**；其余（`0` 下播、`2` 轮播）→ **红**（轮播不是开播）。两路信号取「与」的理由：事件可能落后（刚开房间时事件还没到）、载荷也可能落后（断开那一刻载荷已刷新而事件还在路上）—— 任一说没连上就先点灰，不许把「已经断了」一直显示成红 / 绿（用户 2026-09-13 追加：「标题旁的断连确实没变化（只有红绿）」，当时那颗点只接了载荷的 `connected`）。色值走 `--live-on` / `--live-off` / `--live-idle`。**房间标签页上那颗点走的是同一个 `liveKindOf`、同一套令牌、同一条 `.liveDot` 规则**，因此同一状态下两处必然是同一个色。**看得见的那颗点直径 `--live-dot` = 8px**：它画在**外壳**里（`db-live-dot-box`，仍是 `--sp-3` = 12px），因此**热区 / 悬停面不跟着缩**。文案只进 `title` / `aria-label`（「开播 / 下播 / 未连接」），**不上屏** |
 | 标题 / 房间号 | 房间元信息（`follow_list` / `rooms_list` / `getRoomPlayInfo` 解析结果）；**紧跟状态点右侧、同一排**，不再独占一排。放不下时**循环滚动**（marquee，见下），不再用省略号截断；完整标题始终在 `title` 属性里 |
 | 观众数 | 当前在线（`ONLINE_RANK_COUNT` 的 `online_count`）与累计看过（`WATCHED_CHANGE` 的 `num`），两个都显示（用户 2026-09-12 / 2026-09-13：电池挪走后这两个占顶栏）；上游还没给过的一侧不显示，不用 `—` 或 `0` 顶替。人气值不再展示 |
 | 电池 | **不在顶栏**（用户 2026-09-13：「电池数量挪到底部发送按钮左侧」）：它是输入区工具行里、发送按钮左侧的一枚控件，且**不是圆形**（见 §6.4） |
@@ -252,7 +252,8 @@
 | 位置 | 房间头最右 `⋯` 菜单的第一项，文案「刷新连接」 |
 | 触发 | `invoke('rooms_reconnect', { roomId })` |
 | 效果 | 立即断开并按退避序列重新建立连接；**保留**已收消息与滚动位置，不清空会话缓冲 |
-| 状态反馈 | 触发后状态点立即变 `connecting`；成功转 `connected`，失败转 `error` 并继续退避 |
+| 会话已被「断开连接」结束 | 当场**重建一次会话**（等价于重新进房：缓冲从空开始）。断连之后这颗键不得是死键 —— 否则用户只能返回列表再进来。这是「断连后无法直接重连」那条反馈的落点 |
+| 状态反馈 | 触发后连接态立即转 `connecting`（那颗圆点仍是**灰**的 —— 灰就是「还没连上」，见 §3.1 / §3.3）；成功转 `connected`（红 / 绿由 `live_status` 定），失败转 `error` 并继续退避 |
 | 连续点击 | 处于 `connecting` 时菜单项禁用，避免并发重连 |
 | 与自动重连的关系 | 手动触发会**清零退避计数**，即立刻重试而不是等下一个退避档 |
 | 断线期间消息 | 重连成功后的消息继续追加到同一缓冲；断线期间的空档不回填 |
@@ -261,23 +262,29 @@
 
 四种连接状态由 `danmubox://room` 与 `danmubox://status` 事件驱动：
 
-| 状态 | 状态点视觉（**标签页上**） | `⋯` 菜单的「刷新连接」 | 说明 |
-|---|---|---|---|
-| `connecting` | 黄色实心圆，1s 呼吸动画 | **禁用** | 连接请求已发出、认证未完成 |
-| `connected` | 绿色实心圆，不跳动 | **可用** | 长连接正常；卡住时用户手动刷新 |
-| `disconnected` | 灰色空心圆 | **可用** | 未连接或已主动断开；点击立即重连 |
-| `error` | 红色实心圆 | **可用** | 认证失败或上游错误，正在退避重连 |
+| 状态 | `⋯` 菜单的「刷新连接」 | 说明 |
+|---|---|---|
+| `connecting` | **禁用** | 连接请求已发出、认证未完成 |
+| `connected` | **可用** | 长连接正常；卡住时用户手动刷新 |
+| `disconnected` | **可用** | 未连接或已主动断开；点击立即重连 |
+| `error` | **可用** | 认证失败或上游错误，正在退避重连 |
 
-⚠ 这一族状态点**只出现在房间标签页上**；房间头那枚圆点是**直播状态点**（红 / 绿 / 橙，见 §3.1），两者不是一回事 ——
-不过房间头那枚的**橙色**一档恰好用的就是本节的连接态（`danmubox://status` 不是 `connected` 就点橙），
-因此「连不上」这件事在只有一个房间、没有标签页时也能一眼看到；连接细节（退避原因）仍走 `⋯` 菜单（刷新 / 断开 / 日志）。
+**连接状态不再有「自己的一颗点」**（用户 2026-09-13 追加：「标题旁的断连确实没变化（只有红绿）」）：
+房间头那颗圆点与房间标签页那颗圆点是**同一个东西** —— 同一判据（`liveKindOf`）、同一套 `--live-*` 令牌、
+同一条 `.liveDot` 规则，都只表达**直播状态三态**（绿 = 开播 / 红 = 下播 / 灰 = 未连接，见 §3.1）。
+上面四种连接状态里，`connecting` / `disconnected` / `error` 三档**都归灰**（「没连上」就是一颗灰点），
+只有 `connected` 才落到红 / 绿（红绿由 `live_status` 定）。理由：两处各自维护一套配色，正是「tab 上是灰的、
+标题旁却还是老样子」这类不一致的来源；现在「同一状态 → 同一颜色」是**结构上**成立的（同一个函数、同一组令牌），
+冒烟按 `liveDotTwoSitesSameColor` / `liveDotTwoSitesSameState` 把三个状态各走一遍逐位比对。
+连接细节（在重连 / 退避原因 / 已断开）仍走 `⋯` 菜单（刷新 / 断开 / 日志），房间列表页的卡片照旧写
+「已连接（缓冲 N）」（§2.2）。
 
 规则：
 
 1. 退避序列按契约 §4 为 **5s / 10s / 20s / 40s / 60s 封顶**；退避详情随事件带出，界面上不另起常驻横幅
    （用户 2026-09-12：房间头不再写状态文字）。
 2. 认证被拒（`code != 0`）一律视为认证失败并按退避重连；**不得**在未知 code 上编造含义。
-3. 状态点同时出现在对应标签页上（同一套视觉），便于多标签下判断哪个房间需要刷新。
+3. 同一颗状态点同时出现在房间头与对应标签页上（**同源同色**：同一个 `liveKindOf`、同一组令牌），便于多标签下判断哪个房间没连上（灰）或没开播（红）。
 
 ### 3.4 本人身份（`room_session`）
 
@@ -321,7 +328,7 @@
 | 头像 | `Message.face`；空串不渲染，加载失败退化为昵称首字符占位（§4.2）。对齐口径见 §4.2：**垂直居中于首行** |
 | 身份牌 | 见 §4.2，尺寸随字号缩放（em）。排在昵称**右侧**（同一身份行，`--sp-1`） |
 | 昵称 | 身份行的**第一格**（身份牌跟在它后面），`--fg-dim`（低正文一档），**不吃**弹幕自身颜色：普通弹幕的颜色是 `16777215`（白），套到人名上在浅色主题里等于隐形（用户 2026-09-12 实测「用户名是白色、看不见」）。超长时 14em 截断，名字 + 牌一起超出行宽时由身份行截断 |
-| @ 高亮（正文内） | 正文里的 `@昵称` **就地强调**（用户 2026-09-13 第 1 条）：身份牌后那枚「回复 @某人」的牌子与正文里自带的 @ 重复，**牌子已删**；@ 由展示层从 `content` 里识别（`@` 之后到空白或句读为止都算名字），命中的一段套 `.mention`（`data-testid="db-msg-mention"`），配色**参照身份牌**：字符色取 `--badge-fg`、底取身份牌那道强调色渐变（与 `.badgeAdmin` 同一套），因此深浅两套主题下都与身份牌一致、不新造颜色。它与回复关系**无关**：没有 `reply_*` 字段的弹幕，正文里有 @ 照样高亮；反过来 `reply_to_uid != 0` 而正文里没有 @ 时，行内不再出现任何「回复」字样（上游 `reply_uname_color` 因此不再被界面消费，留在契约 §5 里）。高亮只加壳不改字，冒烟按 `replyChipGone`（`db-msg-reply` / `db-msg-reply-name` 一律不存在）、`mentionHighlighted`、`mentionColorMatchesBadge`（颜色 = 身份牌字符色）、`mentionWorksWithoutReply`、`mentionBodyTextIntact` 断言 |
+| @ 高亮（正文内） | 正文里的 `@昵称` **就地强调**（用户 2026-09-13 第 1 条 + 当天的更正：「高亮我要求的是使用字体颜色，不是背景，你理解错了」）：身份牌后那枚「回复 @某人」的牌子与正文里自带的 @ 重复，**牌子已删**；@ 由展示层从 `content` 里识别（`@` 之后到空白或句读为止都算名字），命中的一段套 `.mention`（`data-testid="db-msg-mention"`），**只改字体颜色** —— 色值取身份牌的字符色 `--badge-fg`；**没有底色、没有内边距、没有圆角**（上一版那层「与 `.badgeAdmin` 同一套的 45° 强调色渐变底」已按用户更正删除）。它与回复关系**无关**：没有 `reply_*` 字段的弹幕，正文里有 @ 照样高亮；反过来 `reply_to_uid != 0` 而正文里没有 @ 时，行内不再出现任何「回复」字样（上游 `reply_uname_color` 因此不再被界面消费，留在契约 §5 里）。高亮只加壳不改字，冒烟按 `replyChipGone`（`db-msg-reply` / `db-msg-reply-name` 一律不存在）、`mentionHighlighted`、`mentionColorMatchesBadge`（颜色 = 身份牌字符色）、`mentionNoBackground`（背景图 none / 底色透明、内边距与圆角为 0）、`mentionWorksWithoutReply`、`mentionBodyTextIntact` 断言 |
 | 正文 | 折行；**不吃弹幕自身颜色**（`Message.color` 界面一处都不消费，正文与昵称 / 时间戳 / 徽标同用主题前景色，见 §4.3）；超过 4 行截断并给「展开」 |
 | 合并计数 | `count > 1` 或 `kind == gift` 时在正文**行内**末尾渲染 `×N`：跟在最后一行文字后面，不另占一行、不另开一栏 |
 
@@ -989,7 +996,7 @@
 | 字号阶 | `--fs-1 … --fs-8` | 0.79 / 0.86 / 0.93 / 1 / 1.07 / 1.15 / 1.3 / 1.43 em | **全部是 em**，不能写成 px：基准字号由 body 的 `--fs-root`（14px）与弹幕区 / 面板上的 `ui.font_scale`（写成 em）共同给出，因此字号滑杆能作用到所有文字（§8.2） |
 | 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是**彩色底上**的文字色，`--accent-text` 是「强调色**作为文字**」（与填充分开：填充只要 3:1、文字要 4.5:1，浅色下两者必须分叉），遮罩 `--overlay`，悬停洗色 `--hover-wash` |
 | 徽标底色 | `--gold`、`--neutral`、`--guard-1…3`、`--sc-1…5`、`--block-platform`、`--block-room`、`--badge-fg`、`--badge-lift`、`--badge-border` | 见 `:root` | 粉丝牌**不吃**这些：它的真彩色来自上游（§4.2），令牌只兜底 |
-| 顶栏 / 状态点 / 浮动提示 | `--header-bg`（半透明顶栏：本主题表面色 88%）、`--header-lift`（自上而下的一道高光）、`--live-on` / `--live-off` / `--live-idle`（直播状态点三态：绿=开播 / 红=下播 / 橙=未连接）、`--toast-bg` / `--toast-fg`（失败浮动提示） | 见 `:root` | 顶栏的「半透明深色层次」由这三条混出来，**深浅两套自动成立**（浅色下同一槽就是半透明白面）；直播状态点的色值与 `--ok` / `--warn` / `--danger` 分开命名：语义不同（在不在播 ≠ 连接状态），浅色下也要各自达标 |
+| 顶栏 / 状态点 / 浮动提示 | `--header-bg`（半透明顶栏：本主题表面色 88%）、`--header-lift`（自上而下的一道高光）、`--live-on` / `--live-off` / `--live-idle`（状态点三态：绿=开播 / 红=下播 / **灰=未连接**；房间头与房间标签页两处**共用这三枚**）、`--toast-bg` / `--toast-fg`（失败浮动提示） | 见 `:root` | 顶栏的「半透明深色层次」由这三条混出来，**深浅两套自动成立**（浅色下同一槽就是半透明白面）；状态点的色值与 `--ok` / `--danger` 分开命名：语义不同（在不在播 ≠ 连接状态），浅色下也要各自达标。**灰色那一档不新造颜色**：取次级文字的中性灰 `--fg-dim`（改前标签页上「未连接」那颗点用的就是它） |
 | 阴影 / 遮罩 | `--shadow-menu`、`--shadow-dialog`、`--shadow-sheet`、`--overlay` | — | 菜单 / 对话框 / sheet / 遮罩各一处 |
 | 行与触屏的固定尺寸 | `--row-line`（行盒高）、`--avatar` = 1.25×行盒、`--badge-h` = 0.9×行盒（**不跟头像走**）、`--emote` = 1.1×行盒、`--time-col`、`--tap-min`、`--ctl-round`（= `--tap-min`：房间头两枚圆形控件——返回与 `⋯`的直径）、`--panel-max-h`、`--panel-max-h-narrow`、`--sheet-max-h` | — | 只有这些是「结构尺寸」；其余一次性尺寸（二维码 200px、菜单最小宽 150px 等）仍写在各自规则里，不硬凑进间距阶。`--panel-max-h-narrow` 用视口份额（45vh）而不是固定像素，窄屏才不会被面板吃掉整屏。**弹幕行的那四个是一组**：`--row-line` 是基准（行盒高，1.5em，声明在 `.row` 上并用 `@property` 注册成 `<length>`，这样它算成 px 后再往下继承，子元素各写各的字号也不会算错）；**头像（1.25×）与身份牌（0.9×）是两条独立的派生**（2026-09-13：复用时牌会跟着头像一起放大）；**而 `--avatar` 有两层**：`.row` 里是行盒的 1.25 倍，`:root` 里另给一个行外默认值（1.35em，随所在字号走）——`.avatar` 是跨页面复用的组件（关注列表 / 账号区 / 账号对话框都在弹幕行之外），令牌只活在 `.row` 里会让那些地方 `var(--avatar)` 解析失败、`<img>` 退回原图尺寸（2026-09-12 的返工，见 §15），头像 / 身份牌 / 表情三个尺寸都从基准按比例派生（§4.1） |
 
@@ -1015,9 +1022,9 @@
 | `--danger` | `#ff6b6b` | `#c4292f` | B+ | 6.7:1 / 5.0:1 ✓ |
 | `--on-accent` | `#0b141a` | `#0b141a` | B+ | 6.1:1（白字压 `#00a884` 只有 3.0:1，因此**不做白字**） |
 | `--on-ok` / `--on-danger` | `#002b12` / `#1b0000` | `#ffffff` / `#ffffff` | 现状 / B+ | 7.8:1、— / 5.2:1、5.6:1 ✓ |
-| `--live-on` | `#25d366`（= `--ok`） | `#0a7c5f` | A / B+ | 直播状态点「**开播**」绿（填充：9.4:1 / 4.6:1 ✓） |
-| `--live-off` | `#ff6b6b`（= `--danger`） | `#c4292f`（= `--danger`） | B+ | 直播状态点「**下播**」红（轮播归此档；填充：6.7:1 / 5.0:1 ✓） |
-| `--live-idle` | `#e9a038`（= `--warn`） | `#c2410c` | B+ | 直播状态点「**未连接**」橙（连接态不是 `connected`；填充：8.5:1 / 4.9:1 ✓） |
+| `--live-on` | `#25d366`（= `--ok`） | `#0a7c5f` | A / B+ | 状态点「**开播**」绿（填充：9.4:1 / 4.3:1 ✓） |
+| `--live-off` | `#ff6b6b`（= `--danger`） | `#c4292f`（= `--danger`） | B+ | 状态点「**下播**」红（轮播归此档；填充：6.7:1 / 4.7:1 ✓） |
+| `--live-idle` | `#8696a0`（= `--fg-dim`） | `#54656f`（= `--fg-dim`） | 现状（不改色值） | 状态点「**未连接**」**灰**（连接态不是 `connected` **或**列表载荷的 `connected` 为假）。改前是橙（`#e9a038` / `#c2410c`，饱和度 80% / 88%），用户 2026-09-13 拍板改灰；灰取自次级文字那枚中性灰（饱和度 12% / 14%），非文字图形要素对 `--bg` / `--bg-elevated`：6.1:1 / 5.7:1（深）、5.1:1 / 6.1:1（浅），≥ 3:1 ✓ |
 | `--toast-bg` / `--toast-fg` | 失败色 22% 混 `--bg-elevated` / `--fg` | 同式（浅色下自动是浅粉底 + 深字） | 派生 | 失败浮动提示；文字对底色 ≥ 12:1 ✓ |
 | `--hover-wash` | `--accent` 8% | `--accent` 12% | 派生 | 浅色底更亮，比例提高才看得出 |
 | `--overlay` | `rgba(0,0,0,.55)` | `rgba(11,20,26,.32)` | 现状 / B | 遮罩（浅色下更轻） |
@@ -1126,6 +1133,13 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"     
 **主题是一个独立的运行维度**（2026-09-12 新增）：`SMOKE_THEMES`（默认 `dark,light`）决定跑几档，档位写进 mock 的 `ui.theme` 并传进 `buildSmokeHtml(theme)` —— **同一份场景、同一套断言**深浅各跑一遍（不是两套场景）。新增的断言：主题三档都在（`themeSelectHasThreeModes`）、在筛选面板里切档后 `<html data-theme>` 真的变（`themeSwitchFlipsDom` 且偏好写回 `themeSwitchPreserved`）、画布底色跟着变（`themeSwitchChangesBackground`）、两档下正文与次级文字对背景 ≥ 4.5:1（`themeContrastBodyOk` / `themeContrastDimOk`）。`SMOKE_THEMES=dark` 可只跑一档（单档调试用；验收矩阵要求两档都跑）。
 
 **本批（用户 2026-09-12 的四条反馈 + 两条追加 + 2026-09-13 验收时的四条更正与一条追加）新增的断言**：房间头一排与圆形控件（`headerControlsAllRound` / `headerControlsSameSize` / `headerBackIsArrowOnly` / `headerTitleWithDot` —— 标题与状态点**同一排**：标题左边缘 > 状态点右边缘、两者竖直中心对齐、标题不越出头部那一排）、没有了的状态文字与徽标（`headerNoConnectedText` / `headerNoVerifiedBadge`）、顶栏那对数值与「电池不在顶栏」（`headerHasBothStats` / `headerNoBattery`）、标题的循环滚动（`titleMarqueeOnOverflow` + `titleOverflowPx` —— 判据是**量出来的**「一份文字宽 > 可视宽」且轨道动画名不为 `none`；`titleMarqueeNoLayoutJump` —— 滚起来前后头部与标题的盒子逐项不变；`titleMarqueeKeepsRow`；`titleShortNoMarquee` —— 短标题**不滚**；`titleRestored`）、电池搬去发送按钮左侧（`batteryInComposer` / `batteryLeftOfSend` —— x 坐标比较 / `batteryNotRound` —— 圆角 ≠ 半短边 / `batteryRadiusPx` / `batteryBoxPx` / `batteryText`）、切 tab 不关面板（`panelSurvivesTabSwitch` —— 面板还在 + 选中的组确实换了 + `db-emote-panel` 还在 / `panelStaysOnInsidePress` —— 按轨道与表情格都不关 / `panelClosesOnChatPress` —— 点弹幕列表仍关 / `panelReopensAfterOutsidePress` / `panelBackOnCommon`）、直播状态点（`liveDotTokensDistinct` —— 三态色值互不相同 / `liveDotMatchesStatus` / `liveDotFollowsStatus` —— 发一条 `danmubox://room` 把 `live_status` 翻过去再翻回来，颜色必须跟着变 / `liveDotIdleWhenDisconnected` —— 发一条 `danmubox://status` 的 `disconnected`，点必须变**橙**（未连接档）/ `liveDotVisualPx` / `liveDotHitPx` / `liveDotVisualIsToken` / `liveDotShrunk` —— 看得见的点 < 12px 且热区外壳 > 它、外壳仍是 12px / `liveDotIsCircle`）、表情面板（`panelEmoteHeaderGone` / `panelEmoteGridTwoCommonRows` / `panelEmoteHeightIsTwoRows` / `panelEmoteRailScrollable` / `panelEmoteRailScrolled` / `panelEmoteRailKeepsGridWidth` / `panelClosesOnToolToggle` / `panelClosesOnOutsideClick`）、主页（`listPageScrolls` / `listPageMarginsSymmetric` / `listPageRightEdgeStable` —— 内容收短到不出滚动条前后，**同一个元素的右缘 x 必须相等**）、标签条（`listPageNoRoomTabs` / `roomTabsInsideRoom`）、发送失败的浮动提示（`sendFailNoBottomHint` / `sendFailToastShown` / `sendFailToastPassive` / `sendFailToastClearsList` / `sendFailToastAboveComposer` / `sendFailToastGone`）。截图同时多一张 `${prefix}-toast.png`（浮动提示只在 2.6s 内存活，必须在那一格抓）。
+
+**本批（2026-09-13 用户的三条更正：状态点改灰 / 两处必须一致 / @ 只要字色，加一条图标「本就不一致」）新增或改写的断言**：
+
+- **断连那一档是灰**：`liveIdleIsGray`（HSL 饱和度 < 0.2 —— 判据用饱和度而不是硬编码色值：改前的橙 `#e9a038` / `#c2410c` 是 80% / 88%，红 / 绿都在 65% 以上，灰只有 12% / 14%）、`liveVividStatesKeepColor`（另两档仍 > 0.4，否则「灰」这条没有区分力）、`liveIdleContrastOk`（非文字图形要素对 `--bg` 与 `--bg-elevated` 都 ≥ 3:1）；两套主题的色值 / 饱和度 / 对比度进 `liveDotColors` / `liveDotTheme` / `liveIdleSaturation` / `liveIdleContrastOnCanvas` / `liveIdleContrastOnSurface`。
+- **两处圆点同一状态同色**：`liveDotTwoSitesSameColor` / `liveDotTwoSitesSameState` —— 三个状态各走一遍（两个房间发同一组事件，含载荷的 `connected`），逐位比对房间头 `db-live-dot` 与每一个标签页 `db-tab-dot` 的计算色与 `data-state`，六个色值另存 `liveDotPairColors`。
+- **图标同一套规范**：`iconSameBox`（同一个 `0 0 24 24`、同一个 24 × 24 盒、缩放系数 1）、`iconDotsTwiceStroke`（⋯ 的圆点直径 = 2 × 返回那一笔的描边宽）、`iconCapsShared`（round 线帽 / 接合 + 恰好三个圆点）、`iconInkCentered`（两枚的墨迹都居中于 (12,12)；改前返回偏左 0.75）、`iconSameDominantExtent`（主轴都是 16 单位）、`iconControlsSameSize`（控件仍是 40 × 40 正圆）；量到的墨迹厚度进 `iconBackInkThicknessPx` / `iconMoreInkThicknessPx`，几何全量进 `iconBack` / `iconMore`。**旧的 `iconWeightsCompromised` / `iconWeightsMatch` 已删**：它们钉的是上一版那条「两个数逐位相等」的口径（该口径已被替换，见 §3.1）。
+- **`@` 高亮只许有字色**：`mentionNoBackground`（背景图 `none`、底色透明、内边距与圆角为 0）；`mentionColorMatchesBadge` 保留（颜色 = 身份牌字符色）。
 
 **两个引擎**：Chromium 与 WebKit 各跑一遍同一份场景代码、同一套断言（不是两套脚本），视口也一样。为什么要两个：**应用跑在 macOS 的 WKWebView 里，Chromium 的绿只证明「在 Chromium 里成立」**。两边的差别是真实存在的（`@property` 注册自定义属性、网格的 `minmax()`、`em` 的求值时机），但也**不要**把所有问题都归给引擎——见下面 2026-09-12 的第二个反例。跑 WebKit 需要一次性的 `npm i -D playwright && npx playwright install webkit`（后者约 80MB，落在 `~/Library/Caches/ms-playwright`）。
 

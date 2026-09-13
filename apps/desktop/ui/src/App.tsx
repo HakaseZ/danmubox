@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AccountManager } from "./components/AccountManager";
 import { RoomList } from "./components/RoomList";
-import { DOT, RoomView } from "./components/RoomView";
+import { LIVE_DOT_CLASS, LIVE_TEXT, RoomView, liveKindOf } from "./components/RoomView";
 import { collectSeenEmotes, roomTabName, toDisplayRows } from "./filtering";
 import { useApp } from "./store";
 import styles from "./app.module.css";
@@ -98,7 +98,14 @@ export function App() {
   const roomTabs = (
     <div className={styles.tabs} data-testid="db-room-tabs">
       {rooms.map((room) => {
-        const state = status[room.room_id]?.state ?? "disconnected";
+        // 标签页上那颗点**与房间头那颗是同一个东西**（用户 2026-09-13：「橙色的需求改成灰色，
+        // 但是下面的标题栏左边还是之前的样子」）：同一个 `liveKindOf` 判据、同一套 `--live-*`
+        // 令牌、同一条 `.liveDot` 规则，所以同一状态下必然是同一个色。
+        const kind = liveKindOf(
+          status[room.room_id]?.state,
+          room.connected,
+          room.live_status,
+        );
         // 标签条报主播名，不报房间号（用户 #18）；拿不到主播名才退回直播间标题。
         const name = roomTabName(room);
         return (
@@ -106,10 +113,14 @@ export function App() {
             key={room.room_id}
             className={room.room_id === activeRoomId ? styles.tabActive : styles.tab}
             data-testid="db-room-tab"
-            title={`${name} · ${state}`}
+            title={`${name} · ${LIVE_TEXT[kind]}`}
             onClick={() => void openRoom(room.room_id)}
           >
-            <span className={`${styles.dot} ${DOT[state]}`} />
+            <span
+              className={`${styles.liveDot} ${LIVE_DOT_CLASS[kind]}`}
+              data-testid="db-tab-dot"
+              data-state={kind}
+            />
             {name}
           </button>
         );

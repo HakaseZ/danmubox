@@ -581,6 +581,14 @@ const MOCK = (theme) => `(function () {
         case "admin_keywords_del": return Promise.resolve(null);
         case "wallet_balance": return Promise.resolve(150);
         case "rooms_connect": return Promise.resolve(null);
+        // 「刷新连接」：替身按后端语义回一条状态流（connecting → connected），并记下
+        // 「有没有真的发这条命令」——断连之后菜单里那颗键必须是活的（见下面的断言）。
+        case "rooms_reconnect":
+          window.__reconnectCalls = (window.__reconnectCalls || 0) + 1;
+          window.__lastReconnectRoom = args.roomId;
+          window.__emit("danmubox://status", { room_id: args.roomId, state: "connecting", detail: "手动重连" });
+          window.__emit("danmubox://status", { room_id: args.roomId, state: "connected", detail: "verified" });
+          return Promise.resolve(null);
         case "plugin:event|listen": (listeners[args.event] = listeners[args.event] || []).push(args.handler); return Promise.resolve(nextId);
         case "plugin:event|unlisten": return Promise.resolve(null);
         default: return Promise.resolve(null);
@@ -1077,7 +1085,7 @@ const MOCK = (theme) => `(function () {
     var toggledDot = byTestId("db-live-dot");
     out.liveDotFollowsStatus = dotColor() === (liveIsOn ? liveOffColor : liveOnColor) && !!toggledDot &&
       byTestId("db-live-dot-box").getAttribute("data-state") === (liveIsOn ? "off" : "on");
-    // ② 连接态掉线 → **未连接**（橙），与在不在播无关（这一档的来源是「danmubox://status」，
+    // ② 连接态掉线 → **未连接**（灰），与在不在播无关（这一档的来源是「danmubox://status」，
     //    与房间标签页上的圆点同源）
     window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "disconnected", detail: "" });
     await sleep(350);
@@ -1117,7 +1125,7 @@ const MOCK = (theme) => `(function () {
     out.liveDotShrunk = !!liveDotBox && !!liveDotBoxEl && liveDotBox.width < 10 &&
       rect(liveDotBoxEl).width > liveDotBox.width &&
       Math.abs(rect(liveDotBoxEl).width - 12) < 0.6;
-    // ---- 三态语义（用户 2026-09-13 第 5 条）：**橙 = 断连 / 红 = 已连接但未开播 / 绿 = 已连接且开播**。
+    // ---- 三态语义（用户 2026-09-13 第 5 条 + 当天的更正）：**灰 = 断连 / 红 = 已连接但未开播 / 绿 = 已连接且开播**。
     //      逐状态发真实事件把三种状态各走一遍（status + room 两个来源），把「状态名 → 颜色」记下来，
     //      再判两件事：① 三个色互不相同；② 每个状态的颜色等于它该有的那个令牌。
     var liveStates = [];
@@ -1136,7 +1144,7 @@ const MOCK = (theme) => `(function () {
     window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: 1 });
     await sleep(300);
     recordLive();
-    // ③ 断连 → 橙（与在不在播无关：连接态掉线时根本不知道播没播）
+    // ③ 断连 → 灰（与在不在播无关：连接态掉线时根本不知道播没播）
     window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "disconnected", detail: "" });
     await sleep(300);
     recordLive();
@@ -1155,42 +1163,106 @@ const MOCK = (theme) => `(function () {
       liveStates[2].state === "idle" && liveStates[2].color === liveIdleColor;
     out.liveDotRestoredAfterStates = dotColor() === liveExpectedColor &&
       byTestId("db-live-dot-box").getAttribute("data-state") === (liveIsOn ? "on" : "off");
-    // ---- 图标**粗细**取证（用户 2026-09-13 第 4 条：返回与 ⋯ 的磅重不一致，取折中）。
-    //      两枚图标现在都是矢量（返回一笔描边、⋯ 三个圆点），于是「粗细」在两边是同一件事：
-    //      返回 = stroke-width ×（渲染盒 / viewBox），⋯ = 圆点直径 × 同一系数。
-    //      ⚠ 改前 ⋯ 是文字字形，它的墨迹厚度由字体决定（实测 Chromium 下 14px 的 U+22EF 只有 1px，
-    //      而返回那一笔是 2px）—— 这正是两者看起来不一致的根因，也是必须换成矢量图的原因。
-    var moreBtnBoxOf = function (btn) {
-      var box = rect(btn);
-      return box ? [Math.round(box.width * 10) / 10, Math.round(box.height * 10) / 10] : null;
+    // ---- 断连那一档**必须是灰的**（用户 2026-09-13：「我觉得灰色也不错，橙色的需求改成灰色」）。
+    //      判据用 **HSL 饱和度**，不硬编码色值：三档色在两套主题里本来就不同值，而「绿 / 红有彩、
+    //      灰没彩」是语义本身。阈值 0.2 —— 改前的橙（#e9a038 / #c2410c）是 80% / 88%，
+    //      红 / 绿都在 65% 以上，灰（--fg-dim：#8696a0 / #54656f）只有 12% / 14%。
+    var saturationOf = function (css) {
+      var m = /rgba?\(([^)]+)\)/.exec(css);
+      if (!m) return null;
+      var ch = m[1].split(",").map(function (v) { return parseFloat(v) / 255; });
+      var max = Math.max(ch[0], ch[1], ch[2]);
+      var min = Math.min(ch[0], ch[1], ch[2]);
+      var delta = max - min;
+      if (delta === 0) return 0;
+      return Math.round((delta / (1 - Math.abs(2 * ((max + min) / 2) - 1))) * 1000) / 1000;
     };
-    var iconWeightOf = function (btn) {
+    out.liveDotTheme = document.documentElement.getAttribute("data-theme");
+    out.liveDotColors = { on: liveOnColor, off: liveOffColor, idle: liveIdleColor };
+    out.liveIdleSaturation = saturationOf(liveIdleColor);
+    out.liveIdleIsGray = out.liveIdleSaturation !== null && out.liveIdleSaturation < 0.2;
+    // 另两档必须**有彩**：否则「灰」这个判据本身没有区分力（三档都灰也能骗过上面一条）
+    out.liveVividStatesKeepColor = saturationOf(liveOnColor) > 0.4 && saturationOf(liveOffColor) > 0.4;
+    // 清晰度：状态点是**非文字图形要素**（WCAG 1.4.11 要 3:1）。顶栏是半透明的一层，
+    // 标签页坐在画布 / 面板上，所以对 --bg 与 --bg-elevated 两面各量一次。
+    out.liveIdleContrastOnCanvas = contrastRatio(liveIdleColor, cssColorOf("--bg"));
+    out.liveIdleContrastOnSurface = contrastRatio(liveIdleColor, cssColorOf("--bg-elevated"));
+    out.liveIdleContrastOk = out.liveIdleContrastOnCanvas >= 3 && out.liveIdleContrastOnSurface >= 3;
+    // ---- 图标**规范**取证（用户 2026-09-13 第 4 条 → 追加：「可能他们本就不一致，只调 size 没用？」）。
+    //      上一版只把两枚的**墨迹粗细**都调成 1.5px，形状 / 光学尺寸仍各走各的（箭头墨迹 9 × 16.5
+    //      且偏左 0.75，⋯ 跨度只有 11.5、圆点 1.5）—— 所以「整体粗细不一致」还在。现在两枚共用
+    //      **一套**规范（见 RoomView.tsx / app.module.css 的注释）：同一个 24 × 24 盒与 viewBox、
+    //      同一条 stroke-width（1.75）、同一套 round 线帽 / 接合、墨迹都居中于 (12,12)、
+    //      主轴尺寸都是 16 单位（箭头的**高** = ⋯ 的**宽**）、⋯ 的圆点直径 = 2 × 描边宽。
+    //      量法：getBBox() 给的是**几何**包围盒（不含描边），四周各外扩半个墨迹厚度才是墨迹外接盒。
+    var iconGeomOf = function (btn) {
       var svg = btn ? btn.querySelector("svg") : null;
-      if (!svg) return null;
+      var shapes = svg ? [].slice.call(svg.querySelectorAll("path, circle")) : [];
+      if (!svg || shapes.length === 0) return null;
+      var vb = (svg.getAttribute("viewBox") || "").split(" ").map(parseFloat);
       var box = rect(svg);
-      var viewBox = (svg.getAttribute("viewBox") || "0 0 24 24").split(" ");
-      var unit = parseFloat(viewBox[2]);
-      var shape = svg.querySelector("path, circle");
-      if (!box || !shape || !(unit > 0)) return null;
-      var scale = box.width / unit;
-      var raw = shape.tagName.toLowerCase() === "circle"
-        ? parseFloat(shape.getAttribute("r")) * 2
-        : parseFloat(shape.getAttribute("stroke-width") || getComputedStyle(shape).strokeWidth);
-      return { px: Math.round(raw * scale * 100) / 100, raw: raw, scale: Math.round(scale * 1000) / 1000,
-        boxW: Math.round(box.width * 10) / 10, tag: shape.tagName.toLowerCase() };
+      if (!box || !(vb[2] > 0)) return null;
+      var scale = box.width / vb[2];
+      // 墨迹厚度：描边 = stroke-width，圆点 = 直径（一个圆点就是一个零长度描边段的圆头）
+      var thicknessOf = function (s) {
+        if (s.tagName.toLowerCase() === "circle") return parseFloat(s.getAttribute("r")) * 2;
+        var w = s.getAttribute("stroke-width");
+        return w === null ? 0 : parseFloat(w);
+      };
+      var lo = { x: Infinity, y: Infinity };
+      var hi = { x: -Infinity, y: -Infinity };
+      var thickness = 0;
+      shapes.forEach(function (s) {
+        var b = s.getBBox();
+        var t = thicknessOf(s);
+        thickness = Math.max(thickness, t);
+        lo.x = Math.min(lo.x, b.x - t / 2);
+        lo.y = Math.min(lo.y, b.y - t / 2);
+        hi.x = Math.max(hi.x, b.x + b.width + t / 2);
+        hi.y = Math.max(hi.y, b.y + b.height + t / 2);
+      });
+      var round1 = function (v) { return Math.round(v * 100) / 100; };
+      return {
+        viewBox: svg.getAttribute("viewBox"),
+        scale: Math.round(scale * 1000) / 1000,
+        boxPx: round1(box.width),
+        inkThicknessPx: round1(thickness * scale),
+        inkW: round1(hi.x - lo.x),
+        inkH: round1(hi.y - lo.y),
+        inkCenterX: round1((lo.x + hi.x) / 2),
+        inkCenterY: round1((lo.y + hi.y) / 2),
+        linecap: shapes[0].getAttribute("stroke-linecap"),
+        linejoin: shapes[0].getAttribute("stroke-linejoin"),
+        shapeCount: shapes.length,
+      };
     };
-    out.iconBack = iconWeightOf(roundCtl[0]);
-    out.iconMore = iconWeightOf(roundCtl[1]);
-    out.iconStrokeBackPx = out.iconBack ? out.iconBack.px : null;
-    out.iconStrokeMorePx = out.iconMore ? out.iconMore.px : null;
-    // 改前：返回 2.00px、⋯ 1.00px（文字字形，实测）；折中 = 1.5px —— 两边现在都必须是 1.5px
-    out.iconWeightsCompromised = !!out.iconBack && !!out.iconMore &&
-      Math.abs(out.iconBack.px - 1.5) < 0.1 && Math.abs(out.iconMore.px - 1.5) < 0.1;
-    // 反面对照：两枚图标的粗细必须一致（差 < 0.15px），且控件本身尺寸不变（40 × 40 正圆）
-    out.iconWeightsMatch = !!out.iconBack && !!out.iconMore &&
-      Math.abs(out.iconBack.px - out.iconMore.px) < 0.15 &&
-      Math.abs(rect(roundCtl[0]).width - rect(roundCtl[1]).width) < 0.6;
-    out.iconMoreBoxPx = moreBtnBoxOf(roundCtl[1]);
+    out.iconBack = iconGeomOf(roundCtl[0]);
+    out.iconMore = iconGeomOf(roundCtl[1]);
+    out.iconBackInkThicknessPx = out.iconBack ? out.iconBack.inkThicknessPx : null;
+    out.iconMoreInkThicknessPx = out.iconMore ? out.iconMore.inkThicknessPx : null;
+    // ① ⋯ 的圆点直径 = 2 × 返回那一笔的描边宽（同一套规范里唯一的比例关系）
+    out.iconDotsTwiceStroke = !!out.iconBack && !!out.iconMore &&
+      Math.abs(out.iconMore.inkThicknessPx - out.iconBack.inkThicknessPx * 2) < 0.2;
+    // ② 同一个渲染盒（24 × 24、缩放系数 1）与同一个 viewBox
+    out.iconSameBox = !!out.iconBack && !!out.iconMore &&
+      out.iconBack.viewBox === out.iconMore.viewBox && out.iconBack.viewBox === "0 0 24 24" &&
+      Math.abs(out.iconBack.boxPx - out.iconMore.boxPx) < 0.6 &&
+      Math.abs(out.iconBack.scale - 1) < 0.01;
+    // ③ 同一套线帽 / 接合（返回是描边路径，⋯ 是实心圆点：端点形状由「圆」本身保证）
+    out.iconCapsShared = !!out.iconBack && out.iconBack.linecap === "round" &&
+      out.iconBack.linejoin === "round" && out.iconMore.shapeCount === 3;
+    // ④ 两枚的墨迹都**居中**于 (12,12)（改前箭头偏左 0.75 —— 这就是「看着不一样」的一半原因）
+    out.iconInkCentered = !!out.iconBack && !!out.iconMore &&
+      Math.abs(out.iconBack.inkCenterX - 12) < 0.2 && Math.abs(out.iconBack.inkCenterY - 12) < 0.2 &&
+      Math.abs(out.iconMore.inkCenterX - 12) < 0.2 && Math.abs(out.iconMore.inkCenterY - 12) < 0.2;
+    // ⑤ 主轴尺寸相同（箭头的高 = ⋯ 的宽 = 16 单位）：两枚的**视觉尺寸**一致，而不是各调一个数
+    out.iconSameDominantExtent = !!out.iconBack && !!out.iconMore &&
+      Math.abs(Math.max(out.iconBack.inkW, out.iconBack.inkH) -
+        Math.max(out.iconMore.inkW, out.iconMore.inkH)) < 0.2;
+    // 控件本身尺寸不变（40 × 40 正圆，两枚同尺寸）
+    out.iconControlsSameSize = !!roundCtl[0] && !!roundCtl[1] &&
+      Math.abs(rect(roundCtl[0]).width - rect(roundCtl[1]).width) < 0.6 &&
+      Math.abs(rect(roundCtl[0]).width - 40) < 0.6;
     // 圆点仍是**正圆**（圆角 = 半径）
     out.liveDotIsCircle = !!liveDotEl &&
       Math.abs(liveDotEl.getBoundingClientRect().width -
@@ -1675,6 +1747,16 @@ const MOCK = (theme) => `(function () {
     out.mentionColorMatchesBadge = !!replyMention && !!plainBadgeEl &&
       getComputedStyle(replyMention).color === getComputedStyle(plainBadgeEl).color &&
       getComputedStyle(replyMention).color === badgeFgColor;
+    // 用户 2026-09-13 的更正：「高亮我要求的是使用字体颜色，不是背景」—— @ 那一格**只许有颜色**：
+    // 底色 / 背景图都没有（上一版那层 45° 强调色渐变底已删），内边距与圆角也没加回来。
+    var mentionStyle = replyMention ? getComputedStyle(replyMention) : null;
+    var noPaint = function (value) {
+      return value === "none" || value === "transparent" || value === "rgba(0, 0, 0, 0)";
+    };
+    out.mentionNoBackground = !!mentionStyle &&
+      noPaint(mentionStyle.backgroundImage) && noPaint(mentionStyle.backgroundColor) &&
+      parseFloat(mentionStyle.paddingLeft) === 0 && parseFloat(mentionStyle.paddingRight) === 0 &&
+      parseFloat(mentionStyle.borderTopLeftRadius) === 0;
     // 高亮认的是**正文**，不是回复关系：没有任何 reply_* 字段的那条照样高亮
     var plainMentionRow = rowWith("没有回复关系也");
     out.mentionWorksWithoutReply = !!mentionOf(plainMentionRow) &&
@@ -2769,6 +2851,29 @@ const MOCK = (theme) => `(function () {
     out.headerMenuClosed = !byTestId("db-context-menu");
     snap();
 
+    // ---- 「断开连接」之后再点「刷新连接」必须能把连接拉回来（用户 2026-09-13：
+    //      「现在断连后再刷新无法直接重连了？」）。走的是**用户看得见的那条路**：
+    //      断连时这颗键必须可点 → 点了真的发出 rooms_reconnect → 状态点从灰回到上游那一档。
+    //      改前后端直接报 ROOM_NOT_FOUND（rooms_disconnect 把会话摘掉了），
+    //      界面只弹一条错误、连接回不来 —— 这三条断言都会红。
+    window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "disconnected", detail: "会话已关闭" });
+    await sleep(250);
+    out.reconnectDotIdleAfterDrop = byTestId("db-live-dot-box").getAttribute("data-state") === "idle";
+    byTestId("db-header-more").click();
+    await sleep(250);
+    var refreshItem = buttonWith(byTestId("db-context-menu"), "刷新连接");
+    out.reconnectItemOffered = !!refreshItem && refreshItem.disabled !== true;
+    var reconnectBefore = window.__reconnectCalls || 0;
+    refreshItem.click();
+    await sleep(400);
+    out.reconnectCommandSent = (window.__reconnectCalls || 0) === reconnectBefore + 1 &&
+      window.__lastReconnectRoom === fixtureRoom.room_id;
+    // 连上之后状态点回到上游 live_status 那一档（灰只表示「还没连上」，见 docs/ui.md §3.3）。
+    out.reconnectDotRestored = byTestId("db-live-dot-box").getAttribute("data-state") === (liveIsOn ? "on" : "off");
+    document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await sleep(150);
+    snap();
+
     // ---- admin 房管（issue #3）：权限前置、写操作二次确认、面板三块与错误原样展示
     out.adminIdentityFetched = calls.indexOf("room_session") >= 0;
     var adminTarget = rows()[rows().length - 1];
@@ -3128,6 +3233,64 @@ const MOCK = (theme) => `(function () {
     out.tabFallbackShowsRoomNumber = tabs.length === 2 &&
       tabs.some(function (t) { return t.innerText.indexOf("房间 5555") >= 0; }) &&
       tabs.every(function (t) { return t.innerText.indexOf("未命名直播间") < 0; });
+    // ---- 两处圆点**同一状态同色**（用户 2026-09-13：「橙色的需求改成灰色，但是下面的标题栏
+    //      左边还是之前的样子」+ 追加「标题旁的断连确实没变化（只有红绿）」）。房间头那颗与
+    //      标签页那颗现在是**同一个判据（liveKindOf）、同一组令牌（--live-*）、同一条 .liveDot 规则**，
+    //      这条断言把它钉死：三态各走一遍，量每一处的**计算色**与 data-state。
+    //      两个房间发同一组事件（含载荷里的 connected ——「连没连上」是两路信号取与），
+    //      所以「哪个标签是当前激活的那个」不影响结论。
+    var tabDotEls = function () { return allByTestId("db-tab-dot"); };
+    var headerDotNow = function () {
+      var dot = byTestId("db-live-dot");
+      return dot ? getComputedStyle(dot).backgroundColor : null;
+    };
+    var headerStateNow = function () {
+      var box = byTestId("db-live-dot-box");
+      return box ? box.getAttribute("data-state") : null;
+    };
+    var tabColorsNow = function () {
+      return tabDotEls().map(function (el) { return getComputedStyle(el).backgroundColor; });
+    };
+    var pairAt = async function (conn, liveStatus) {
+      [fixtureRoom.room_id, 5555].forEach(function (id) {
+        window.__emit("danmubox://status", { room_id: id, state: conn, detail: "" });
+        window.__emit("danmubox://room", {
+          room_id: id, live_status: liveStatus, connected: conn === "connected",
+        });
+      });
+      await sleep(350);
+      return {
+        header: headerDotNow(),
+        headerState: headerStateNow(),
+        tabs: tabColorsNow(),
+        tabStates: tabDotEls().map(function (el) { return el.getAttribute("data-state"); }),
+      };
+    };
+    var dotPairs = [
+      { kind: "on", want: cssColorOf("--live-on"), at: await pairAt("connected", 1) },
+      { kind: "off", want: cssColorOf("--live-off"), at: await pairAt("connected", 0) },
+      { kind: "idle", want: cssColorOf("--live-idle"),
+        at: await pairAt("disconnected", fixtureRoom.live_status) },
+    ];
+    out.liveDotPairColors = dotPairs.map(function (p) {
+      return { kind: p.kind, want: p.want, header: p.at.header, tabs: p.at.tabs };
+    });
+    out.liveDotTwoSitesSameColor = dotPairs.every(function (p) {
+      return p.at.tabs.length === 2 && p.at.header === p.want &&
+        p.at.tabs.every(function (c) { return c === p.want; });
+    });
+    out.liveDotTwoSitesSameState = dotPairs.every(function (p) {
+      return p.at.headerState === p.kind && p.at.tabs.length === 2 &&
+        p.at.tabs.every(function (s) { return s === p.kind; });
+    });
+    // 尺寸**维持现状**：标签页那颗点换的只是配色来源（旧 .dot 的 --sp-2 → 现在这条 .liveDot
+    // 的 --live-dot），看得见的那颗点仍是 8px、外壳（热区 / 悬停面）仍是 12px。
+    var firstTabDot = tabDotEls()[0];
+    out.tabDotSizePx = firstTabDot ? Math.round(rect(firstTabDot).width * 10) / 10 : null;
+    out.tabDotSizeUnchanged = !!firstTabDot &&
+      Math.abs(rect(firstTabDot).width - cssLengthOf("--live-dot")) < 0.6 &&
+      Math.abs(rect(firstTabDot).width - 8) < 0.6;
+    // 收尾就停在**未连接（灰）**那一档：最后那张截图因此看得到灰点（两处都是灰的）。
     snap();
 
     out.done = true;

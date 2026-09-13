@@ -883,7 +883,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
       return;
     }
     // 只有这个开关本身变了才动定时器：其它偏好改动不能顺手撤销已排好的摘除
-    // （无头冒烟实测：拨一下「系统通知」就会让列表里的互动消息永久留下）。
+    // （无头冒烟实测：任何与自动消失无关的偏好改动，都会让列表里的互动消息永久留下）。
     if (patch["ui.interact_auto_hide"] === undefined) return;
     clearInteractTimers();
     const roomId = get().activeRoomId;

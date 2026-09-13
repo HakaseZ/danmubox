@@ -384,8 +384,6 @@ export interface Prefs {
   "ui.gift_panel_mode": "merged" | "separate";
   /** 互动/进场消息显示一会儿后自动消失；关掉则常驻。 */
   "ui.interact_auto_hide": boolean;
-  /** 系统通知（开播 / 下播 / 标题变更 / 公告）显示开关。 */
-  "ui.system_notice": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */
   "ui.show_timestamp": boolean;
   /** 自定义短语（需求 §2.2）；短语面板里唯一的内容来源，点选插到光标处。 */

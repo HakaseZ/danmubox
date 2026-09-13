@@ -435,11 +435,49 @@ function markPendingRejected(
   }));
 }
 
-/** 丢掉某个房间的状态键：会话结束（关标签/移除房间）即销毁，不跨会话复用。 */
+/** 丢掉某个房间的状态键：会话结束（关标签/移除房间/断开连接）即销毁，不跨会话复用。 */
 function dropRoom<T>(map: Record<number, T>, roomId: number): Record<number, T> {
   const rest = { ...map };
   delete rest[roomId];
   return rest;
+}
+
+/**
+ * **身份世代**：换人时递增（切号 / 登出当前账号 / 删掉当前账号 / 扫码确认新账号）。
+ *
+ * 换人期间发起的读取（`session_status` / `accounts_list` / `rooms_list` / 房内身份）落地前
+ * 都要复核自己是否还是最新的一代 —— 否则先点账号 1、后点账号 2 时，1 的回包后到就把界面
+ * 改回 1（审计 P67：界面「当前」标记不是最后点击的那个）。
+ * 取号必须在**命令之前**：按意图顺序（点击顺序）而不是回包顺序，晚到的旧续作直接放弃，
+ * 也就不会再多发一轮重拉。
+ */
+let identityEpoch = 0;
+
+/** 换人：取一个新世代号（调用方在命令之前取，落地前复核）。 */
+function beginIdentityChange(): number {
+  identityEpoch += 1;
+  return identityEpoch;
+}
+
+/**
+ * 全量房间列表的**落地护栏**（审计 P66）。`rooms_list` 是当前态的全量快照，晚到的旧快照
+ * 盖回新状态就是界面串台：`openRoom(A)` 后立刻 `openRoom(B)`，A 那条后到的快照会把 B 的
+ * `connected` / 会话条数指回旧值。
+ * 每次发起取一个递增号，落地时只接受**还没落过更新快照**的那一份 —— 号是发起顺序，而响应
+ * 必然是发起那一刻的当前态，所以号大的永远不比号小的旧。失败不占号：一次失败不该把别人
+ * 已经落地的快照判成「更旧」。
+ */
+let roomsSeq = 0;
+let roomsAppliedSeq = 0;
+
+/** 重拉 `rooms_list`；这次请求已被更新的快照越过时返回 undefined（= 这一份丢掉不落）。 */
+async function reloadRooms(): Promise<RoomView[] | undefined> {
+  roomsSeq += 1;
+  const seq = roomsSeq;
+  const rooms = await api.roomsList();
+  if (seq < roomsAppliedSeq) return undefined;
+  roomsAppliedSeq = seq;
+  return rooms;
 }
 
 /**
@@ -467,6 +505,9 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
     ownedEmotes: [],
     ownedLoaded: false,
     ownedError: undefined,
+    // 余额是**账号级**数字（`wallet_balance`）：留着它，新账号进房时状态栏会先把上一个
+    // 账号的电池数摆出来，直到重拉落地（审计 P72）。
+    balance: undefined,
     seeding: false,
     lastSend: undefined,
   });
@@ -623,7 +664,12 @@ export const useApp = create<AppStore>((set, get, store) => ({
               [identity.room_id]: identity,
             },
           })),
-        onSend: (lastSend) => set({ lastSend }),
+        // `danmubox://send` 与命令返回是**同一份结果**（ipc.md §4）：同样只登记当前房间的
+        // —— 晚到的旧结果不得让另一个房间弹浮片（审计 P73）。
+        onSend: (lastSend) => {
+          if (lastSend.room_id !== get().activeRoomId) return;
+          set({ lastSend });
+        },
         onLog: (line) => {
           const logs = [...get().logs, line];
           if (logs.length > LOG_CAP) logs.splice(0, logs.length - LOG_CAP);
@@ -638,8 +684,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
   async addRoom(input) {
     try {
       const room = await api.roomsAdd(input);
-      const rooms = await api.roomsList();
-      set({ rooms });
+      const rooms = await reloadRooms();
+      if (rooms !== undefined) set({ rooms });
       await get().openRoom(room.room_id);
     } catch (error) {
       set({ error: describeError(error) });
@@ -661,7 +707,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
           adminErrors: {},
         }));
       }
-      set({ rooms: await api.roomsList() });
+      const rooms = await reloadRooms();
+      if (rooms !== undefined) set({ rooms });
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -677,30 +724,42 @@ export const useApp = create<AppStore>((set, get, store) => ({
         [String(roomId)]: Date.now(),
       },
     });
-    // 新会话：丢掉上一轮的身份与房管数据，否则关标签再进会拿着旧身份放行房管入口。
-    set((state) => ({
+    // 切房只换渲染：清掉上个房间的弹幕与房管数据、丢掉发往别的房间的浮片。
+    // **身份快照不删**（审计 P71）：切房并没有结束会话 —— 这个房间（多标签下可能同时连着
+    // 好几个）的连接还在，切回来还是同一次会话，删了只会让房管入口白闪一下再取回来。
+    // 「不留陈旧身份」由另外两件事兜住：① 结束会话的路径各自删掉该房间的身份（关标签 /
+    // 移除房间 / 断开连接 / 换人）；② 会话重建时 core 重取身份并经 `danmubox://session`
+    // 覆盖（`session.rs`），界面另在进房与打开房管入口时各读一次。
+    set({
       activeRoomId: roomId,
       messages: [],
       seeding: true,
-      roomIdentities: dropRoom(state.roomIdentities, roomId),
+      // 发送浮片只属于发出它的那个房间：切房即清（见 `send` 的落地复核，审计 P73）。
+      lastSend: undefined,
       adminSilent: [],
       adminBlacklist: [],
       adminKeywords: [],
       adminErrors: {},
-    }));
+    });
     try {
       const history = await api.historyQuery(roomId, {
         limit: 0,
       });
-      set({ messages: history });
-      if (get().prefs?.["ui.interact_auto_hide"]) {
-        scheduleInteractHide(store, roomId, history);
+      // 落地复核（审计 P65）：await 期间用户可能已经切到别的房间 —— 那批历史属于上一个
+      // 房间，整批写进 `messages` 就是把 B 的列表换成 A 的。建连**不跳过**：这个房间是
+      // 用户点开过的，多标签下各房间各自连着。
+      if (get().activeRoomId === roomId) {
+        set({ messages: history });
+        if (get().prefs?.["ui.interact_auto_hide"]) {
+          scheduleInteractHide(store, roomId, history);
+        }
       }
       await get().connect(roomId);
     } catch (error) {
       set({ error: describeError(error) });
     } finally {
-      set({ seeding: false });
+      // 「正在载入」由**当下一代**收尾：晚到的那次不该把新房间的提示提前撤掉（审计 P65）。
+      if (get().activeRoomId === roomId) set({ seeding: false });
     }
   },
 
@@ -722,7 +781,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
   async connect(roomId) {
     try {
       await api.roomsConnect(roomId);
-      set({ rooms: await api.roomsList() });
+      // `rooms_list` 的落地复核（审计 P66）：这一份被更新的快照越过就丢掉，
+      // 否则 A→B 连点时 A 那条后到的快照会把 B 的连接态指回旧值。
+      const rooms = await reloadRooms();
+      if (rooms !== undefined) set({ rooms });
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -731,7 +793,17 @@ export const useApp = create<AppStore>((set, get, store) => ({
   async disconnect(roomId) {
     try {
       await api.roomsDisconnect(roomId);
-      set({ rooms: await api.roomsList() });
+      // 断开 = 这个房间的会话结束（`docs/ipc.md` §8「离开房间」那一行）：该房间的身份快照与
+      // 房管三块一并作废 —— 与 `closeRoom` / `removeRoom` 同款。留着的话，房管入口还按
+      // 上一个会话的身份放行（审计 P70）。弹幕与缓冲不动：重连时按同一会话去重（见 `alreadyListed`）。
+      set((state) => ({
+        roomIdentities: dropRoom(state.roomIdentities, roomId),
+        ...(state.activeRoomId === roomId
+          ? { adminSilent: [], adminBlacklist: [], adminKeywords: [], adminErrors: {} }
+          : {}),
+      }));
+      const rooms = await reloadRooms();
+      if (rooms !== undefined) set({ rooms });
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -743,7 +815,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
       // 重连可能把已经结束的会话（用户点过「断开连接」）重新建起来，
       // 也可能只是把当前连接掐了重连——两种情况下 `connected` 都以重拉结果为准，
       // 否则房间头菜单里的「断开连接」会拿着旧状态一直置灰。
-      set({ rooms: await api.roomsList() });
+      const rooms = await reloadRooms();
+      if (rooms !== undefined) set({ rooms });
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -756,7 +829,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
     const localId = insertPending(store, roomId, content, emote, reply);
     try {
       const result = await api.chatSend(roomId, content, emote, reply);
-      set({ lastSend: result });
+      // 落地复核（审计 P73）：结果属于**发出去的那个房间**（`ChatSendResult.room_id`），
+      // 只有它还是当前房间才登记 —— 否则 B 的输入区会弹 A 那条的失败浮片。
+      // 行上的标记不受影响：`markPending*` 各自按房间复核一次。
+      if (get().activeRoomId === roomId) set({ lastSend: result });
       // 上游明确说这条没上屏（被吞 / 被禁言 / 要粉丝牌 / 频率限制…）→ 就地标成**被拒**：
       // 正文划线 + 行尾写上**原因**（与发送浮片同一句），留着给用户对照着改一条再发。
       // `ok` 则保持不动：那一行已经按「别人看到的我」的样子画着了，等回播把权威字段换进来。
@@ -813,12 +889,15 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   async refreshIdentity() {
+    // 换人复核（审计 P67）：重拉的这几份都以**当下的身份**为准，晚到的旧一代回包一律丢掉。
+    const epoch = identityEpoch;
     try {
       // 以重拉结果为准：`account_*` 的返回形状不是界面的事实来源，重拉一次最省心也最准。
       const [session, accounts] = await Promise.all([
         api.sessionStatus(),
         api.accountsList(),
       ]);
+      if (epoch !== identityEpoch) return;
       set({ accounts });
       await get().applySession(session);
     } catch (error) {
@@ -835,16 +914,24 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   async applySession(session) {
+    const epoch = identityEpoch;
     set({ session });
-    set({ rooms: await api.roomsList() });
     // 关注跟着账号走：换了身份就按新身份重拉；未登录则清空，不留上一个人的列表。
     if (session.logged_in) void get().loadFollowed();
     else set({ followed: [] });
+    const rooms = await reloadRooms();
+    // 落地复核（审计 P67）：这一轮重拉期间又换了一次人，房间列表交给那一代去铺。
+    if (epoch !== identityEpoch) return;
+    if (rooms !== undefined) set({ rooms });
   },
 
   async switchAccount(name) {
+    // 换人先取号（按**点击顺序**，不是回包顺序）——晚到的旧续作在下面直接放弃。
+    const epoch = beginIdentityChange();
     try {
       await api.accountSwitch(name);
+      // 已经有更晚的一次换人：清切片与重拉都交给那一代，绝不拿这一轮覆盖它（审计 P67）。
+      if (epoch !== identityEpoch) return;
       // 切号成功：上一个身份的界面状态先清干净，再按新会话重铺（需求 2026-09-13）。
       // 后端已用新凭据重建各房间连接（契约 §7），界面这边不能留着旧身份的视角。
       resetIdentityState(set);
@@ -860,7 +947,11 @@ export const useApp = create<AppStore>((set, get, store) => ({
       // 判定必须在命令之前取：后端切换后会推 `danmubox://session`，store 里的
       // `active_profile` 可能先一步变成新账号，回头再比就对不上了。
       const wasCurrent = name === get().session?.active_profile;
+      // 删当前账号 = 换人，取号；删别的账号不动身份，也就不取号（那一轮只重拉状态，
+      // `refreshIdentity` 自己会复核世代）。
+      const epoch = wasCurrent ? beginIdentityChange() : undefined;
       await api.accountRemove(name);
+      if (epoch !== undefined && epoch !== identityEpoch) return;
       if (wasCurrent) resetIdentityState(set);
       // 被删的可能正是当前账号（后端会切到别个），进行中的扫码也随之作废。
       set({ qr: null, qrState: null, qrError: null });
@@ -875,7 +966,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
       // 登出当前账号 = 身份退回游客，同样要把上一个身份的界面状态清掉；
       // 登出别的账号不动当前界面（`active_profile` 不因登出改名，所以这里不必抢在命令前取值）。
       const wasCurrent = name === undefined || name === get().session?.active_profile;
+      // 与删当前账号同款：换人才取号（审计 P67）。
+      const epoch = wasCurrent ? beginIdentityChange() : undefined;
       await api.accountLogout(name);
+      if (epoch !== undefined && epoch !== identityEpoch) return;
       if (wasCurrent) resetIdentityState(set);
       // 清掉凭据后该账号退回未登录：会话变游客、关注列表清空（refreshIdentity 里做）。
       set({ qr: null, qrState: null, qrError: null });
@@ -908,6 +1002,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
       const { state, account } = await api.accountQrPoll(qr.key);
       set({ qrState: state, qrError: null });
       if (state === "confirmed") {
+        // 确认 = 换人：取号，让这一代之前的在途读取全部作废（与切号同款，审计 P67）。
+        beginIdentityChange();
         // 后端在这一步已落盘并让房间重连；界面把登录态、账号、房间、关注重新拉一遍。
         // 新增时说清「加了哪个账号」，重新登录时说清「覆盖了谁的凭据」。
         const who = account ? account.nickname || account.name : "";
@@ -943,7 +1039,11 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async loadEmotes(roomId) {
     try {
-      set({ emotes: await api.emotesList(roomId) });
+      const emotes = await api.emotesList(roomId);
+      // 落地复核（审计 P68）：表情库按**房内身份**下发，而 `emotes` 是全局单份数组 ——
+      // await 期间切了房间就不能写进去，否则 B 的预览 / 置灰是按 A 的身份算的。
+      if (get().activeRoomId !== roomId) return;
+      set({ emotes });
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -982,8 +1082,12 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   async loadRoomIdentity(roomId) {
+    // 身份世代复核（审计 P67 / P71）：这份身份是按**凭据**取的，换人后晚到的那份属于
+    // 上一个账号 —— 写进去会让房管入口按旧身份放行。
+    const epoch = identityEpoch;
     try {
       const identity = await api.roomSession(roomId);
+      if (epoch !== identityEpoch) return;
       set((state) => ({
         roomIdentities: { ...state.roomIdentities, [roomId]: identity },
       }));
@@ -1010,6 +1114,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
         return undefined;
       }),
     ]);
+    // 落地复核（审计 P69）：三块是「当前房间」的会话级单例，await 期间切了房间就丢弃这一批
+    // —— A 打开面板后立刻切 B，B 的面板不该显示 A 的名单。
+    if (get().activeRoomId !== roomId) return;
     set((state) => ({
       adminSilent: silent ?? state.adminSilent,
       adminBlacklist: blacklist ?? state.adminBlacklist,

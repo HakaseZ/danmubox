@@ -56,6 +56,10 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
     badges.admin ||
     badges.guardLevel > 0 ||
     (badges.medalLevel > 0 && badges.medalName.length > 0);
+  // 有没有身份行：系统行不画，昵称与徽标都空的也不画（空盒会白吃一道间距）。
+  // 时间戳要落在这两族行的**同一个纵向位置**上，所以这里统一算一次给两处用。
+  const hasIdentity =
+    message.kind !== "system" && (hasBadges || message.uname.length > 0);
 
   const kindClass: Record<Message["kind"], string | undefined> = {
     danmaku: undefined,
@@ -99,12 +103,9 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
         onMenu(message, { x: event.clientX, y: event.clientY });
       }}
     >
-      {/* 时间戳列：开关见 `ui.show_timestamp`；固定宽度 + tabular-nums，保证逐行纵向对齐 */}
-      {prefs["ui.show_timestamp"] && (
-        <span className={styles.time} data-testid="db-msg-time">
-          {formatClock(message.ts)}
-        </span>
-      )}
+      {/* 时间戳（用户 2026-09-14：「时间戳显示时放在最右边」）：**不再占行首一列**，
+          位置改到身份行的右端，见下面 `.text` 里那两处渲染；没有身份行的行走
+          「只有时间」的首行。开关仍是 `ui.show_timestamp`（默认关闭）。 */}
       {message.kind !== "system" && (
         // 头像列永远占位：没有头像（face 为空串）时不画假图，但列宽照留，
         // 否则这一行的身份簇 / 正文会整体左移，逐行对不齐（issue #8）。
@@ -114,12 +115,12 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
         </span>
       )}
       {/* 正文块 = **上下两行**（参考图口径，用户 2026-09-13）：第一行身份
-          （用户名 + 身份牌），第二行正文。两块都是块级，所以正文必然落在自己的行上、
+          （用户名 + 身份牌，**右端是时间戳**），第二行正文。两块都是块级，所以正文必然落在自己的行上、
           左起点与用户名对齐（悬挂缩进），并且拿到**整行宽度**——旧版是「身份簇 ｜ 正文」
           左右两列，窄屏 360 下正文只有 112–165px（占视口 46%），长文本自然折得又窄又碎。
           身份行内只用 --sp-1（贴）；与正文的「分」由换行本身给出，不再有 --sp-2 外边距。 */}
       <span className={styles.text}>
-        {message.kind !== "system" && (hasBadges || message.uname.length > 0) && (
+        {hasIdentity ? (
           // 身份行：昵称 + 身份牌**是一个整体**（都属于「谁在说话」）。
           // 牌在昵称**右边**（参考图：蓝底白字的房间牌跟在用户名后面）。
           // 「回复了谁」不再另起一格（用户 2026-09-13 第 1 条：与正文里自带的 @ 重复）——
@@ -166,7 +167,24 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
                 )}
               </span>
             )}
+            {/* 时间戳：身份行的**最后一格**、靠右（`margin-left: auto`，见 `.time`）——
+                用户 2026-09-14：「时间戳显示时放在最右边」。它是定宽的一格，所以逐行的
+                右边缘相同（用户 2026-09-12「时间要对齐」）；`flex: none` 保证昵称 + 牌
+                再长也压不扁它（超出的部分由可收缩的昵称省略号吸收）。 */}
+            {prefs["ui.show_timestamp"] && (
+              <span className={styles.time} data-testid="db-msg-time">
+                {formatClock(message.ts)}
+              </span>
+            )}
           </span>
+        ) : (
+          // 没有身份行的行（`kind === "system"`、或既无昵称又无徽标）：时间**独占正文块的
+          // 首行**、同样靠右 —— 不因为缺身份行就把时间丢掉；正文仍从下一行、左边缘起点开始。
+          prefs["ui.show_timestamp"] && (
+            <span className={`${styles.timeLine} ${styles.time}`} data-testid="db-msg-time">
+              {formatClock(message.ts)}
+            </span>
+          )
         )}
         {/* 正文：文字与表情图**同一个行盒**——表情不另起一列、不另站一个基线。
             正文统一用主题前景色：上游允许发送者自定义弹幕颜色（舰长/老爷常见金黄），

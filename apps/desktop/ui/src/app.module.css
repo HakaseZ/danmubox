@@ -284,7 +284,7 @@
      而且「有没有滚动条都不跳」。见 index.css 里那条「不写滚动条样式」的注释。 */
 }
 
-/* 页头一行：左「弹幕框」标题、右主题开关（用户 2026-09-13 #10）。
+/* 页头一行：左「弹幕框」标题、右**主题按钮**（用户 2026-09-13 #10 + #7）。
    两个都是 flex item：标题可缩（`min-width: 0`，长标题不会把控件挤出容器），
    控件不缩（`flex: none`）——360px 宽（窗口最小宽度）下这一行也不会溢出、不换行。 */
 .listHeader {
@@ -302,23 +302,16 @@
   min-width: 0;
 }
 
-/* 主题开关：`<label>` 里的「主题」就是它的可访问名（原生 `select`，键盘可达）。
-   字号比正文小一档：它挨着一个 `--fs-8` 的大标题，跟着正文走会显得抢。 */
-.themePicker {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex: none;
-  font-size: var(--fs-3);
-  color: var(--fg-dim);
-}
+/* 主题按钮（用户 2026-09-13 #7：「模仿安卓 / iOS 的日月按钮，但是分亮、暗、自动三态，
+   是按钮非滑块」）**没有自己的规则**：它就是一枚举着日 / 月 / 日月图标的圆形按钮，几何 /
+   悬停 / 键盘可达都跟着房间头那套圆形控件（`.ctlRound` + `.ctlIcon`，直径 `--ctl-round`）。
+   这里原先的 `<label>主题 + <select>` 连同 `.themePicker` 的规则一起删掉 —— 三态循环没有
+   文字标签，当前档只进 `title` / `aria-label`（docs/ui.md §8.3）。 */
 
-/* 「主题」二字是次级标签（`--fg-dim`），控件里的当前档位是**要读的内容**，回到正文色 */
-.themePicker select {
-  color: var(--fg);
-}
-
-/* 账号区（用户 2026-09-12：切换不再做成下拉，只留「当前身份 + 账号按钮」） */
+/* 账号区：**整行就是入口**（用户 2026-09-13 #8：「账号面板改为直接点击头像所在的那个圆角
+   长方形就能进入，不需要独立的『账号』按钮」）。这一行自己就是靶子（`role="button"` +
+   `tabIndex`），所以悬停只加底色、焦点给一圈强调色描边 —— 与账号对话框里那些「整行可点」的
+   账号行（.accountItemSwitchable）同一套手法。行内没有别的可点元素。 */
 .account {
   display: flex;
   align-items: center;
@@ -328,6 +321,16 @@
   background: var(--bg-elevated);
   padding: var(--sp-3);
   margin-bottom: var(--sp-4);
+  cursor: pointer;
+}
+
+.account:hover {
+  background: var(--hover-wash);
+}
+
+.account:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .accountIdentity {
@@ -547,7 +550,7 @@
   min-width: 0;
 }
 
-/* 圆形控件：返回 / ⋯（几何由 --ctl-round 一处给出）。**电池不在此列**——
+/* 圆形控件：返回 / ⋯ / 主题按钮（几何由 --ctl-round 一处给出）。**电池不在此列**——
    用户 2026-09-13：「电池不要圆形，仅 3 点选项需要」，它是输入区里的一枚圆角矩形（.battery）。
    `--r-full` 作用在正方盒上就是正圆（圆角 = 半径），不需要各处再写 50%。 */
 .ctlRound {
@@ -569,10 +572,11 @@
   background: var(--hover-wash);
 }
 
-/* 圆形控件里的图标（返回 / ⋯）：**同一套矢量规范** —— 同一个 24 × 24 盒与 `viewBox`、
-   同一条 `stroke-width`（1.75，写死在 SVG 里，不随字号变）、同一套 round 线帽 / 接合；
-   两枚的墨迹都**居中于 (12,12)**，主轴尺寸都是 16 单位（箭头的高 = ⋯ 的宽），
-   而 ⋯ 的圆点直径 = 2 × 描边宽（一个圆点就是一个零长度描边段的圆头）。详见 `RoomView.tsx`。
+/* 圆形控件里的图标（返回 / ⋯ / 日·月·日月）：**同一套矢量规范** —— 同一个 24 × 24 盒与
+   `viewBox`、同一条 `stroke-width`（1.75，写死在 SVG 里，不随字号变）、同一套 round 线帽 / 接合；
+   各枚的墨迹都**居中于 (12,12)**，主轴尺寸都是 16 单位（箭头的高 = ⋯ 的宽 = 日 / 月的外缘），
+   而 ⋯ 的圆点直径 = 2 × 描边宽（一个圆点就是一个零长度描边段的圆头）。详见 `RoomView.tsx`；
+   日 / 月 / 日月三枚见 `RoomList.tsx` 的 `ThemeGlyph`。
    60% × `--ctl-round`（40px）= 24px —— 缩放系数正好 1，viewBox 里 1 单位 = 屏幕上 1px。 */
 .ctlIcon {
   width: 60%;
@@ -2039,10 +2043,6 @@
   .headerBar {
     flex-wrap: wrap;
     row-gap: var(--sp-1);
-  }
-
-  .account {
-    flex-wrap: wrap;
   }
 
   .accountIdentity {

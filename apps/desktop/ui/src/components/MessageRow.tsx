@@ -80,8 +80,10 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   const autoHide = message.kind === "interact" && prefs["ui.interact_auto_hide"];
 
   // 本地乐观行**不加任何待确认视觉**（用户 2026-09-13 的更正：「发出去就是和已发送一样的状态，
-  // 上游返回的数据只做校验」）：插入时不带 `send_state`，因此这一行与已确认行渲染逐项相同。
-  // 只有失败族（判失败 / 超时未确认）才由行尾那枚标记说明，整行不做弱化。
+  // 上游返回的数据只做校验」）：插入时不带 `send_state`，因此这一行与「别的客户端看到的我」
+  // 渲染逐项相同。标记只在**发送没成**时出现（整行不弱化，要读得清）：被拒的那条还要把正文
+  // 划掉并写出上游给的原因（用户 2026-09-13：留着便于对照修改）。
+  const rejected = message.send_state === "rejected";
   const variant = [
     kindClass[message.kind] ?? "",
     autoHide ? styles.autoHide : "",
@@ -192,7 +194,11 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
               title={message.content}
             />
           ) : (
-            <span className={highlight}>{withMentions(text)}</span>
+            <span
+              className={`${highlight ?? ""} ${rejected ? styles.rejectedText : ""}`}
+            >
+              {withMentions(text)}
+            </span>
           )}
           {/* 礼物行始终显示数量（连击折叠后的次数）；其余类型不再有 ×N ——
               「相似消息合并」已整条删除（P49），count > 1 只可能来自礼物连击。
@@ -201,20 +207,16 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             <span className={styles.merged}>×{count}</span>
           )}
           {message.send_state !== undefined && (
-            // 修正标记（乐观渲染，用户 2026-09-13）：只可能是失败族的「发送失败」/「未确认」——
-            // 正常那条（含刚插入、还在等回执的本地行）不带这个字段，因此不渲染任何标记。
-            // 与合并计数一样是正文里的**行内**一格，只有本地那条有；配色走现有令牌
-            // （--warn / --danger），不新造颜色。整行不加弱化（乐观行要与已确认行逐项相同）。
+            // 发送没成的标记（乐观渲染，用户 2026-09-13）：正常行（刚插入还在等回执的本地行、
+            // 上游回播换进来的那条）不带这个字段，因此不渲染任何标记。与合并计数一样是正文里的
+            // **行内**一格；整行不弱化（要读得清）。被拒的那条写**上游给的原因**（与浮片同一句，
+            // 见 `sendOutcomeText`），「未确认」那档只说明我们没等到回声。
             <span
-              className={`${styles.sendState} ${
-                message.send_state === "failed"
-                  ? styles.sendStateFailed
-                  : styles.sendStateUnconfirmed
-              }`}
+              className={styles.sendState}
               data-testid="db-msg-send-state"
               data-state={message.send_state}
             >
-              {SEND_STATE_TEXT[message.send_state]}
+              {message.send_reason ?? SEND_STATE_TEXT[message.send_state]}
             </span>
           )}
         </span>

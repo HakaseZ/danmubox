@@ -4,7 +4,7 @@ import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { FilterBar } from "./FilterBar";
 import {
   EMOTE_PACKAGE_LABEL,
-  SEND_OUTCOME_TEXT,
+  sendOutcomeText,
   SEND_TOAST_MS,
   type Emote,
   type EmotePackage,
@@ -125,11 +125,8 @@ export function Composer({
     // `sendSeq === 0` = 还没发过东西（可能是进房间带进来的旧结果）：不弹。
     if (sendSeq === 0) return;
     if (lastOutcome === undefined || lastOutcome === "ok") return;
-    // 文案不再加「发送失败：」前缀：`SEND_OUTCOME_TEXT` 本身已经把它说全了
-    // （`failed` 就是「发送失败」），前缀会拼成「发送失败：发送失败 · …」。
-    setToast(
-      `${SEND_OUTCOME_TEXT[lastOutcome]}${lastDetail ? ` · ${lastDetail}` : ""}`,
-    );
+    // 与那一行行尾的标记**同一句**（`sendOutcomeText`）：浮片与行上写的必须是同一件事。
+    setToast(sendOutcomeText(lastOutcome, lastDetail));
     // 渐隐是 CSS 动画（.toast），这里只负责在动画走完之后把元素摘掉 ——
     // 否则它会「透明地占着一块地方」，那正是用户不要的形态。
     const timer = window.setTimeout(() => setToast(null), SEND_TOAST_MS);
@@ -379,8 +376,8 @@ export function Composer({
     const outcome = await onSend(emote.text, token, reply);
     setBusy(false);
     setSendSeq((value) => value + 1);
-    // 被这一条消耗掉的回复目标就清掉；失败保留（与文字发送同一口径：留着能重试）
-    if (replyTo && outcome !== undefined && outcome !== "failed") setReplyTo(null);
+    // 被这一条消耗掉的回复目标就清掉；没发出去就留着（与文字发送同一口径：留着能重试）
+    if (replyTo && outcome === "ok") setReplyTo(null);
   };
 
   const submit = async () => {
@@ -397,8 +394,9 @@ export function Composer({
     const outcome = await onSend(content, undefined, reply);
     setBusy(false);
     setSendSeq((value) => value + 1);
-    // 只有确实发出去（或被吞）才清空草稿；失败保留内容便于重试。
-    if (outcome !== undefined && outcome !== "failed") {
+    // 只有**确实发出去**才清空草稿：被拒的那条要照着行上划掉的正文 + 原因自己改
+    // （用户 2026-09-13：「便于我对照修改」），结果未知的还能原样重发。
+    if (outcome === "ok") {
       setDraft("");
       setReplyTo(null);
       setMention(null);

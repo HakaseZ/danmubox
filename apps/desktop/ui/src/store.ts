@@ -25,6 +25,8 @@ import type {
   QrState,
   SessionState,
 } from "./types";
+// 值导入（上面那一组是 `import type`）：发送结果那句话在这里拼，行尾标记与浮片共用同一句。
+import { sendOutcomeText } from "./types";
 
 /** 前端只保留的显示上限；真正的会话缓冲在后端（docs/contract.md §4.3）。 */
 const CLIENT_MESSAGE_CAP = 2000;
@@ -165,7 +167,18 @@ let pendingSeq = 0;
 /** 待确认行的超时兜底定时器（键 = 本地行的 `local_id`）。 */
 const sendTimers = new Map<number, number>();
 
-/** 摘掉一条待确认行的定时器（转正 / 判失败 / 离开房间都要）。 */
+/**
+ * 已经被上游回播**对上的**本地行（`local_id`）。本地行不再被替换成上游那条
+ * （见 `onMessage`：那一帧就是最终形态），因此它会一直留在列表里；不给它退场标记的话，
+ * 同一正文连发两条时第二条的回播会被**第一条**再次吸走（取列表里最靠前的那条），
+ * 第二条于是白等 8 秒被判「未确认」。改前这层语义是天然成立的 —— 命中之后那条被
+ * 上游那条替换、`local_id` 转正，自己就退出了对账面；现在把它放到列表**之外**：
+ * 行上一个字段都不写，退场只记在这张侧表里。
+ * `pendingSeq` 进程内单调递增、号不复用，因此键永不冲突；退房时随缓冲一起清掉。
+ */
+const echoedLocals = new Set<number>();
+
+/** 摘掉一条待确认行的定时器（回播确认 / 判失败 / 离开房间都要）。 */
 function clearSendTimer(localId: number) {
   const timer = sendTimers.get(localId);
   if (timer !== undefined) window.clearTimeout(timer);
@@ -184,6 +197,9 @@ function clearRoomTimers() {
   clearInteractTimers();
   for (const timer of sendTimers.values()) window.clearTimeout(timer);
   sendTimers.clear();
+  // 本地行随 `messages` 一起清空（契约 §4.3：缓冲的生命周期 = 一次房内会话），
+  // 侧表里的退场标记没有行可指了，一并清掉。
+  echoedLocals.clear();
 }
 
 /** 追加一条并守住前端显示上限（真正的会话缓冲在后端，docs/contract.md §4.3）。 */
@@ -207,14 +223,16 @@ function appended(messages: Message[], message: Message): Message[] {
  * - 时间窗：`SEND_MATCH_WINDOW_MS` 以内（`ts` 之差取绝对值）。
  *
  * 命中多条时取**列表里最靠前**的那条：连发两条同样内容时按先来后到一一对上。
- * 参与范围 = **本地行且尚未判失败**（`local_id` 为负，见 `insertPending`）—— `failed` 那条上游
- * 已明确拒绝，不会有回推；`unconfirmed` 仍参与（回推迟到也能转正）；已确认的行 `local_id` 恒为正，
- * 天然出局。这也正是**不会重复**的根据：一次发送只可能对上一条本地行，对上之后那条就被换掉。
+ * 参与范围 = **本地行（`local_id` 为负，见 `insertPending`）且还没对上过** ——
+ * `rejected` 那条上游已明确拒绝，不会有回播；`unconfirmed` 仍参与（回播迟到也算收到）；
+ * 已经对上过的（`echoedLocals`）出局，否则第二条的回播会再次落到第一条头上。
+ * 这也正是**不会重复**的根据：一次发送只可能对上一条本地行。
  */
 function matchPending(messages: Message[], incoming: Message): number {
   if (incoming.kind !== "danmaku") return -1;
   return messages.findIndex((item) => {
-    if (item.local_id >= 0 || item.send_state === "failed") return false;
+    if (item.local_id >= 0 || item.send_state === "rejected") return false;
+    if (echoedLocals.has(item.local_id)) return false;
     if (item.kind !== incoming.kind || item.uid !== incoming.uid) return false;
     if (item.content !== incoming.content) return false;
     const mine = item.emote?.emoticon_unique ?? "";
@@ -249,15 +267,55 @@ function alreadyListed(messages: Message[], incoming: Message): boolean {
 }
 
 /**
+ * 本人粉丝牌的**真彩色**。`room_session` 不带它（`protocol.md` A38 只实测到
+ * `up_medal.{level, medal_name}`），而弹幕里带着（A37：`user.medal.v2_medal_color_*` 四个键）。
+ * 所以从**本人上一条上游行**里取：本地行要「从第一帧起就与上游行渲染逐项相同」，
+ * 牌面配色就不能走按牌名派生的兜底色 —— 那是**另一个色**，会和本人其它行对不上。
+ * 取不到（本会话里我还没发过言）就返回空串，由 `medalColors` 正常回落。
+ */
+function ownMedalPalette(messages: Message[], uid: number): {
+  medal_color_start: string;
+  medal_color_end: string;
+  medal_color_border: string;
+  medal_color_text: string;
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+    // 只认带真彩色的弹幕行：回填的历史条目**没有**颜色字段（A30），拿它当来源等于没取到。
+    if (item.uid !== uid || item.kind !== "danmaku") continue;
+    if ((item.medal_color_start ?? "").length === 0) continue;
+    return {
+      medal_color_start: item.medal_color_start ?? "",
+      medal_color_end: item.medal_color_end ?? "",
+      medal_color_border: item.medal_color_border ?? "",
+      medal_color_text: item.medal_color_text ?? "",
+    };
+  }
+  return {
+    medal_color_start: "",
+    medal_color_end: "",
+    medal_color_border: "",
+    medal_color_text: "",
+  };
+}
+
+/**
  * **立刻**把这条弹幕画出来（乐观渲染，用户 2026-09-13：「发送应该即刻响应」），
  * 并给它排一个超时兜底的定时器。返回本地行的 `local_id`（对账 / 修正都用它定位）。
  *
- * 身份字段取自会话与 `room_session`：本地行因此带着与本人实时弹幕一样的昵称与身份牌；
- * 转正时整行被上游那条**替换**，口径一律以远端为准。
+ * 这一行**从第一帧起就与上游回推的行渲染逐项相同**，而且**那一帧就是最终形态**
+ * （用户 2026-09-13 追加：发送是一次性落定，上游反馈只在被拦截 / 被拒时才动手）。
+ * 正因如此，插入时能填的身份字段必须填全（回播之后没人会再给它补）：
+ * - 昵称 / uid 来自 `session`，**头像**来自当前生效账号的 `face`（两者都源自 `nav`）；
+ * - 粉丝牌等级与牌名、大航海、房管标记：来自 `roomIdentities[roomId]`（`room_session`，
+ *   会话建立时取自上游进房接口，与回播那条同源）；
+ * - 牌面**配色**：`room_session` 不带，改从本人上一条上游行取（`ownMedalPalette`）；
+ * - `medal_guard_level`（牌面样式）：我的牌就是本房间的牌，因此它 = 我在本房间的大航海等级
+ *   （A39：官方拿 `medal.guard_level` 区分牌面样式，取值是该牌所属房间的舰长等级）。
  *
  * **刻意不设 `send_state`**（用户 2026-09-13 的更正）：它要的就是「发出去 = 已发送的样子」，
- * 上游返回只做校验、不作为展示前置，因此插入的这一行在渲染上与已确认行**逐项相同**；
- * 只有上游明确拒绝或超时没等到回推，才由 `markPendingFailed` / 超时回调写进失败族的取值。
+ * 上游返回只做校验、不作为展示前置，因此插入的这一行在渲染上与「别的客户端看到的我」**逐项相同**；
+ * 只有上游明确拒绝（`markPendingRejected`）或结果未知（`markPendingUnconfirmed`）才写上它。
  */
 function insertPending(
   store: StoreApi<AppStore>,
@@ -271,22 +329,29 @@ function insertPending(
   const state = store.getState();
   const session = state.session;
   const identity = state.roomIdentities[roomId];
+  const uid = session?.uid ?? 0;
+  // 头像不在 `session` 里（`SessionState` 只有 `logged_in` / `uid` / `nickname` /
+  // `active_profile`，契约 §5），它在当前生效账号上 —— 同样是 `nav` 求证时拿到的 `data.face`。
+  const face = state.accounts.find((item) => item.active)?.face ?? "";
+  const hasMedal = (identity?.my_medal_name ?? "").length > 0;
   const pending: Message = {
     local_id: localId,
     room_id: roomId,
     kind: "danmaku",
     ts: Date.now(),
-    uid: session?.uid ?? 0,
+    uid,
     uname: session?.nickname ?? "",
     content,
     color: 0,
     medal_level: identity?.my_medal_level ?? 0,
     medal_name: identity?.my_medal_name ?? "",
+    ...ownMedalPalette(state.messages, uid),
     guard_level: identity?.my_guard_level ?? 0,
-    medal_guard_level: 0,
+    medal_guard_level: hasMedal ? (identity?.my_guard_level ?? 0) : 0,
     reply_to_uid: reply?.mid ?? 0,
     reply_to_uname: reply?.uname ?? "",
     is_admin: identity?.is_admin ?? false,
+    face,
     is_history: false,
     amount: 0,
     combo_id: "",
@@ -308,34 +373,55 @@ function insertPending(
     store.setState((current) => ({ messages: appended(current.messages, pending) }));
   }
   const timer = window.setTimeout(() => {
-    sendTimers.delete(localId);
-    // 房间切走之后这条本地行已经不在了（离开房间即清空，契约 §4.3），别去改别人房里同号的行。
-    if (store.getState().activeRoomId !== roomId) return;
-    // 到点还没等到回推 → 标成**失败族**的「未确认」（不删）。只动仍无状态的那条：
-    // 上游若已明确拒绝（`failed`）就不覆盖它的原因。
-    store.setState((current) => ({
-      messages: current.messages.map((item): Message =>
-        item.local_id === localId && item.send_state === undefined
-          ? { ...item, send_state: "unconfirmed" }
-          : item,
-      ),
-    }));
+    // 到点还没等到回播 → 挂上「未确认」（不删：它可能已经发出去了，只是回声没来）。
+    markPendingUnconfirmed(store, roomId, localId);
   }, SEND_CONFIRM_TIMEOUT_MS);
   sendTimers.set(localId, timer);
   return localId;
 }
 
 /**
- * 把本地那条行**就地修正**成失败态（上游明确拒绝 `outcome != ok`，或传输层出错）。
- * 已转正 / 已被上限裁掉时是空操作 —— 绝不凭空造出一条行；已判失败的不改（保留原判）。
+ * 挂上「未确认」：**没等到上游回播**（8s 超时）或**传输层出错**（结果未知）。
+ *
+ * 这一档不是「发失败」。被上游明确拒绝的那种会被 `markPendingRejected` 标成**被拒**（划掉 + 写原因）；
+ * 留着这一行，是因为它**可能已经发出去了**（别的客户端看得到），只是我们没等到回声 ——
+ * 行尾那枚「未确认」就是唯一的提醒，整行不弱化（要读得清）。
+ * 已被上限裁掉 / 房间已切的调用是空操作。
  */
-function markPendingFailed(store: StoreApi<AppStore>, roomId: number, localId: number) {
+function markPendingUnconfirmed(store: StoreApi<AppStore>, roomId: number, localId: number) {
   clearSendTimer(localId);
   if (store.getState().activeRoomId !== roomId) return;
   store.setState((state) => ({
     messages: state.messages.map((item): Message =>
-      item.local_id === localId && item.send_state !== "failed"
-        ? { ...item, send_state: "failed" }
+      item.local_id === localId && item.send_state === undefined
+        ? { ...item, send_state: "unconfirmed" }
+        : item,
+    ),
+  }));
+}
+
+/**
+ * 把本地那条行**就地标成被拒**：上游明确说了这条没上屏（`chat_send` 的 `outcome != ok` ——
+ * 被平台 / 直播间吞掉、被禁言、要粉丝牌、频率限制…），并把它**留在列表里**。
+ *
+ * 为什么留着（用户 2026-09-13）：「那行消失我希望能得到保留，划线并标注一下被 ban 的原因，
+ * 便于我对照修改」—— 划掉的那条 + 上游给的原因就是「我该改哪几个字」的全部依据。所以：
+ * 整行**不弱化**（要读得清）、正文划线（`.rejectedText`）、行尾那枚标记写**原因**
+ * （与浮片同一句，见 `sendOutcomeText`）。
+ * 已被上限裁掉 / 房间已切的调用是空操作。
+ */
+function markPendingRejected(
+  store: StoreApi<AppStore>,
+  roomId: number,
+  localId: number,
+  reason: string,
+) {
+  clearSendTimer(localId);
+  if (store.getState().activeRoomId !== roomId) return;
+  store.setState((state) => ({
+    messages: state.messages.map((item): Message =>
+      item.local_id === localId && item.send_state !== "rejected"
+        ? { ...item, send_state: "rejected", send_reason: reason }
         : item,
     ),
   }));
@@ -414,19 +500,30 @@ export const useApp = create<AppStore>((set, get, store) => ({
         onMessage: (message) => {
           if (message.room_id !== get().activeRoomId) return;
           const current = get().messages;
-          // 先对账：上游回推我们自己那条时，把本地待确认行**换成**它，而不是再插一条
-          // （用户 2026-09-13：本地乐观渲染 + 回执校验，见 docs/ui.md §4.4）。
+          // 先对账：这条是不是我们自己刚发、还在等回执的那条（用户 2026-09-13：
+          // 本地乐观渲染 + 回执校验）。
+          //
+          // 对上之后做两件事，且**必须是这两件**：
+          //   ① 把**字段换成上游那条**。判定标准（用户 2026-09-13 的原话）：「我在客户端发出去
+          //      的弹幕，应该和我用别的客户端看它成功上屏时的样子一样」—— `ts` / 头像 / 牌面
+          //      真彩色 / `upstream_id` 只有上游知道（插入时那套是本地按 `room_session` 与本人
+          //      上一条行凑的近似），换进来才真的「一样」；
+          //   ② 把 `local_id` **照抄本地那个负数**（`{ ...message, local_id }`）。React key 因此
+          //      不变 ⇒ DOM 节点不重建、不闪（用户原话：看不出中间有回播这件事）。
+          //   ③ 原位替换（`map` 而不是 `appended`）：期间可能有别人插进来，不能把它挪到末尾。
+          // 位置与身份都保持，肉眼也就没有变化 —— 插入那一帧已经带着同一套身份了。
+          // 上游这条因此不入列，也就不会「同一条刷两遍」（docs/ui.md §4.5）。
           const pendingIndex = matchPending(current, message);
           if (pendingIndex >= 0) {
-            clearSendTimer(current[pendingIndex].local_id);
-            // 一次 set 里同时摘掉本地那条、接上上游这条：净条数不变，
-            // 「只出现一条」因此是构造性的，不是靠事后去重。
-            set({
-              messages: appended(
-                current.filter((_, index) => index !== pendingIndex),
-                message,
+            const localId = current[pendingIndex].local_id;
+            // 记进侧表：这一行已经对上过，不能让下一条同正文的回播再落到它头上。
+            echoedLocals.add(localId);
+            clearSendTimer(localId);
+            set((state) => ({
+              messages: state.messages.map((item): Message =>
+                item.local_id === localId ? { ...message, local_id: localId } : item,
               ),
-            });
+            }));
             return;
           }
           // 同一条弹幕的第二份不再入列（`docs/ui.md` §4.5）：合并逻辑会把它画成一行
@@ -622,14 +719,18 @@ export const useApp = create<AppStore>((set, get, store) => ({
     try {
       const result = await api.chatSend(roomId, content, emote, reply);
       set({ lastSend: result });
-      // 上游说这条没发出去（code 非 0）→ 就地把它标成失败；`ok` 则保持不动（它已经按
-      // 与已确认行相同的样子画在列表里了），等上游把自己那条回推回来**转正**。
-      if (result.outcome !== "ok") markPendingFailed(store, roomId, localId);
+      // 上游明确说这条没上屏（被吞 / 被禁言 / 要粉丝牌 / 频率限制…）→ 就地标成**被拒**：
+      // 正文划线 + 行尾写上**原因**（与发送浮片同一句），留着给用户对照着改一条再发。
+      // `ok` 则保持不动：那一行已经按「别人看到的我」的样子画着了，等回播把权威字段换进来。
+      if (result.outcome !== "ok") {
+        markPendingRejected(store, roomId, localId, sendOutcomeText(result.outcome, result.detail));
+      }
       return result.outcome;
     } catch (error) {
-      // 传输层出错同样等于「这条没发出去」：本地行标失败，错误条照旧（两个都保留）。
+      // 传输层出错 = **结果未知**，不是「没发出去」：错误条照旧，行上挂「未确认」留着 ——
+      // 它可能已经上屏了（别的客户端看得到），删掉反而是撒谎。
       set({ error: describeError(error) });
-      markPendingFailed(store, roomId, localId);
+      markPendingUnconfirmed(store, roomId, localId);
       return undefined;
     }
   },

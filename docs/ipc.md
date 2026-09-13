@@ -349,7 +349,7 @@ type RoomStats = {   // 与 §3.1 同名，事件即它本身
 
 ## 5. Zustand store 形状
 
-单一 store（`create<AppStore>`，无切片拆分）。**store 里存的就是 §3.1 的载荷对象**（snake_case），不做 camelCase 转写；本地实现细节只是一个 UI 专用字段 `send_state`。
+单一 store（`create<AppStore>`，无切片拆分）。**store 里存的就是 §3.1 的载荷对象**（snake_case），不做 camelCase 转写；本地实现细节只有两个 UI 专用字段（`send_state` / `send_reason`）。
 
 ```ts
 type AppStore = {
@@ -398,12 +398,15 @@ type AppStore = {
 本地乐观行（§7）的形态：
 
 ```ts
-type SendState = "unconfirmed" | "failed";   // Message.send_state
+type SendState = "unconfirmed" | "rejected";   // Message.send_state（另有 Message.send_reason）
 
 // 本地行 = 完整 Message + 负数 local_id（-1、-2、…，见 store.ts 的 insertPending）
-// 真实 local_id 由后端按会话单调分配、恒为正，两者永不碰撞。
-// send_state **缺省 = 普通行**：既包括上游回推的已确认行，也包括刚插入、还在等回执的本地行
-// ——后者必须与已确认行**渲染逐项相同**，不许表达「发送中」。
+// 真实 local_id 由后端按会话单调分配、恒为正，两者永不碰撞；**回播命中时也不换号**
+// （换成上游的号 = 换 React key = 重建节点，就不是「看不出回播」了）。
+// send_state **缺省 = 普通行**：既包括回播把字段换进来的那条，也包括刚插入、还在等回执的本地行
+// ——后者必须与「别的客户端看到的我」**渲染逐项相同**，不许表达「发送中」。
+// 两档：unconfirmed（8s 没等到回播 / IPC 出错，行尾「未确认」）、
+// rejected（上游明确拒绝：正文划线，行尾写 send_reason —— 与浮片同一句）。
 ```
 
 | store 动作 | 调用 | 说明 |
@@ -450,43 +453,44 @@ type EventHandlers = {
 
 ## 7. 发弹幕的乐观更新与失败回滚
 
-`chat_send` 是本项目唯一「本地状态先于服务端确认」的命令：点下发送**立刻**在列表末尾渲染一条本地行，再发请求；上游返回只做校验，不作为展示前置。
+`chat_send` 是本项目唯一「本地状态先于服务端确认」的命令：点下发送**立刻**在列表末尾渲染一条本地行，
+再发请求；上游返回只做校验，不作为展示前置。判据是三条（`ui.md` §4.4）：**发出去的 = 我用别的客户端
+看到的样子**、**看不出中间有回播**、**被 ban 的那条留着划线并写原因**。
 
 ```mermaid
 sequenceDiagram
   participant C as Composer 组件
   participant S as store.messages
   participant A as api.chatSend
-  C->>S: insertPending：完整 Message + 负数 local_id，不设 send_state
+  C->>S: insertPending：完整 Message（含头像与牌面配色）+ 负数 local_id，不设 send_state
   C->>A: chat_send(roomId, content, emote?, reply?)
   A-->>C: ChatSendResult（或 IPC 错误对象）
   alt outcome = ok
-    C->>S: 保持不动（已经按已确认行的样子画着），等上游回推把它换掉
+    C->>S: 不动；等上游回播把权威字段换进同一行（local_id 照旧 ⇒ 节点不重建）
   else outcome != ok
-    C->>S: markPendingFailed：send_state = "failed"
+    C->>S: markPendingRejected：send_state = "rejected" + send_reason（正文划线）
   else 传输层异常
-    C->>S: 错误条 + markPendingFailed：send_state = "failed"
+    C->>S: 错误条 + markPendingUnconfirmed：send_state = "unconfirmed"
   end
-  S-->>S: 8s 内没等到回推 → send_state = "unconfirmed"
+  S-->>S: 8s 内没等到回播 → send_state = "unconfirmed"
 ```
 
 | 规则 | 内容 |
 |---|---|
-| 挂载位置 | `messages` 尾部插入一条**完整 `Message`**：`local_id` 取负数（`-1`、`-2`、…，`pendingSeq` 自增），身份字段取自 `session` 与 `roomIdentities[roomId]`，`upstream_id=""`。**刻意不设 `send_state`** |
-| 超时兜底 | 插入时排一个 `SEND_CONFIRM_TIMEOUT_MS`（**8000ms**）的定时器：到点仍无 `send_state` → 置 `"unconfirmed"`（不删行，也不再假装它「发送中」）。只改仍无状态的那条；上游已明确拒绝的 `failed` 不被覆盖 |
-| 对账（转正） | 上游回推到达时按 `matchPending` 判定：`uid` 相同 + 正文逐字相同（两侧都带 `emote` 时再比 `emoticon_unique`）+ `ts` 之差 ≤ `SEND_MATCH_WINDOW_MS`（**60000ms**）。参与范围 = 本地行且未判 `failed`；命中多条取列表里最靠前的一条。命中后**一次 `set` 里摘掉本地那条、接上上游这条**——净条数不变，「只出现一条」是构造性的，不靠事后去重 |
-| 幂等 | 本地行与真实行的 `local_id` 永不碰撞（负数 vs 恒正），`onMessage` 的单调判定也不受影响 |
-| `ok` | 命令返回 `outcome="ok"` 不动本地行；转正完全交给上游回推（`danmubox://message`）。若回推先到，命中对账即换掉 |
-| 被吞（`blocked_platform` / `blocked_room`） | 归入失败族：`outcome != "ok"` → 本地行置 `"failed"`；具体来源由 `outcome` 决定，文案由 `SEND_OUTCOME_TEXT`（`types.ts`）给出 |
-| 上游判定限频（`rate_limited`） | 同上 → `"failed"`，提示「发送过于频繁」 |
-| `medal_required` / `muted` | → `"failed"`，分别提示「粉丝牌等级不足」「已被禁言」，保留输入内容，**不**自动重发 |
-| 传输层异常 / IPC 错误（含本地节流 `RATE_LIMITED`） | `chat_send` reject → 错误条展示 `describeError`，本地行同时置 `"failed"`（两个都保留）。重试由用户再次发送完成（新的一次乐观行） |
-| 失败行渲染 | `send_state="failed"` → 「发送失败」；`"unconfirmed"` → 「未确认」。其余行（含刚插入的本地行）**与已确认行渲染逐项相同**——没有「发送中」这一档 |
+| 挂载位置 | `messages` 尾部插入一条**完整 `Message`**：`local_id` 取负数（`-1`、`-2`、…，`pendingSeq` 自增）；身份字段取自 `session`（昵称 / uid）、当前生效账号（`face`）与 `roomIdentities[roomId]`（粉丝牌 / 大航海 / 房管），**牌面真彩色取自本人上一条上游行**（`room_session` 不带它），`upstream_id=""`。**刻意不设 `send_state`** |
+| 对账 | 上游回播到达时按 `matchPending` 判定：`uid` 相同 + 正文逐字相同（两侧都带 `emote` 时再比 `emoticon_unique`）+ `ts` 之差 ≤ `SEND_MATCH_WINDOW_MS`（**60000ms**）。参与范围 = 本地行（负数）且未判 `rejected`、且没被对上过（`echoedLocals` 侧表，行上一个字段都不写）；命中多条取列表里最靠前的一条。命中后**原位把字段换成上游那条、`local_id` 照抄本地那个负数**——净条数不变，React key 不变 ⇒ DOM 节点不重建 |
+| 幂等 | 本地行与真实行的 `local_id` 永不碰撞（负数 vs 恒正），`onMessage` 的单调判定也不受影响；回播命中**不换号**，所以那条永远留在负数一侧（这也是 `echoedLocals` 必须存在的原因） |
+| 超时兜底 | 插入时排一个 `SEND_CONFIRM_TIMEOUT_MS`（**8000ms**）的定时器：到点仍无 `send_state` → 置 `"unconfirmed"`（不删行，也不再假装它「发送中」）。只改仍无状态的那条 |
+| `ok` | 命令返回 `outcome="ok"` 不动本地行；换字段完全交给上游回播（`danmubox://message`）。若回播先到，命中对账即已换好 |
+| 被拒（`blocked_platform` / `blocked_room` / `rate_limited` / `medal_required` / `muted` / `failed`） | 一律 `outcome != "ok"` → 本地行置 `"rejected"`，`send_reason` = `sendOutcomeText(outcome, detail)`（**与浮片同一句**）：正文划线，行尾显示该句。行**不删**，草稿**保留**（用户 2026-09-13：「那行消失我希望能得到保留，划线并标注一下被 ban 的原因，便于我对照修改」） |
+| 传输层异常 / IPC 错误（含本地节流 `RATE_LIMITED`） | `chat_send` reject → 错误条展示 `describeError`，本地行置 `"unconfirmed"`（**结果未知**：这条可能已经上屏，因此不划线、不判被拒）。重试由用户再次发送完成（新的一次乐观行） |
+| 失败行渲染 | `"rejected"` → 正文划线（`.rejectedText`）+ 行尾写 `send_reason`；`"unconfirmed"` → 行尾「未确认」。**两档都不弱化整行**（要读得清）；其余行（含刚插入的本地行、回播换过字段的那条）**与「别的客户端看到的我」渲染逐项相同**——没有「发送中」这一档 |
+| 草稿 | 只有 `ok` 清空草稿（并收起回复 / @ / 面板）；其余一律保留，便于重试或照着行上划掉的那条改写（`ui.md` §6.5.1） |
 | 本地节流 | 发送前由 core 检查同房间 2s 最小间隔与相同内容 5s 去重（`contract.md` §4），命中则不发请求、直接 reject `RATE_LIMITED` |
-| 生命周期 | 草稿是 `Composer` 的组件本地状态，不进 store、不落盘；本地行随 `messages` 在一次房内会话内生死（离开 / 切房即清空） |
+| 生命周期 | 草稿是 `Composer` 的组件本地状态，不进 store、不落盘；本地行随 `messages` 在一次房内会话内生死（离开 / 切房即清空），`echoedLocals` 侧表同时清空 |
 | 安全 | 草稿内容不写入 `prefs.json`、不上报；日志只记 `content_len` 与 `outcome`（见 `architecture.md` §9.2） |
 
-失败族两档必须与普通行在视觉上可区分，且必须能区分失败来源；样式 token 与文案表由 `ui.md` 定义。
+两档标记都必须与普通行可区分，且整行保持可读（不弱化）；样式 token 与文案表由 `ui.md` §4.4 / §6.5 定义。
 
 ## 8. 订阅生命周期与内存回收
 

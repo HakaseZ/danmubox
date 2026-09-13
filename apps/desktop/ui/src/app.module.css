@@ -969,23 +969,33 @@
 }
 
 /* 本地乐观行**不加任何待确认视觉**（用户 2026-09-13 的更正：发出去 = 已发送的样子，
-   上游返回只做校验）：插入时它不带 `send_state`，因此与已确认行逐项相同 ——
-   此前那档整行 `opacity: .6` 的 `.pending` 随「发送中」一起删除。 */
+   上游返回只做校验）：插入时它不带 `send_state`，因此与「别的客户端看到的我」逐项相同 ——
+   此前那档整行 `opacity: .6` 的 `.pending` 随「发送中」一起删除。
+   回播到达时也不改观感：字段换成上游那条、但 `local_id`（React key）照抄本地那个负数，
+   节点因此不重建（见 `store.onMessage` 与 `MessageList` 的 `getItemKey`）。 */
 
-/* 修正标记（行尾，与 `.merged` 同为正文里的**行内**一格）：只有失败族两档，
-   配色取现有令牌 —— 未确认 = 警告色（--warn）、发送失败 = 危险色（--danger）。
-   不做删除线 ——「未确认」的这条很可能已经发出去了，划掉会说出界面不知道的事。 */
+/* 发送没成的标记（行尾，与 `.merged` 同为正文里的**行内**一格）：两档 ——
+   未确认 = 警告色（--warn）、被拒 = 危险色（--danger，行上还带 data-state）。
+   文案由组件给：被拒那档写上游给的原因，未确认那档只说我们没等到回声。
+   被拒那行的正文另加 `.rejectedText` 的划线（`--danger` 的删除线说出的事是确定的：
+   这条没上屏，别的客户端看不到它）；「未确认」的**不划线** —— 它很可能已经发出去了，
+   划掉会说出界面不知道的事。 */
 .sendState {
   margin-left: var(--sp-1);
   font-size: var(--fs-1);
-}
-
-.sendStateUnconfirmed {
   color: var(--warn);
 }
 
-.sendStateFailed {
+.sendState[data-state="rejected"] {
   color: var(--danger);
+}
+
+/* 被拒那条的正文（`.content` 里的文字格）：一道删除线 + 略淡，便于对照着改。
+   只划文字 —— 行尾那枚原因标记要读得清，所以不划整行；表情弹幕没有文字可划，
+   靠行尾那枚标记说明。 */
+.rejectedText {
+  text-decoration: line-through;
+  color: var(--fg-dim);
 }
 
 .kindGift {

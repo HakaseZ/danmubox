@@ -60,12 +60,18 @@ export interface Message {
   emote?: EmoteRef | null;
   upstream_id: string;
   /**
-   * **本地乐观行**被修正后的状态（UI 专用字段，后端不认识它）。**缺省 = 正常行**：既包括
-   * 上游回推的已确认行，也包括刚插入、还在等回执的那条本地行 —— 后者按用户 2026-09-13 的
-   * 更正必须与已确认行**渲染逐项相同**，因此不许用它表达「发送中」。只有上游明确拒绝
-   * （`failed`）或超时没等到回推（`unconfirmed`）才写上它（`docs/ui.md` §4.4）。
+   * **本地乐观行**的标记（UI 专用字段，后端不认识它）。**缺省 = 正常行**：既包括上游回播
+   * 换进来的那条，也包括刚插入、还在等回执的本地行 —— 后者按用户 2026-09-13 的口径必须与
+   * 「别的客户端看到的我」渲染逐项相同，因此不许用它表达「发送中」。
+   * 只在发送没成时写上它：`unconfirmed`（结果未知）或 `rejected`（上游明确拒绝，
+   * 正文划线并附 `send_reason`）—— 两档的差别见 `SendState`（`docs/ui.md` §4.4）。
    */
   send_state?: SendState;
+  /**
+   * 被上游拒绝的**原因**（UI 专用，只在 `send_state === "rejected"` 时有）：行尾标记原样显示它，
+   * 与发送浮片（§6.5.1）是**同一句**（`sendOutcomeText`）—— 两者必须说的是同一件事。
+   */
+  send_reason?: string;
 }
 
 export interface Room {
@@ -397,6 +403,15 @@ export const SEND_OUTCOME_TEXT: Record<SendOutcome, string> = {
   failed: "发送失败",
 };
 
+/**
+ * 发送结果那句话 —— **浮片（§6.5.1）与行尾标记（§4.4）共用同一句**，两者必须说同一件事。
+ * 这里不再加「发送失败：」前缀：`SEND_OUTCOME_TEXT` 本身已把它说全了，
+ * 加了会拼成「发送失败：发送失败 · …」。
+ */
+export function sendOutcomeText(outcome: SendOutcome, detail?: string | null): string {
+  return `${SEND_OUTCOME_TEXT[outcome]}${detail ? ` · ${detail}` : ""}`;
+}
+
 export const KIND_LABEL: Record<MessageKind, string> = {
   danmaku: "弹幕",
   gift: "礼物",
@@ -420,24 +435,25 @@ export const INTERACT_AUTO_HIDE_MS = 8000;
 export const SEND_TOAST_MS = 2600;
 
 /**
- * 本地乐观行的**修正**状态（`Message.send_state`）—— 只走「失败族」这两条路，
- * 正常那条从插入到转正**都不带这个字段**（缺省即普通行）：
+ * 本地行的标记（`Message.send_state`，UI 专用）—— 只在「发送没成」时出现：
  *
- * - `unconfirmed` —— 超时（`SEND_CONFIRM_TIMEOUT_MS`）还没等到回推：**不一定**发失败，
- *   但界面不能再假装它「发送中」（用户 2026-09-13：不要永远停在发送中）；
- * - `failed` —— `chat_send` 明确说了没发出去（`outcome != ok`）或传输层出错。
+ * - `unconfirmed` —— **结果未知**：8 秒（`SEND_CONFIRM_TIMEOUT_MS`）没等到上游回播，或
+ *   `chat_send` 在传输层就出错了（IPC 没回来）。这条**可能已经上屏了**（别的客户端看得到），
+ *   只是我们没拿到证据 —— 所以行留着、不划线，尾上一枚「未确认」就是提醒
+ *   （用户 2026-09-13：不要永远停在「发送中」）。
+ * - `rejected` —— **上游明确拒绝**（`outcome != ok`，含被平台 / 直播间吞掉、被禁言、要粉丝牌、
+ *   频率限制…）：这条别的客户端根本看不到。用户 2026-09-13 的口径是**留着它**——
+ *   正文划线 + 行尾写上游给的原因（`Message.send_reason`），便于对照着改一条再发。
  *
- * 用户 2026-09-13 更正：乐观行插入时**不设**该字段 —— 它必须与已确认行**渲染逐项相同**，
- * 不许有「发送中」那类待确认视觉（上游返回只做校验，不作为展示前置）。
- * `unconfirmed` 仍参与对账（回推迟到也能转正）；`failed` 不再参与 ——
- * 上游已经拒绝，不会有对应的回推（见 `store.matchPending`）。
+ * 判定标准（用户原话）：「我在客户端发出去的弹幕，应该和我用别的客户端看它成功上屏时的样子一样」——
+ * 所以这两种标记**都不弱化整行**（照旧读得清），也和「发送中」那种待确认视觉无关。
  */
-export type SendState = "unconfirmed" | "failed";
+export type SendState = "unconfirmed" | "rejected";
 
-/** 修正标记的文案（行内就地显示，配色见 `app.module.css` 的 `.sendState`）。 */
+/** 标记的兜底文案（`rejected` 有原因时直接用原因，见 `Message.send_reason`）。 */
 export const SEND_STATE_TEXT: Record<SendState, string> = {
   unconfirmed: "未确认",
-  failed: "发送失败",
+  rejected: "发送失败",
 };
 
 /**
@@ -451,9 +467,10 @@ export const SEND_STATE_TEXT: Record<SendState, string> = {
 export const SEND_CONFIRM_TIMEOUT_MS = 8000;
 
 /**
- * 对账的时间窗：上游回推那条的 `ts` 与本地行的 `ts` 差超过它就不再认成同一条。
- * 一声发送对应一条回推，正常只差 1–2 秒；放宽到 60s 是为了容忍慢房间的排队，
- * 而「很久以前发过同样的话」不会被误认 —— 那些行早已转正（`send_state` 缺省），
- * 压根不参与对账（见 `store.matchPending`）。
+ * 对账的时间窗：上游回播那条的 `ts` 与本地行的 `ts` 差超过它就不再认成同一条。
+ * 一声发送对应一条回播，正常只差 1–2 秒；放宽到 60s 是为了容忍慢房间的排队，
+ * 而「很久以前发过同样的话」不会被误认 —— 比的是两条消息**各自的 `ts`**，
+ * 十分钟前那条与此刻的回播差着十分钟，压根出不了这个窗；
+ * 此外对上过一次的行已由 `echoedLocals` 退出对账面（见 `store.matchPending`）。
  */
 export const SEND_MATCH_WINDOW_MS = 60_000;

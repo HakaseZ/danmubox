@@ -208,7 +208,7 @@ graph TD
 | F-03 | 虚拟列表窗口 | 注入大量历史行 | 常驻 DOM 行数不随注入总数线性增长；窗口滚动后离开视口的节点被回收 |
 | F-04 | 自动滚动与暂停 | 位于底部、上滑暂停、点击「回到最新」 | 底部时新消息自动跟随；暂停后不跳回底部；按钮恢复跟随 |
 | F-05 | 偏好往返 | 修改字号 / 透明度 / 过滤条件 | 经 `prefs_get` / `prefs_set` 读写并在重启后读回（用 mock IPC 断言往返） |
-| F-06 | 发弹幕乐观更新与结果提示 | 模拟 `chat_send` 返回七种 `SendOutcome` | 成功时本地行转正；`blocked_platform` / `blocked_room` / `rate_limited` / `medal_required` / `muted` / `failed` 给出**可区分**的失败提示并可重试，被拒的那行**就地**标成失败（乐观行本身与已确认行渲染逐项相同，不留「发送中」那类中间态） |
+| F-06 | 发弹幕乐观更新与结果提示 | 模拟 `chat_send` 返回七种 `SendOutcome` | 成功时上游回播把权威字段换进**同一行**（节点不重建、看不出回播）；`blocked_platform` / `blocked_room` / `rate_limited` / `medal_required` / `muted` / `failed` 给出**可区分**的失败提示并可重试，被拒的那行**留在列表里**：正文划线 + 行尾写上游给的原因，草稿保留（乐观行本身与「别的客户端看到的我」渲染逐项相同，不留「发送中」那类中间态） |
 | F-07 | 徽标渲染 | 渲染主播 / 房管 / 大航海样本 | 主播由 `uid == Room.anchor_uid` 派生、房管取 `is_admin`、大航海按 `guard_level` 展示 |
 | F-08 | 礼物栏双模式 | 切换 `ui.gift_panel_mode` | `merged` 时礼物与弹幕混排、`separate` 时礼物进入独立栏 |
 | F-09 | 刷新按钮 | 在房间内点击「刷新」 | 发出 `rooms_reconnect`；已渲染的当前会话消息不被清空 |

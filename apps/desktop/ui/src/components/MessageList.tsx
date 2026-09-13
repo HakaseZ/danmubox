@@ -54,6 +54,11 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
     // （改前是单行 ≈ 29px，估值写的是 26）。正文折行时更高，由实测修正。
     estimateSize: () => 58,
     overscan: 12,
+    // 行的身份 = `local_id`，它在**一行的整个生命期内不变**：本地那条收到上游回播时
+    // 既不重建也不改写（用户 2026-09-13，见 `store.onMessage`），转正意义上的「换 id」
+    // 已经不存在了。**别换成会变的东西**（渲染序号 / `ts` / 上游 id…）：key 一变
+    // React 就拆掉这个节点重建，行内 `<img>` 跟着重新挂载、样式重算，
+    // 「发送那一刻的那一帧」就没了（这条由冒烟断言 `sendOptimisticEchoSameNode` 钉住）。
     getItemKey: (index) => rows[index].message.local_id,
   });
 

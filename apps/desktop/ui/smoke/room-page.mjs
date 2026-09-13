@@ -2598,14 +2598,29 @@ const MOCK = (theme) => `(function () {
     var failRow = rowWith("这条会发失败");
     var failMark = failRow
       ? failRow.querySelector('[data-testid="db-msg-send-state"]') : null;
+    // 被拒的那条**留在列表里**（用户 2026-09-13：「那行消失我希望能得到保留，划线并标注一下被 ban
+    // 的原因，便于我对照修改」），行尾那枚标记写的是**原因**（与浮片同一句，见 sendOutcomeText）。
     out.sendFailRowMarked = !!failMark &&
-      failMark.getAttribute("data-state") === "failed" &&
-      failMark.innerText.indexOf("发送失败") >= 0;
-    // 失败的那条**只有一条**：修正不是「再插一条失败行」。
+      failMark.getAttribute("data-state") === "rejected" &&
+      failMark.innerText.indexOf("上游拒绝：弹幕被吞") >= 0;
+    out.sendFailRowReason = failMark ? failMark.innerText : null;
+    // 行上那句话与浮片上那句话**必须逐字相同**：两处说的是同一件事，不许各自表述。
+    out.sendFailRowReasonMatchesToast = !!failMark && !!toastEl &&
+      failMark.innerText === toastEl.innerText;
+    // 正文划线（.rejectedText 的 line-through）：这是「对照着改」的锚点。
+    var failBody = failRow ? failRow.querySelector('[data-testid="db-msg-body"] span') : null;
+    out.sendFailRowStruckThrough = !!failBody &&
+      getComputedStyle(failBody).textDecorationLine.indexOf("line-through") >= 0;
+    // 但整行**不弱化**：划掉的是那条弹幕，不是「把整行淡化到看不清」。
+    out.sendFailRowNotFaded = !!failRow && getComputedStyle(failRow).opacity === "1";
+    // 被拒的那条**只有一条**：标被拒不是「再插一条」。
     out.sendFailRowSingle = rows().filter(function (r) {
       return r.innerText.indexOf("这条会发失败") >= 0;
     }).length === 1;
     out.sendFailRowMarkedWithToast = out.sendFailRowMarked && out.sendFailToastShown === true;
+    // 草稿留着：被拒之后要能照着行上划掉的正文 + 原因自己改一条再发（用户 2026-09-13：
+    // 「便于我对照修改」）—— 发出去（outcome 为 ok）才清空。
+    out.sendFailKeepsDraft = document.querySelector("textarea").value === "这条会发失败";
     snap();
     await sleep(3200);
     out.sendFailToastGone = !byTestId("db-toast");
@@ -2677,28 +2692,54 @@ const MOCK = (theme) => `(function () {
       out.sendOptimisticConfirmedLook !== null &&
       JSON.stringify(out.sendOptimisticLook) === JSON.stringify(out.sendOptimisticConfirmedLook) &&
       out.sendOptimisticLook.hasState === false;
+    // **第一帧就带头像**（用户 2026-09-13：「含身份牌 / 等级 / 头像 / 表情 / 间距等上游行会显示的
+    // 一切」）：插入的那一行必须已经有头像图。改前它不带 face，头像要等回播换上来才出现 ——
+    // 那就是用户看见的那次「修正」。（这里只钉「有头像」，不比 URL：那份 URL 属于当前账号。）
+    var optimisticAvatar = optimisticEl
+      ? optimisticEl.querySelector('[data-testid="db-msg-avatar"]') : null;
+    out.sendOptimisticHasFace = !!optimisticAvatar &&
+      (optimisticAvatar.getAttribute("src") || "").length > 0;
     // 停下让跑脚本的进程抓一张截图：同一屏里上下两条（刚发的 + 已确认的）外观应当一致，
     // 这张图就是「两者无法区分」的证据（它每 250ms 读一次 data-smoke）。
     out.sendOptimisticShown = out.sendOptimisticRendersLikeConfirmed;
     snap();
     await sleep(700);
-    // 上游把自己那条回推回来（uid 与正文对得上，见 store.matchPending 的对账规则）
+    // 上游把自己那条回播回来（uid 与正文对得上，见 store.matchPending 的对账规则）。
+    // **故意带一张不同的头像**：本地行插入时的头像取自当前账号（Account.face，取自 nav），回播那条带的是
+    // 上游权威值 —— 换进来才算「我用别的客户端看到的样子」。真机上两者是同一张图（都是我的头像），
+    // 所以看不出变化；这里用一张不同的，证明字段确实换进来了（而不是被忽略）。
+    var echoFace =
+      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><rect width='32' height='32' fill='%23e05b7a'/></svg>";
     window.__emit("danmubox://message", window.__mk("danmaku", optimisticText, false, {
-      uid: 1000, uname: "本地测试"
+      uid: 1000, uname: "本地测试", face: echoFace
     }));
     await sleep(300);
     var convertedRow = optimisticRow();
     out.sendOptimisticRowsAfterEcho = optimisticRowCount();
     out.sendOptimisticEchoSingleRow = optimisticRowCount() === 1;
-    // 转正后：状态标记没了（这条已经是上游的事实），昵称/正文以远端那条为准。
+    // 「看不出有回播」的可验形式（用户 2026-09-13：「那个时候根本看不出来有回播，只知道如果被 ban 了
+    // 那个弹幕会消失然后弹个提示」），分三件量：
+    // ① **同一个 DOM 节点**：回播前取的句柄 === 回播后按正文重新查到的那个（节点没被重建）；
+    // ② **样式逐项不变**：lookOf 快照与回播前那一次相等（不是「与对照行相同」）；
+    // ③ **字段换成上游的**：头像 src 变成回播那条给的那张。
+    // ①②保证「不重建、不闪」，③保证「以上游为准」—— 两件事必须同时成立，缺一个都不算对。
+    out.sendOptimisticEchoSameNode = !!optimisticEl && optimisticEl === convertedRow &&
+      optimisticEl.isConnected === true;
+    out.sendOptimisticEchoLookUnchanged = !!convertedRow &&
+      JSON.stringify(lookOf(convertedRow)) === JSON.stringify(out.sendOptimisticLook);
+    var echoAvatar = convertedRow
+      ? convertedRow.querySelector('[data-testid="db-msg-avatar"]') : null;
+    out.sendOptimisticEchoAdoptsFace = !!echoAvatar &&
+      echoAvatar.getAttribute("src") === echoFace;
+    // 回播后：状态标记没了（这条已经是上游的事实），昵称/正文以远端那条为准。
     out.sendOptimisticEchoConverted = !!convertedRow &&
       !convertedRow.querySelector('[data-testid="db-msg-send-state"]') &&
       convertedRow.innerText.indexOf("本地测试") >= 0;
-    // 本地那条**被换掉**而不是又插一条：同一正文的行数回推前后都是 1（不是 2），
-    // 而且它身上不再挂「待确认」标记（那一条已经从「本地」变成「上游」）。
+    // 本地那一条**留在原位**而不是又插一条：同一正文的行数回播前后都是 1（不是 2），
+    // 而且它身上不再挂标记（字段已经换成上游那条）。
     out.sendOptimisticEchoAbsorbedLocal = optimisticRowCount() === 1 && !!convertedRow &&
       !convertedRow.querySelector('[data-testid="db-msg-send-state"]');
-    // 转正后的那条与**已确认行**同样逐项相同（转正 = 换成上游那条，不是留一个「本地痕迹」）。
+    // 换过字段的那条与**已确认行**同样逐项相同（它现在就是上游那条的字段 + 本地那个 key）。
     var echoLook = lookOf(convertedRow);
     var confirmedLookAfterEcho = lookOf(rowWith(confirmedText));
     out.sendOptimisticEchoRendersLikeConfirmed = !!echoLook && !!confirmedLookAfterEcho &&

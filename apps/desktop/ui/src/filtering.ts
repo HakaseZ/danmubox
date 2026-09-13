@@ -78,13 +78,11 @@ export function medalColors(message: Message): {
   };
 }
 
-/** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 系统通知 → 粉丝牌 → 用户）。 */
+/** 过滤规则（docs/ui.md §8.1 的求值顺序：类型 → 粉丝牌 → 用户）。 */
 export function passesFilter(message: Message, prefs: Prefs): boolean {
   if (prefs["filter.kinds"].length > 0 && !prefs["filter.kinds"].includes(message.kind)) {
     return false;
   }
-  // 系统通知（开播 / 下播 / 标题变更 / 公告）默认不渲染，开关打开才显示（需求 §2.4）。
-  if (message.kind === "system" && !prefs["ui.system_notice"]) return false;
   if (message.medal_level < prefs["filter.medal_level_min"]) return false;
   if (prefs["filter.uids"].includes(message.uid)) return false;
   return true;

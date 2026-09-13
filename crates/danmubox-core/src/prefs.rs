@@ -33,6 +33,7 @@ struct Spec {
     allowed: Option<&'static [&'static str]>,
 }
 
+/// `kind` 的**校验**集合：永远六种，勾回来的路必须留着（用户随时能把「系统」再选上）。
 const KINDS: [&str; 6] = [
     "danmaku",
     "gift",
@@ -41,6 +42,20 @@ const KINDS: [&str; 6] = [
     "guard",
     "system",
 ];
+
+/// `filter.kinds` 的**默认**白名单：不含 `system`。
+///
+/// 需求 §2.4 要的是「系统通知默认不显示」。删掉 `ui.system_notice` 之后
+/// （issue 2609140651 #1：它和「消息类型 → 系统」是逐字相同的一条门），
+/// 这份默认值就是那句话的唯一落点。
+const DEFAULT_KINDS: [&str; 5] = ["danmaku", "gift", "superchat", "interact", "guard"];
+
+/// 已删除的历史偏好键（issue 2609140651 #1）。
+///
+/// 存量 `prefs.json` 里可能还写着它：`load` 时按它的值把结果**物化**进
+/// `filter.kinds`（`false` → 去掉 `system`；`true` → 补上 `system`），
+/// 旧键本身当未知键忽略；下次 `save` 只落 `overrides`，文件里就只剩新形态。
+const LEGACY_SYSTEM_NOTICE: &str = "ui.system_notice";
 
 fn spec(
     key: &'static str,
@@ -98,8 +113,6 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             None,
             None,
         ),
-        // 系统通知（开播 / 下播 / 标题变更 / 公告）：默认不显示（需求 §2.4）。
-        spec("ui.system_notice", Ty::Bool, json!(false), None, None, None),
         // 弹幕时间戳列（需求 §2.1 / 契约 §8）。**曾漏登记在白名单里**：界面、契约、
         // 文档三处都写了它，但 SPECS 没有 → `set_patch` 命中未知键分支返回
         // `BAD_REQUEST`，开关存不下去也读不回来（用户 2026-09-12 核 issue #6 时发现）。
@@ -107,7 +120,17 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // 自定义短语（需求 §2.2）；短语面板里唯一的内容来源（内置颜文字已删，见 issue #19）。
         spec("composer.phrases", Ty::StrArr, json!([]), None, None, None),
         spec("filter.uids", Ty::IntArr, json!([]), None, None, None),
-        spec("filter.kinds", Ty::KindArr, json!(KINDS), None, None, None),
+        // 要不要看系统类消息（开播 / 下播 / 标题变更 / 公告）由这里的 `system` 项决定，
+        // 没有单独的开关键：原先的 `ui.system_notice` 与「消息类型 → 系统」盖的消息集合
+        // 逐字相同，已按用户裁决删除（issue 2609140651 #1，迁移见 [`LEGACY_SYSTEM_NOTICE`]）。
+        spec(
+            "filter.kinds",
+            Ty::KindArr,
+            json!(DEFAULT_KINDS),
+            None,
+            None,
+            None,
+        ),
         spec(
             "filter.medal_level_min",
             Ty::Int,
@@ -269,6 +292,9 @@ impl Prefs {
         let mut unknown: Vec<&str> = Vec::new();
         if let Some(obj) = parsed.as_object() {
             for (key, value) in obj {
+                if key == LEGACY_SYSTEM_NOTICE {
+                    continue; // 已删除的旧键，交给 migrate_legacy_system_notice 物化
+                }
                 match find_spec(key) {
                     Some(spec) if validate(spec, value).is_ok() => {
                         prefs.overrides.insert(key.clone(), value.clone());
@@ -281,6 +307,7 @@ impl Prefs {
                     _ => unknown.push(key.as_str()),
                 }
             }
+            migrate_legacy_system_notice(&mut prefs, obj);
         }
         if !unknown.is_empty() {
             tracing::debug!(keys = ?unknown, "忽略文件里未知或非法的偏好键（下次落盘即清理）");
@@ -311,6 +338,42 @@ impl Prefs {
         std::fs::rename(&tmp, path).map_err(|e| Error::Internal(format!("replace prefs: {e}")))?;
         Ok(())
     }
+}
+
+/// 把历史键 `ui.system_notice` 的值物化进 `filter.kinds`（见 [`LEGACY_SYSTEM_NOTICE`]）。
+///
+/// 只在文件里真的写了布尔值时才动手；非布尔值（被手写坏了）按未知键忽略，不动白名单。
+/// 结果**显式**写进 `overrides`（哪怕与默认值相同）：这样「用户当初把系统通知关掉」
+/// 这件事在文件里有一份读得出来的落点，而不是靠默认值巧合对上。
+fn migrate_legacy_system_notice(prefs: &mut Prefs, file: &Map<String, Value>) {
+    let Some(Value::Bool(show_system)) = file.get(LEGACY_SYSTEM_NOTICE) else {
+        return;
+    };
+
+    // 以「生效值」为底：文件里的 `filter.kinds` 合法就用它，否则回落默认值。
+    let mut kinds: Vec<String> = prefs
+        .get("filter.kinds")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect();
+
+    if *show_system {
+        if !kinds.iter().any(|kind| kind == "system") {
+            kinds.push("system".to_string());
+        }
+    } else {
+        kinds.retain(|kind| kind != "system");
+    }
+
+    tracing::info!(
+        show_system,
+        "偏好键 ui.system_notice 已删除，按它的值物化进 filter.kinds"
+    );
+    prefs
+        .overrides
+        .insert("filter.kinds".to_string(), json!(kinds));
 }
 
 #[cfg(test)]
@@ -379,13 +442,40 @@ mod tests {
         assert_eq!(prefs.get("ui.theme").unwrap(), json!("system"));
         assert_eq!(prefs.get("ui.gift_panel_mode").unwrap(), json!("merged"));
         assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
-        assert_eq!(prefs.get("ui.system_notice").unwrap(), json!(false));
         assert_eq!(prefs.get("history.buffer_rows").unwrap(), json!(5000));
         assert_eq!(prefs.buffer_rows(), 5000);
         assert_eq!(
-            prefs.get("filter.kinds").unwrap().as_array().unwrap().len(),
-            6
+            prefs.get("filter.kinds").unwrap(),
+            json!(DEFAULT_KINDS),
+            "默认白名单不含 system（系统通知默认不显示，需求 §2.4）"
         );
+    }
+
+    /// 默认集合与校验集合的关系：默认是「六种去掉 `system`」，勾回来的路必须还在。
+    #[test]
+    fn default_kinds_are_the_six_minus_system() {
+        let expected: Vec<&str> = KINDS
+            .iter()
+            .copied()
+            .filter(|kind| *kind != "system")
+            .collect();
+        assert_eq!(
+            DEFAULT_KINDS.to_vec(),
+            expected,
+            "默认白名单照 KINDS 的顺序去掉 system"
+        );
+
+        let mut prefs = Prefs::new();
+        prefs
+            .set_patch(&json!({ "filter.kinds": KINDS }))
+            .expect("用户把「系统」勾回来必须存得下去");
+        assert!(prefs
+            .get("filter.kinds")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind == "system"));
     }
 
     #[test]
@@ -412,7 +502,6 @@ mod tests {
             json!({ "ui.theme": "neon" }),
             json!({ "ui.auto_scroll": "yes" }),
             json!({ "ui.interact_auto_hide": 1 }),
-            json!({ "ui.system_notice": "on" }),
             json!({ "filter.kinds": ["danmaku", "notice"] }),
             json!({ "filter.uids": [1, "2"] }),
             json!({ "history.buffer_rows": 5 }),
@@ -505,5 +594,81 @@ mod tests {
         assert_eq!(rewritten.get("ui.theme").unwrap(), &json!("dark"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 写一份临时的 `prefs.json` 再读回来，专门验 `load` 的迁移口径。
+    fn load_temp(tag: &str, body: &str) -> Prefs {
+        let dir = std::env::temp_dir().join(format!("danmubox-prefs-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("prefs.json");
+        std::fs::write(&path, body).unwrap();
+
+        let loaded = Prefs::load(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+        loaded
+    }
+
+    /// 存量 `ui.system_notice` 的迁移（issue 2609140651 #1）：按它的值物化进 `filter.kinds`，
+    /// 旧键本身不再留在 `overrides` 里（下次落盘即消失）。
+    #[test]
+    fn legacy_system_notice_migrates_into_filter_kinds() {
+        let off = load_temp("mig-off", r#"{"ui.system_notice":false}"#);
+        assert_eq!(off.get("filter.kinds").unwrap(), json!(DEFAULT_KINDS));
+        assert!(
+            off.overrides().get(LEGACY_SYSTEM_NOTICE).is_none(),
+            "旧键不得留在 overrides 里"
+        );
+
+        let on = load_temp("mig-on", r#"{"ui.system_notice":true}"#);
+        assert_eq!(on.get("filter.kinds").unwrap(), json!(KINDS));
+
+        // 文件里本来就有 filter.kinds：以它为准增删，不动顺序里的其它项。
+        let merged = load_temp(
+            "mig-merged",
+            r#"{"ui.system_notice":true,"filter.kinds":["danmaku","gift"]}"#,
+        );
+        assert_eq!(
+            merged.get("filter.kinds").unwrap(),
+            json!(["danmaku", "gift", "system"])
+        );
+
+        let pruned = load_temp(
+            "mig-pruned",
+            r#"{"ui.system_notice":false,"filter.kinds":["danmaku","system","guard"]}"#,
+        );
+        assert_eq!(
+            pruned.get("filter.kinds").unwrap(),
+            json!(["danmaku", "guard"])
+        );
+
+        // 非布尔值按非法值忽略：既不迁移，也不把旧键写进 overrides。
+        let junk = load_temp("mig-junk", r#"{"ui.system_notice":"on"}"#);
+        assert_eq!(junk.get("filter.kinds").unwrap(), json!(DEFAULT_KINDS));
+        assert!(junk.overrides().is_empty());
+    }
+
+    /// 没有旧键就不动 `filter.kinds`——默认值本身就是「不含 system」。
+    #[test]
+    fn absent_legacy_key_leaves_filter_kinds_alone() {
+        let loaded = load_temp("mig-absent", r#"{"ui.theme":"dark"}"#);
+        assert_eq!(loaded.get("filter.kinds").unwrap(), json!(DEFAULT_KINDS));
+        assert!(
+            loaded.overrides().get("filter.kinds").is_none(),
+            "没写过就不该凭空多出一条 overrides"
+        );
+    }
+
+    /// 删掉的键不能再被写入：`set_patch` 必须按未知键拒绝（开关已并进 `filter.kinds`）。
+    #[test]
+    fn deleted_pref_key_is_not_writable() {
+        let mut prefs = Prefs::new();
+        assert_eq!(
+            prefs
+                .set_patch(&json!({ "ui.system_notice": false }))
+                .unwrap_err()
+                .code(),
+            "BAD_REQUEST"
+        );
+        assert!(prefs.overrides().is_empty());
     }
 }

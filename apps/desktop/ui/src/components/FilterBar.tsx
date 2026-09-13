@@ -19,6 +19,9 @@ interface Props {
  * 筛选与显示面板（issue #8 第一条：不再常驻占一行，收进工具栏弹出的面板）。
  *
  * 两块：消息类型白名单 / 显示开关。键名全部来自契约 §8 的权威清单。
+ * 「显示」块里**没有**系统类消息的开关：要不要看开播 / 下播 / 标题变更 / 公告，
+ * 就是「消息类型」里的「系统」芯片（原先另有一个 `ui.system_notice` 开关，
+ * 两个门盖的消息集合逐字相同，已按用户裁决删除，见 issue 2609140651 #1）。
  * 主题开关**不在**这里 —— 它在主界面「弹幕框」右侧，全局切换（docs/ui.md §8.3）。
  */
 export function FilterBar({ prefs, onChange }: Props) {
@@ -86,16 +89,6 @@ export function FilterBar({ prefs, onChange }: Props) {
               }
             />
             互动消息自动消失
-          </label>
-          <label title="系统通知">
-            <input
-              type="checkbox"
-              checked={prefs["ui.system_notice"]}
-              onChange={(event) =>
-                onChange({ "ui.system_notice": event.target.checked })
-              }
-            />
-            系统通知
           </label>
           <label className={styles.filterSelect}>
             礼物栏

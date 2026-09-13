@@ -391,11 +391,10 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.pause_on_hover` | boolean | `true` | 鼠标悬停暂停自动滚动 |
 | `ui.gift_panel_mode` | string | `"merged"` | `merged`（礼物混在弹幕栏）/ `separate`（独立礼物栏） |
 | `ui.interact_auto_hide` | boolean | `true` | 互动/进场消息显示一会儿后自动消失（`false` = 常驻） |
-| `ui.system_notice` | boolean | `false` | 是否显示系统通知（开播 / 下播 / 标题变更 / 公告） |
 | `ui.show_timestamp` | boolean | `false` | 弹幕前是否显示时间戳（用户 2026-09-12 反馈：要可开关） |
 | `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
 | `filter.uids` | integer[] | `[]` | 用户 UID 过滤列表 |
-| `filter.kinds` | string[] | 六种 kind 全集 | 参与展示的消息类型白名单 |
+| `filter.kinds` | string[] | 五种（六种 kind 去掉 `system`） | 参与展示的消息类型白名单。系统类消息（开播 / 下播 / 标题变更 / 公告）没有单独的开关：勾上「系统」就看、取消就不看（用户 2026-09-14 裁决，见 §9 溯源行） |
 | `filter.medal_level_min` | integer | `0` | 粉丝牌最低等级 |
 | `history.buffer_rows` | integer | `5000` | 每房间内存缓冲条数上限 |
 | `ui.recent_watched` | object | `{}` | 各房间最近一次打开的时刻：键 = 房间号（十进制字符串），值 = UTC 毫秒。关注列表按它**降序**排（用户 #16）；没打开过的房间不在其中，排序时排在看过的之后 |
@@ -406,6 +405,9 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 `ui.gift_panel_mode` 对应 REQUIREMENTS.md「可以配置独立一个礼物栏或者礼物混合在弹幕栏中」。
 
 读写语义（对 `prefs_get` / `prefs_set` 生效）：读返回全部键的**生效值**（默认值已合并）；写接受部分键值补丁，未知键或非法值报 `BAD_REQUEST`，成功返回合并后的生效值全集。
+
+`filter.kinds` 默认不含 `system`，因此系统类消息（开播 / 下播 / 标题变更 / 公告）**默认不显示**——这是需求 §2.4 的原意，落在白名单的默认值上。原先前端另有一个 `ui.system_notice` 开关，与白名单里的「系统」项盖住的消息集合逐字相同，用户 2026-09-14 裁决删除该键、只留白名单一条门。
+存量 `prefs.json` 里若还写着 `ui.system_notice`，`load` 时按它的值把结果物化进 `filter.kinds`（`false` → 从白名单里去掉 `system`；`true` → 保证含 `system`），旧键本身由此失效。
 
 ## 9. 需求溯源（规范性）
 
@@ -437,12 +439,12 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 词云 | 下期非核心条目，见 `roadmap.md` |
 | 深色模式 / 字号 | §8 `ui.theme` / `ui.font_scale` |
 | 房间观众数（在线人数 / 累计看过） | §5 `RoomStats`、§7 `danmubox://room_stats` |
-| 互动消息自动消失 / 系统通知开关 | §8 `ui.interact_auto_hide` / `ui.system_notice` |
+| 互动消息自动消失 / 系统通知开关 | §8 `ui.interact_auto_hide`；系统类消息改由 §8 `filter.kinds` 里的 `system` 项承担（`ui.system_notice` 已按用户 2026-09-14 裁决删除，`ui.md` §4.8） |
 | 关注列表自动加载 | §3 `RoomCatalog`、§7 `follow_list`、`ui.md` §2.2 |
 | 时间戳显示开关 / 用户头像 / 粉丝牌与身份标识（#6） | §5 `Message.face`、§8 `ui.show_timestamp`、`ui.md` |
 | 主站「我的表情」可发送（#8） | §5 `Emote.package_kind=owned`、§7 `emotes_owned` |
 | 房管功能：禁言 / 黑名单 / 屏蔽词（#3） | §7 `admin_*`、`protocol.md` A36 |
-| 过滤与显示开关 | §8 `filter.*` / `ui.show_timestamp` / `ui.system_notice` / `ui.interact_auto_hide` |
+| 过滤与显示开关 | §8 `filter.*` / `ui.show_timestamp` / `ui.interact_auto_hide` |
 | 多房间标签页 | `ui.md` |
 | 多账号（单文件多 profiles，界面统一叫「账号」） | §4.1、§5 `Account`、§7 `accounts_list` / `account_switch` |
 | 草稿与最近发送记录（会话内） | §4.3 |

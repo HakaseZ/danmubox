@@ -1078,6 +1078,49 @@
     `roomCardShowsAnchorAndTitle` / `tabShowsAnchorNames` / `tabsRendered`；
     新增截图 `danmubox-ui-follow.png` / `danmubox-ui-narrow-follow.png`（关注列表排布，两档各一张）。
 
+### Changed
+
+- **需求基线（[`REQUIREMENTS.md`](REQUIREMENTS.md)）重写为精准规格**（2026-09-13）：逐条保留要求本体（一条不少），
+  按现有实现补全粒度（过滤四轴、观众数两值、主题三档、房管写操作、列表不展示房间号、时间戳开关等），
+  口语化条目改为「要什么」；「已废弃项」移出基线，历史并入本文件。
+- **需求基线期的三条定案**（原记在 `REQUIREMENTS.md` §6，随基线重写移入）：① 展示项只做深色模式 / 字号 /
+  透明度三项（透明度其后被移除，见本段 `Removed`；重做待办见 [`docs/roadmap.md`](docs/roadmap.md) backlog）；
+  ② 输入草稿与「最近发送记录」只保留在会话内；③ 多账号 = **单个 `config.toml` 内多 profiles**。
+  同一批还定了包标识 `dev.zack.danmubox` → `dev.kksk.danmubox`。
+
+### Removed
+
+- **从未落地的「被吞标记」配色规格**（原 `docs/ui.md` §4.4 的一张 18 行表：平台吞 → 红色删除线 + 角标、直播间吞 → 黄色）。
+  该视觉**从未实现**：现在非 `ok` 一律走「行标发送失败 + 浮动提示」，判定来源是上游 `msg`/`message` == `"f"` / `"k"`
+  （`docs/protocol.md` §11.2、`docs/contract.md` §5 的 `SendOutcome`）；配色方案不再作为规格保留。
+- **基线期即排除的需求**（原登记在 `docs/contract.md` §9 的溯源表，现统一收在这里）：本地数据库、
+  跨会话历史、弹幕回看与导出、AI 原生接口、AI 日报、免打扰时段、**提示音**（关键词告警只做「命中高亮」，
+  全仓无任何播放声音的实现）、快捷键、多房间未读静音、断线补齐、开播提示、按 uid 只看某人、谢谢礼物模板。
+  这些一律不进规格：`docs/contract.md` §2「本期明确排除」保留工程侧的对应条目，需求侧的取舍见
+  [`REQUIREMENTS.md`](REQUIREMENTS.md) §4 非目标。
+
+### Changed
+
+- **`docs/roadmap.md` 瘦身为 backlog**：阶段 1–4 的交付物 / 验收标准 / 前置依赖 / 校准清单（原 §3–§7）与阶段 5 的验收清单移出该文件，逐阶段结论移入本 CHANGELOG；roadmap 只保留当前状态、下期 backlog（等上游样本 / 待拍板 / 更远期）与风险表（10 行压到 6 行），指向 `distribution.md` 的链接改指 `operations.md`。
+- **`docs/testing.md` 收束**：删掉「与其他文档的关系」整表，改为指向 `README.md` §7 的一行；指向 `distribution.md` / `overview.md` 的链接改指 `operations.md`；§3.3 的「未实测取值进 roadmap 阶段校准表」改为进 `protocol.md` 附录 A。
+- **阶段划分与依赖**：阶段 1 游客与协议解码 → 阶段 2 登录层 → 阶段 3 交互层 → 阶段 4 关注与钱包 → 阶段 5 三端编译；阶段 3 与阶段 4 在阶段 2 退出后并行推进，阶段 5 需两者同时就绪。
+- **阶段 1–4 已退出（截至 2026-09-12）**：四个阶段的验收项逐条实测通过并退出；仍缺上游样本的实测校准项不算已退出阶段的欠账，一律保持「未验证」标注。
+- **阶段 1 已退出（2026-09-11 验收）**：交付 `danmubox-bili` 协议编解码（16 字节大端头、载荷版本 0/1/2/3 含 brotli、子包递归拆分、单包解压上限 16 MiB）与连接层（游客认证包 `uid=0`、WS 心跳、上游 HTTP 心跳每 60s、退避 5/10/20/40/60s）、房间解析、`danmubox-core` 端口与事件总线、会话环形缓冲（默认 5000 条）、`danmubox-cli`；S1-AC1~AC11 全通过（S1-AC3 的断网触发补测于 2026-09-12）。
+- **阶段 1 实测数字**：长连 2 小时 4 分收 1390 条消息（danmaku 261），4 次**上游发起**的断连全部自动恢复、HTTP 心跳失败 0 次；人为断网后三个房间各走完一整轮退避，序列 5000→10000→20000→40000→60000 正确封顶，15 次重连后全部恢复；S1-AC4~AC10 由离线单测覆盖，S1-AC11 依赖方向检查通过（`core` 不含 B 站知识）。
+- **阶段 2 已退出**：交付明文 `config.toml` 读写（0600 / 临时文件 + rename 原子替换 / 多账号 `[profiles.<name>]` + `active_profile`）、启动顺序、扫码登录、游客与登出、`buvid3` 与 WBI 签名、`getDanmuInfo`、`prefs.json`（默认值合并 / 原子替换 / 损坏回落保留 `.bak`）；S2-AC1~AC8 全通过，含凭据红线检索。
+- **阶段 3 已退出**：交付 `chat_send` 与 `SendOutcome` 七态（含被吞判定与回显提取）、发送节流（同房间 2s、相同内容 5s）、`emotes_list` 按身份加载、`chat_report`、身份徽标派生、`ui.gift_panel_mode` 双模式、过滤与样式偏好、`rooms_reconnect`；S3-AC1~AC11 全通过，原 §5.4 校准表逐条有结论。
+- **阶段 4 已退出**：交付 `follow_list`（`live_status == 1` 置顶、`group_name`）、从关注列表进场、`wallet_balance`；S4-AC1~AC6 全通过，原 §6.4 校准表逐条有结论。
+- **阶段 5 当前状态**：**仅 macOS 完成**（本机产物可运行）；**Windows / Android 未完成**——缺工具链（Gradle、Android SDK/NDK、`ANDROID_HOME`、Rust Android target；Windows 需 Windows 机器或 CI，macOS 无法交叉编译），登记在 [`docs/roadmap.md`](docs/roadmap.md) backlog。
+- **阶段 5 验收标准（S5-AC1~AC7，尚未跑完）**：三端各自运行产物、Android 真机前台 30 分钟、三端完整执行手工冒烟清单、退出后无残留进程、产物体积与常驻内存落在登记目标内；退出条件 = 三端跑通「启动 → 登录 → 连接 → 看弹幕 → 发弹幕 → 刷新 → 退出」闭环，且产物路径与构建步骤登记到 `docs/operations.md`。
+
+### Calibration
+
+- **阶段 1 校准表（原 roadmap §3.4，10 项）**：`DANMU_MSG` 下标、游客掩码范围、`INTERACT_WORD(_V2)` / `ENTRY_EFFECT` 字段差异、`USER_TOAST_MSG` 的 `guard_level` 口径、SC 金额与 id 字段、`SEND_GIFT` 字段、`op=3` 人气值结构、认证非 0 `code` 集合、子包嵌套层级、WS / HTTP 心跳保活——结论一律回填 `docs/protocol.md` 附录 A。
+- **阶段 1 未结项**：礼物 / SC / 大航海字段、房管与舰长正向样本、未归类命令归类仍未复现，保持在 `protocol.md` 附录 A 的「未验证」标注，不计为已退出阶段的欠账。
+- **阶段 3 校准表（原 roadmap §5.4，5 项）**：被吞判定 `"f"` / `"k"`、`data.mode_info.extra` 回显路径、限流 / 粉丝牌不足 / 禁言错误码、表情包库接口、举报接口参数与响应——复核结论写死在 `danmubox-bili` 与 `docs/protocol.md`。
+- **阶段 4 校准表（原 roadmap §6.4，4 项）**：关注列表端点与字段名、`group_name` 来源、`live_status` 口径（0/1/2）、电池余额取值字段——结论回填 `docs/protocol.md` 附录 A。
+- **阶段 5 无校准项**：其验收只有产物与三端冒烟，校准项全部属于阶段 1 / 3 / 4。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

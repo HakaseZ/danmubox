@@ -1,8 +1,8 @@
 # 运行与运维
 
-> 定位：danmubox 的日常启动停止、数据文件位置、凭据文件维护、故障排查与卸载清理。
-> 读者：日常使用与排障的仓库所有者本人；需要读取应用数据目录的维护者。
-> 更新时机：新增/更名环境变量、数据目录或文件名变化、新增 IPC 命令、新增卸载残留位置时必须同步本文。
+> 定位：danmubox 的日常启动停止、数据文件位置、凭据文件维护、故障排查、三端构建分发与卸载清理。
+> 读者：日常使用与排障的仓库所有者本人；需要读取应用数据目录或在本机出包的维护者。
+> 更新时机：新增/更名环境变量、数据目录或文件名变化、新增 IPC 命令、新增卸载残留位置、新增目标平台或打包步骤时必须同步本文。
 
 ---
 
@@ -12,11 +12,11 @@
 
 | 平台 | 启动 | 停止 |
 |---|---|---|
-| macOS | 双击 `danmubox.app`；开发期见下方两种运行方式 | 关闭窗口即退出（本期不做后台保活）；异常残留用活动监视器结束 `danmubox-desktop` |
+| macOS | 双击 `danmubox.app`（需按 §5.3 先出包）；开发期见下方两种运行方式 | 关闭窗口即退出（本期不做后台保活）；异常残留用活动监视器结束 `danmubox-desktop` |
 | Windows | 开始菜单 / 桌面快捷方式，或运行安装目录下的 `danmubox.exe` | 关闭窗口即退出；异常残留用任务管理器结束 `danmubox.exe` |
 | Android | 桌面图标，或 `adb shell monkey -p dev.kksk.danmubox -c android.intent.category.LAUNCHER 1` | 从最近任务划掉；彻底停止用「设置 → 应用 → danmubox → 强制停止」 |
 
-应用为纯客户端形态，不启动任何本地网络服务：界面通过 Tauri IPC 与引擎通信，二者之间不需要任何访问凭据（契约 §7）。构建与产物见 `distribution.md`。
+应用为纯客户端形态，不启动任何本地网络服务：界面通过 Tauri IPC 与引擎通信，二者之间不需要任何访问凭据（契约 §7）。三端打包与产物见 §5。
 
 #### 桌面端运行方式（2026-09-11 实测）
 
@@ -39,14 +39,7 @@ DANMUBOX_LOG=debug cargo run -p danmubox-desktop
 # 只看到 "web content process terminated" 而没有页面加载 → dev server 没起或端口不对
 ```
 
-要得到**不依赖 dev server 的独立应用**，需用 Tauri CLI 打包（它会关掉 `devUrl` 并生成 `.app` / `.msi` / APK）：
-
-```bash
-npm --prefix apps/desktop/ui run build     # 先出前端产物
-npx @tauri-apps/cli build                  # 需要时再装：npm i -D @tauri-apps/cli
-```
-
-单独 `cargo build --release` **不会**产生可独立运行的产物——它仍指向 `devUrl`。这一点已实测确认。
+要得到**不依赖 dev server 的独立产物**见 §1.6；三端打安装包见 §5。单独 `cargo build --release` **不会**产生可独立运行的产物——它加载不出前端（窗口全白，日志里既无 `webview 页面加载` 也无任何 IPC），已实测（2026-09-13 实测 A/B，见 `../AGENT.md` §9）。
 
 ### 1.2 日志级别 `DANMUBOX_LOG`
 
@@ -69,9 +62,10 @@ npx @tauri-apps/cli build                  # 需要时再装：npm i -D @tauri-a
 
 | 出口 | 说明 |
 |---|---|
-| stdout / stderr | 前台运行时直接可见 |
-| 数据目录下的 `logs/` | 桌面端（GUI 启动时 stdout 不可见）；实际路径以 `app_info` 返回的数据目录为准 |
-| `danmubox://log` | Tauri IPC 事件，供前端调试面板订阅（契约 §7） |
+| stdout / stderr | 前台运行时直接可见；桌面端 GUI 启动时 stdout 不可见，用下方重定向办法 |
+| `danmubox://log` | Tauri IPC 事件，供前端调试面板订阅（`ipc.md` §4） |
+
+桌面端不写日志文件（`apps/desktop/src-tauri/src/lib.rs` 的 `fmt_layer` 固定写 stderr），需要留存时用下方重定向。
 
 #### 桌面端调试日志落到文件（推荐）
 
@@ -82,8 +76,14 @@ mkdir -p target/logs
 DANMUBOX_LOG=debug cargo run -p danmubox-desktop 2>&1 | tee -a target/logs/app.log
 ```
 
-日志**全量**覆盖前后端：Rust 侧的 `tracing` 输出，加上界面里 `console.error` / `console.warn`
-与未捕获错误（通过 `frontend_log` 命令转发，见 `frontend_log` 与 `CONSOLE_BRIDGE`）。
+日志**全量**覆盖前后端：Rust 侧的 `tracing` 输出，加上界面里的 JS 错误。桥接由 `apps/desktop/src-tauri/src/lib.rs` 实现：
+
+- 页面每次 `PageLoadEvent::Finished` 后，Rust 侧执行 `webview.eval(CONSOLE_BRIDGE)` 注入桥接脚本；
+- 脚本改写 `console.error` / `console.warn`，并监听 `window` 的 `error` 与 `unhandledrejection`；
+- 命中后由脚本**直接**调 `window.__TAURI_INTERNALS__.invoke('frontend_log', { level, message })`（不经 `@tauri-apps/api`）；
+- Rust 侧 `frontend_log` 命令按 level 写进 `tracing` 的 `danmubox::ui` target（`error` / `warn`，其余落 `debug`）。
+
+脚本自带两条限流：`message` 截断到 **2000 字符**（去重键取前 200 字符）；同一条告警 **1s 内只上报一次**——防止「渲染 → 告警 → 日志回推 → 重渲染」的反馈环。
 
 判断界面是否真的加载、以及是否出现异常循环，看这几条：
 
@@ -98,11 +98,11 @@ DANMUBOX_LOG=debug cargo run -p danmubox-desktop 2>&1 | tee -a target/logs/app.l
 
 ### 1.3 数据目录与文件位置（三端）
 
-数据目录下只有凭据文件、偏好文件与桌面端日志；弹幕只在内存，不落盘（契约 §4.3）。
+数据目录下只有凭据文件与偏好文件；弹幕只在内存，不落盘（契约 §4.3）。
 
 | 平台 | 数据目录 | 典型内容 |
 |---|---|---|
-| macOS | `~/Library/Application Support/danmubox/` | `config.toml`、`prefs.json`、`prefs.json.bak`、`logs/` |
+| macOS | `~/Library/Application Support/danmubox/` | `config.toml`、`prefs.json`、`prefs.json.bak` |
 | Windows | `%APPDATA%\danmubox\` | 同上 |
 | Android | 应用私有目录（绝对路径随系统与用户而异，以 `app_info` 返回值为准） | `config.toml`、`prefs.json`、`prefs.json.bak` |
 
@@ -197,21 +197,23 @@ sid = ""
 | JSON 解析失败（损坏） | 按默认值启动，并把损坏副本保留为 `prefs.json.bak` |
 | 正常写入 | 原子替换（临时文件 + rename），不会出现写一半的半成品文件 |
 
----
-
-### 1.3 独立产物（不依赖 dev server）
+### 1.6 独立产物（不依赖 dev server）
 
 ```bash
 # 仅需一次：安装 Tauri CLI（注意绕开 ~/.npm 里 root 所有的缓存目录）
 npm --prefix apps/desktop/ui i -D @tauri-apps/cli --cache /tmp/npm-cache-danmubox
-# 构建（会在 target/release 下产出可执行文件；`beforeBuildCommand` 会自动先构建前端）
+# 构建（`beforeBuildCommand` 会自动先构建前端；产物落在 target/release）
 cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 ```
 
-产物是 `target/release/danmubox-desktop`（约 13 MB），**前端已内嵌**：
+产物是 `target/release/danmubox-desktop`（约 13 MB，实测），**前端已内嵌**：
 日志里页面加载的 URL 是 `tauri://localhost` 而不是 `http://localhost:5173`，
-因此不需要再起 Vite，双击即可运行。加 `--no-bundle` 是因为仓库还没有应用图标，
-带 bundle 会要求图标文件；需要 `.app` 时先补图标再 `tauri build`。
+因此不需要再起 Vite，双击即可运行。
+
+`tauri.conf.json` 当前 `bundle.active=false` 且 `icon` 为空，所以这一步不产出 `.app` / `.msi` / APK；
+要出安装包先补应用图标并打开 `bundle.active`，三端步骤与产物见 §5.3。
+
+---
 
 ## 2. 故障排查决策树
 
@@ -282,7 +284,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 | 1 | `adb logcat` 是否有进程启动输出 | 无输出 → 应用闪退，先解决崩溃 |
 | 2 | 启动日志与 `danmubox://log` 事件是否正常 | 正常 → 问题在前端渲染，不在引擎 |
 | 3 | Android System WebView 组件版本 | 过旧或已禁用 → 在系统应用管理中更新 / 启用「Android System WebView」 |
-| 4 | 前端资源是否随包 | 打包遗漏或路径错误 → 重新构建前端后重新打 APK |
+| 4 | 前端资源是否随包 | 打包遗漏或路径错误 → 重新构建前端后重新打 APK（见 §5.3） |
 | 5 | 是否只在特定页面白屏 | 定位到具体组件；核心逻辑在 Rust，UI 属渐进增强（见 `architecture.md`） |
 | 6 | 换设备是否复现 | 单设备复现 → 设备侧 WebView 环境问题 |
 
@@ -320,7 +322,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 分享日志前的自查命令：
 
 ```bash
-grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或 logs 目录>   # 命中即先替换再外发
+grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或日志目录>   # 命中即先替换再外发
 ```
 
 提交仓库前：确认无 `config.toml`、无 keystore、无 `.p12`、无导出的 Cookie 文本。
@@ -336,7 +338,7 @@ grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或 lo
 | # | 残留位置 | 清理方式 |
 |---|---|---|
 | 1 | `/Applications/danmubox.app` | 拖入废纸篓 |
-| 2 | `~/Library/Application Support/danmubox/` | `rm -rf`（含 `config.toml`、`prefs.json`、`prefs.json.bak`、`logs/`） |
+| 2 | `~/Library/Application Support/danmubox/` | `rm -rf`（含 `config.toml`、`prefs.json`、`prefs.json.bak`） |
 | 3 | 隔离属性 | 无需处理，随文件删除 |
 | 4 | 登录项 / LaunchAgents | 本项目不注册，无需处理 |
 
@@ -345,7 +347,7 @@ grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或 lo
 | # | 残留位置 | 清理方式 |
 |---|---|---|
 | 1 | 程序本体 | 「设置 → 应用 → 已安装的应用 → danmubox → 卸载」 |
-| 2 | `%APPDATA%\danmubox\` | 删除（含 `config.toml`、`prefs.json`、`prefs.json.bak`、`logs/`） |
+| 2 | `%APPDATA%\danmubox\` | 删除（含 `config.toml`、`prefs.json`、`prefs.json.bak`） |
 | 3 | WebView2 用户数据目录 | 位于 `%LOCALAPPDATA%\` 下的应用目录，具体目录名以生成的 exe / 包标识为准；删除后下次启动重建 |
 | 4 | 卸载残留的安装目录 | 若卸载后仍有空目录，手工删除 |
 
@@ -370,34 +372,267 @@ grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或 lo
 
 ---
 
-## 附录 A：待实测校准（B 站线上行为）
+## 5. 构建与分发
 
-下表各项为契约已采用的协议要点，其**具体取值与判据**必须用真实连接/发送复核后写死；在实测回填前不得当作既成事实引用。核对方法统一为：`DANMUBOX_LOG=debug` 启动 → 复现对应场景 → 读取日志 / `danmubox://log` 事件原文。
+> 定位：danmubox 在 macOS / Windows / Android 三端的构建、签名、打包、安装与自用更新方式。
+> 读者：在本机执行构建 / 重新打包 / 装机的开发者（通常是仓库所有者本人）。
+> 更新时机：新增目标平台、更换包标识或版本策略、新增签名或安装步骤、产物路径变化时必须同步本节。
 
-| # | 待测项 | 现状 | 核对方法 | 责任人动作 |
-|---|---|---|---|---|
-| 1 | 发弹幕被吞判据 | `msg`/`message` == `"f"` → `blocked_platform`，`"k"` → `blocked_room` | 用真实账号发送可触发拦截的内容，记录响应原文与 `data.mode_info.extra` | 复核后把判据与回显路径写死到 `danmubox-bili`，并同步 `protocol.md` |
-| 2 | 房间解析接口 | `getRoomPlayInfo` 一次返回 `room_id` / `uid` / `live_status` | 用短号与完整 URL 各解析一次，对比字段 | 确认字段名与含义后回填 `protocol.md` |
-| 3 | HTTP 心跳 | `live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat`，每 60s，`hb=base64("60|<真实room_id>|1|0")` | 抓包比对官方 web 客户端；缺心跳时观察是否被判死 | 实测确认端点、参数与周期 |
-| 4 | WS 心跳 body | 字面量 `[object Object]`（`op=2`，帧头 `protover=1`） | 抓包比对官方 web 客户端 | 实测确认字面量拼写 |
-| 5 | `DANMU_MSG` 取值路径 | 内容 `info[1]`；用户对象 `info[0][15].user`（`uid` / `base.name` / `base.face`） | 发送一条已知弹幕，在日志中查字段路径 | 确认后写死并同步 `protocol.md` |
-| 6 | `INTERACT_WORD_V2` 载荷 | protobuf，从 `data` 字段 base64 解码 | 抓一条真实进入消息解码验证 | 确认 schema 字段后写死 |
-| 7 | `upstream_id`（举报必需） | 来源未定 | 从真实弹幕包中定位可用于举报的标识字段 | 实测确认后回填契约 §5 与 `protocol.md` |
+> 通用构建 / 测试 / lint 命令见 [`../README.md`](../README.md) §8 与 [`../AGENT.md`](../AGENT.md) §3；本节只写三端打包、产物与安装。
 
-规则：**校准表里的数字必须来自实测**。表格空着是允许的（表示尚未测量），但不得填入推测值、不得编造具体数值。
+### 5.1 范围与前提
+
+| 项 | 约定 |
+|---|---|
+| 分发范围 | **自用，不对外分发**：产物只装自己的设备 |
+| 目标平台 | macOS / Windows / Android（iOS 与折叠屏适配为后期 enhancement） |
+| 不做 | 自动更新、后台保活（契约 §2） |
+| 包标识 bundle id | `dev.kksk.danmubox`，三端统一（契约 §1） |
+| 前端产物 | `apps/desktop/ui/` 由 Vite 构建并内嵌进 Tauri 应用（React + TS，见 `architecture.md`） |
+| 引擎 | `danmubox-core`（Rust），薄封装见 `architecture.md` |
+
+### 5.2 `<target-dir>` 的定义
+
+Rust 产物目录在 workspace 下由 Cargo 决定，本节统一用 `<target-dir>` 表示，避免硬编码：
+
+| 场景 | `<target-dir>` |
+|---|---|
+| workspace 统一 target（默认，`target-dir` 未覆盖） | `<repo>/target` |
+| `apps/desktop/src-tauri` 使用独立 target 目录 | `<repo>/apps/desktop/src-tauri/target` |
+| 显式指定平台 target 时 | 上述目录下的 `<triple>/release/...` |
+
+本期实测走的是默认情形：§1.6 的独立产物落在 `<repo>/target/release/danmubox-desktop`。
+
+### 5.3 三端构建步骤与产物
+
+#### macOS
+
+```bash
+# 日常出包（实测，见 §1.6）：独立可执行文件，前端已内嵌
+cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
+```
+
+需要 `.app` / `.dmg` 时：先补应用图标并打开 `bundle.active`，再执行
+
+```bash
+cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles app,dmg
+```
+
+| 产物 | 路径 |
+|---|---|
+| 独立可执行（实测） | `<target-dir>/release/danmubox-desktop`（前端已内嵌，约 13 MB） |
+| 应用包（需先补图标） | `<target-dir>/release/bundle/macos/danmubox.app` |
+| 安装镜像（需先补图标） | `<target-dir>/release/bundle/dmg/danmubox_0.1.0_<arch>.dmg` |
+
+- `<arch>` 由构建机架构决定（Apple Silicon 为 `aarch64`，Intel 为 `x64`）。
+- 交叉架构可在 Apple Silicon 上追加 `--target x86_64-apple-darwin`，产物落在 `<target-dir>/x86_64-apple-darwin/release/bundle/` 下。
+- 本地运行不需要 DMG，直接双击 `danmubox.app`，或用 §1.1 的开发期运行方式。
+
+#### Windows
+
+```bash
+cd apps/desktop && ./ui/node_modules/.bin/tauri build                       # 默认同时产出 msi 与 nsis
+cd apps/desktop && ./ui/node_modules/.bin/tauri build --target x86_64-pc-windows-msvc   # 显式 64 位
+```
+
+| 产物 | 路径 |
+|---|---|
+| WiX MSI | `<target-dir>/release/bundle/msi/danmubox_0.1.0_x64_en-US.msi` |
+| NSIS 安装器 | `<target-dir>/release/bundle/nsis/danmubox_0.1.0_x64-setup.exe` |
+
+- `.msi` **只能在 Windows 上构建**（WiX 仅支持 Windows）；NSIS 可在其他平台交叉构建，但属「最后手段」，本仓库不采用。
+- 自用只保留 NSIS 安装器与免安装可执行文件即可；MSI 留一份作为备用安装路径。
+- 首次安装后从「应用和功能」可正常卸载（见 §4）。
+
+#### Android
+
+```bash
+cd apps/desktop && ./ui/node_modules/.bin/tauri android init     # 首次生成 gen/android 工程，只跑一次
+cd apps/desktop && ./ui/node_modules/.bin/tauri android build --apk
+cd apps/desktop && ./ui/node_modules/.bin/tauri android build --apk --split-per-abi
+cd apps/desktop && ./ui/node_modules/.bin/tauri dev -- --device <serial>   # 真机热重载调试
+```
+
+| 产物 | 路径 |
+|---|---|
+| 通用 APK | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
+| 分 ABI APK | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/app-<abi>-release.apk` |
+
+- 自用装机只装 APK（不生成 AAB）。
+- 默认构建包含官方支持的四个 ABI；自用设备通常只需 `arm64`，可用 `--target aarch64` 缩短构建时间。
+- 最低 Android 版本由 Tauri 决定（官方当前为 Android 7.0 / SDK 24），需要提高时在 `bundle.android.minSdkVersion` 配置。
+
+### 5.4 工具链前置条件（对照 Tauri 官方 Prerequisites）
+
+Tauri 官方把依赖分为「系统依赖 + Rust + 移动端附加依赖」三类。下表逐项对齐，**桌面端与移动端要求不同，不要互推**。
+
+| 组件 | 适用平台 | 安装方式 | 必需的判定依据 |
+|---|---|---|---|
+| Rust（rustup） | 三端 | `curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf \| sh` | 官方把 Rust 列为通用必需项；版本由 `rust-toolchain.toml` 固定 |
+| Node.js LTS | 三端（前端构建 + Tauri CLI） | nodejs.org 下载 LTS | 前端为 React + Vite，需 Node 构建工具链 |
+| Xcode Command Line Tools | macOS 桌面 | `xcode-select --install` | 官方明确：**仅开发桌面目标时用 CLT 即可**，无需完整 Xcode |
+| Visual Studio C++ Build Tools | Windows | 安装器勾选「Desktop development with C++」 | 官方列为 Windows 开发必需项 |
+| WebView2 Runtime | Windows（开发机 + 目标机） | Evergreen Bootstrapper | 官方：Tauri 用 Edge WebView2 渲染，开发与运行都需要 |
+| VBSCRIPT 可选功能 | Windows（仅打 MSI 时） | 设置 → 应用 → 可选功能 → 更多 Windows 功能 → 勾选 VBSCRIPT | 官方：缺它时 `light.exe` 报错 |
+| Android Studio | Android | developer.android.com/studio | 官方移动端第一步 |
+| Android SDK 组件 | Android | SDK Manager 安装 Android SDK Platform / Platform-Tools / Build-Tools / Command-line Tools | 官方逐项列出 |
+| NDK (Side by side) | Android | SDK Manager 安装 | 官方逐项列出 |
+| `JAVA_HOME` | Android | 指向 Android Studio 自带 JBR，如 `export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` | 官方要求显式设置 |
+| `ANDROID_HOME` / `NDK_HOME` | Android | `export ANDROID_HOME="$HOME/Library/Android/sdk"`；`NDK_HOME="$ANDROID_HOME/ndk/<版本>"` | 官方要求显式设置 |
+| rustup 四个 Android ABI target | Android | `rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android` | 官方列出的四个目标，缺一则对应 ABI 构建失败 |
+| Tauri CLI | 三端 | 前端脚本内 `@tauri-apps/cli`（`./ui/node_modules/.bin/tauri`） | 仓库不额外要求全局安装 `cargo-tauri` |
+
+要点：
+
+- **macOS 桌面只需 Xcode CLT**（本期不做 iOS 端）。
+- **Windows 目标机需要 WebView2 运行时**。Windows 10/11 较新版本通常已预装；缺失时按 §5.6 处理。
+- **Android 的四个 ABI target 与 NDK 缺一不可**；`--split-per-abi` 只影响打包粒度，不影响编译目标是否已安装。
+
+#### Android 前置条件（2026-09-12 实际核查）
+
+要在本机构建 Android 端，当前**缺**以下东西（已装的只有 `adb` 与 `java`）：
+
+| 需要 | 现状 |
+|---|---|
+| Android SDK（`sdkmanager`） | **缺**；`ANDROID_HOME` 未设置 |
+| Android NDK | **缺**；`ANDROID_NDK_HOME` 未设置 |
+| Gradle | **缺** |
+| Rust 的 Android target（`aarch64-linux-android` 等） | **缺**（当前只装了 `aarch64-apple-darwin`）|
+| `adb`、`java`/`javac` | 已有 |
+
+Windows 端同理需要先加 `x86_64-pc-windows-msvc`（或 `-gnu`）target 与对应的链接器/工具链。
+两端都属于独立工程，开工前先补齐这些前置条件。
+
+### 5.5 macOS 本地运行与签名策略
+
+自用不发布，因此**不购买 Apple Developer 账号、不做公证（notarization）**：公证需要 Apple 账号凭据（`APPLE_ID` / `APPLE_API_KEY` 等），自用场景不引入该依赖。
+
+| 场景 | 做法 | 结果 |
+|---|---|---|
+| 本机构建本机运行 | 不配置 `signingIdentity`，Tauri 做 ad-hoc 签名（等价 `codesign -s -`） | 可直接启动；Apple Silicon 上 ad-hoc 签名是二进制可执行的前提 |
+| 拷到另一台自己的 Mac | 用「右键 → 打开」或系统设置 → 隐私与安全性 → 仍要打开；也可 `xattr -dr com.apple.quarantine /path/danmubox.app` | Gatekeeper 首次拦截后可正常运行 |
+
+验证命令：
+
+```bash
+codesign -dv --verbose=4 /path/danmubox.app   # 确认为 adhoc 签名
+spctl -a -vv /path/danmubox.app               # 查看 Gatekeeper 评估结果
+xattr -l /path/danmubox.app                   # 查看隔离属性
+```
+
+- **证书与密钥不进仓库**：签名材料一律留在本机钥匙串，禁止写入仓库或文档。
+
+### 5.6 Windows SmartScreen 与 WebView2
+
+未签名的安装器从浏览器下载后被打上 Mark-of-the-Web，首次运行触发 SmartScreen「Windows 已保护你的电脑」。自用不发布，**不购买 OV / EV 证书**（都需付费与身份材料，EV 另有硬件令牌要求），产物保持未签名。
+
+| 场景 | 处理方式 |
+|---|---|
+| 自用本机构建、本机运行 | 从本机构建目录直接运行，**不经过浏览器下载**，通常不触发；若触发，走下一行 |
+| 已经出现警告 | 点「更多信息」→「仍要运行」 |
+| 拷贝到另一台自用机器 | 先解除文件锁定：文件属性 → 勾选「解除锁定」，或 PowerShell `Unblock-File .\danmubox_0.1.0_x64-setup.exe`，再运行安装器 |
+
+- 官方明确：签名只是减少警告的手段，**不是运行的必要条件**——只要愿意忽略 SmartScreen 警告，未签名也可运行。
+- 安装器默认在缺少 WebView2 时下载 WebView2 Bootstrapper（需要联网）。若目标机常年离线，可改为随包内嵌安装器，代价是安装器体积显著增大（体积量级见 §5.10）。
+- 打包 MSI 报 `failed to run light.exe` 时，检查 §5.4 表中的 VBSCRIPT 可选功能。
+
+### 5.7 Android APK 安装
+
+签名材料（keystore 与口令）**只存本机**，不进仓库、不进日志、不进文档（安全红线见 §3）。**同一 `dev.kksk.danmubox` 的后续安装必须使用同一签名**，否则无法覆盖安装、只能先卸载（卸载会清数据，且 `config.toml` 凭据一并丢失，见 §4）。
+
+```bash
+adb devices                                  # 确认设备已授权
+adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
+```
+
+| 情况 | 处置 |
+|---|---|
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名与已装版本不一致 → 先 `adb uninstall dev.kksk.danmubox`（会清数据）再安装 |
+| `INSTALL_FAILED_OLDER_SDK` | 设备 Android 版本低于最低支持版本 → 提高设备系统或调整 `minSdkVersion` 后重建 |
+| 手机上提示「不允许安装未知应用」 | 在「安装未知应用」权限中允许 USB 安装来源 |
+| 不想用 USB | 把 APK 传到手机后用文件管理器安装（同样需要未知来源权限） |
+| 只装单一 ABI | `adb install -r` 前确认 APK 的 ABI 与设备匹配（此处指 arm64 / x86_64） |
+
+### 5.8 版本号策略
+
+| 项 | 规则 |
+|---|---|
+| 版本格式 | SemVer `MAJOR.MINOR.PATCH`，当前基线 `0.1.0`（`apps/desktop/src-tauri/tauri.conf.json` 的 `version`；记录见 `../CHANGELOG.md`） |
+| 单一事实源 | Tauri 配置中的 `version` 为准，三端产物名由它派生 |
+| bundle id | `dev.kksk.danmubox`，三端一致；**一旦装机后不再更改**，否则 Android 无法覆盖安装、数据目录也会错位 |
+| Android versionCode | 采用官方派生规则 `major*1000000 + minor*1000 + patch`；需要连续递增时在 `bundle.android.versionCode` 显式指定 |
+| 预发布 | 自用不做预发布通道；`0.x` 期间 minor 变更允许破坏兼容 |
+| 文档同步 | 每次发版更新 `../CHANGELOG.md`；影响安装 / 数据目录 / 命令的改动同时更新本节与 §1 |
+| 本地文件兼容 | 无迁移；升级不影响 `config.toml` 与 `prefs.json`，弹幕缓冲是内存态、退出即丢（契约 §4.3） |
+
+### 5.9 自用更新方式
+
+不做自动更新：不引入 updater 插件、不搭更新服务器——自用单机，后端发布通道本身是额外维护面。升级即用新产物覆盖安装。
+
+| 平台 | 更新步骤 | 数据是否保留 |
+|---|---|---|
+| macOS | 退出应用 → 用新 `danmubox.app` 整体替换旧应用 → 重新启动 | 保留（数据在 `~/Library/Application Support/danmubox/`，不在 .app 内） |
+| Windows | 退出应用 → 运行新安装器覆盖安装 | 保留（数据在 `%APPDATA%\danmubox\`） |
+| Android | `adb install -r <新 APK>` | 保留（同包名 + 同签名）；换签名或降 versionCode 会失败 |
+
+回滚方式：保留上一版产物（安装器 / APK / .app），直接覆盖回去。无迁移，回滚不涉及数据格式转换；但若升级时应用重写过 `config.toml` / `prefs.json`，回滚后以当前文件为准。
+
+### 5.10 产物体积与内存目标（量级，非精确值）
+
+只给量级与来源，不写具体数字；目的是给实现阶段一个可比的锚点。实测登记见文末指针。
+
+| 指标 | 预期量级 | 依据 |
+|---|---|---|
+| 应用本体（不含内嵌 WebView2 安装器） | 10¹ MB | Tauri 的定位是「小包体」；sidecar 方案已在 [`decisions/0001-tauri-over-flutter.md`](decisions/0001-tauri-over-flutter.md) 否决——它会把包体推回 40MB+，抵消 Tauri 的体积优势 |
+| Windows 安装器额外体积 | 0 / ~1.8MB / ~127MB / ~180MB 四档 | Tauri 官方 `webviewInstallMode` 对照表给出的增量：`downloadBootstrapper` 0 / `embedBootstrapper` ~1.8MB / `offlineInstaller` ~127MB / `fixedVersion` ~180MB |
+| 常驻内存 | 10² MB | 结构上由「WebView 渲染进程 + Rust 引擎」构成，其中 WebView 通常是大头；弹幕仅在内存环形缓冲内保存（`history.buffer_rows` 默认 5000 条），不是主要占用 |
+
+参考来源（官方文档，核对日期 2026-09-11）：Tauri 2 Prerequisites、macOS Application Bundle、Windows Installer（WebView2 安装模式与体积对照）、Android 打包（versionCode 派生规则与产物路径）。
+
+量级只是锚点，实测值与当时的构建配置（release、是否 `--split-per-abi` / `--target`）登记到文末指针所指的唯一校准表。采样命令：
+
+```bash
+# 体积
+du -sh <target-dir>/release/bundle/macos/danmubox.app
+ls -lh <target-dir>/release/bundle/dmg/*.dmg
+ls -lh apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+# 常驻内存（在「单房间、持续收弹幕」状态下采样，记录房间数与消息速率）
+ps -o rss= -p <pid>                                  # macOS：活动监视器亦可
+adb shell dumpsys meminfo dev.kksk.danmubox          # Android
+# 冷启动到首屏：至少三次取范围，不写单次值
+time <启动命令>                                       # Android 用 adb shell am start -W dev.kksk.danmubox
+```
+
+### 5.11 出包前检查清单（自用，一次性）
+
+| # | 检查项 | 通过标准 |
+|---|---|---|
+| 1 | 版本号一致 | Tauri 配置、`../CHANGELOG.md`、产物文件名三者一致 |
+| 2 | 包标识一致 | 三端均为 `dev.kksk.danmubox` |
+| 3 | 三端均可启动 | macOS 双击 / Windows 安装后启动 / Android 安装后启动 |
+| 4 | 核心链路可用 | 按 `testing.md` 的三端手工冒烟清单逐条执行 |
+| 5 | 本地文件就位 | 数据目录出现 `config.toml`（权限 `0600`）与 `prefs.json`；应用为纯客户端形态，不启动任何本地服务（见 §1） |
+| 6 | 无敏感信息外泄 | 产物目录、日志、崩溃输出中不含 `SESSDATA` / `bili_jct` / `DedeUserID` 明文（见 §3）；仓库中无签名材料、`.p12`、Cookie、`config.toml` |
+| 7 | 卸载可用 | 按 §4 能清干净残留 |
 
 ---
 
-## 5. 相关文档
+## 6. 相关文档
 
 | 文档 | 关联点 |
 |---|---|
 | [`contract.md`](contract.md) | 本地文件、常量、`SendOutcome`、IPC 命令、偏好键的唯一事实源 |
 | [`auth.md`](auth.md) | 三种登录模式、扫码状态机、凭据字段与失效处理 |
-| [`protocol.md`](protocol.md) | WS 包结构、心跳、重连、消息取值路径 |
+| [`protocol.md`](protocol.md) | WS 包结构、心跳、重连、消息取值路径；唯一「待实测校准」表 |
 | [`ipc.md`](ipc.md) | 前端命令与事件名、调试面板订阅 |
 | [`ui.md`](ui.md) | 房间内「刷新」按钮、连接状态展示、发送失败回滚 |
 | [`architecture.md`](architecture.md) | 进程拓扑、并发模型、可观测性 |
-| [`distribution.md`](distribution.md) | 三端构建、安装、签名与自用更新 |
-| [`testing.md`](testing.md) | 三端手工冒烟清单，用于验证排障动作是否生效 |
+| [`testing.md`](testing.md) | 三端手工冒烟清单，用于验证排障动作与出包检查是否生效 |
+| [`decisions/0001-tauri-over-flutter.md`](decisions/0001-tauri-over-flutter.md) | 桌面框架选型与包体取舍 |
+| [`../README.md`](../README.md) | 项目定位、三端目标、通用开发命令（§8） |
+| [`../AGENT.md`](../AGENT.md) | 构建 / 测试 / lint 命令与仓库作业规范 |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | 版本变更记录 |
+
+---
+
+> 唯一「待实测校准」表在 [`protocol.md`](protocol.md) 附录 A；本文不再自建。

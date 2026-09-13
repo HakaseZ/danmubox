@@ -156,7 +156,7 @@ sessdata = ""
   这条键在断连之后不能变成死键，否则用户只能返回列表再进来。
 - 输入草稿与「最近发送记录」同样只存在**会话内内存**中：不落盘、不写 `prefs.json`（REQUIREMENTS.md §2.2）。
 - 若将来需要跨会话历史，方案是**追加式 JSONL 文件**（按天分片），不引入数据库；届时另立 ADR。
-- 落库概念相关的字段与机制（`dedup_key`、`raw` 保留、`user_version` 迁移、索引、WAL、单写者 actor、保留天数、行数上限清理）**全部不存在**，文档与代码中不得出现。
+- **不引入数据库**（[`decisions/0005-no-local-database.md`](decisions/0005-no-local-database.md)）：落库相关的字段与机制（`dedup_key`、`raw` 保留、`user_version` 迁移、索引、WAL、单写者 actor、保留天数、行数上限清理）不存在，文档与代码中不得出现。
 
 ## 5. 领域模型（规范性）
 
@@ -181,7 +181,8 @@ sessdata = ""
 | `is_admin` | bool | 发送者是否房管（REQUIREMENTS.md 需求） |
 | `is_history` | bool | 是否来自进场回填（§4.3）；实时推送恒为 `false` |
 | `amount` | i64 | 礼物金瓜子或 SC 金额，非交易类为 0 |
-| `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。两种来源都算「表情弹幕」：① `info[0][13]` 是对象（`dm_type=1`，图在槽位里）；② **正文整条恰好是一个文字表情 token**（`[dog]` 这类，图在 `extra.emots[正文]` 里，见 `protocol.md` §10.1.x / A42）。正文里夹着别的字时**不设**本字段（本字段是「整条画图」语义，设了会吞掉正文）。存整份而非只存图片地址，是为了让界面能把它**再发出去** |
+| `combo_id` | string | 礼物连击标识（上游 `batch_combo_id`，见 `protocol.md` §10.2）；非连击类消息为空串，同一次连击的每条礼物共用它，界面据此聚合，折叠规则见 `ui.md` §8.4 |
+| `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。两种来源都算「表情弹幕」：① `info[0][13]` 是对象（`dm_type=1`，图在槽位里）；② **正文整条恰好是一个文字表情 token**（`[dog]` 这类，图在 `extra.emots[正文]` 里，见 `protocol.md` §10.1.x / A42）。正文里夹着别的字时**不设**本字段（本字段是「整条画图」语义，设了会吞掉正文）。存整份而非只存图片地址：渲染要用它（见下）。
 | `reply_to_uid` | i64 | 被回复者的 uid；`0` 表示这条不是回复（上游把它塞在 `info[0][15].extra` 这个 JSON 字符串里，历史条目另有其路径） |
 | `reply_to_uname` | string | 被回复者昵称；非回复为空串 |
 | `reply_type_enum` | i64 | 上游回复类型枚举（实时 `extra.reply_type_enum`，历史 `reply.reply_type_enum`）。官方枚举 `{0: NO_REPLY, 1: NORMAL_REPLY, 2: MATCH_REPLY}`，但实测只有 `0`/`1` 出现、且与 `reply_mid` 是否非 0 完全同构——**不得**用它区分「纯 @」与「回复」（`protocol.md` A40） |
@@ -225,8 +226,8 @@ sessdata = ""
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `outcome` | `SendOutcome` | 归一化结论，上表七取一 |
-| `upstream_code` | `number | null` | 上游 `code` 原样，**不翻译**；本地节流拦下时为 `null`（没发请求） |
-| `upstream_message` | `string | null` | 上游 `msg` / `message` 原话，**不改写** |
+| `upstream_code` | `number \| null` | 上游 `code` 原样，**不翻译**；本地节流拦下时为 `null`（没发请求） |
+| `upstream_message` | `string \| null` | 上游 `msg` / `message` 原话，**不改写** |
 
 > 纪律：`SendOutcome` 只表达**已经敢下结论**的取值；一切未知 code 进 `failed`，其原始 `code` 与 `message` 通过 `SendReport` 一路带到界面（`REQUIREMENTS.md` §2.3 要求给出禁言 / 频率 / 粉丝牌等原因）。码表映射见 `protocol.md` 附录 A17。
 
@@ -317,39 +318,53 @@ sessdata = ""
 
 ## 7. Tauri IPC（规范性）
 
-Frontend → Rust 命令（`invoke`）：
+Frontend → Rust 命令（`invoke`）。本节是**命令名索引**，与 `apps/desktop/src-tauri/src/lib.rs` 的 `generate_handler!` 一一对应；
+签名、载荷类型与错误码见 [`ipc.md`](ipc.md) §3。
 
 | 命令 | 用途 |
 |---|---|
-| `session_status` | 登录态（不含 Cookie 值），含当前 `active_profile` |
-| `accounts_list` | 无 | `Account[]` | `INTERNAL` | 列出全部账号（游客态不是账号，没有凭据就没有条目） |
-| `account_qr_start` | `target?: string` | `{ key, url, svg }` | `INTERNAL` | 不带 `target` = **新增账号**（扫完按昵称自动命名、重名加后缀，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面须二次确认）。二维码由后端离线渲染成 SVG |
-| `account_qr_poll` | `key: string` | `{ state: "pending"\|"scanned"\|"confirmed"\|"expired", account: Account \| null }` | `INTERNAL` | 确认后由后端完成落盘并把该账号设为当前（`active=true`）并返回它；未确认时 `account` 为 `null` |
-| `account_login_cookie` | `cookie: string`、`name?: string` | `Account` | `BAD_REQUEST` `INTERNAL` | 手填 Cookie 登录（需求 §2.5 三种方式之一）；`name` 缺省时按昵称自动生成；必填字段缺失 → `BAD_REQUEST` |
-| `account_switch` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换当前账号并以新凭据重建各房间连接；`name` 不存在 → `NOT_FOUND` |
-| `account_logout` | `name?: string` | `SessionStatus` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省 = 当前账号）的凭据；**账号条目保留**、`logged_in=false`，即退回游客态 |
-| `account_remove` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号条目；**不许删最后一个** → `BAD_REQUEST`；删的是当前项时，当前指向自动切到剩下的条目 |
-| `emotes_owned` | 主站「我的表情」（用户拥有的表情包）；`package_kind` 为 `owned`，唯一键 = `"upower_" + 表情 text` |
-| `room_session` | 返回该房间**当前会话**里的本人身份（`RoomSession`）。房间无活跃会话（未连接/已关闭）→ 返回该 room 的全零身份而**不报错**（与 `history_query` 同风格）。身份在会话建立时并发取一次并缓存，同时经既有 `danmubox://session` 事件推送 |
-| `admin_mute` / `admin_unmute` | 禁言 / 解除（`room_id`、`uid`、`hour`：`-1` 永久、`0` 本场） |
-| `admin_blacklist_list` / `_add` / `_del` | 直播间黑名单（列表 / 加入 / 移除） |
-| `admin_keywords_list` / `_add` / `_del` | 直播间屏蔽词（列表 / 添加 / 删除） |
-| `admin_silent_list` | 禁言名单（`SilentUser[]`）——房管功能做完整所需，官方面板也有这一栏 |
-| `rooms_list` / `rooms_add` / `rooms_remove` | 房间增删查 |
-| `rooms_connect` / `rooms_disconnect` | 连接控制 |
-| `rooms_reconnect` | 手动重连（房间内「刷新」按钮），用于长连接卡住或推流中断 |
-| `history_query` | 查询**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`） |
-| `chat_send` | 发弹幕（可带 `emote` 与 `reply`）——`emote` 非空时按表情弹幕发送（`docs/protocol.md` §11.4），返回 `ChatSendResult { room_id, content, outcome, detail? }`。`detail` 是上游 `message` + `code` 拼成的一行，仅在 `outcome != ok` 时出现。**回显口径（2026-09-13 起）**：界面**不等**这条命令才画——点下发送就本地乐观渲染一条待确认行，`ok` 只是「请求已受理」，那条行保持待确认直到上游 `danmubox://message` 把它**回推**回来（对账规则：同一 uid + 逐字相同的正文 + 时间窗，命中即把本地行换成上游那条）；`outcome != ok` 则把本地行**修正**成发送失败。也就是说 `chat_send` 的返回**只用于校验与修正**，界面不再靠它决定「有没有这条弹幕」（`docs/ui.md` §4.4） |
-| `chat_report` | 举报弹幕，理由取自上一步的清单（`{id, reason}`） |
-| `report_reasons` | 举报理由清单（上游固定 7 条） |
-| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)` |
-| `emotes_list` | 按**真实会话身份**加载表情包库（上游据此下发可用包；此前传零身份，会缺粉丝牌与大航海那几包） |
-| `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令） |
+| `app_info` | 版本、数据目录、凭据文件路径、当前是否登录；前端挂载后调的第一条命令 |
+| `session_status` | 登录态（脱敏，不含任何 Cookie 值），含当前 `active_profile` |
+| `accounts_list` | 列出全部账号（游客态不是账号：没有凭据就没有条目）；有凭据者并发向 `nav` 求证，单个失败只影响它那一行 |
+| `account_switch` | 切换当前账号，并以新凭据**重建各房间连接**（不重连会出现「界面显示新账号、连接还是旧账号」） |
+| `account_remove` | 删除账号条目；**不许删最后一个**；删的是当前项时当前指向切到剩下的条目并重连 |
+| `account_logout` | 清掉该账号（缺省 = 当前账号）的凭据；**账号条目保留**、`logged_in=false`，即退回游客态。登出别的账号时不重连 |
+| `account_login_cookie` | 手填 Cookie 登录（需求 §2.5 三种方式之一）；必填字段缺一即 `BAD_REQUEST`，落盘前先向 `nav` 求证 |
+| `account_qr_start` | 扫码第一步：取二维码内容并在**本地离线**编成 SVG。不带 `target` = **新增账号**（扫完按昵称命名、重名加后缀，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面须二次确认） |
+| `account_qr_poll` | 扫码轮询：状态 + **确认时**已落盘并设为当前（`active=true`）的那个账号；确认后各房间以新凭据重连 |
+| `rooms_list` | 已登记房间：`RoomView` = §5 `Room` + 连接态 + 当前会话缓冲条数 |
+| `rooms_add` | 解析房间号 / 短号 / URL 并登记；**不建立连接** |
+| `rooms_remove` | 移除房间；有会话则先关闭（会话缓冲随会话销毁） |
+| `rooms_connect` | 建立房内会话。**幂等**：已有会话时原样返回，同一房间不得并存两份连接 |
+| `rooms_disconnect` | 断开并关闭会话；缓冲随之销毁 |
+| `rooms_reconnect` | 房间内「刷新」：会话还在（连接中 / 退避中 / 已连接）→ 原地重连，**不清缓冲**，仍属同一次会话；会话已不在（点过断开，或移除后又加回）→ 当场重建一次会话，等价重新进房、缓冲从空开始（两档口径见 §4.3） |
+| `history_query` | 查**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`）；无会话返回空数组 |
+| `room_session` | 该房间**当前会话**里的本人身份（`RoomSession`）。无活跃会话（未连接 / 已关闭）→ 返回全零身份而**不报错**；身份在会话建立时并发取一次并缓存，同时经 `danmubox://session` 推送 |
+| `chat_send` | 发弹幕（`color` / `emote` / `reply` 可选；`emote` 非空即表情弹幕，`protocol.md` §11.4）。返回 `ChatSendResult { room_id, content, outcome, detail? }`：`outcome` 是 §5 `SendOutcome` 归一化结论，`detail` 是上游 `message` + `code` 拼的一行、仅 `outcome != ok` 时出现。**界面不等这条命令才画**——返回只用于校验与修正，乐观渲染与对账见 [`ipc.md`](ipc.md) §7 |
+| `chat_report` | 举报一条弹幕，理由取自 `report_reasons` 的清单 |
+| `report_reasons` | 举报理由清单（每次向上游 `dMReport/ForReason` 现取，条数以上游为准） |
+| `emotes_list` | 按**真实会话身份**加载表情包库（上游据此下发可用包；传零身份会缺粉丝牌与大航海那几包） |
+| `emotes_owned` | 主站「我的表情」（`package_kind` 为 `owned`，唯一键 = `"upower_" + 表情 text`）；未登录时上游退化为免费表情包 |
+| `admin_mute` | 禁言（`hour`：`-1` 永久 / `0` 本场 / 其余为小时数）；仅房管成立，上游非 0 code 原样带回、不赋语义 |
+| `admin_unmute` | 解除禁言 |
+| `admin_silent_list` | 直播间禁言名单（`SilentUser[]`）——房管功能做完整所需，官方面板也有这一栏 |
+| `admin_blacklist_list` | 直播间黑名单列表 |
+| `admin_blacklist_add` | 加入直播间黑名单 |
+| `admin_blacklist_del` | 移出直播间黑名单 |
+| `admin_keywords_list` | 直播间屏蔽词列表 |
+| `admin_keywords_add` | 添加屏蔽词 |
+| `admin_keywords_del` | 删除屏蔽词 |
+| `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令；取数口径见 §5） |
 | `wallet_balance` | 电池余额 |
-| `prefs_get` / `prefs_set` | 偏好读写 |
-| `app_info` | 版本、数据目录、构建信息 |
+| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)` |
+| `prefs_get` | 读偏好生效值全集（默认值已合并，见 §8） |
+| `prefs_set` | 写偏好补丁；未知键或非法值 → `BAD_REQUEST`，成功返回合并后的生效值全集 |
+| `frontend_log` | 前端控制台桥上报：`level` 为 `error` / `warn`（其余按 debug），`target = "danmubox::ui"`。页面 `console.error` / `console.warn` 与未捕获错误经它并入 Rust 侧同一份日志；同一告警 1 秒内只上报一次，防「渲染 → 告警 → 日志 → 重渲染」反馈环（`DANMUBOX_LOG` 见 §4） |
 
 Rust → Frontend 事件：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
+
+`danmubox://session` 是**双载荷**事件名：登录态 `SessionStatus`（带 `logged_in`）与房内身份 `RoomSession`（带 `is_admin`）走同一个名字，
+前端按判别字段分派，**身份载荷不得覆盖登录态**（否则 `logged_in` 变 `undefined`，界面误判成游客）；载荷判别表见 [`ipc.md`](ipc.md) §4。
 
 `danmubox://room_stats` 的载荷是 §5 的 `RoomStats`（在线人数 / 累计看过，两侧可缺省）。
 
@@ -372,7 +387,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
 | `filter.keywords` | string[] | `[]` | 关键词列表 |
 | `filter.keywords_mode` | string | `"hide"` | `hide` 命中隐藏 / `only` 仅显示命中 |
-| `filter.keywords_alert` | boolean | `false` | 命中关键词时高亮并提示音 |
+| `filter.keywords_alert` | boolean | `false` | 命中关键词时高亮 |
 | `filter.uids` | integer[] | `[]` | 用户 UID 过滤列表 |
 | `filter.kinds` | string[] | 六种 kind 全集 | 参与展示的消息类型白名单 |
 | `filter.medal_level_min` | integer | `0` | 粉丝牌最低等级 |
@@ -393,14 +408,20 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | REQUIREMENTS.md 需求 | 承载位置 |
 |---|---|
 | 看弹幕 / 发弹幕 | §5、§6 |
+| 三端（macOS / Windows / Android） | §2、§3 依赖方向 |
+| 醒目留言（SC）与礼物金额 | §5 `Message.amount`、§6 |
+| 表情弹幕发送 | §3 `DanmakuSender`、§5 `Message.emote` / `EmoteRef` |
+| @ 与回复他人 | §5 `Message.reply_to_uid` / `reply_to_uname`、`protocol.md` §11.6 |
 | 按用户身份加载表情包库 | §3 `EmoteProvider`、§5 `Emote` / `RoomSession`、§7 `emotes_list` |
 | 举报弹幕（同官方行为） | §3 `DanmakuReporter`、§5 `upstream_id`、§7 `chat_report` |
+| 举报理由从固定清单里选 | §3 `DanmakuReporter::reasons()`、§7 `report_reasons` |
 | 上游代码完全分离 | §3 端口与依赖方向 |
 | cookie 配置文件 / 默认扫码 / 有则直读 | §4.1 |
 | 房管身份 | §5 `is_admin` |
 | 本房间粉丝牌等级 | §5 `RoomSession.my_medal_level` |
 | 礼物事件 / 独立礼物栏或混合 | §8 `ui.gift_panel_mode` |
 | 关注列表 + 直播中置顶 | §5 `FollowedRoom`、§7 `follow_list` |
+| 房间列表 / 标签条用主播昵称或标题标识（不露房间号） | §5 `Room.anchor_uname` / `title`、`ui.md` §2.2 |
 | 发言失败原因（全局/直播间禁言、等级、频率） | §5 `SendOutcome` |
 | 电池余额 | §3 `WalletProvider`、§7 `wallet_balance` |
 | 徽标（主播 / 房管 / 大航海） | §5 徽标说明 |
@@ -409,7 +430,6 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 进场回填最近弹幕（用户 2026-09-12 追加，非 REQUIREMENTS.md 原文） | §3 `LiveSource::recent`、§4.3、§5 `is_history`、`ui.md` §4.7 |
 | 词云 | 下期非核心条目，见 `roadmap.md` |
 | 深色模式 / 字号 | §8 `ui.theme` / `ui.font_scale` |
-| 透明度（原 `ui.opacity`） | **已删除**（用户 2026-09-12 反馈：实现方式非预期），待办见 `roadmap.md` |
 | 房间观众数（在线人数 / 累计看过） | §5 `RoomStats`、§7 `danmubox://room_stats` |
 | 互动消息自动消失 / 系统通知开关 | §8 `ui.interact_auto_hide` / `ui.system_notice` |
 | 关注列表自动加载 | §3 `RoomCatalog`、§7 `follow_list`、`ui.md` §2.2 |
@@ -417,24 +437,24 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 主站「我的表情」可发送（#8） | §5 `Emote.package_kind=owned`、§7 `emotes_owned` |
 | 房管功能：禁言 / 黑名单 / 屏蔽词（#3） | §7 `admin_*`、`protocol.md` A36 |
 | 过滤与显示开关 | §8 `filter.*` / `ui.show_timestamp` / `ui.system_notice` / `ui.interact_auto_hide` |
+| 关键词过滤与命中高亮 | §8 `filter.keywords` / `filter.keywords_mode` / `filter.keywords_alert` |
 | 多房间标签页 | `ui.md` |
 | 多账号（单文件多 profiles，界面统一叫「账号」） | §4.1、§5 `Account`、§7 `accounts_list` / `account_switch` |
 | 草稿与最近发送记录（会话内） | §4.3 |
 | bundle id 变更 | §1 |
-| **已从需求中移除** | 本地数据库、跨会话历史、弹幕回看、导出、AI 原生接口、AI 日报、免打扰时段、提示音、快捷键、多房间未读静音、断线补齐、开播提示、按 uid 只看某人、谢谢礼物模板 |
+| 前端日志并入后端日志（控制台桥） | §7 `frontend_log`、§4 `DANMUBOX_LOG` |
+
+> 已移除需求的历史清单见 [`../CHANGELOG.md`](../CHANGELOG.md) 的 Removed 段。
 
 ## 10. 写作要求（强制）
 
 1. 正文中文，标识符/技术名词保留英文。
 2. 文件开头三行引言块：定位 / 读者 / 更新时机。
 3. 表格优先于长段落；接口、字段、常量必须用表格或代码块。
-4. **禁止**出现 `TODO`、`待补充`、`占位`、`XXX` 之类空壳。
-   - 对 B 站未实测的事实用「待实测校准」表格承载，写明核对方法与责任人动作，不得凭空编造具体数值。
-5. **禁止**创建源码或构建文件（`.rs` `.ts` `.tsx` `.toml` `.json` `.lock`）。只写 Markdown。
-6. 只写自己负责的文件，不得修改他人文件。
-7. 不执行 git 操作，不运行构建、测试、格式化、lint。
-8. 引用其他文档用相对路径。
-9. **收敛优先**：文档只保留四类内容——① 当前需求与规范性契约；② 技术决策（ADR）；③ 为构建、验证、交付所必需的流程；④ B 站侧的待实测校准项。已撤销的方案、未被要求的增强、为尚不存在的代码写的实现细节，一律移出仓库：有历史价值的进 `docs/.archive/`（不进 git），其余直接删除。
+4. **禁止**出现 `TODO`、`待补充`、`占位`、`XXX` 之类空壳；对 B 站未实测的事实不得凭空编造具体数值。
+
+> 唯一「待实测校准」表在 [`protocol.md`](protocol.md) 附录 A；本文不再自建。
+> 作业规范（只写 Markdown、不跑 git / 构建 / lint、只改自己负责的文件、引用用相对路径、收敛优先）见 [`../AGENT.md`](../AGENT.md)。
 
 ## 11. 文档清单
 
@@ -444,8 +464,9 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `README.md` / `AGENT.md` / `CHANGELOG.md` | 本期 |
 | `docs/contract.md` | 本文件（规范性契约） |
 | `docs/protocol.md` / `auth.md` / `architecture.md` / `ipc.md` / `ui.md` | 本期 |
-| `docs/roadmap.md` / `testing.md` / `distribution.md` / `operations.md` | 本期 |
+| `docs/operations.md` / `testing.md` | 本期 |
+| `docs/roadmap.md` | 下期 backlog（等上游样本 / 待拍板 / 更远期）与风险；阶段史见 `CHANGELOG.md` |
 | `docs/decisions/*` | 本期 |
 | `docs/.archive/` | **不进 git**；仅存放已撤销方案与历史讨论，不参与实现，引用它一律视为无效 |
 
-已从仓库移除（不归档、不重建）：`docs/data-model.md`（无数据库）、`docs/api.md`（无 HTTP API）。
+已从仓库移除（不归档、不重建）：`docs/data-model.md`（无数据库）、`docs/api.md`（无 HTTP API）、`docs/overview.md`（正文并入本文件与 `ipc.md` / `architecture.md` / `ui.md` / `operations.md`）、`docs/distribution.md`（并入 `docs/operations.md`）。

@@ -58,7 +58,7 @@ graph LR
 
 ## 3. 构建 / 测试 / lint 命令
 
-Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desktop`（前端）尚未创建，其命令标注为「未可用」。
+Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落地，下表命令**均已验证可用**。
 
 | 用途 | 命令 |
 |---|---|
@@ -75,10 +75,12 @@ Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desk
 | 扫码登录/新增账号（CLI） | `cargo run -p danmubox-cli -- login [账号名]`（不带 = 新增账号；带 = 给该账号重新登录） |
 | 账号列表 / 切号 / 增删（CLI） | `cargo run -p danmubox-cli -- accounts [--use <名字>] [--create] [--remove <名字>]` |
 | 登出（CLI） | `cargo run -p danmubox-cli -- logout [账号名]`（缺省 = 当前账号；账号条目保留） |
-| 发弹幕（CLI） | `cargo run -p danmubox-cli -- send <房间> "内容"`（需登录） |
+| 发弹幕（CLI） | `cargo run -p danmubox-cli -- send <房间> "内容"`（需登录；`--emote <唯一键>` 发表情弹幕） |
+| 只读核对（CLI） | `cargo run -p danmubox-cli -- wallet` / `follow` / `emotes <房间>` / `emotes-owned` / `admin-lists <房间>` |
+| 指定另一份配置 | 任何 CLI 子命令加 `--config <路径>`（全局参数） |
 | 前端依赖安装 | `npm --prefix apps/desktop/ui install` |
 | 前端类型检查 + 构建 | `npm --prefix apps/desktop/ui run build`（= `tsc -b && vite build`） |
-| 前端 dev server | `npm --prefix apps/desktop/ui run dev`（桌面端运行前必须先起） |
+| 前端 dev server | `npm --prefix apps/desktop/ui run dev`（仅热重载开发需要；独立产物已内嵌前端，不需要它） |
 | 桌面端运行 | `cargo run -p danmubox-desktop` |
 
 环境变量：`DANMUBOX_LOG`（默认 `info`；`debug` 会输出每条业务载荷的原文，是字段校准的采集入口）。
@@ -214,15 +216,17 @@ Rust 侧三个 crate 已落地，下列命令**均已验证可用**；`apps/desk
 
 | 需要什么 | 去哪看 |
 |---|---|
-| 三合一综述（需求 → 代码 → 界面，先读这篇） | `docs/overview.md` |
-| 需求基线 | `REQUIREMENTS.md` |
+| 需求基线（做什么 / 不做什么） | `REQUIREMENTS.md` |
 | 规范性契约（唯一事实源） | `docs/contract.md` |
 | 项目边界与状态 | `README.md` |
-| 分层与并发模型 | `docs/architecture.md` |
-| 协议细节 | `docs/protocol.md` |
+| 文档索引 | `README.md` §7 |
+| 分层、模块与并发 | `docs/architecture.md` |
+| 协议细节与唯一校准表 | `docs/protocol.md` |
 | 登录与凭据 | `docs/auth.md` |
 | IPC 契约 | `docs/ipc.md` |
 | 界面规范 | `docs/ui.md` |
+| 测试与冒烟 | `docs/testing.md` |
+| 运维、排障与构建分发 | `docs/operations.md` |
+| 下期 backlog 与风险 | `docs/roadmap.md` |
 | 为什么这样选 | `docs/decisions/` |
-| 排期与验收 | `docs/roadmap.md` |
-| 需求与 issue 台账（这条做没做、凭什么） | `docs/requests.md` |
+| 这条需求做没做、凭什么 | `docs/requests.md` |

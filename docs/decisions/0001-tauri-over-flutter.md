@@ -10,7 +10,7 @@
 | 日期 | 2026-09-11 |
 | 决策者 | 项目作者 |
 | 影响面 | `apps/desktop/`、`crates/danmubox-core/`、`crates/danmubox-bili/`、`crates/danmubox-cli/`、三端构建流程 |
-| 相关文档 | [`../contract.md`](../contract.md) §3、[`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)、[`0004-upstream-isolation.md`](0004-upstream-isolation.md)、[`0008-frontend-stack.md`](0008-frontend-stack.md)、[`../distribution.md`](../distribution.md) |
+| 相关文档 | [`../contract.md`](../contract.md) §3、[`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)、[`0004-upstream-isolation.md`](0004-upstream-isolation.md)、[`0008-frontend-stack.md`](0008-frontend-stack.md)、[`../operations.md`](../operations.md) |
 
 ## Context
 
@@ -73,7 +73,7 @@
 | 风险 | 说明 | 缓解 |
 |---|---|---|
 | Android WebView 差异 | 不同厂商 WebView 版本行为不一致，可能影响渲染表现 | 核心逻辑全部放 Rust；UI 渐进增强；Android 端纳入手工冒烟清单 |
-| 工具链碎片化 | 三端各自需要额外前置依赖，环境搭建成本高 | 在 [`../distribution.md`](../distribution.md) 中固化前置条件与版本要求 |
+| 工具链碎片化 | 三端各自需要额外前置依赖，环境搭建成本高 | 在 [`../operations.md`](../operations.md) 中固化前置条件与版本要求 |
 | 协议变更 | B 站可能调整弹幕协议 | 协议层独立成 `danmubox-bili`，改动不外溢（见 [`0004-upstream-isolation.md`](0004-upstream-isolation.md)） |
 
 补充：选型阶段曾把「AI 原生接口 / MCP 生态」列为一条独立理由。该需求**本轮已置空**——AI 与 MCP 本期不做任何实现，只要求架构保持兼容：`core` 的端口与事件总线不得假设消费方是 UI，新能力一律经端口暴露（见 [`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)）。因此它不再构成本决策的理由，也不得作为任何实现的依据。

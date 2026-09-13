@@ -83,7 +83,7 @@ graph TD
 | `upstream_id` 保留原文 | 举报所需的标识原样保留，不由本地生成 |
 | 徽标派生 | 主播由 `uid == Room.anchor_uid` 派生、房管取 `is_admin`、大航海取 `guard_level`；不依赖独立字段 |
 
-字段取值口径未实测的部分不得在测试里硬编码臆测值：测试用 fixture 承载实测样本，fixture 更新即结论更新；未实测的取值一律进 `docs/roadmap.md` 的阶段校准表与 `docs/protocol.md` 附录，并写清核对方法与责任人动作。
+字段取值口径未实测的部分不得在测试里硬编码臆测值：测试用 fixture 承载实测样本，fixture 更新即结论更新；未实测的取值一律进 [`protocol.md`](protocol.md) 附录 A 的「待实测校准」表，并写清核对方法与责任人动作。
 
 ## 4. 会话缓冲语义测试（`danmubox-core`）
 
@@ -215,7 +215,7 @@ graph TD
 
 ## 10. 三端手工冒烟清单
 
-每步都可执行，且都给出预期结果；执行时逐步勾选并留证（截图或终端输出）。三端共用的前置条件：已构建产物、能访问网络、准备一个正在开播的真实直播间，以及一个可用于登录的账号。
+每步都可执行，且都给出预期结果；执行时逐步勾选并留证（截图或终端输出）。三端共用的前置条件：已构建产物、能访问网络、准备一个正在开播的真实直播间，以及一个可用于登录的账号。构建产物、签名 / 安装与工具链前置条件见 [`operations.md`](operations.md)（命令出处见 `README.md` §8，交付门槛见 `AGENT.md` §9）；本节只列验收步骤，不重复它们。
 
 ### 10.1 共用步骤
 
@@ -239,7 +239,7 @@ graph TD
 
 | 步骤 | 操作 | 预期结果 |
 |---|---|---|
-| M-1 | 双击应用包启动 | Gatekeeper 不阻止（本地签名或 ad-hoc 策略见 `docs/distribution.md`）；应用正常打开 |
+| M-1 | 双击应用包启动 | Gatekeeper 不阻止（本地签名或 ad-hoc 策略见 [`operations.md`](operations.md)）；应用正常打开 |
 | M-2 | 检查 `config.toml` 位置与权限 | 位于 `~/Library/Application Support/danmubox/`，权限为 0600 |
 | M-3 | 完成 C-1 ~ C-13 | 全部通过 |
 
@@ -247,9 +247,9 @@ graph TD
 
 | 步骤 | 操作 | 预期结果 |
 |---|---|---|
-| W-1 | 安装 / 运行产物 | 不白屏；若目标机无 WebView2，按 `docs/distribution.md` 的说明先安装运行时 |
+| W-1 | 安装 / 运行产物 | 不白屏；若目标机无 WebView2，按 [`operations.md`](operations.md) 的说明先安装运行时 |
 | W-2 | 检查 `config.toml` 位置与权限 | 位于 `%APPDATA%\danmubox\`，权限等价于仅当前用户可读写 |
-| W-3 | 首次运行观察 SmartScreen | 出现警告时可按 `docs/distribution.md` 的处理方式继续；不出现功能性阻断 |
+| W-3 | 首次运行观察 SmartScreen | 出现警告时可按 [`operations.md`](operations.md) 的处理方式继续；不出现功能性阻断 |
 | W-4 | 完成 C-1 ~ C-13 | 全部通过 |
 
 ### 10.4 Android 专属
@@ -285,17 +285,8 @@ graph TD
 | 日志断言 | 断言日志**不含**凭证时，用关键词检索而非打印凭证本身 |
 | 脱敏 | 回放 fixture 按 §8.3 处理；同一用户在多条样本中保持同一映射 |
 | 提交前检查 | 对新增 fixture 与快照做一次敏感关键词检索，命中即修复 |
-| 文档同步 | 协议 `cmd`、IPC 命令、偏好键、会话语义或发送结果语义变更时，同步更新本文的用例清单与 `docs/roadmap.md` 的验收项 |
+| 文档同步 | 协议 `cmd`、IPC 命令、偏好键、会话语义或发送结果语义变更时，同步更新本文的用例清单与 [`operations.md`](operations.md) 的对应章节；阶段的验收标准与历史记录见 [`../CHANGELOG.md`](../CHANGELOG.md) |
 
 ## 15. 与其他文档的关系
 
-| 文档 | 关系 |
-|---|---|
-| `docs/roadmap.md` | 本文的用例清单支撑各阶段的验收标准 |
-| `docs/contract.md` | 本文所有断言对象的取值来源（模型、常量、IPC、偏好键） |
-| `docs/protocol.md` | 协议用例的字段来源与「待实测校准」结论登记处 |
-| `docs/ipc.md` | IPC 命令与事件名断言的依据 |
-| `docs/ui.md` | 虚拟列表、渲染断言与冒烟清单交互步骤的依据 |
-| `docs/auth.md` | 登录、扫码与凭据安全规则 |
-| `docs/distribution.md` / `docs/operations.md` | 三端冒烟与故障排查的操作依据 |
-| `AGENT.md` | 提交前的自测要求与 DoD 清单 |
+文档索引见 [`../README.md`](../README.md) §7；本文只负责验证方案。

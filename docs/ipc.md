@@ -1,8 +1,9 @@
 # danmubox Tauri IPC 契约
 
-> 定位：前端与 Rust 引擎之间唯一的命令/事件契约，定义命令签名、载荷类型、事件集合、Zustand store 形状与乐观更新规则。
+> 定位：前端与 Rust 引擎之间唯一的命令/事件契约——命令签名、载荷类型、事件集合、Zustand store 形状与乐观发送规则。
 > 读者：写 React/TS 前端的开发者、在 `apps/desktop/src-tauri` 增加命令的 Rust 开发者、需要判断「一处改动要同步几个文件」的 AI 编码 agent。
-> 更新时机：新增/删除/改名的命令或事件、改动任何载荷字段、改动 store 形状或乐观更新规则时，必须同步修改本文；契约 §5 / §7 / §8 变更时本文必须跟随。
+> 更新时机：新增/删除/改名的命令或事件、改动任何载荷字段、改动 store 形状或乐观发送规则时，必须同步修改本文。
+> 与其他文档的分工：命令名清单与常量在 `contract.md`（§7 / §5 / §8）；端口与并发、取消树、退避在 `architecture.md`；协议与 `cmd → kind` 在 `protocol.md`；界面规格与冒烟断言在 `ui.md`。本文不复制它们的正文。
 
 ---
 
@@ -10,11 +11,11 @@
 
 只有一种运行模式：页面运行在 Tauri WebView 中，命令走 `invoke("命令名", 参数)`，事件走 `listen("danmubox://事件名", handler)`。
 
-`vite dev` 下 WebView 内 `@tauri-apps/api` 同样可用，前端的数据路径只有 `invoke` / `listen` 这一条。
+`vite dev` 下 WebView 内 `@tauri-apps/api` 同样可用，前端的数据路径只有 `invoke` / `listen` 这一条（唯一例外见 §6 的控制台桥）。
 
-约束（规范性）：命令名与事件名的集合是**封闭**的，与契约 §7 逐条一致（命令清单见 §3、事件清单见 §4）；新增面必须同时改契约 §7、本文与实现，不允许前端私自定义字符串。
+约束（规范性）：命令名与事件名的集合是**封闭**的，与 `contract.md` §7 逐条一致（命令清单见 §3、事件清单见 §4）；新增面必须同时改 `contract.md` §7、本文与实现，不允许前端私自定义字符串。
 
-> 「手填 Cookie」不设命令：按契约 §4.1，它等于**直接编辑 `config.toml`**，界面只提供数据目录路径与文件说明。
+> 「手填 Cookie」不设独立命令：按 `contract.md` §4.1，它等于**直接编辑 `config.toml`**，界面只提供数据目录路径与文件说明。
 
 > 后期想法（本期不实现）：接入 MCP，让 Agent 直接消费弹幕数据。因此 IPC 只是 core 的一个消费面，core 的端口与事件总线不得假设消费方是 UI；新增能力先落 core 端口，再决定是否暴露成命令。
 
@@ -22,68 +23,74 @@
 
 | 项 | 约定 |
 |---|---|
-| 命令名 | `snake_case`，与契约 §7 字面一致 |
-| 参数名 | Rust 侧 `snake_case`；Tauri 2 默认把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId`、`content`、`upstreamId`、`input` 等 camelCase 键 |
-| 成功返回 | 直接返回 §3 签名表「返回」列的 JSON 值 |
-| 失败返回 | `invoke` 被 reject，值为错误对象 `{ "error": { "code", "message", "detail" } }`；前端按 `code` 分支，`detail` 的键名按命令固定（如 `detail.reason`、`detail.retry_after_ms`、`detail.upstream_code`），**不得**解析 `message` 文本 |
-| 错误码 | 只用下表七个；本文是错误码集合的权威来源 |
+| 命令注册 | 全部集中在 `apps/desktop/src-tauri/src/lib.rs` 的 `tauri::generate_handler![…]`；命令函数也在该文件（没有 `commands.rs`） |
+| 命令名 | `snake_case`，与 `contract.md` §7 字面一致 |
+| 参数名 | Rust 侧 `snake_case`；Tauri 2 把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId`、`query`、`patch`、`upstreamId` 等 camelCase 键 |
+| 同步/异步 | 37 条命令：28 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` |
+| 成功返回 | §3 签名表「返回」列的 JSON 值；`void` = 无返回体 |
+| 失败返回 | `invoke` reject，值为 `ApiError`：`{ "code": string, "message": string }`（`lib.rs`）。前端按 `code` 分支；`message` 是给人看的文案（Rust `Display` 或上游原文），**不得**解析它做逻辑，也没有 `detail` 这类嵌套字段 |
+| 错误码 | `code` 取自 `core::error::Error::code()`，共八个（下表）；错误对象的集合以本文为准 |
 | 时间 | 统一 UTC 毫秒、`i64`；JS 侧为 `number` |
-| 消息载荷 | 契约 §5 的 `Message`，JSON 侧 **snake_case**；进入 store 时转 camelCase（契约只约束载荷，不约束 store 内部表示） |
-| 偏好键 | 契约 §8 的字面键名（如 `ui.font_scale`），两边都不改名，store 内也用字面键 |
+| 载荷字段 | `snake_case`（`apps/desktop/ui/src/types.ts` 与后端同形）；**store 里存的就是同一份 `Message`**，不做 camelCase 转换（见 §5） |
+| 偏好键 | `contract.md` §8 的字面键名（如 `ui.font_scale`），两边都不改名，store 内也用字面键 |
 | 凭据 | 任何命令的返回都不含 `sessdata` / `bili_jct` / `dede_user_id`；`session_status` 只返回状态位 |
 
-错误码（本文档负责，`core::error` 归一化后映射到这里）：
+错误码（分类见 `contract.md` §7；前端按 code 分支）：
 
 | code | 触发场景 | 前端处理 |
 |---|---|---|
-| `BAD_REQUEST` | 参数缺失/非法（如 `input` 解析不出房间号、`prefs_set` 未知键或非法值） | 不重试，就地提示 |
-| `NOT_FOUND` | 资源不存在（非房间类，如已消费的扫码 `key`） | 不重试 |
+| `BAD_REQUEST` | 参数缺失/非法（`input` 解析不出房间号、`query.kinds` 有未知 kind、`prefs_set` 未知键或非法值、`open_url` 非 http(s)、举报理由或 `upstream_id` 为空） | 不重试，就地提示 |
+| `UNAUTHORIZED` | 凭据无效/过期（由 core 归一化） | 不重试，引导重新登录 |
+| `NOT_FOUND` | 资源不存在（非房间类，如已消费的扫码 `key`、账号名不存在） | 不重试 |
 | `ROOM_NOT_FOUND` | 房间号无法解析，或不在已添加列表 | 不重试 |
 | `NOT_LOGGED_IN` | 游客模式调用需登录的动作 | 不重试，引导扫码登录 |
-| `RATE_LIMITED` | 本地发弹幕节流命中（同房间 2s、相同内容 5s，契约 §4）；`detail.reason` = `min_interval` / `duplicate`，`detail.retry_after_ms` 供倒计时 | 不自动重发 |
-| `UPSTREAM_ERROR` | 上游接口非预期响应或结构不符；`detail.upstream_code` / `detail.upstream_message` 携带原始值 | 幂等读请求不自动重试；写请求不自动重试 |
+| `RATE_LIMITED` | 本地发弹幕节流命中（同房间 2s、相同内容 5s，`contract.md` §4）；原因在 `message` 里 | 不自动重发 |
+| `UPSTREAM_ERROR` | 上游接口非预期响应或结构不符；`message` 携带上游原文 | 幂等读请求不自动重试；写请求不自动重试 |
 | `INTERNAL` | 本地未预期错误（本地文件 IO、序列化、任务 panic） | 不重试，记录日志 |
 
 ## 3. 命令签名表
 
-所有命令均为 `#[tauri::command] async fn`，接收 `State<CoreHandle>`；「错误」列是可能被 reject 的错误码（未列出的码不会出现）。
+37 条，与 `generate_handler!` 逐条对应；除表中注明的同步命令外均为 `async fn`。所有命令都接收 `State<'_, AppState>`（下表省略）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
 
 | 命令 | 参数 | 返回 | 错误 | 说明 |
 |---|---|---|---|---|
-| `session_status` | 无 | `SessionStatus` | — | 永不失败；未登录时 `mode="anonymous"`、`uid=0`；含当前 `active_profile` |
+| `app_info` | 无 | `AppInfo` | — | 版本、数据目录、`config.toml` 路径、是否登录；不含任何凭据。同步命令 |
+| `session_status` | 无 | `SessionState` | `INTERNAL` | 未登录时 `logged_in=false`、`uid=0`、`nickname=""`；`active_profile` 是当前生效的 profile 名 |
 | `accounts_list` | 无 | `Account[]` | `INTERNAL` | 列出全部账号：`Account { name, nickname, uid, face, logged_in, active }`；游客态不是账号，没有凭据就没有条目 |
-| `account_qr_start` | `target?: string` | `{ key, url, svg }` | `INTERNAL` | 不带 `target` = **新增账号**（扫完按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并在文案里写明覆盖哪个账号） |
-| `account_qr_poll` | `key: string` | `{ state, account }` | `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`；确认后后端落盘并设为当前，未确认时 `account` 为 `null` |
-| `account_login_cookie` | `cookie: string`、`name?: string` | `Account` | `BAD_REQUEST` `INTERNAL` | 手填 Cookie（需求 §2.5 三种方式之一）；缺必填字段 → `BAD_REQUEST` |
-| `account_switch` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换当前账号并以新凭据重建各房间连接 |
-| `account_logout` | `name?: string` | `SessionStatus` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省=当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
-| `account_remove` | `name: string` | `SessionStatus` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
-| `rooms_list` | 无 | `RoomView[]` | `INTERNAL` | 已添加房间 + 当前连接状态 + 当前会话缓冲条数 |
-| `rooms_add` | `input: string` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号，解析走 `getRoomPlayInfo`（昵称与标题另取一次 `getH5InfoByRoom`，失败只留空、不阻断）；解析不出即 `BAD_REQUEST` |
-| `rooms_remove` | `roomId: number` | `void` | `ROOM_NOT_FOUND` `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
-| `rooms_connect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 建立会话：创建 supervisor、创建会话缓冲、开始收包。幂等：已连接时直接返回当前状态 |
-| `rooms_disconnect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` | 断开并**结束会话、清空缓冲**。幂等：已断开时直接返回 |
-| `rooms_reconnect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` | 房间内「刷新」按钮：主动断开并立即重连（跳过退避）。**不清空缓冲、不结束会话**；连接中/退避中/已连接三种状态均可调用。会话已因 `rooms_disconnect` 结束（或房间被移除）时**重建一次会话**（全新会话、缓冲从空开始，等价于重新进房）——断连之后这颗键不得变成死键。`ROOM_NOT_FOUND` 只剩「房间未登记」一种情形 |
-| `history_query` | `roomId: number`、`limit?: number`、`after?: number`、`before?: number`、`kinds?: MessageKind[]`、`uid?: number`、`q?: string` | `Message[]`（snake_case，按 `ts` 升序） | `ROOM_NOT_FOUND` `BAD_REQUEST` `INTERNAL` | 只查**当前房内会话缓冲**（契约 §4.3）；无活跃会话（缓冲已销毁）时返回空数组，不报错。不跨会话、不回放、不导出 |
-| `chat_send` | `roomId: number`、`content: string`、`color?: number`、`mode?: number` | `ChatSendResult` | `BAD_REQUEST` `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | `color` 缺省 16777215、`mode` 缺省 1，**两者都原样透传不做范围校验**——A18 实测：上游对 `mode` 与越界 `color` 都不做范围检查，且会把过暗颜色改写成白（可读性规范化）；**唯一要避免的是 `color=0`**（上游参数层直接拒绝 `-400`）。本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发 |
-| `chat_report` | `roomId: number`、`upstreamId: string`、`reason: number` | `ReportResult` | `BAD_REQUEST` `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕；`upstreamId` 取 `Message.upstream_id`（契约 §5，举报必需）；`reason` 为上游举报类型码，取值见 §3.2 |
-| `emotes_list` | `roomId: number` | `Emote[]` | `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 按**真实会话身份**（取自会话缓存，见 `room_session`；此前传零身份会缺粉丝牌与大航海那几包）（`RoomSession`）加载表情包库：无牌/有牌/房管/大航海看到的面板不同 |
-| `room_session` | `roomId: number` | `RoomSession` | `INTERNAL` | 该房间**当前会话**里的本人身份（`is_admin` / `my_guard_level` / `my_medal_level` / `my_medal_name`）。无活跃会话 → 全零身份而**不报错**；界面据此决定房管入口是否亮起（拿不到身份即按无权限渲染，不靠试错） |
-| `emotes_owned` | 无 | `Emote[]` | `UPSTREAM_ERROR` `INTERNAL` | 主站「我的表情」：用户**拥有**的表情包（充电/UP 主专属那一族）。`package_kind="owned"`、`room_id=0`、唯一键 = `"upower_" + 表情 text`；未登录时上游退化为免费表情包，因此**不报** `NOT_LOGGED_IN` |
-| `admin_mute` | `roomId: number`、`uid: number`、`hour: number`、`msg?: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
-| `admin_unmute` | `roomId: number`、`uid: number` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 解除禁言 |
-| `admin_silent_list` | `roomId: number` | `SilentUser[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 当前禁言名单（只读） |
-| `admin_blacklist_list` | `roomId: number` | `BlacklistedUser[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 黑名单（只读）。内部把 `roomId` 解析成主播 uid 后按 `anchor_id` 寻址——上游这个接口不吃房间号 |
-| `admin_blacklist_add` | `roomId: number`、`uid: number` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 加入黑名单（拉黑会解除关系并禁止互动，比禁言重） |
-| `admin_blacklist_del` | `roomId: number`、`uid: number` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 移出黑名单 |
-| `admin_keywords_list` | `roomId: number` | `string[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 直播间屏蔽词（只读） |
-| `admin_keywords_add` | `roomId: number`、`words: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 添加屏蔽词；上游一次只收一个 `keyword`，多词由实现逐个调用 |
-| `admin_keywords_del` | `roomId: number`、`word: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 删除屏蔽词 |
-| `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；交给界面前按 `live_status == 1` 置顶（契约 §5），完整展示排序见 `docs/ui.md` §2.2 |
-| `wallet_balance` | 无 | `WalletBalance` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额；单位与刷新时机见 §3.2 |
-| `prefs_get` | 无 | `PrefsSnapshot`（契约 §8 全部 17 键的**生效值**） | `INTERNAL` | 未写入过的键返回契约 §8 默认值 |
-| `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形 |
-| `app_info` | 无 | `AppInfo` | — | 版本、数据目录、构建信息、日志级别、平台；不含任何凭据 |
+| `account_qr_start` | `target: Option<String>` | `QrStart { key, url, svg }` | `BAD_REQUEST` `INTERNAL` | 不带 `target` = **新增账号**（确认后按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并写明覆盖哪个账号）。二维码由后端离线渲染成 SVG，`target` 由界面侧补记、后端不认这个字段 |
+| `account_qr_poll` | `key: String` | `QrPoll { state, account }` | `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`；确认那一次凭据已落盘、账号已存在，`account` 非空；未确认时 `account` 为 `null` |
+| `account_login_cookie` | `cookie: String, name: Option<String>` | `Account` | `BAD_REQUEST` `INTERNAL` | 手填 Cookie（需求 §2.5 三种方式之一）；必填 `SESSDATA` / `bili_jct` / `DedeUserID`，缺一 → `BAD_REQUEST`；`name` 缺省按昵称自动生成 |
+| `account_switch` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换当前账号并以新凭据重建各房间连接 |
+| `account_logout` | `name: Option<String>` | `SessionState` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省 = 当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
+| `account_remove` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
+| `rooms_list` | 无 | `RoomView[]` | — | 已登记房间 + 当前连接状态 + 当前会话缓冲条数。同步命令 |
+| `rooms_add` | `input: String` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号；解析不出即 `BAD_REQUEST`。只登记，不建连 |
+| `rooms_remove` | `room_id: i64` | `void` | `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
+| `rooms_connect` | `room_id: i64` | `void` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 建立会话：创建 supervisor、创建会话缓冲、开始收包。幂等：已连接时直接 `Ok`。**连接态不在返回值里**——看 `danmubox://status` 或重拉 `rooms_list` |
+| `rooms_disconnect` | `room_id: i64` | `void` | — | 断开并**结束会话、清空缓冲**。幂等：未连接时也 `Ok` |
+| `rooms_reconnect` | `room_id: i64` | `void` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 房间内「刷新」：会话还在（连接中/退避中/已连接）→ 只终止当前连接并立即重连，**不清空缓冲、不结束会话**；会话已结束（断连过、或房间被移除后又加回来）→ **重建一次会话**（全新会话、缓冲从空开始，等价重新进房），因此断连之后这颗键不是死键。同步命令 |
+| `history_query` | `room_id: i64, query: HistoryQueryDto` | `Message[]`（snake_case，按 `ts` 升序） | `BAD_REQUEST` | 只查**当前房内会话缓冲**（`contract.md` §4.3）；无活跃会话（缓冲已销毁）时返回空数组，不报错。`query` 字段：`limit`（缺省 500）、`after`、`before`、`kinds`、`uid`、`q`（未知 kind → `BAD_REQUEST`）。不跨会话、不回放、不导出。同步命令 |
+| `chat_send` | `room_id: i64, content: String, color: Option<i64>, emote: Option<EmoteToken>, reply: Option<ReplyTarget>` | `ChatSendResult` | `BAD_REQUEST` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | 发弹幕。`emote` 非空 = **表情弹幕**（`emoticon_unique` + 尺寸等整份信息，此时 `content` 只用于日志与节流判重）；`reply` = @ 或回复某条（`mid` + `uname`，回复某条时带 `dmid` = 被回复弹幕的 `upstream_id`）。`color` 缺省 16777215，**原样透传不做范围校验**；上游 `mode=1`（普通弹幕）由实现内部固定，**不作为参数暴露**。**唯一要避免的是 `color=0`**（上游参数层直接拒绝）。本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发 |
+| `chat_report` | `message: Message, reason: ReportReason` | `void` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕。`message` 取列表里那一条（实现读它的 `upstream_id` / `uid` / `content`；**`upstream_id` 必需**，为空 → `BAD_REQUEST`）；`reason` 来自 `report_reasons`（同时上报文案与 `id`）。前端签名见 `apps/desktop/ui/src/ipc.ts` 的 `chatReport(message, reason)` |
+| `report_reasons` | 无 | `ReportReason[]` | `UPSTREAM_ERROR` `INTERNAL` | 举报理由清单：请求上游 `dMReport/ForReason` 并解析 `data.data[]`，每项 `ReportReason { id, reason }`。**条数由上游决定**，不是本地硬编码清单；不要求登录 |
+| `emotes_list` | `room_id: i64` | `Emote[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 按**真实会话身份**（取自会话缓存）加载表情包库：无牌/有牌/房管/大航海看到的面板不同；无活跃会话时退回零身份。`Emote.locked` 由上游 `perm` 派生，`true` = 当前身份用不了（界面置灰，不隐藏） |
+| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`is_admin` / `my_guard_level` / `my_medal_level` / `my_medal_name`）。无活跃会话 → 全零身份而**不报错**；界面据此决定房管入口是否亮起（拿不到身份即按无权限渲染，不靠试错）。同步命令 |
+| `emotes_owned` | 无 | `Emote[]` | `UPSTREAM_ERROR` `INTERNAL` | 主站「我的表情」：用户**拥有**的表情包（`upower_` 家族）。`package_kind="owned"`、`room_id=0`、唯一键 = `"upower_" + 表情 text`；未登录时上游退化为免费表情包，因此**不报** `NOT_LOGGED_IN` |
+| `admin_mute` | `room_id: i64, uid: i64, hour: i64, msg: Option<String>` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
+| `admin_unmute` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 解除禁言 |
+| `admin_silent_list` | `room_id: i64` | `SilentUser[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 当前禁言名单（只读）。`SilentUser { uid, uname, face }` |
+| `admin_blacklist_list` | `room_id: i64` | `BlacklistedUser[]` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 黑名单（只读）。内部把 `roomId` 解析成主播 uid 后按 `anchor_id` 寻址——上游这个接口不吃房间号 |
+| `admin_blacklist_add` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 加入黑名单（拉黑会解除关系并禁止互动，比禁言重） |
+| `admin_blacklist_del` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 移出黑名单 |
+| `admin_keywords_list` | `room_id: i64` | `string[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 直播间屏蔽词（只读） |
+| `admin_keywords_add` | `room_id: i64, words: String` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 添加屏蔽词；上游一次只收一个 `keyword`，多词由实现逐个调用 |
+| `admin_keywords_del` | `room_id: i64, word: String` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 删除屏蔽词 |
+| `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；交给界面前按 `live_status == 1` 置顶（`contract.md` §5），完整展示排序见 `ui.md` §2.2 |
+| `wallet_balance` | 无 | `number`（Rust `i64`） | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额（整数）：上游 `data.gold`（金瓜子）按 `gold / 100` 换算成电池；`gold` 缺失或不可解析 → `UPSTREAM_ERROR`。没有包裹类型（口径与端点见 `protocol.md` 附录 A29） |
+| `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令，不引 `tauri-plugin-opener` |
+| `prefs_get` | 无 | `PrefsSnapshot`（`contract.md` §8 全部 17 键的**生效值**） | `INTERNAL` | 未写入过的键返回 `contract.md` §8 默认值。同步命令 |
+| `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令 |
+| `frontend_log` | `level: String, message: String` | `void` | — | **前端 → 后端的内部命令**，不是给业务代码用的：控制台桥把 `console.error` / `console.warn` 与未捕获错误转发过来，写进 `tracing` 日志（`target = "danmubox::ui"`，`level` ∈ `error` / `warn`，其它值降级为 debug）。同步命令，永不失败。详见 §4.1 |
 
 `prefs_set` 接受部分补丁（只提交要改的键），返回合并后的全量生效值。
 
@@ -92,7 +99,7 @@
 ```ts
 type MessageKind = "danmaku" | "gift" | "superchat" | "interact" | "guard" | "system";
 
-// 命令与事件携带的原始形态：契约 §5 的 Message，snake_case
+// 命令与事件携带的原始形态：contract.md §5 的 Message，snake_case
 type Message = {
   local_id: number;      // 会话内自增序号，仅用于 UI key 与本地引用；进程重启后重置
   room_id: number;       // 真实房间号
@@ -102,76 +109,119 @@ type Message = {
   uname: string;
   face: string;          // 发言者头像 URL；取不到为空串（前端自行降级）
   content: string;
-  color: number;         // 十进制 RGB
+  color: number;         // 十进制 RGB；界面不吃它做配色
   medal_level: number;   // 发送者粉丝牌等级，0 无
   medal_name: string;
-  guard_level: number;   // 0 无 / 1 总督 / 2 提督 / 3 舰长
-  is_admin: boolean;     // 发送者是否房管
-  amount: number;        // 礼物金瓜子或 SC 金额，非交易类为 0
-  is_history: boolean;  // 是否来自进场回填；实时推送恒为 false
-  emote: EmoteRef | null;  // 表情弹幕的整份表情信息（契约 §5）；非表情为 null
-  medal_guard_level: number;  // 粉丝牌自身所属房间的舰长标记；只用于牌面样式，不画舰长标
-  medal_color_start: string;  // 粉丝牌起始色（带 alpha 的 CSS 十六进制串）；空串不是颜色
+  medal_color_start: string;   // 粉丝牌配色：带 alpha 的 CSS 十六进制串；空串不是颜色
   medal_color_end: string;
   medal_color_border: string;
   medal_color_text: string;
-  reply_to_uid: number;   // 被回复者 uid；0 = 不是回复
-  reply_to_uname: string;  // 被回复者昵称；非回复为空串
-  combo_id: string;       // 连击标识（礼物聚合用）
-  upstream_id: string;   // 上游弹幕标识，举报必需
+  guard_level: number;         // 发送者在本房间的大航海：0 无 / 1 总督 / 2 提督 / 3 舰长
+  medal_guard_level: number;   // 粉丝牌自身所属房间的舰长标记；只用于牌面样式，不画舰长标
+  is_admin: boolean;           // 发送者是否房管
+  is_history: boolean;         // 是否来自进场回填；实时推送恒为 false
+  amount: number;              // 礼物金瓜子或 SC 金额，非交易类为 0
+  combo_id: string;            // 礼物连击标识（上游 batch_combo_id），非连击为空串
+  emote: EmoteRef | null;      // 表情弹幕的整份表情信息；非表情为 null
+  reply_to_uid: number;        // 被回复者 uid；0 = 不是回复
+  reply_to_uname: string;      // 被回复者昵称；非回复为空串
+  reply_type_enum: number;     // 上游回复枚举（0 无关系 / 1 有关系）；不区分「@」与「回复某条」
+  show_reply: boolean;         // 上游 show_reply，实测恒为 true，不作为判别式
+  reply_uname_color: string;   // 被 @ 者名字的颜色；无关系为空串
+  upstream_id: string;         // 上游弹幕标识，举报必需
 };
 
-// 契约 §5 的封闭集合
+type EmoteRef = {
+  emoticon_unique: string;  // 上游唯一键
+  url: string;
+  width: number;
+  height: number;
+  is_dynamic: boolean;
+  in_player_area: boolean;
+  bulge_display: boolean;
+};
+
+// chat_send 的 emote 参数：发**表情弹幕**时携带的整份表情信息
+// （官方发送载荷 msg=emoticon_unique、dm_type=1、emoticonOptions=…，见 protocol.md §11.4）
+type EmoteToken = {
+  emoticon_unique: string;
+  emoji: string;
+  url: string;
+  width: number;
+  height: number;
+  is_dynamic: boolean;
+  in_player_area: boolean;
+  bulge_display: boolean;
+};
+
+// chat_send 的 reply 参数：@ 某人与回复某条（protocol.md §11.6）
+type ReplyTarget = {
+  mid: number;       // 被 @ 者 uid
+  uname: string;
+  dmid: string;      // 被回复弹幕的 Message.upstream_id；仅 @ 时为空串
+};
+
+// history_query 的 query 参数
+type HistoryQueryDto = {
+  limit?: number;        // 缺省 500
+  after?: number;
+  before?: number;
+  kinds?: MessageKind[];
+  uid?: number;
+  q?: string;
+};
+
+// contract.md §5 的封闭集合
 type SendOutcome =
   | "ok"                // 已发出且进入公开弹幕流
-  | "blocked_platform"  // 被平台风控吞掉（上游响应 msg/message == "f"）
-  | "blocked_room"      // 被直播间吞掉（上游响应 msg/message == "k"）
+  | "blocked_platform"  // 被平台风控吞掉
+  | "blocked_room"      // 被直播间吞掉
   | "rate_limited"      // 上游频率限制
   | "medal_required"    // 粉丝牌等级不足
   | "muted"             // 已被禁言
-  | "failed";           // 兜底，带原始 code 与 message
+  | "failed";           // 兜底，具体原因在 detail 里
 
+// chat_send 的返回，也是 danmubox://send 的载荷
 type ChatSendResult = {
-  outcome: SendOutcome;
   room_id: number;
-  content: string;                  // 实际发出的内容；被吞时为上游回显的内容（可能被改写/截断）
-  upstream_code: number | null;     // outcome="failed" 时必有
-  upstream_message: string | null;
+  content: string;
+  outcome: SendOutcome;
+  detail?: string | null;   // 上游 msg 原话 + code 拼成的一行；outcome="ok" 时不出现
 };
 
-type SessionStatus = {
-  mode: "anonymous" | "qrcode" | "cookie";
+type SessionState = {         // session_status / account_* 的返回
   logged_in: boolean;
   uid: number;                // 未登录为 0
-  uname: string;              // 未登录为空串
-  expires_at: number | null;  // UTC 毫秒，未知为 null
-  active_profile: string;     // `config.toml` 中当前生效的 profile 名
+  nickname: string;           // 未登录为空串
+  active_profile: string;     // config.toml 中当前生效的 profile 名
 };
 
 // accounts_list 的返回：每个账号一份具名凭据（config.toml 的 [profiles.<name>]）
 type Account = { name: string; nickname: string; uid: number; face: string; logged_in: boolean; active: boolean };
 
 // account_qr_start 的返回：二维码由后端离线渲染成 SVG，前端包成 data URI 显示
-type AccountQr = { key: string; url: string; svg: string };
+type QrStart = { key: string; url: string; svg: string };
+
+type QrState = "pending" | "scanned" | "confirmed" | "expired";
 
 type QrPoll = {
-  // 归一化状态：pending（未扫码/已扫码待确认/一切未知上游码）/ confirmed / expired
-  status: "pending" | "confirmed" | "expired";
-  code: number;                  // 上游原始状态码，只透传不解释（语义权威表见 auth.md）
-  message: string;               // 上游文案或本地描述，仅展示，不参与逻辑
-  session: SessionStatus | null; // status="confirmed" 时非空
+  state: QrState;                // 归一化状态（状态码语义表由 auth.md 拥有）
+  account: Account | null;       // state="confirmed" 时非空
 };
 
 type RoomView = {
   room_id: number;
-  short_id: number | null;
-  anchor_uid: number | null;     // 主播徽标的派生依据：uid == anchor_uid
-  anchor_uname: string;          // 主播昵称（契约 §5，上游 getH5InfoByRoom）；空串 = 上游未给，界面回落 title →「房间 <号>」
-  title: string | null;
+  short_id: number;
+  anchor_uid: number;
+  anchor_uname: string;          // 主播昵称；空串 = 上游未给，界面回落 title →「房间 <号>」
+  title: string;
   live_status: number;           // 0 未开播 / 1 直播中 / 2 轮播
   connected: boolean;
-  buffered_count: number;        // 当前会话缓冲条数，无会话为 0
+  buffered: number;              // 当前会话缓冲条数，无会话为 0
 };
+
+// danmubox://room 的载荷：RoomView 去掉连接态与缓冲条数
+type Room = Omit<RoomView, "connected" | "buffered">;
 
 // 我在该房间的身份（表情包可用范围与徽标判定依据），会话级、不落盘
 type RoomSession = {
@@ -182,36 +232,47 @@ type RoomSession = {
   is_admin: boolean;
 };
 
+type EmotePackage = "common" | "owned" | "room" | "medal" | "guard";
+
 type Emote = {
   key: string;
-  package_kind: "common" | "owned" | "room" | "medal" | "guard";  // owned = 主站「我的表情」（契约 §5）
+  package_kind: EmotePackage;    // owned = 主站「我的表情」（contract.md §5）
+  emoticon_unique: string;       // 发表情弹幕时上游要的就是它
   text: string;
   url: string;
-  room_id: number;               // 房间专属时非 0
+  width: number;
+  height: number;
+  is_dynamic: boolean;
+  in_player_area: boolean;
+  bulge_display: boolean;
+  room_id: number;               // 房间专属时非 0，主站表情为 0
+  locked: boolean;               // true = 当前身份用不了，界面置灰
 };
 
 type FollowedRoom = {
   room_id: number;
   uname: string;
   face: string;
-  title: string;                  // 直播间标题（上游 GetWebList / 批量房间接口的 title；空串 = 上游未给）
-  live_status: number;           // 0 未开播 / 1 直播中 / 2 轮播
+  title: string;                 // 直播间标题；空串 = 上游未给
+  live_status: number;
   group_name: string;
-  live_start_at: number;         // 本场开播时刻（Unix 秒，上游 liveTime）；0 = 未知（未开播条目拿不到，见 contract §5）
-  online: number;                // 人气 / 在线数（上游 online；缺失 = 0）
+  live_start_at: number;         // 本场开播时刻（Unix 秒）；0 = 未知
+  online: number;                // 人气 / 在线数；缺失 = 0
 };
+
+// 房管只读列表条目（禁言名单与黑名单同形）
+type SilentUser = { uid: number; uname: string; face: string };
+type BlacklistedUser = SilentUser;
 
 type RoomStats = {
   room_id: number;
-  online: number | null;   // 在线人数（ONLINE_RANK_COUNT.online_count），未给过为 null
-  watched: number | null;  // 累计看过（WATCHED_CHANGE.num），未给过为 null
+  online: number | null;   // 在线人数，未给过为 null
+  watched: number | null;  // 累计看过，未给过为 null
 };
 
-type WalletBalance = { battery: number };
+type ReportReason = { id: number; reason: string };
 
-type ReportResult = { ok: boolean; upstream_code: number | null; upstream_message: string | null };
-
-type PrefsSnapshot = {            // 契约 §8 的 17 键全量，键名即契约字面
+type PrefsSnapshot = {            // contract.md §8 的 17 键全量，键名即契约字面
   "ui.font_scale": number; "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean; "ui.pause_on_hover": boolean;
   "ui.gift_panel_mode": "merged" | "separate";
@@ -225,225 +286,254 @@ type PrefsSnapshot = {            // 契约 §8 的 17 键全量，键名即契�
   "history.buffer_rows": number;
   "ui.recent_watched": Record<string, number>;  // 房间号 → 最近一次打开的时刻（UTC 毫秒）
 };
-// 原先的 "ui.opacity" 已删除（用户 2026-09-12：实现方式非预期），不再接受该键。
 
 type AppInfo = {
-  name: string; version: string; bundle_id: string;
-  platform: "macos" | "windows" | "android" | "dev";
-  data_dir: string | null;       // 数据目录；解析失败为 null
-  log_level: string | null;      // DANMUBOX_LOG 的生效值
+  version: string;      // CARGO_PKG_VERSION
+  data_dir: string;
+  config_path: string;  // config.toml 的完整路径
+  logged_in: boolean;
 };
 ```
 
-### 3.2 待实测校准（B 站侧取值）
+### 3.2 待实测校准
 
-以下取值不在契约内、依赖 B 站线上行为，不得凭空写死；核对方法：`DANMUBOX_LOG=debug` 启动 → 复现对应场景 → 从 Tauri 事件 `danmubox://log` 取请求/响应原文 → 回填下表并同步 `protocol.md`。
-
-| 待确认项 | 现状 | 核对方法 | 责任人动作 |
-|---|---|---|---|
-| ~~`chat_send` 的 `color` / `mode` 合法取值~~ | **已实测结案**（`protocol.md` A18，2026-09-12）：`color=0` 被参数层拒；`mode` 与越界 `color` 上游不校验；过暗颜色会被改写成白。客户端原样透传即可 | — | — |
-| 扫码上游状态码 → 归一化状态的映射 | 本文件只透传 `code`；状态机与状态码语义表由 `auth.md` 拥有 | 完整跑一次扫码（未扫码 / 已扫码待确认 / 确认成功 / 失效）并在每个节点记录 `code` 与凭据下发情况 | `auth.md` 维护者回填状态码表；本文件无需改动 |
-| `chat_report` 的 `reason` 类型码取值 | 只透传调用方给出的数值，不校验语义 | 用官方界面举报一次同一条弹幕并抓取请求参数 | 协议层维护者回填类型码表并同步 `protocol.md` |
-| 被吞弹幕回显内容的稳定字段路径 | 按契约 §5 取 `data.mode_info.extra`（JSON 字符串）的 `content` | 各触发一次平台风控与直播间吞没，记录原始响应 | 协议层维护者确认是否需要兜底路径 |
-| `wallet_balance` 的单位与刷新时机 | 只透传上游原始数值，不做换算 | 登录后读一次，消费一份礼物后再读一次，比对差值 | 钱包端口维护者确定单位与刷新策略后回填 |
+> 唯一「待实测校准」表在 [`protocol.md`](protocol.md) 附录 A；本文不再自建。
 
 ## 4. 事件表
+
+后端 → 前端共 **7 个**事件名。前端由 `subscribeEvents` 统一 `listen`（`apps/desktop/ui/src/ipc.ts`），只订阅传入的 handler 对应的事件；返回的取消订阅函数必须保存（见 §8）。
 
 | 事件名 | 载荷（snake_case） | 触发时机 | 频率控制 |
 |---|---|---|---|
 | `danmubox://message` | `Message` | 每归一化一条消息；同时写入该房间会话缓冲 | 不节流；前端按帧合批渲染 |
-| `danmubox://room` | `RoomEvent` | 房间元信息变化、连接建立/断开、重连退避开始、手动重连 | 同房间 200ms 合并 |
-| `danmubox://session` | `SessionStatus` **或** `RoomSession` | 扫码确认、登出、认证失败导致会话失效；**同一条事件也用于推送房内身份**（`RoomSession`，会话建立时取一次）——前端须按判别字段分派（有 `logged_in` 走登录态、有 `is_admin` 走房内身份），否则身份载荷会把登录态覆盖成 `undefined` | 事件驱动 |
-| `danmubox://status` | `StatusEvent` | 进程状态变化 | 最多 1s 一次（节流） |
-| `danmubox://send` | `ChatSendResult` | 每次发弹幕请求得到结果（**与 `chat_send` 的返回值同构**） | 事件驱动 |
-| `danmubox://room_stats` | `RoomStats` | 房间观众数变化（在线人数 / 累计看过，两侧可缺省；契约 §5） | 事件驱动，不进会话缓冲 |
-| `danmubox://log` | `LogEntry` | 日志级别允许时逐条推送 | ring buffer 上限内推送 |
+| `danmubox://room` | `Room` | **当前实现里没有发布点**（`EventBus::publish_room` 无调用者），房间元信息变化不会推这个事件；前端以重拉 `rooms_list` 为准（`ipc.ts` 仍保留 `listen` 与 `onRoom` 分支，供未来接上）。载荷不含连接态——连接态走 `danmubox://status` | — |
+| `danmubox://session` | `RoomSession` | 会话建立后本人房内身份取到时推一次；取不到则只记日志、不推 | 事件驱动 |
+| `danmubox://status` | `StatusEvent` | 连接状态变化；会话关闭（`RoomClosed`）也以 `disconnected` 形态从这里推出 | 事件驱动 |
+| `danmubox://send` | `ChatSendResult` | 每次 `chat_send` 得到结果（**与命令返回值同构**，同一份对象再发一次） | 事件驱动 |
+| `danmubox://room_stats` | `RoomStats` | 房间观众数变化（在线人数 / 累计看过，两侧可缺省；`contract.md` §5） | 事件驱动，不进会话缓冲 |
+| `danmubox://log` | `string` | `tracing` 日志行经桥接层推出，格式为 `"<LEVEL> <message>"` | 事件驱动；前端日志切片上限 200 行（§8） |
 
 ```ts
-type RoomEvent = {
-  room_id: number; short_id: number | null; anchor_uid: number | null;
-  title: string | null; live_status: number; connected: boolean;
-  reason: "connect" | "disconnect" | "reconnect" | "backoff" | "closed" | "meta";
-};
+type ConnState = "connecting" | "connected" | "disconnected" | "error";
+
 type StatusEvent = {
-  uptime_ms: number; rooms_connected: number; rooms_total: number; messages_total: number;
+  room_id: number;
+  state: ConnState;
+  detail: string;   // 人类可读补充；认证失败时只放原始 code，不赋语义
 };
-type LogEntry = { ts: number; level: string; target: string; message: string; span: string | null };
+
+type RoomStats = {   // 与 §3.1 同名，事件即它本身
+  room_id: number;
+  online: number | null;
+  watched: number | null;
+};
 ```
+
+**`danmubox://session` 的判别规则**：这个事件名上目前只推一种载荷——房内身份 `RoomSession`（`Event::Session`，会话建立时向总线发一次）。但前端必须按**判别字段**分派，而不是假定载荷种类：有 `logged_in`（boolean）→ 登录态 `SessionState`；有 `is_admin`（boolean）→ 房内身份 `RoomSession`。分派写错（例如把身份当登录态）会把 `session.logged_in` 覆盖成 `undefined`，界面随即误判成游客态。
+
+### 4.1 控制台桥（前端 → 后端的内部命令）
+
+`frontend_log` 不是事件，是**前端 → 后端**的命令；它不由业务组件调用，而由 Rust 注入的脚本调用。
+
+| 项 | 内容 |
+|---|---|
+| 注入 | `CONSOLE_BRIDGE` 常量（`lib.rs`）在页面加载完成（`PageLoadEvent::Finished`）后由 Rust `eval` 注入 WebView；每次加载都注入一次，脚本自带去重标记防重复挂钩 |
+| 调用方式 | 脚本直接调原生 `window.__TAURI_INTERNALS__.invoke('frontend_log', { level, message })`——这是 §6「前端不出现 `invoke` 字面量」的唯一例外，它不承载业务数据 |
+| 捕获范围 | `console.error` / `console.warn`（转调原函数，不吞日志）、`window` 的 `error` 事件、`unhandledrejection` |
+| `level` | 只取 `error` / `warn`；Rust 侧分别映射为 `tracing::error!` / `tracing::warn!`，其它值降级为 debug |
+| `target` | `"danmubox::ui"`——Rust 侧一份日志即可覆盖前后端 |
+| 截断 | `message` 截到 **2000 字符**；去重键另取 `level + "\0" + message` 的前 **200 字符** |
+| 去重 | 同一条告警 **1000ms** 内只上报一次；去重表超过 200 条即清空 |
+
+去重的必要性：Rust 侧日志会回推成 `danmubox://log`，界面日志面板随之重渲染；若某条告警每次渲染都复现（如 React 的重复 key），不回推去重就会形成「渲染 → 告警 → 日志 → 重渲染」的反馈环。
 
 ## 5. Zustand store 形状
 
-单一 store，按切片组织；切片之间不互相 import，只通过 store 的 actions 协作。
+单一 store（`create<AppStore>`，无切片拆分）。**store 里存的就是 §3.1 的载荷对象**（snake_case），不做 camelCase 转写；本地实现细节只是一个 UI 专用字段 `send_state`。
 
 ```ts
-type StoredMessage = {              // store 内部形态：camelCase（`MessageKind` 同 §3.1）
-  localId: number;                  // 0 表示尚未获得服务端确认的本地行
-  tempId?: string;                  // 仅 pending / blocked / failed 行有
-  roomId: number; kind: MessageKind; ts: number;
-  uid: number; uname: string; content: string; color: number;
-  medalLevel: number; medalName: string; guardLevel: number; isAdmin: boolean;
-  amount: number; upstreamId: string;
-  state: "remote" | "pending" | "blocked" | "failed";
-  sendOutcome?: SendOutcome;        // 仅 blocked 行：区分 blocked_platform / blocked_room
-};
+type AppStore = {
+  // 会话与账号
+  info?: AppInfo;
+  session?: SessionState;
+  accounts: Account[];
+  qr: QrStart | null;              // 界面另外补记 target（QrStart 不含它）
+  qrState: QrState | null;
+  qrError: string | null;
 
-type AppState = {
-  // session 切片
-  session: { status: SessionStatus | null; qr: QrPoll | null; loading: boolean };
-  // rooms 切片（房间列表只在内存中，进程重启为空）
-  rooms: { byId: Record<number, RoomView>; order: number[]; activeId: number | null };
-  // 会话缓冲切片：core 持有权威缓冲，这里是当前会话的**前端镜像**，随会话结束清空
-  sessionBuffer: {
-    byRoom: Record<number, StoredMessage[]>;   // key 存在即该房间会话存活
-    droppedByRoom: Record<number, number>;     // 缓冲溢出被丢弃的最旧条数（UI 折叠提示）
-    session: Record<number, RoomSession>;      // 我在该房间的身份，表情/徽标用
-  };
-  // 表情切片：按房间缓存，随会话结束清空
-  emotes: { byRoom: Record<number, Emote[]>; scope: Record<number, RoomSession>; loading: boolean };
-  // 关注列表切片
-  follow: { rooms: FollowedRoom[]; groups: string[]; loading: boolean; lastError: string | null };
-  // 钱包切片
-  wallet: { balance: WalletBalance | null; loading: boolean };
-  // 观众数切片：按房间存在线人数 / 累计看过（契约 §5 RoomStats），随事件更新、不落盘
+  // 房间（列表只在内存中，进程重启为空）
+  rooms: RoomView[];
+  activeRoomId?: number;
+  status: Record<number, { state: ConnState; detail: string }>;
+
+  // 弹幕：只有「当前房间」一份，随一次房内会话生死（离开 / 切房即清空）
+  messages: Message[];             // 显示上限 2000 条，见 §8
+  seeding: boolean;                // 首屏历史回填进行中
+  lastSend?: ChatSendResult;
   roomStats: Record<number, { online?: number; watched?: number }>;
-  // prefs 切片（键名为契约 §8 字面键）
-  prefs: { effective: PrefsSnapshot | null; dirty: boolean; lastError: string | null };
-  // status 切片
-  status: { uptimeMs: number; roomsConnected: number; roomsTotal: number; messagesTotal: number };
-  // log 切片（调试面板，最多保留 500 条，不落盘）
-  logs: { entries: LogEntry[]; level: string; open: boolean };
+
+  // 表情、关注、钱包、身份
+  emotes: Emote[];
+  ownedEmotes: Emote[];            // 主站「我的表情」
+  ownedLoaded: boolean;
+  ownedError?: string;
+  followed: FollowedRoom[];
+  balance?: number;                // 电池余额（整数；`wallet_balance` 的返回）
+  roomIdentities: Record<number, RoomSession>;   // 按房间缓存，离开即删
+
+  // 房管（会话级）
+  adminSilent: SilentUser[];
+  adminBlacklist: BlacklistedUser[];
+  adminKeywords: string[];
+  adminErrors: { silent?: string; blacklist?: string; keywords?: string };
+  adminBusy: boolean;
+
+  // 偏好、日志、提示
+  prefs?: PrefsSnapshot;           // 字面键，见 §3.1
+  logs: string[];                  // 上限 200 行
+  error?: string; notice?: string;
 };
+```
+
+本地乐观行（§7）的形态：
+
+```ts
+type SendState = "unconfirmed" | "failed";   // Message.send_state
+
+// 本地行 = 完整 Message + 负数 local_id（-1、-2、…，见 store.ts 的 insertPending）
+// 真实 local_id 由后端按会话单调分配、恒为正，两者永不碰撞。
+// send_state **缺省 = 普通行**：既包括上游回推的已确认行，也包括刚插入、还在等回执的本地行
+// ——后者必须与已确认行**渲染逐项相同**，不许表达「发送中」。
 ```
 
 | store 动作 | 调用 | 说明 |
 |---|---|---|
-| `refreshSession()` | `session_status` | 登录态变化入口 |
-| `logoutAccount(name?)` | `account_logout` | 清空 `session`，清空 `sessionBuffer` / `emotes` / `follow` / `wallet`，再 `refreshRooms()` |
-| `loadAccounts()` / `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `loginCookie(cookie, name?)` / `startAccountQr(target?)` / `pollAccountQr()` | `accounts_list` / `account_switch` / `account_remove` / `account_login_cookie` | 用返回值覆盖 `session`；切换「当前账号」后按「离开房间」规则清空会话缓冲、表情与钱包切片（那些是**上一个账号**的）；账号本身的变化交给 `loadAccounts()` |
-| `refreshRooms()` | `rooms_list` | 启动时与 `danmubox://room` 事件后调用 |
-| `addRoom(input)` | `rooms_add` | 成功后插入 `rooms.byId` |
-| `removeRoom(roomId)` | `rooms_remove` | 同时删除该房间的 `sessionBuffer.byRoom[roomId]` / `droppedByRoom[roomId]` / `emotes.byRoom[roomId]` |
-| `connectRoom(roomId)` | `rooms_connect` | 返回 `RoomView` 覆盖本地；成功后开一个空的会话缓冲切片 |
-| `disconnectRoom(roomId)` | `rooms_disconnect` | 覆盖本地状态，并**删除该房间的会话缓冲与表情缓存** |
-| `reconnectRoom(roomId)` | `rooms_reconnect` | 房间内「刷新」；**不清空会话缓冲**，只等 `danmubox://room` 回连状态 |
-| `loadHistory(roomId, opts)` | `history_query` | 首屏、向上回滚、订阅者落后后的补齐；结果按 `localId` 去重合并，`ts` 升序 |
-| `sendChat(roomId, content, color?, mode?)` | `chat_send` | 见 §7 乐观更新 |
-| `reportDanmaku(roomId, upstreamId, reason)` | `chat_report` | 成功后就地提示；失败按错误码提示 |
-| `loadEmotes(roomId)` | `emotes_list` | 进入房间后调用一次；面板按 `package_kind` 分组 |
-| `refreshFollow()` | `follow_list`（每次实时拉取） | 返回后按「直播中置顶 → 最近观看（`ui.recent_watched`）降序 → 最后开播时间降序」渲染；**启动时（会话就绪后）与登录/换号后各自动调用一次**，失败仍走错误提示并保留「刷新」按钮 |
-| `refreshWallet()` | `wallet_balance` | 状态栏展示；打开礼物面板时刷新 |
-| `loadPrefs()` / `savePrefs(patch)` | `prefs_get` / `prefs_set` | 写入后用返回值整体覆盖 `prefs.effective` |
-| `loadAppInfo()` | `app_info` | 状态栏与调试面板 |
-
-`toMessage()` 转换表（唯一的 snake_case → camelCase 落点）：
-
-| 载荷字段 | store 字段 |
-|---|---|
-| `local_id` `room_id` `kind` `ts` `uid` `uname` `content` `color` | `localId` `roomId` `kind` `ts` `uid` `uname` `content` `color` |
-| `medal_level` `medal_name` `guard_level` `is_admin` `amount` `upstream_id` | `medalLevel` `medalName` `guardLevel` `isAdmin` `amount` `upstreamId` |
+| `bootstrap()` | `app_info` + `session_status` + `rooms_list` + `prefs_get` + `accounts_list`（并行） | 启动入口：先铺数据，再 `subscribeEvents` 订阅事件（§8） |
+| `refreshIdentity()` / `loadAccounts()` / `applySession(session)` | `session_status` / `accounts_list` | 登录态或账号变化后的统一善后；**不吃** `account_*` 的返回值，以重拉结果为准 |
+| `switchAccount(name)` / `removeAccount(name)` / `logoutAccount(name?)` / `loginCookie(cookie, name?)` / `startAccountQr(target?)` / `pollAccountQr()` / `cancelAccountQr()` | `account_switch` / `account_remove` / `account_logout` / `account_login_cookie` / `account_qr_start` / `account_qr_poll` | 账号族；成功后按新会话重拉房间与关注 |
+| `addRoom(input)` | `rooms_add` | 成功后重拉 `rooms_list` 并 `openRoom` |
+| `openRoom(roomId)` | `history_query`（`limit: 0`）+ `rooms_connect` | 开一次新房内会话：清空 `messages` 与房管/身份，回填历史，再建连；同时记 `ui.recent_watched` |
+| `closeRoom()` | — | 关标签：清空 `messages` / 房管数据，删该房间 `roomIdentities` |
+| `removeRoom(roomId)` | `rooms_remove` | 移除并断连；若是当前房间则与 `closeRoom` 同款清理 |
+| `connect(roomId)` / `disconnect(roomId)` / `refresh(roomId)` | `rooms_connect` / `rooms_disconnect` / `rooms_reconnect` | 三个都只 `invoke` 再重拉 `rooms_list`——连接态以重拉结果为准 |
+| `send(roomId, content, emote?, reply?)` | `chat_send` | 乐观渲染 + 回执校验，见 §7 |
+| `report(message, reason)` | `chat_report` | 与命令同参：整条 `Message` + `ReportReason` |
+| `loadReportReasons()` | `report_reasons` | 首次拉取后缓存；失败不覆盖已有清单 |
+| `loadEmotes(roomId)` / `loadOwnedEmotes(retryFailedOnly?)` | `emotes_list` / `emotes_owned` | 由 `RoomView` 的 effect 在登录态就绪时触发；主站表情成功一次后不再重复拉 |
+| `loadFollowed()` | `follow_list` | 会话就绪后与登录/换号后各自动调用一次；返回后按 `ui.md` §2.2 的排序链渲染 |
+| `loadBalance()` | `wallet_balance` | 状态栏展示；进入房间时刷新 |
+| `loadRoomIdentity(roomId)` | `room_session` | 进房取一次快照；之后靠 `danmubox://session` 更新 |
+| `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块 |
+| `runAdmin(roomId, action)` | `admin_mute` / `admin_unmute` / `admin_blacklist_add` / `admin_blacklist_del` / `admin_keywords_add` / `admin_keywords_del` | 一次一个写操作；成功后就地重读三块，`adminBusy` 期间禁用按钮 |
+| `updatePrefs(patch)` | `prefs_set` | 用返回的全量生效值覆盖 `prefs` |
+| `openProfile(uid)` | `open_url` | 点昵称跳用户主页 |
+| `dismissError()` / `setNotice(notice?)` | — | 错误条 / 浮动提示的本地开关 |
 
 ## 6. 客户端封装
 
-唯一 IO 边界是适配层：业务组件只 import 一个与 §3 同名、同参、同返回的客户端接口（`DanmuboxClient`），不出现 `invoke` / `listen` 字面量；事件订阅统一为 `subscribe(handlers: EventHandlers): () => void`。
+唯一 IO 边界是 `apps/desktop/ui/src/ipc.ts`：业务组件只 import 一个与 §3 同名、同参、同返回的客户端接口（`api`），不出现 `invoke` / `listen` 字面量；事件订阅统一为 `subscribeEvents(handlers): Promise<UnlistenFn>`，返回取消订阅函数。命令失败时由 `call()` 把命令名与错误码打到控制台（经 §4.1 的桥进入 Rust 日志）；`describeError` 把 `ApiError` 转成展示文案。
 
 ```ts
 type EventHandlers = {
-  onMessage(m: Message): void;
-  onRoom(e: RoomEvent): void;
-  onSession(e: SessionStatus): void;
-  onStatus(e: StatusEvent): void;
-  onSend(e: ChatSendResult): void;
-  onLog?(e: LogEntry): void;
+  onMessage?(m: Message): void;
+  onStatus?(e: StatusEvent): void;
+  onRoomStats?(e: RoomStats): void;
+  onRoom?(r: Room): void;
+  onSession?(s: SessionState): void;      // 按判别字段分派后才会命中
+  onRoomSession?(s: RoomSession): void;   // 同上
+  onSend?(e: ChatSendResult): void;
+  onLog?(line: string): void;
 };
 ```
 
+**唯一例外**：控制台桥注入脚本（`CONSOLE_BRIDGE`，§4.1）直接调原生 `invoke`，它不承载业务数据，也不经过 `api`。
+
 ## 7. 发弹幕的乐观更新与失败回滚
 
-`chat_send` 是本项目唯一「本地状态先于服务端确认」的命令。
+`chat_send` 是本项目唯一「本地状态先于服务端确认」的命令：点下发送**立刻**在列表末尾渲染一条本地行，再发请求；上游返回只做校验，不作为展示前置。
 
 ```mermaid
 sequenceDiagram
   participant C as Composer 组件
-  participant S as store.sessionBuffer
-  participant A as DanmuboxClient
-  C->>S: 插入 pending 行（tempId，localId=0，state="pending"）
-  C->>A: chat_send(roomId, content)
+  participant S as store.messages
+  participant A as api.chatSend
+  C->>S: insertPending：完整 Message + 负数 local_id，不设 send_state
+  C->>A: chat_send(roomId, content, emote?, reply?)
   A-->>C: ChatSendResult（或 IPC 错误对象）
   alt outcome = ok
-    C->>S: pending → remote（等 danmubox://message 用真实 localId 落地）
-  else outcome = blocked_platform / blocked_room
-    C->>S: pending → blocked，用回显 content 覆盖原文，保留 tempId 供划线
-  else outcome = rate_limited / medal_required / muted / failed
-    C->>S: pending → failed，保留原文与 sendOutcome
+    C->>S: 保持不动（已经按已确认行的样子画着），等上游回推把它换掉
+  else outcome != ok
+    C->>S: markPendingFailed：send_state = "failed"
+  else 传输层异常
+    C->>S: 错误条 + markPendingFailed：send_state = "failed"
   end
+  S-->>S: 8s 内没等到回推 → send_state = "unconfirmed"
 ```
 
 | 规则 | 内容 |
 |---|---|
-| 挂载位置 | `sessionBuffer.byRoom[roomId]` 尾部插入 `state="pending"` 的行，`localId=0`，`tempId` 唯一 |
-| 幂等归并 | `chat_send` 返回值与 `danmubox://send` 同构，按「同房间 + 同 `content` + 5s 窗口」归并到同一 pending 行；真实消息（`localId > 0`）到达时，若同房间存在 `content` 相同、时间差在 5s 内、`uid` 为本人（或 `uid=0` 的 pending 容错）的本地行，则用真实行替换本地行，不新增 |
-| `ok` | 用返回结果把行置为 `remote`；若 `danmubox://message` 先到，以真实行为准，避免同一弹幕出现两行 |
-| `blocked_platform` | pending → `blocked`：内容用 `ChatSendResult.content`（上游回显，可能与输入不同）覆盖，保留 `tempId` 供划线 |
-| `blocked_room` | pending → `blocked`：同样用上游回显覆盖内容；用于区分「平台风控」与「主播/房管吞没」两种来源 |
-| `rate_limited` | 若由本地节流命中（IPC 错误码 `RATE_LIMITED`），**不插入 pending 行**，直接按 `detail.retry_after_ms` 禁用发送按钮倒计时；若由上游判定（`SendOutcome.rate_limited`），行置 `failed` 并提示上游限频 |
-| `medal_required` / `muted` | 行置 `failed`，分别提示「粉丝牌等级不足」「已被禁言」，保留输入内容，**不**自动重发 |
-| `failed` | 行置 `failed`，提供「重试」按钮（重新走 `chat_send`，生成新的 `tempId`）；`upstream_code` / `upstream_message` 只进调试日志，不直接展示 |
-| `NOT_LOGGED_IN` | 回滚 pending 行并清空，弹出扫码登录入口，输入内容保留在草稿 |
-| 永久失败 | 会话结束（离开房间）或超过 5 分钟，`failed` / `blocked` 行随会话缓冲一起清空 |
-| 本地节流 | 发送前检查同房间 2s 最小间隔与相同内容 5s 去重（契约 §4），命中则不发请求，直接提示 |
+| 挂载位置 | `messages` 尾部插入一条**完整 `Message`**：`local_id` 取负数（`-1`、`-2`、…，`pendingSeq` 自增），身份字段取自 `session` 与 `roomIdentities[roomId]`，`upstream_id=""`。**刻意不设 `send_state`** |
+| 超时兜底 | 插入时排一个 `SEND_CONFIRM_TIMEOUT_MS`（**8000ms**）的定时器：到点仍无 `send_state` → 置 `"unconfirmed"`（不删行，也不再假装它「发送中」）。只改仍无状态的那条；上游已明确拒绝的 `failed` 不被覆盖 |
+| 对账（转正） | 上游回推到达时按 `matchPending` 判定：`uid` 相同 + 正文逐字相同（两侧都带 `emote` 时再比 `emoticon_unique`）+ `ts` 之差 ≤ `SEND_MATCH_WINDOW_MS`（**60000ms**）。参与范围 = 本地行且未判 `failed`；命中多条取列表里最靠前的一条。命中后**一次 `set` 里摘掉本地那条、接上上游这条**——净条数不变，「只出现一条」是构造性的，不靠事后去重 |
+| 幂等 | 本地行与真实行的 `local_id` 永不碰撞（负数 vs 恒正），`onMessage` 的单调判定也不受影响 |
+| `ok` | 命令返回 `outcome="ok"` 不动本地行；转正完全交给上游回推（`danmubox://message`）。若回推先到，命中对账即换掉 |
+| 被吞（`blocked_platform` / `blocked_room`） | 归入失败族：`outcome != "ok"` → 本地行置 `"failed"`；具体来源由 `outcome` 决定，文案由 `SEND_OUTCOME_TEXT`（`types.ts`）给出 |
+| 上游判定限频（`rate_limited`） | 同上 → `"failed"`，提示「发送过于频繁」 |
+| `medal_required` / `muted` | → `"failed"`，分别提示「粉丝牌等级不足」「已被禁言」，保留输入内容，**不**自动重发 |
+| 传输层异常 / IPC 错误（含本地节流 `RATE_LIMITED`） | `chat_send` reject → 错误条展示 `describeError`，本地行同时置 `"failed"`（两个都保留）。重试由用户再次发送完成（新的一次乐观行） |
+| 失败行渲染 | `send_state="failed"` → 「发送失败」；`"unconfirmed"` → 「未确认」。其余行（含刚插入的本地行）**与已确认行渲染逐项相同**——没有「发送中」这一档 |
+| 本地节流 | 发送前由 core 检查同房间 2s 最小间隔与相同内容 5s 去重（`contract.md` §4），命中则不发请求、直接 reject `RATE_LIMITED` |
+| 生命周期 | 草稿是 `Composer` 的组件本地状态，不进 store、不落盘；本地行随 `messages` 在一次房内会话内生死（离开 / 切房即清空） |
 | 安全 | 草稿内容不写入 `prefs.json`、不上报；日志只记 `content_len` 与 `outcome`（见 `architecture.md` §9.2） |
 
-`blocked` 行必须与 `pending` / `failed` 在视觉上可区分，且必须能区分平台风控与直播间吞没两种来源；样式 token 由 `ui.md` 定义。
+失败族两档必须与普通行在视觉上可区分，且必须能区分失败来源；样式 token 与文案表由 `ui.md` 定义。
 
 ## 8. 订阅生命周期与内存回收
 
 | 阶段 | 动作 |
 |---|---|
-| 应用启动 | `listen` 六个事件（收齐后进入就绪态）；`prefs_get` + `rooms_list` + `session_status` 并行 |
-| 进入房间 | `rooms_connect` 成功后创建 `sessionBuffer.byRoom[roomId]`（空），随后 `loadHistory` 取首屏 + `loadEmotes` |
-| 切换房间标签 | 只切 `rooms.activeId`；事件继续到达，非激活房间只入 store 不渲染 |
-| 离开房间（返回列表 / 关闭标签 / `disconnect` / `remove`） | 删除该房间的会话缓冲切片、表情切片与 `droppedByRoom` 计数；core 侧缓冲同步销毁 |
-| 手动重连 | 不触碰任何 store 切片，只等 `danmubox://room` 的 `connected` 变化 |
-| 应用卸载 / HMR | 组件全部卸载或 `import.meta.hot.dispose` 时调用 `unsubscribe()`；连接由 Rust 持有，不做断开 |
+| 应用启动 | `bootstrap`：并行 `app_info` + `session_status` + `rooms_list` + `prefs_get` + `accounts_list`，再 `subscribeEvents` 订阅 §4 的 7 个事件名（每类 handler 可选） |
+| 进入房间 | `openRoom`：清空 `messages` 与房管/身份 → `history_query`（`limit: 0`）回填 → `rooms_connect`；`RoomView` 渲染时按登录态触发 `loadEmotes` / `loadOwnedEmotes` / `loadRoomIdentity` / `loadBalance` |
+| 切换房间 | 只切 `activeRoomId` 并清掉上一间的 `messages`；事件继续到达，非激活房间的弹幕直接丢弃（`onMessage` 判 `room_id`） |
+| 离开房间（关标签 / 移除房间） | 清空 `messages`、清掉互动与发送定时器、删该房间 `roomIdentities`、清空房管三块；core 侧缓冲同步销毁 |
+| 手动重连 | 不触碰 store 切片；`rooms_reconnect` 后重拉 `rooms_list` 取连接态 |
+| 应用卸载 / HMR | `bootstrap` 每次订阅前先 `unsubscribe?.()`；订阅函数由模块级变量持有，**不允许匿名 `listen` 后丢弃句柄**（热重载后会重复监听） |
 
-内存边界（唯一的权威裁剪点在 core）：
+内存边界：
 
 | 项 | 上限 | 超出行为 |
 |---|---|---|
-| 会话缓冲（core 权威，`history.buffer_rows`） | 5000 条 | 丢最旧；前端 `droppedByRoom` 计数 +1，UI 提示「已折叠 N 条早期消息」 |
-| 前端渲染窗口 | 不设第二套裁剪 | 由虚拟列表按视口取 `sessionBuffer.byRoom[roomId]` 的切片渲染，不做二次丢弃 |
-| `logs` 切片 | 500 条 | 丢弃最旧 |
-| 房间数量 | 不设硬上限 | 每房间一个 supervisor task 的代价记录在 `architecture.md` §4 |
-| 非激活房间 | 保留订阅与缓冲、限制渲染 | 切回时按虚拟列表窗口渲染，不重建 store |
-
-回收规则：事件订阅的退订函数必须存进 store 或模块级 registry，**不允许匿名 `listen` 后丢弃句柄**（会导致热重载后重复监听）。
+| core 会话缓冲（权威，`history.buffer_rows`） | 见 `contract.md` §8 | 丢最旧；前端显示上限只影响渲染侧 |
+| 前端 `messages` | `CLIENT_MESSAGE_CAP` = 2000 条 | 丢最旧 |
+| 前端 `logs` | `LOG_CAP` = 200 行 | 丢最旧 |
+| `emotes` / `ownedEmotes` | 无独立上限 | 随房间 / 会话变化整体替换 |
+| 非激活房间 | 只丢弃弹幕事件 | 切回时按 `history_query` 重取（一次房内会话一份 `messages`） |
 
 ## 9. 新增一个 IPC 命令需要同步改哪些文件
 
-以下路径为规划路径（代码未开始），以契约 §3 的目录结构为准。
+以下路径均为当前实现路径（不再是规划路径）。
 
 | # | 文件 | 改什么 | 是否必须 |
 |---|---|---|---|
-| 1 | 契约 §7（`contract.md`） | 在命令清单里加入新命令名 | 必须（否则命令集合不闭合） |
-| 2 | `crates/danmubox-core/src/port/**` | 若需要新引擎能力，先加端口或 core 公开接口 | 视命令而定 |
+| 1 | `contract.md` §7 | 在命令清单里加入新命令名 | 必须（否则命令集合不闭合） |
+| 2 | `crates/danmubox-core/src/ports.rs` | 若需要新引擎能力，先加端口方法（core 内部其余模块见 `architecture.md`） | 视命令而定 |
 | 3 | `crates/danmubox-bili/src/**` | 实现对应端口（B 站侧请求与归一化只落在这里） | 视命令而定 |
-| 4 | `apps/desktop/src-tauri/src/commands.rs` | 新增 `#[tauri::command]` 函数，参数与返回值按本文 §3 的类型 | 必须 |
-| 5 | `apps/desktop/src-tauri/src/lib.rs` | 把新命令加进 `tauri::generate_handler![...]` 注册表 | 必须 |
-| 6 | `apps/desktop/src-tauri/src/ipc_error.rs` | 若引入新错误分支，映射到 §2 的七个错误码之一 | 视命令而定 |
-| 7 | `apps/desktop/ui/src/api/types.ts` | 请求/响应的 TypeScript 类型 | 必须 |
-| 8 | `apps/desktop/ui/src/api/client.ts` | 在 `DanmuboxClient` 接口上加方法 | 必须 |
-| 9 | `apps/desktop/ui/src/api/tauri.ts` | `invoke` 实现 | 必须 |
-| 10 | `apps/desktop/ui/src/store/**` | 对应的 store 动作与切片字段 | 视命令而定 |
-| 11 | `ipc.md`（本文） | 命令签名表、载荷类型、store 动作表 | 必须 |
-| 12 | `../AGENT.md` | 「新增 IPC 命令」操作清单若与本表不一致则同步 | 必须 |
+| 4 | `apps/desktop/src-tauri/src/lib.rs` | 新增 `#[tauri::command]` 函数（参数与返回值按本文 §3 的类型，`ApiError` 从 `core::Error` 映射） | 必须 |
+| 5 | `apps/desktop/src-tauri/src/lib.rs` | 把新命令加进 `tauri::generate_handler![…]` 注册表 | 必须 |
+| 6 | `apps/desktop/ui/src/ipc.ts` | 在 `api` 上加方法；需要错误进日志的用 `call()`，写操作用裸 `invoke` | 必须 |
+| 7 | `apps/desktop/ui/src/types.ts` | 请求/响应的 TypeScript 类型（保持 snake_case） | 必须 |
+| 8 | `apps/desktop/ui/src/store.ts` | 对应的 store 动作与字段 | 视命令而定 |
+| 9 | `ipc.md`（本文） | 命令签名表、载荷类型、store 动作表 | 必须 |
+| 10 | `AGENT.md` | 「新增 IPC 命令」操作清单若与本表不一致则同步 | 必须 |
 
 自检清单（提交前逐条确认）：
 
-1. 命令名与契约 §7 字面一致，事件名未越出 §4 的六个；参数名前端 camelCase、Rust snake_case。
-2. 错误只用 §2 的七个码，且 `message` 不参与前端逻辑。
-3. 返回载荷不含凭据；载荷中的 `Message` 字段与契约 §5 完全一致，`kind` 不越出六种。
-4. 若命令涉及历史，只读当前会话缓冲，不得引入跨会话查询或导出。
+1. 命令名与 `contract.md` §7 字面一致，事件名未越出 §4 的七个；参数名前端 camelCase、Rust snake_case。
+2. 错误只用 §2 的八个码，reject 值是 `{ code, message }`，`message` 不参与前端逻辑。
+3. 新命令进了 `generate_handler!`；同步命令里不得用 `Handle::current()`。
+4. 返回载荷不含凭据；载荷中的 `Message` 字段与 `contract.md` §5 完全一致，`kind` 不越出六种。
+5. 若命令涉及历史，只读当前会话缓冲，不得引入跨会话查询或导出。
 
 ---
 
-相关文档：`architecture.md`（分层、端口/适配器与并发模型）、`ui.md`（渲染与交互、虚拟列表、样式 token）、`auth.md`（扫码状态机与凭据）、`protocol.md`（协议与 `cmd → kind`）、`contract.md`（文档基线契约）、`decisions/0008-frontend-stack.md`（前端栈与状态管理）、`../AGENT.md`（作业规范与操作清单）、`../README.md`。
+相关文档：`architecture.md`（分层、端口/适配器与并发模型）、`ui.md`（渲染与交互、虚拟列表、样式 token）、`auth.md`（扫码状态机与凭据）、`protocol.md`（协议与 `cmd → kind`、唯一校准表）、`contract.md`（文档基线契约）、`roadmap.md`（未开工项）、`testing.md`（测试与冒烟）、`decisions/0008-frontend-stack.md`（前端栈与状态管理）、`../AGENT.md`（作业规范与操作清单）、`../README.md`。

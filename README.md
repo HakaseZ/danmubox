@@ -52,15 +52,15 @@
 
 ## 3. 当前状态
 
-截至 2026-09-12：
+截至 2026-09-13：
 
 | 项 | 状态 |
 |---|---|
 | 技术选型 | 已完成（结论见 `docs/decisions/`，8 篇 ADR） |
-| 文档基线 | 已完成：需求 [`REQUIREMENTS.md`](REQUIREMENTS.md)、契约 [`docs/contract.md`](docs/contract.md)、协议与实测校准 [`docs/protocol.md`](docs/protocol.md)，另有架构 / IPC / UI / 登录 / 分发 / 运维 / 测试 / 路线图各一篇 |
+| 文档基线 | 已完成：需求 [`REQUIREMENTS.md`](REQUIREMENTS.md)、契约 [`docs/contract.md`](docs/contract.md)、协议与实测校准 [`docs/protocol.md`](docs/protocol.md)，另有架构 / IPC / UI / 登录 / 运维 / 测试 / 路线图各一篇（索引见 §7） |
 | 代码 | 约 11300 行（Rust + TS/TSX）：`danmubox-core`（领域模型 / 端口 / 总线 / 会话缓冲 / 偏好 / 凭据）、`danmubox-bili`（协议 / WS / 鉴权 / WBI / HTTP）、`danmubox-cli`（采集与校准入口）、`apps/desktop`（Tauri 2 + React 19 + Zustand + 虚拟滚动） |
-| 阶段进度 | **阶段 1–4 已退出**；阶段 5 仅 macOS 完成，Windows / Android 见 §8 待办 |
-| 功能面 | 游客态与登录态收弹幕；发弹幕（纯文本 / 表情 / @回复 / 快捷短语）；进场历史回填；礼物（V1+V2、连击聚合、金额统计与排行）；SuperChat；大航海播报；举报（7 条理由）；关注列表与分组；电池余额；多房间标签页；多账号切换与**界面内扫码登录**；过滤与 16 项偏好 |
+| 阶段进度 | **阶段 1–4 已退出**；阶段 5 仅 macOS 完成，Windows / Android 见 [`docs/roadmap.md`](docs/roadmap.md) backlog |
+| 功能面 | 游客态与登录态收弹幕；发弹幕（纯文本 / 表情 / @回复 / 快捷短语）；进场历史回填；礼物（V1+V2、连击聚合、金额统计与排行）；SuperChat；大航海播报；举报（理由清单来自上游）；关注列表与分组；电池余额；多房间标签页；多账号切换与**界面内扫码登录**；房管面板；过滤与 17 项偏好 |
 | 构建与测试 | `cargo test --workspace` **153 通过**；`cargo clippy --workspace --all-targets -- -D warnings` **零告警**；前端 `npx tsc -b` 通过 |
 | 桌面端产物 | 可出**独立可执行文件**（前端已内嵌，**不再需要 dev server**）：`cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` → `target/release/danmubox-desktop` |
 
@@ -78,63 +78,39 @@
 
 ## 5. 架构总览
 
-`danmubox-core` 只含**领域模型、端口（trait）、事件总线与会话编排、本地文件读写**，
-不含任何 B 站细节；所有 B 站协议、URL、字段下标、签名算法与 protobuf 定义集中在
-`danmubox-bili`，由它实现 core 定义的端口。逆向或协议变更时只改 `danmubox-bili`。
-上层消费面 `danmubox-cli` 与 `apps/desktop/src-tauri` 同时依赖 core 与 bili。
+四层单向依赖：`danmubox-bili`（唯一接触 B 站的适配器）→ `danmubox-core`（领域模型 + 端口 + 事件总线 + 会话编排 + 本地文件）；
+消费面 `danmubox-cli` 与 `apps/desktop/src-tauri` 同时依赖 core 与 bili。
+**`core` 不得依赖 `bili`，也不得依赖 `tauri`；逆向或协议变更只改 `bili`。**
 
-```mermaid
-graph LR
-    BILI["danmubox-bili<br/>B 站适配器：协议 / WS / 鉴权 / 表情 / 举报 / 关注"]
-    CORE["danmubox-core<br/>领域模型 + 端口(trait) + 事件总线 + 会话编排"]
-    CLI["danmubox-cli<br/>调试与校验入口"]
-    DESK["apps/desktop/src-tauri<br/>Tauri 2 命令层"]
-
-    BILI --> CORE
-    CLI --> CORE
-    CLI --> BILI
-    DESK --> CORE
-    DESK --> BILI
-```
-
-依赖方向是单向的（规范性）：`bili → core`，`cli` / `desktop → core + bili`。
-**`core` 不得依赖 `bili`，也不得依赖 `tauri`。**
+分层职责、crate 依赖图、端口（8 个 trait）与并发模型的规范性定义见 [`docs/architecture.md`](docs/architecture.md) §1–§4 与 [`docs/contract.md`](docs/contract.md) §3。
 
 ## 6. 目录结构
 
 ```text
 danmubox/
-  Cargo.toml                # Rust workspace
-  rust-toolchain.toml
-  crates/
-    danmubox-core/          # 领域模型 + 端口(trait) + 事件总线 + 会话编排 + 本地文件（禁止依赖 tauri；禁止依赖任何具体上游实现）
-    danmubox-bili/          # B 站适配器：实现 core 的端口（协议/WS/鉴权/WBI/扫码/表情/举报/关注）
-    danmubox-cli/           # 调试与校验入口（阶段 1 用于脱离 UI 验证协议与适配器）
-  apps/
-    desktop/                # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
-  docs/                     # 文档（索引见 §7）
-  REQUIREMENTS.md           # 需求基线（用户手写）
-  README.md
-  AGENT.md
-  CHANGELOG.md
+  crates/{danmubox-core,danmubox-bili,danmubox-cli}/
+  apps/desktop/               # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
+  docs/                       # 文档（索引见 §7）
+  REQUIREMENTS.md             # 需求基线（用户手写）
+  README.md  AGENT.md  CHANGELOG.md
 ```
+
+各 crate 的模块划分见 [`docs/architecture.md`](docs/architecture.md) §2；目录与依赖方向的规范性定义见 [`AGENT.md`](AGENT.md) §2 与 [`docs/contract.md`](docs/contract.md) §3。
 
 ## 7. 文档索引
 
 | 文档 | 内容 | 主要读者 |
 |---|---|---|
-| [`docs/overview.md`](docs/overview.md) | **三合一综述（先读这篇）**：业务需求总览（按主题归类，回指台账编号）→ 代码执行逻辑 → 界面逻辑，事实以 `文件:行号` 为准 | 全体；第一次接触本仓库 |
-| [`docs/contract.md`](docs/contract.md) | **规范性契约（唯一事实源）**：命名、共享常量、领域模型、端口边界、IPC 与本地文件契约、偏好键、写作要求 | 全体；写代码前必读 |
+| [`docs/contract.md`](docs/contract.md) | **规范性契约（唯一事实源）**：命名、共享常量、领域模型、端口边界、IPC 命令名、本地文件契约、偏好键、写作要求 | 全体；写代码前必读 |
 | [`REQUIREMENTS.md`](REQUIREMENTS.md) | 需求基线（用户手写），契约由它翻译而来 | 全体 |
-| [`docs/architecture.md`](docs/architecture.md) | 分层、crate 依赖图、core 模块划分、并发模型、会话编排 | 实现者 |
-| [`docs/protocol.md`](docs/protocol.md) | B 站弹幕协议：包头、op、protover、认证与心跳包（WS + HTTP）、子包拆分、重连状态机 | 实现者 |
+| [`docs/architecture.md`](docs/architecture.md) | 分层、crate 依赖图、core/bili 模块划分、并发模型、会话编排、去重与取消树 | 实现者 |
+| [`docs/protocol.md`](docs/protocol.md) | B 站弹幕协议：包头、op、protover、认证与心跳包（WS + HTTP）、子包拆分、重连状态机；**附录 A 是全仓唯一的「待实测校准」表** | 实现者 |
 | [`docs/auth.md`](docs/auth.md) | 三种登录模式、buvid3、WBI 签名、扫码状态机、`config.toml` 凭据读写 | 实现者 |
-| [`docs/ipc.md`](docs/ipc.md) | Tauri IPC 命令与事件、载荷类型、前端 store、订阅生命周期 | 前端实现者 |
+| [`docs/ipc.md`](docs/ipc.md) | Tauri IPC 命令签名与事件、载荷类型、前端 store、乐观发送与订阅生命周期 | 前端实现者 |
 | [`docs/ui.md`](docs/ui.md) | 信息架构、布局线框、虚拟列表、滚动与过滤规则、六种 kind 渲染、礼物栏与徽标 | 前端实现者 |
 | [`docs/testing.md`](docs/testing.md) | 测试金字塔、协议 fixture、回放、端口契约、三端冒烟 | 实现者 |
-| [`docs/distribution.md`](docs/distribution.md) | 三端构建步骤与产物、签名策略、工具链前置条件 | 作者 |
-| [`docs/operations.md`](docs/operations.md) | 日常操作、故障排查决策树、脱敏规则、卸载与残留清理 | 作者 |
-| [`docs/roadmap.md`](docs/roadmap.md) | 阶段里程碑、验收标准、风险与 enhancement 排期 | 作者、agent |
+| [`docs/operations.md`](docs/operations.md) | 日常操作、故障排查决策树、脱敏规则、卸载与残留清理、**三端构建与分发** | 作者 |
+| [`docs/roadmap.md`](docs/roadmap.md) | 当前阶段状态、下期 backlog（等样本 / 待拍板 / 更远期）、风险 | 作者、agent |
 | [`docs/requests.md`](docs/requests.md) | 需求与 issue 归档台账：对话中提出的需求 + 仓库根 `issue` 的逐条对照（状态 / 证据 / 落点） | 作者、agent |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR 索引与模板 | 作者、agent |
 | [`docs/decisions/0001-tauri-over-flutter.md`](docs/decisions/0001-tauri-over-flutter.md) | 选型：范围收敛到三端后 Tauri 胜出 | 作者 |
@@ -165,7 +141,9 @@ danmubox/
 | 扫码登录 / 新增账号 | `cargo run -p danmubox-cli -- login [账号名]` | 终端渲染二维码，轮询至确认；不带账号名 = 新增账号（确认后按昵称自动起名），带 = 给该账号重新登录 |
 | 登出 | `cargo run -p danmubox-cli -- logout [账号名]` | 清空该账号（缺省 = 当前账号）的凭据；账号条目保留 |
 | 账号管理 | `cargo run -p danmubox-cli -- accounts [--use <名字>\|--create\|--remove <名字>\|--cookie -]` | 不带参数列出账号（登录状态 + 昵称 / uid）；`--create` 扫码新增；`--cookie -` 从 stdin 收手填 Cookie |
-| 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败） |
+| 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败）；`--emote <唯一键>` 发表情弹幕 |
+| 电池 / 关注 / 表情 / 房管（CLI） | `cargo run -p danmubox-cli -- wallet`、`follow`、`emotes <房间>`、`emotes-owned`、`admin-lists <房间>` | 逐项核对上游能力的只读入口；`admin-lists` 需房管身份 |
+| 全局参数 | `--config <路径>` | 以上任何子命令都接受，用于指定另一份 `config.toml`（调试 / 多环境并存） |
 | 桌面端（独立产物） | `cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` | **推荐**：产出 `target/release/danmubox-desktop`，前端已内嵌，双击即用 |
 | 桌面端（开发热更新） | `npm --prefix apps/desktop/ui run dev` + `cargo run -p danmubox-desktop` | 仅开发时用；须先起 dev server，否则窗口空白（见 `docs/operations.md` §1.1） |
 

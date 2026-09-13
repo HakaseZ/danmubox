@@ -19,7 +19,47 @@ import styles from "../app.module.css";
 /** 输入区上方三个弹出面板：同时只开一个，向上展开（issue #8）。 */
 type PanelKind = "emotes" | "phrases" | "filter";
 
+/** 草稿按「身份 × 房间」各留一份：正文、回复目标、@ 目标三者同属一份草稿（契约 C1）。 */
+interface ComposerDraft {
+  text: string;
+  replyTo: Message | null;
+  mention: { mid: number; uname: string } | null;
+}
+
+/**
+ * 每个「身份 × 房间」各留一份草稿，键是 `${identityKey}:${roomId}`（用户 item 2 / item 4）。
+ *
+ * 放在**模块级**而不是 store：草稿是纯界面状态（契约 §8 没有对应的偏好键），也不该落盘；
+ * 切号的隔离由键里的身份段天然给出——换了身份就换了键，新身份从空草稿开始，
+ * 切回原身份仍能看到自己原来那份。
+ */
+const composerDrafts = new Map<string, ComposerDraft>();
+
+/**
+ * 上游没给弹幕上限时的回落值，照官方前端（产物里 `t.danmu_length || 20`，见 `docs/protocol.md` A44）。
+ * 只在 `RoomSession.danmaku_length` 还没取到（0 / 未下发）时兜底，不在别处重复这个数字。
+ */
+const DEFAULT_DANMAKU_LENGTH = 20;
+
+/**
+ * 草稿**开头**那段 `@昵称 ` 的长度（没有就是 0）。
+ *
+ * 官方把 at 前缀算在弹幕上限之外（`inputLengthLimit = danmakuLengthLimit + tempAtUserName.length`），
+ * 因此「在开头 @ 了某人」时实际能打的字数要多出这一截。
+ */
+function atPrefixLength(text: string, uname: string | null | undefined): number {
+  if (uname === null || uname === undefined || uname.length === 0) return 0;
+  const token = `@${uname} `;
+  return text.startsWith(token) ? token.length : 0;
+}
+
 interface Props {
+  /** 当前房间号：草稿按「身份 × 房间」分键时用它（item 2）。 */
+  roomId: number;
+  /** 当前身份键（游客 `"guest"`、登录为 uid 字符串）：切号即换键，草稿不串号（item 4）。 */
+  identityKey: string;
+  /** 本房间的弹幕字数上限（`RoomSession.danmaku_length`）；未取到按官方缺省 20（item 12）。 */
+  danmakuLength?: number;
   disabled: boolean;
   loggedIn: boolean;
   lastOutcome?: SendOutcome;
@@ -64,6 +104,9 @@ const EMOTE_PANEL_ID = "db-emote-panel";
 const emoteTabId = (kind: EmotePackage) => `db-emote-tab-${kind}`;
 
 export function Composer({
+  roomId,
+  identityKey,
+  danmakuLength,
   disabled,
   loggedIn,
   lastOutcome,
@@ -94,7 +137,9 @@ export function Composer({
   const [newPhrase, setNewPhrase] = useState("");
   // 发送失败那条**浮动提示**（用户 2026-09-12：不要在**最下**出常驻提示，要「弹窗 + 渐隐」，
   // 而且整个过程不能挡住滚动的弹幕 —— 见 .toast 的 pointer-events 与它在文档流里的位置）。
-  const [toast, setToast] = useState<string | null>(null);
+  // 上限提示（item 12）走同一张浮片：`key` 每次自增，连着两次同文案也会重放动画（见 showToast）。
+  const [toast, setToast] = useState<{ text: string; key: number } | null>(null);
+  const toastKeyRef = useRef(0);
   // 每一次发送落定都 +1：连续两次同样的失败因此会**重新弹一次**（挂在 outcome 字符串上不会重跑）。
   const [sendSeq, setSendSeq] = useState(0);
   // 短语的「改」：就地变成输入框（右键菜单里点「编辑」进入）。
@@ -105,6 +150,41 @@ export function Composer({
   const composerRef = useRef<HTMLDivElement>(null);
   // 展开中的那个面板自身（表情 / 短语 / 筛选三选一，同时只有一个在 DOM 里）。
   const panelRef = useRef<HTMLDivElement>(null);
+
+  /** 弹一张浮片（发送失败原因 / 字数上限提示共用）：`key` 变了才会重放渐隐动画。 */
+  const showToast = (text: string) => {
+    toastKeyRef.current += 1;
+    setToast({ text, key: toastKeyRef.current });
+  };
+
+  // 草稿分键：**身份 + 房间**（契约 C1）。切房间或切号都换键 —— 换号不继承上一个身份的草稿（item 4）。
+  const draftKey = `${identityKey}:${roomId}`;
+  // 当前 state 里的草稿属于哪个键；`null` = 还没装载过（首次渲染）。
+  const loadedDraftKeyRef = useRef<string | null>(null);
+
+  // 切键时**先存旧键、再取新键**（契约 C1）：面板类状态（面板 / 分组 tab / 右键菜单 / 改短语 /
+  // 浮片 / 「加一条」的输入）一律重置 —— 换房间不该带着上一个房间的面板；
+  // 同一个键内的每一次编辑都立刻同步进 Map，组件卸载时最后几个字也不会丢。
+  useEffect(() => {
+    if (loadedDraftKeyRef.current !== draftKey) {
+      if (loadedDraftKeyRef.current !== null) {
+        composerDrafts.set(loadedDraftKeyRef.current, { text: draft, replyTo, mention });
+      }
+      const saved = composerDrafts.get(draftKey);
+      setDraft(saved?.text ?? "");
+      setReplyTo(saved?.replyTo ?? null);
+      setMention(saved?.mention ?? null);
+      loadedDraftKeyRef.current = draftKey;
+      setPanel(null);
+      setEmoteTab(null);
+      setPhraseMenu(null);
+      setEditingPhrase(null);
+      setToast(null);
+      setNewPhrase("");
+      return;
+    }
+    composerDrafts.set(draftKey, { text: draft, replyTo, mention });
+  }, [draftKey, draft, replyTo, mention]);
 
   // 行菜单送来的动作：@ 与回复各应用一次（token 每次点击都变，不会自激）。
   useEffect(() => {
@@ -126,12 +206,17 @@ export function Composer({
     if (sendSeq === 0) return;
     if (lastOutcome === undefined || lastOutcome === "ok") return;
     // 与那一行行尾的标记**同一句**（`sendOutcomeText`）：浮片与行上写的必须是同一件事。
-    setToast(sendOutcomeText(lastOutcome, lastDetail));
-    // 渐隐是 CSS 动画（.toast），这里只负责在动画走完之后把元素摘掉 ——
-    // 否则它会「透明地占着一块地方」，那正是用户不要的形态。
+    showToast(sendOutcomeText(lastOutcome, lastDetail));
+  }, [sendSeq, lastOutcome, lastDetail]);
+
+  // 渐隐是 CSS 动画（.toast），这里只负责在动画走完之后把元素摘掉 ——
+  // 否则它会「透明地占着一块地方」，那正是用户不要的形态。
+  // 文案与来源无关（发送失败 / 字数上限），因此挂在浮片自己身上，不挂在发送序号上。
+  useEffect(() => {
+    if (toast === null) return;
     const timer = window.setTimeout(() => setToast(null), SEND_TOAST_MS);
     return () => window.clearTimeout(timer);
-  }, [sendSeq, lastOutcome, lastDetail]);
+  }, [toast]);
 
   // 面板顶上不再有「关闭」按钮（用户 2026-09-12：表情与关闭都不需要），
   // 关面板的入口因此是两条：① 再点一次那个工具按钮（togglePanel）；
@@ -175,6 +260,30 @@ export function Composer({
     const token = `@${mention.uname}`;
     return draft.includes(`${token} `) || draft.endsWith(token) ? mention : null;
   }, [mention, draft]);
+
+  // 上游给的房间上限（`RoomSession.danmaku_length`）：`0` = 身份还没取到，按官方缺省 20 兜底 ——
+  // 绝不能把 0 当成「一个字都不许发」（那时输入框会整个不能用）。
+  const roomLengthLimit =
+    danmakuLength !== undefined && danmakuLength > 0 ? danmakuLength : DEFAULT_DANMAKU_LENGTH;
+  // 有效上限 = 房间上限 + 草稿开头的 `@昵称 ` 前缀（官方口径，见 atPrefixLength）；
+  // 计数与截断都按 `String.length`（UTF-16 码元），与官方一致（实测 60 个汉字被截到 40）。
+  const lengthLimit = roomLengthLimit + atPrefixLength(draft, mention?.uname);
+
+  /**
+   * 写入草稿的**唯一入口**：超有效上限即截断到上限并按官方文案提示（用户 item 12）。
+   *
+   * 截断发生在输入这一侧（而不是发送前）：用户要的是「在输入框限制 & 提示一下，
+   * 免得发出去才发现超长了」，因此打字与粘贴都不越界，超出的部分当场被挡下。
+   */
+  const applyDraft = (next: string) => {
+    const limit = roomLengthLimit + atPrefixLength(next, mention?.uname);
+    if (next.length > limit) {
+      setDraft(next.slice(0, limit));
+      showToast(`最多输入 ${limit} 个字哦~`);
+      return;
+    }
+    setDraft(next);
+  };
 
   // 接口给的包（`emotes_list` 的按房间包 + 主站「我的表情」）是**唯一**的来源：
   // 面板分组与「将发送」预览都走这一份。同一个 `emoticon_unique` 只保留先来的那条
@@ -285,7 +394,8 @@ export function Composer({
     const el = areaRef.current;
     const start = el?.selectionStart ?? draft.length;
     const end = el?.selectionEnd ?? draft.length;
-    setDraft(draft.slice(0, start) + text + draft.slice(end));
+    // 插入同样受有效上限约束：@ 前缀会增加上限，因此按插入**后**的文本重新算（见 applyDraft）。
+    applyDraft(draft.slice(0, start) + text + draft.slice(end));
     requestAnimationFrame(() => {
       el?.focus();
       el?.setSelectionRange(start + text.length, start + text.length);
@@ -407,18 +517,6 @@ export function Composer({
   // 与弹幕列表同一口径：em 相对 body 的 --fs-root，字号滑杆改这一处
   const panelFont = { fontSize: `${prefs["ui.font_scale"]}em` };
 
-  // 三个面板共用的关闭入口（面板是文档流里的一块，关掉它就是收起自己）。
-  const panelClose = (
-    <button
-      data-testid="db-panel-close"
-      title="关闭面板"
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() => setPanel(null)}
-    >
-      关闭
-    </button>
-  );
-
   return (
     <>
       {panel === "emotes" && (
@@ -430,7 +528,8 @@ export function Composer({
         >
           {/* 面板顶上**没有标题、也没有「关闭」**（用户 2026-09-12：「表情包栏顶部的表情和
               关闭不需要」）：收起面板靠再点一次「表情」或点输入区外面（见上面那条 pointerdown）。
-              少掉这一行之后，三行大表情格就是面板的全部高度。 */}
+              少掉这一行之后，三行大表情格就是面板的全部高度。
+              短语与筛选面板同样没有这一行（用户 item 8），三个面板因此是同一副骨架。 */}
           {/* 「我的表情」拉失败只在面板里提示并可重试：输入框与已加载的分组照常可用 */}
           {ownedError !== undefined && (
             <div className={styles.panelError} data-testid="db-owned-error">
@@ -530,11 +629,8 @@ export function Composer({
 
       {panel === "phrases" && (
         <div className={styles.phrases} data-testid="db-panel" style={panelFont} ref={panelRef}>
-          <div className={styles.panelHead}>
-            <span className={styles.panelTitle}>短语</span>
-            <span className={styles.composerSpacer} />
-            {panelClose}
-          </div>
+          {/* 面板没有标题行、也没有「关闭」按钮（用户 item 8：「展开高度看齐表情界面」）：
+              「加一条」就是面板的第一行内容。 */}
           {/* 「加一条」是**固定的一行**（不跟芯片抢换行位、不随芯片区滚走）：
               竖屏下短语再多，这个输入框都还在、还能用（用户 #8）。 */}
           <div className={styles.phraseAdd} data-testid="db-phrase-add">
@@ -550,7 +646,7 @@ export function Composer({
               }}
             />
             <button
-              className={styles.phraseItem}
+              className={styles.phraseAddBtn}
               disabled={newPhrase.trim().length === 0}
               title="添加这条短语"
               onMouseDown={(event) => event.preventDefault()}
@@ -561,6 +657,8 @@ export function Composer({
               添加
             </button>
           </div>
+          {/* 芯片区：一组**等宽列**（见 .phrasesRow），短语各占一格、左对齐，
+              行数多少都在这里自己滚 —— 面板高度不跟着内容走（契约 C7）。 */}
           <div className={styles.phrasesBody}>
             <div className={styles.phrasesRow}>
               {customPhrases.length === 0 && (
@@ -611,12 +709,16 @@ export function Composer({
       )}
 
       {panel === "filter" && (
-        <div className={styles.filterPanel} data-testid="db-panel" ref={panelRef}>
-          <div className={styles.panelHead}>
-            <span className={styles.panelTitle}>筛选与显示</span>
-            <span className={styles.composerSpacer} />
-            {panelClose}
-          </div>
+        <div
+          className={styles.filterPanel}
+          data-testid="db-panel"
+          style={panelFont}
+          ref={panelRef}
+        >
+          {/* 同样没有面板头与关闭按钮（用户 item 8）：面板本体就是 FilterBar 的两块
+              （消息类型 / 显示），收起靠再点一次「筛选」或点面板外。
+              字号与另两个面板同一处给出（`ui.font_scale`）：面板高度用的是 em 令牌，
+              三者的字号口径不同的话，算出来的定高也就对不上（见 --panel-h）。 */}
           <FilterBar prefs={prefs} onChange={onPrefs} />
         </div>
       )}
@@ -671,16 +773,18 @@ export function Composer({
           矩形因此与弹幕列表区域不相交；`pointer-events: none` 让提示期间弹幕照常滚。 */}
       {toast !== null && (
         <div
+          key={toast.key}
           className={styles.toast}
           data-testid="db-toast"
           role="status"
           style={{ animationDuration: `${SEND_TOAST_MS}ms` }}
         >
-          {toast}
+          {toast.text}
         </div>
       )}
 
       <div className={styles.composer} ref={composerRef}>
+        {/* 超上限即截断并按官方文案弹提示（见 applyDraft）：不等到发送才发现超长。 */}
         <textarea
           ref={areaRef}
           value={draft}
@@ -688,7 +792,7 @@ export function Composer({
             loggedIn ? "说点什么…（Enter 发送，Shift+Enter 换行）" : "未登录，只能看弹幕"
           }
           disabled={disabled || !loggedIn}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => applyDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -718,13 +822,24 @@ export function Composer({
           </button>
           <button
             className={panel === "filter" ? styles.toolActive : undefined}
-            title="筛选与显示（关键词 / 类型 / 字号 / 时间戳…）"
+            title="筛选与显示（类型 / 字号 / 时间戳…）"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => togglePanel("filter")}
           >
             筛选
           </button>
           <span className={styles.composerSpacer} />
+          {/* 字数计数 `已用/有效上限`（用户 item 12）：上限来自上游、@ 前缀不计入（见 applyDraft），
+              因此这里显示的就是「还能再打几个字」的准确刻度，不必等到发出去才发现超长。 */}
+          {loggedIn && (
+            <span
+              className={styles.inputCount}
+              data-testid="db-input-count"
+              title={`本房间弹幕上限 ${lengthLimit} 字`}
+            >
+              {draft.length}/{lengthLimit}
+            </span>
+          )}
           {/* 发送簇 = **电池 + 发送**，同进同退（窄屏换行时不许被拆到两排——
               用户 2026-09-13：「电池数量挪到底部发送按钮左侧」）。
               电池是**圆角矩形**（.battery），与返回 / ⋯ 的圆**不同形状**；点数值手动刷新（§6.4）。 */}

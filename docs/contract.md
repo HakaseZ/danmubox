@@ -260,6 +260,7 @@ sessdata = ""
 | `my_medal_worn` | bool | 我**是否佩戴着**这块牌（上游 `data.medal.is_weared`）。与 `my_medal_level` 是两回事：**持有 ≠ 佩戴**，界面只在为真时画（`protocol.md` A43、`ui.md` §4.4） |
 | `my_guard_level` | i64 | 我在该直播间的大航海等级 |
 | `is_admin` | bool | 我在该直播间是否房管 |
+| `danmaku_length` | u32 | **本房间的弹幕字数上限**（上游 `getInfoByUser` 的 `data.property.danmu.length`，即官方前端读的 `danmaku_length`）。实测（2026-09-13）当前账号 × 8 个房间都是 **40**，上游缺该字段时官方前端的缺省是 **20**（`protocol.md` A44）。界面据此**截断输入并显示 `已用/上限`**，不再自己写死数字。**`0` = 尚未取到身份**（会话刚建立 / 游客 / 上游失败）——界面按缺省 20 处理，不是「一个字都不许发」 |
 
 > 与 `Message.medal_level` 区分：后者是**发送者**的牌，前者是**我**在这个房间的牌。表情包库可用范围取决于这套身份。
 

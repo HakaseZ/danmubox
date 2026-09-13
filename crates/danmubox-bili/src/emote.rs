@@ -89,8 +89,10 @@ impl BiliEmotes {
 /// 从**弹幕载荷里的表情对象**解析出 `EmoteRef`（实时 `DANMU_MSG` 的 `info[0][13]`
 /// 与历史条目的 `emoticon` 是同一套字段，实测确认）。
 ///
-/// 存在的意义：上游有些表情家族（如 `upower_` 的 UP 主专属表情）**不在直播表情接口里**，
-/// 只能从收到的弹幕学到；界面据此把它们补进表情选择器，用户才能把它们发回来。
+/// 存在的意义：**渲染弹幕里的表情**——正文把表情画成图，盒子取哪一档由 `bulge_display`
+/// 与 `width / height` 的长宽比定（`docs/ui.md` §4.1）。
+/// （曾以「学到的表情能再发回去」为由存这一族，2026-09-13 实测证伪并删除该机制：跨房间的
+/// `room_<房间号>_<id>` 发送必被上游拒（`code=10203`）。）
 pub fn emote_ref_from_object(emote: &Value) -> Option<EmoteRef> {
     let url = emote.get("url").and_then(Value::as_str)?;
     if url.is_empty() {

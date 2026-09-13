@@ -29,7 +29,6 @@ interface Props {
   ownedEmotes: Emote[];
   /** 「我的表情」上次拉取失败的原因；面板里显示并提供重试（不阻塞输入框）。 */
   ownedError?: string;
-  seenEmotes: Emote[];
   /** 电池余额（`wallet_balance`）：显示在**发送按钮左侧**（用户 2026-09-13）。 */
   balance?: number;
   /** 点数值手动刷新余额（docs/ui.md §6.4）。 */
@@ -72,7 +71,6 @@ export function Composer({
   emotes,
   ownedEmotes,
   ownedError,
-  seenEmotes,
   balance,
   onRefreshBalance,
   pendingAction,
@@ -181,10 +179,10 @@ export function Composer({
     return draft.includes(`${token} `) || draft.endsWith(token) ? mention : null;
   }, [mention, draft]);
 
-  // 接口给的包（`emotes_list` 的按房间包 + 主站「我的表情」）是**权威**的一侧：
-  // 同一个 `emoticon_unique` 只保留接口给的那条。「我的表情」并进这一侧之后，
-  // 从弹幕学到的同类表情会被自动去重（接口优先、学到的补漏）。
-  const interfaceEmotes = useMemo(() => {
+  // 接口给的包（`emotes_list` 的按房间包 + 主站「我的表情」）是**唯一**的来源：
+  // 面板分组与「将发送」预览都走这一份。同一个 `emoticon_unique` 只保留先来的那条
+  // （顺序是 `emotes` 在前、`ownedEmotes` 在后，因此同名时接口包优先）。
+  const panelEmotes = useMemo(() => {
     const known = new Set<string>();
     const out: Emote[] = [];
     for (const emote of [...emotes, ...ownedEmotes]) {
@@ -194,16 +192,6 @@ export function Composer({
     }
     return out;
   }, [emotes, ownedEmotes]);
-
-  // 接口包 + 从弹幕学到的表情（去重后）；面板分组与「将发送」预览都走这一份，
-  // 否则学到的表情能在面板里选、预览里却显示成文字。
-  const allEmotes = useMemo(() => {
-    const known = new Set(interfaceEmotes.map((emote) => emote.emoticon_unique));
-    return [
-      ...interfaceEmotes,
-      ...seenEmotes.filter((emote) => !known.has(emote.emoticon_unique)),
-    ];
-  }, [interfaceEmotes, seenEmotes]);
 
   // 按来源分组展示（通用 / 我的表情 / 本房间 / 粉丝牌 / 大航海），见 docs/ui.md §6.3。
   // 面板里**没有搜索框**（用户 2026-09-12：「上方的搜索也没必要」）：分组就是唯一的浏览方式。
@@ -215,13 +203,13 @@ export function Composer({
       medal: [],
       guard: [],
     };
-    for (const emote of allEmotes) {
+    for (const emote of panelEmotes) {
       groups[emote.package_kind].push(emote);
     }
     return PACKAGE_ORDER.map((kind) => [kind, groups[kind]] as const).filter(
       ([, items]) => items.length > 0,
     );
-  }, [allEmotes]);
+  }, [panelEmotes]);
 
   // 当前 tab：选中的那一组还在就用它，否则回落到第一组（派生值，不留在 state 里）。
   const activeKind = grouped.some(([kind]) => kind === emoteTab)
@@ -268,9 +256,9 @@ export function Composer({
 
   // 输入区预览：把草稿里能对上的表情名换成图片，让用户看清「这条发出去长什么样」。
   const preview = useMemo(() => {
-    if (draft.length === 0 || allEmotes.length === 0) return null;
+    if (draft.length === 0 || panelEmotes.length === 0) return null;
     // 长名优先，避免短名吃掉长名的前缀。
-    const candidates = allEmotes
+    const candidates = panelEmotes
       .filter((emote) => emote.text.length > 0 && emote.url.length > 0)
       .sort((a, b) => b.text.length - a.text.length);
     const parts: { text: string; emote?: Emote }[] = [];
@@ -293,7 +281,7 @@ export function Composer({
     }
     if (buffer.length > 0) parts.push({ text: buffer });
     return matched > 0 ? parts : null;
-  }, [draft, allEmotes]);
+  }, [draft, panelEmotes]);
 
   /** 在光标处插入（面板点选与 @ 都走这里），插完把光标放到插入内容之后。 */
   const insertAtCaret = (text: string) => {

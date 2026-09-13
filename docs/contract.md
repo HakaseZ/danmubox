@@ -255,8 +255,9 @@ sessdata = ""
 
 `EmoteRef`（弹幕携带的表情，规范性）：`emoticon_unique` / `url`（已规范化）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display`。
 
-> 为什么存整份而不只存图片地址：上游有些表情家族（`upower_` 的 UP 主专属表情）**不在直播表情接口里**，
-> 只能从收到的弹幕学到。存全了，界面才能把它们补进选择器、让用户**再发出去**（`protocol.md` A35）。
+> 为什么存整份而不只存图片地址：**弹幕行里的表情要按原图信息渲染** —— 盒子取哪一档由
+> `bulge_display` 与 `width / height` 的长宽比定（`ui.md` §4.1）；只留一个 URL 就没法给出正确的盒子。
+> （这条注脚曾经写的是「界面据此把学到的表情再发出去」，2026-09-13 实测证伪并删除该机制。）
 
 `SilentUser` / `BlacklistedUser`（房管列表条目，规范性）：`uid` / `uname` / `face`。禁言名单与黑名单各一套——前者是「本直播间禁言」，后者是「拉黑（自动解除关系并禁止互动）」。
 

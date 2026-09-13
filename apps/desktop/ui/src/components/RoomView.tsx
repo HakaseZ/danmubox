@@ -37,8 +37,6 @@ interface Props {
   ownedEmotes: Emote[];
   /** 「我的表情」上次拉取失败的原因（面板里给可重试提示）。 */
   ownedError?: string;
-  /** 从收到的弹幕里学到的表情，补进选择器（见 filtering.collectSeenEmotes）。 */
-  seenEmotes: Emote[];
   balance?: number;
   onBack: () => void;
   onRefresh: () => void;
@@ -109,7 +107,6 @@ export function RoomView({
   emotes,
   ownedEmotes,
   ownedError,
-  seenEmotes,
   balance,
   onBack,
   onRefresh,
@@ -636,7 +633,6 @@ export function RoomView({
         emotes={emotes}
         ownedEmotes={ownedEmotes}
         ownedError={ownedError}
-        seenEmotes={seenEmotes}
         balance={balance}
         onRefreshBalance={() => void loadBalance()}
         pendingAction={pendingAction}

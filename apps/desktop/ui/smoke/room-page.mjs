@@ -2370,18 +2370,13 @@ const MOCK = (theme) => `(function () {
     // 对照：可用的那一组（本房间 10 条 「perm = 1」）不灰、尺寸与灰的那组一样
     // （「字段缺失的 perm 视为可用」那一条由 「crates/danmubox-bili/src/emote.rs」 的单测覆盖，
     //  界面这一侧只消费 「locked」 布尔值）。
-    // 这一组是 **11** 条：10 条来自接口，另 1 条是**从真实夹具那条表情包弹幕学到的**
-    // （collectSeenEmotes 把收到过的表情补进选择器，见 filtering.ts）。
     if (roomTab) {
       roomTab.click();
       await sleep(300);
       var freeItems = [].slice.call(byTestId("db-panel")
         .querySelectorAll('[data-testid="db-emote-item"][data-locked="false"]'));
-      out.panelUnlockedEmoteNotDimmed = freeItems.length === 11 && freeItems.every(function (el) {
+      out.panelUnlockedEmoteNotDimmed = freeItems.length === 10 && freeItems.every(function (el) {
         return parseFloat(getComputedStyle(el).opacity) >= 0.99;
-      });
-      out.panelLearnedEmoteListed = freeItems.some(function (el) {
-        return el.title.indexOf(ROW_FIXTURES.emoticon.content) >= 0;
       });
       out.panelLockedEmoteSameSize = lockedCount > 0 && lockedImgH !== null && freeItems.length > 0 &&
         Math.abs(lockedImgH - rect(freeItems[0].querySelector("img")).height) < 0.6;

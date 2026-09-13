@@ -24,6 +24,23 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **「从收到的弹幕里学表情、补进表情面板」整条机制删除**（用户 2026-09-13：「那确实就是学来的根本发不了嘛，
+  直接把这个去掉，不需要学来表情包」）。删掉的是 `filtering.ts` 的 `collectSeenEmotes` 与它的整条管线：
+  `App.tsx` 的 `seenEmotes` 计算与透传、`RoomView.tsx` / `Composer.tsx` 的 prop、`Composer.tsx` 里把它
+  并进面板与发送预览的那一层合并（`allEmotes` 整个删掉，只剩接口那一份 `panelEmotes`）。**渲染一行没动。**
+  **为什么撤（实测事实）**：① 学来的那一族是**跨房间的 `room_<房间号>_<id>`**，发出去必被上游拒
+  （`code=10203`「表情发送失败~」），连「房间属本账号自己」也救不了 —— 面板里多出来的那一格**本来就发不出去**，
+  留着只会让人点了之后收一条失败提示；② **弹幕里的表情渲染不经过它**：行内画的是后端给的 `Message.emote`
+  （`EmoteRef`，`docs/ui.md` §4.1），与这份「学到的集合」是两条路，所以这次是**纯删除**。
+  面板内容从此**只显示上游下发的表情**（`emotes_list` + `emotes_owned`，`docs/ui.md` §6.3）。
+  冒烟：删掉只为它存在的断言 `panelLearnedEmoteListed`（「本房间」那一组里必须能按表情名找到夹具那条
+  表情包弹幕的表情），并把 `panelUnlockedEmoteNotDimmed` 的条数从 **11 改回真实的上游条数 10**
+  （改前是 10 条接口表情 + 1 条从夹具弹幕学来的）。
+  顺带把两处已证伪的注脚改成事实：`docs/contract.md` §5 的 `EmoteRef` 注脚（存整份是为了**渲染**取盒子，
+  不是「为了再发出去」）与 `crates/danmubox-bili/src/emote.rs`、`crates/danmubox-core/src/model.rs` 的同款说明。
+
 ### Changed
 
 - **状态点改灰 + 两处同源、`@` 只留字色、两枚图标统一矢量规范**（用户 2026-09-13 的第 3 批更正）：

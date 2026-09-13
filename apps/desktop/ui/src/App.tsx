@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AccountManager } from "./components/AccountManager";
 import { RoomList } from "./components/RoomList";
 import { LIVE_DOT_CLASS, LIVE_TEXT, RoomView, liveKindOf } from "./components/RoomView";
-import { collectSeenEmotes, roomTabName, toDisplayRows } from "./filtering";
+import { roomTabName, toDisplayRows } from "./filtering";
 import { useApp } from "./store";
 import styles from "./app.module.css";
 
@@ -81,10 +81,6 @@ export function App() {
     return () => media.removeEventListener("change", apply);
   }, [prefs]);
 
-
-  // 从收到的弹幕里学到的表情（直播接口不给的那一族），补进表情选择器。
-  const seenEmotes = useMemo(() => collectSeenEmotes(messages), [messages]);
-
   const rows = useMemo(
     () => (prefs ? toDisplayRows(messages, prefs) : []),
     [messages, prefs],
@@ -144,7 +140,6 @@ export function App() {
             emotes={emotes}
             ownedEmotes={ownedEmotes}
             ownedError={ownedError}
-            seenEmotes={seenEmotes}
             balance={balance}
             onBack={closeRoom}
             onRefresh={() => void refresh(activeRoom.room_id)}

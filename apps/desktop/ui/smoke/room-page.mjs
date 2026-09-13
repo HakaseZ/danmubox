@@ -32,22 +32,29 @@
 //   step6  关掉自动消失后互动行常驻
 //   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级；
 //          内容不足视口时整体贴底；头像列永远占位（昵称三列纵向对齐）；粉丝牌真彩色与兜底色；
-//          回复关系可见；舰长标只认本房间的 guard_level；「回到最新」是下箭头（同源矢量几何）
+//          回复关系可见；舰长标只认本房间的 guard_level；「回到最新」是**圆形图标钮**（下箭头，
+//          与返回键同源矢量几何、同尺寸，无可见文字、可访问名走 aria-label）
 //   emotes 主站「我的表情」分组可见、能选中、发出去带的是唯一键
 //   menu   右键出菜单（复制 / ＠TA / 回复 / 屏蔽 / 主页 / 举报）并能关掉
 //   mention＠ 目标与文本同源：文本里的 @名字 被删掉后发送就不带目标；回复的引用条照旧带目标
 //   time   时间戳默认不渲染；开关打开后每行一列且等宽（纵向对齐）
 //   limit  弹幕字数上限：上限来自 room_session.danmaku_length（40）；超限即截断并提示；
 //          工具行常显 已用/上限；@昵称 前缀不计入有效上限
-//   theme  主题开关在**房间列表页页头**（三档、切档真的落到 <html data-theme>、深浅对比度达标）
+//   theme  主题**按钮**在**房间列表页页头**（点一下前进一档：亮 → 暗 → 自动，三下一轮回到原档；
+//          图标随档变且三档同一套矢量规范、切档真的落到 <html data-theme>、深浅对比度达标）
 //   gift   礼物栏在输入区下方、全宽、可折叠，展开不改变弹幕宽度
 //   admin  房管权限前置（**有房管身份才有入口**；不是房管时菜单里没有这一项）、写操作二次确认与
-//          请求形状、面板三块列表增删、上游 code + message 原样展示、身份被撤销后面板自动收起
+//          请求形状、身份就绪即预载三块名单、面板三块收成三个 tab（roving tabindex + ←→/Home/End）、
+//          单点动作走行右键菜单、批量一次确认按序执行、上游 code + message 原样展示、
+//          身份被撤销后面板自动收起；面板里没有「刷新」按钮（重拉 = 关掉再开）
+//   panels 五面板互斥：房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏同时最多开一个
 //   tabs   多标签隔离：切房间把面板 / 菜单 / 滚动跟随重置，草稿按「身份 × 房间」各留一份
 //   follow 未开播也列出（**真实取样夹具**：未开播项第 1 页可见且翻页到底一条不少）、按最后开播时间排序、>30 条分页
-//   account 账号区只留一行身份 + 「账号」按钮（不再有下拉——单条目下拉会被读成功能坏了）；
-//          对话框里一行一个账号（昵称 + uid + 状态 + 操作）；**非当前账号整行可点即切换**
+//   account 账号区只留一行身份、**整行即入口**（独立的「账号」按钮已删；游客态同样可点，
+//          键盘 Enter / Space 等价）；对话框里一行一个账号（昵称 + uid + 状态 + 操作），
+//          **非当前账号整行可点即切换**
 //          （role=button / tabIndex=0 / 键盘 Enter·Space 等价、行内动作按钮不冒泡、当前行不可点）；
+//          对话框排版：二维码卡片与上方一级块同宽、间距 = 对话框统一行间距、「＋ 添加账号」居中；
 //          切换后按新身份重拉 rooms_list / follow_list 并回到房间列表页（切号隔离）；
 //          单账号也能看到「＋ 添加账号」；
 //          添加 = account_qr_start（不带 target，永不覆盖）+ 2 秒轮询到 confirmed 后多一行且标为当前；
@@ -601,11 +608,17 @@ const MOCK = (theme) => `(function () {
           danmaku_length: 40,
           is_admin: window.__admin
         });
+        // 三块各自的读取失败开关：__setAdminFail(true) 时**三块一起**拒绝 —— 面板里的错误条
+        // 按当前 tab 只渲染一条（issue #1 之后一次只渲染一块），冒烟因此能逐 tab 各断一次。
         case "admin_silent_list": return window.__adminFail
           ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
           : Promise.resolve([{ uid: 900, uname: "被禁言的观众", face: "" }]);
-        case "admin_blacklist_list": return Promise.resolve([{ uid: 901, uname: "黑名单观众", face: "" }]);
-        case "admin_keywords_list": return Promise.resolve(["刷屏", "广告"]);
+        case "admin_blacklist_list": return window.__adminFail
+          ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
+          : Promise.resolve([{ uid: 901, uname: "黑名单观众", face: "" }]);
+        case "admin_keywords_list": return window.__adminFail
+          ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
+          : Promise.resolve(["刷屏", "广告"]);
         case "admin_mute":
         case "admin_unmute":
         case "admin_blacklist_add":
@@ -708,11 +721,68 @@ const MOCK = (theme) => `(function () {
     pick.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
   };
-  // 受控 <select> 与输入框同理：直接改 .value 不会触发 React 的 onChange，要走原型 setter + change
-  var pickSelect = function (select, value) {
-    var setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value").set;
-    setter.call(select, value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+  // 键事件：焦点先落到目标上，再派发 keydown / keyup —— 与「Tab 到它、再按键」同一条路径
+  // （React 的 onKeyDown 收到的就是这一个事件）。**场景跑在一次 evaluate 里**，运行器没有把
+  // 真实键盘事件送进来的通道（它只发 click 与取快照），所以这是页面内能给出的最接近的一次；
+  // 原生 <button> 的 Enter / Space 是浏览器默认动作换出来的 click，派发键事件换不出来 ——
+  // 凡是判「原生按钮的键盘激活」，判据因此落在「它确实是一枚原生按钮 + 可聚焦 + 未禁用」上。
+  var pressKey = function (el, key) {
+    if (!el) return false;
+    el.focus();
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: key, bubbles: true, cancelable: true }));
+    el.dispatchEvent(new KeyboardEvent("keyup", { key: key, bubbles: true, cancelable: true }));
+    return true;
+  };
+  // 图标几何取证（房间头两枚 / 「回到最新」/ 主题按钮三档共用）：getBBox() 给的是**几何**
+  // 包围盒（不含描边），四周各外扩半个墨迹厚度才是墨迹外接盒。定义在场景开头是因为
+  // **step1 的主题按钮**就要用它（后面的房间头那一段只负责调用与断言）。
+  var iconGeomOf = function (btn) {
+    var svg = btn ? btn.querySelector("svg") : null;
+    var shapes = svg ? [].slice.call(svg.querySelectorAll("path, circle")) : [];
+    if (!svg || shapes.length === 0) return null;
+    var vb = (svg.getAttribute("viewBox") || "").split(" ").map(parseFloat);
+    var box = rect(svg);
+    if (!box || !(vb[2] > 0)) return null;
+    var scale = box.width / vb[2];
+    // 墨迹厚度：描边 = stroke-width，圆点 = 直径（一个圆点就是一个零长度描边段的圆头）。
+    // ⚠ 两者对**外接盒**的贡献不同：描边的几何包围盒是**路径中心线**，四周各要外扩半个笔画；
+    //    实心圆的包围盒**本身就是墨迹**，一点都不用外扩（第一版两边都外扩，于是 ⋯ 的墨迹范围
+    //    被算成 19.5 × 7，与箭头那 16 对不上 —— 冒烟当场把这条抓住了）。
+    var thicknessOf = function (s) {
+      if (s.tagName.toLowerCase() === "circle") return parseFloat(s.getAttribute("r")) * 2;
+      var w = s.getAttribute("stroke-width");
+      return w === null ? 0 : parseFloat(w);
+    };
+    var padOf = function (s) {
+      return s.tagName.toLowerCase() === "circle" ? 0 : thicknessOf(s) / 2;
+    };
+    var lo = { x: Infinity, y: Infinity };
+    var hi = { x: -Infinity, y: -Infinity };
+    var thickness = 0;
+    shapes.forEach(function (s) {
+      var b = s.getBBox();
+      var t = thicknessOf(s);
+      var pad = padOf(s);
+      thickness = Math.max(thickness, t);
+      lo.x = Math.min(lo.x, b.x - pad);
+      lo.y = Math.min(lo.y, b.y - pad);
+      hi.x = Math.max(hi.x, b.x + b.width + pad);
+      hi.y = Math.max(hi.y, b.y + b.height + pad);
+    });
+    var round1 = function (v) { return Math.round(v * 100) / 100; };
+    return {
+      viewBox: svg.getAttribute("viewBox"),
+      scale: Math.round(scale * 1000) / 1000,
+      boxPx: round1(box.width),
+      inkThicknessPx: round1(thickness * scale),
+      inkW: round1(hi.x - lo.x),
+      inkH: round1(hi.y - lo.y),
+      inkCenterX: round1((lo.x + hi.x) / 2),
+      inkCenterY: round1((lo.y + hi.y) / 2),
+      linecap: shapes[0].getAttribute("stroke-linecap"),
+      linejoin: shapes[0].getAttribute("stroke-linejoin"),
+      shapeCount: shapes.length,
+    };
   };
   // WCAG 相对亮度：把「正文 / 次级文字对背景 ≥ 4.5:1」这条纪律写成可判定的数字，
   // 不靠人眼判（两套主题各判一次，浅色尤其容易在绿 / 灰上翻车）。
@@ -1009,22 +1079,55 @@ const MOCK = (theme) => `(function () {
     // 过了这一步就点进房间了，列表页那两排只在这一刻可见。
     await sleep(900);
 
-    // ---- theme 主题开关（item 10）：开关在**房间列表页页头**（标题「弹幕框」右侧），
-    //      不再在房间页的筛选面板里 —— 主题是全局的，主界面就该能切。三档都在、切档真的落到
-    //      <html data-theme>、画布底色跟着变、两档下正文 / 昵称的对比度都达标，再切回本次运行的档位。
-    //      （模板串里不许出现反引号与反斜杠，见文件头 —— 所以这里一条正则都不写。）
-    var themeSelect = byTestId("db-pref-theme");
-    out.themeSelectShown = Boolean(themeSelect);
-    out.themeSelectInListHeader = !!themeSelect && !!byTestId("db-list-page") &&
-      byTestId("db-list-page").contains(themeSelect);
-    out.themeSelectOptions = themeSelect
-      ? [].slice.call(themeSelect.options).map(function (o) { return o.value; })
-      : [];
-    out.themeSelectHasThreeModes = out.themeSelectOptions.join(",") === "system,light,dark";
+    // ---- theme 主题按钮（item 10 + issue #7）：控件在**房间列表页页头**（标题「弹幕框」右侧），
+    //      形态是**按钮**（用户 2026-09-13 #7：「模仿安卓 / iOS 的日月按钮，分亮、暗、自动三态，
+    //      是按钮非滑块」）：点一下前进一档（亮 → 暗 → 自动 → 亮），图标随档变；档位落到
+    //      window.__prefs["ui.theme"] 与 <html data-theme>，两档下正文 / 昵称的对比度都达标。
+    //      **自动**档的 data-theme 由环境偏好决定（跟随系统），所以那一档只判「是个合法主题名」、
+    //      不写死 light / dark。（模板串里不许出现反引号与反斜杠，见文件头 —— 这里一条正则都不写。）
+    var themeBtn = byTestId("db-pref-theme");
+    out.themeControlShown = Boolean(themeBtn);
+    // ① 控件是一枚**原生按钮**、可聚焦（原生按钮的 Enter / Space 由浏览器默认动作换成 click，
+    //     所以「是按钮 + 能聚焦 + 没禁用」就是它的键盘契约），里面不再是下拉。
+    out.themeControlIsButton = !!themeBtn && themeBtn.tagName === "BUTTON";
+    out.themeControlHasNoSelect = !!themeBtn && themeBtn.querySelector("select") === null;
+    out.themeControlInListHeader = !!themeBtn && !!byTestId("db-list-page") &&
+      byTestId("db-list-page").contains(themeBtn);
+    if (themeBtn) themeBtn.focus();
+    out.themeControlFocusable = !!themeBtn && themeBtn.disabled !== true &&
+      document.activeElement === themeBtn;
+    var THEME_ORDER = ["light", "dark", "system"];
+    var THEME_NAMES = { light: "亮", dark: "暗", system: "自动" };
+    var themeModeOf = function () { return window.__prefs["ui.theme"]; };
+    var themeNextOf = function (mode) {
+      var at = THEME_ORDER.indexOf(mode);
+      return THEME_ORDER[(at + 1) % THEME_ORDER.length];
+    };
+    // 图标没有可见文字：可访问名必须自带「现在是哪一档、点一下去哪一档」（title 同一句话）
+    var themeHintOf = function (mode) {
+      return "主题：" + THEME_NAMES[mode] + "（点一下切到" + THEME_NAMES[themeNextOf(mode)] + "）";
+    };
     var themeApplied = document.documentElement.getAttribute("data-theme");
+    var themeStart = themeModeOf();
     out.themeApplied = themeApplied;
-    out.themeMatchesPref = themeApplied === window.__prefs["ui.theme"] ||
-      window.__prefs["ui.theme"] === "system";
+    out.themeStartMode = themeStart;
+    out.themeMatchesPref = themeApplied === themeStart || themeStart === "system";
+    out.themeAccessibleName = themeBtn ? (themeBtn.getAttribute("aria-label") || "") : null;
+    out.themeAccessibleNameIsHint = !!themeBtn &&
+      out.themeAccessibleName === themeHintOf(themeStart) &&
+      (themeBtn.getAttribute("title") || "") === out.themeAccessibleName;
+    // 三档图标都走 §3.1 那一套矢量规范：24 盒 / 1.75 描边 / 墨迹居中 (12,12) / 主轴 16 单位
+    var themeIconSpecOk = function () {
+      var g = iconGeomOf(themeBtn);
+      var svg = themeBtn ? themeBtn.querySelector("svg") : null;
+      return !!g && !!svg && svg.getAttribute("aria-hidden") === "true" &&
+        g.viewBox === "0 0 24 24" &&
+        Math.abs(g.inkCenterX - 12) < 0.2 && Math.abs(g.inkCenterY - 12) < 0.2 &&
+        Math.abs(Math.max(g.inkW, g.inkH) - 16) < 0.2 &&
+        Math.abs(g.inkThicknessPx / g.scale - 1.75) < 0.01;
+    };
+    out.themeIcon = iconGeomOf(themeBtn);
+    out.themeIconSpecOk = themeIconSpecOk();
     // 列表页能测的两处文字：正文色（关注项昵称，继承 --fg）与**次级色**（账号区的
     // uid 那一格 .accountMeta，取 --fg-dim）—— 正是硬纪律里那两个 token。
     var listContrast = function () {
@@ -1041,22 +1144,49 @@ const MOCK = (theme) => `(function () {
     out.listThemeContrast = listContrast();
     out.listThemeContrastOk = out.listThemeContrast.body >= 4.5 &&
       out.listThemeContrast.name >= 4.5 && out.listThemeContrast.dim >= 4.5;
-    if (themeSelect) {
-      var otherTheme = themeApplied === "light" ? "dark" : "light";
-      pickSelect(themeSelect, otherTheme);
-      await sleep(350);
-      out.themeSwitchFlipsDom = document.documentElement.getAttribute("data-theme") === otherTheme;
-      out.themeSwitchPreserved = window.__prefs["ui.theme"] === otherTheme;
-      var switchedContrast = listContrast();
-      out.themeSwitchChangesBackground = switchedContrast.bg !== out.listThemeContrast.bg;
-      out.themeSwitchedContrast = switchedContrast;
-      out.themeSwitchedContrastBodyOk = switchedContrast.body >= 4.5 &&
-        switchedContrast.name >= 4.5;
-      out.themeSwitchedContrastDimOk = switchedContrast.dim >= 4.5;
-      // 切回本次运行的档位：后面的步骤与截图仍按这一档走
-      pickSelect(themeSelect, themeApplied);
-      await sleep(350);
-      out.themeRestored = document.documentElement.getAttribute("data-theme") === themeApplied;
+    if (themeBtn) {
+      // 走完**亮 → 暗 → 自动**一轮（三下回到原档）：每一步都验档位本身、<html data-theme>、
+      // 可访问名与图标规范；路过**与起始档相反**的那一档时，把对比度也量一遍。
+      var themeOtherMode = themeStart === "light" ? "dark" : "light";
+      var themeSteps = [];
+      var themeSwitchedContrast = null;
+      for (var ts = 0; ts < THEME_ORDER.length; ts += 1) {
+        themeBtn.click();
+        await sleep(350);
+        var themeNow = themeModeOf();
+        var themeDom = document.documentElement.getAttribute("data-theme");
+        themeSteps.push({
+          mode: themeNow,
+          dom: themeDom,
+          nameOk: (themeBtn.getAttribute("aria-label") || "") === themeHintOf(themeNow),
+          iconOk: themeIconSpecOk(),
+          // 亮 / 暗是确定的；自动档由环境偏好定，只要落在两套主题里即可
+          domOk: themeNow === "system"
+            ? (themeDom === "light" || themeDom === "dark")
+            : themeDom === themeNow,
+          prefOk: window.__prefs["ui.theme"] === themeNow
+        });
+        if (themeNow === themeOtherMode) themeSwitchedContrast = listContrast();
+      }
+      out.themeCycleModes = themeSteps.map(function (s) { return s.mode; });
+      out.themeAdvanceOneStep = themeSteps.length === 3 &&
+        themeSteps[0].mode === themeNextOf(themeStart) &&
+        themeSteps[1].mode === themeNextOf(themeSteps[0].mode) &&
+        themeSteps[2].mode === themeStart;
+      out.themeCycleStepsOk = themeSteps.length === THEME_ORDER.length &&
+        themeSteps.every(function (s) {
+          return s.nameOk && s.iconOk && s.domOk && s.prefOk;
+        });
+      out.themeSwitchChangesBackground = !!themeSwitchedContrast &&
+        themeSwitchedContrast.bg !== out.listThemeContrast.bg;
+      out.themeSwitchedContrast = themeSwitchedContrast;
+      out.themeSwitchedContrastBodyOk = !!themeSwitchedContrast &&
+        themeSwitchedContrast.body >= 4.5 && themeSwitchedContrast.name >= 4.5;
+      out.themeSwitchedContrastDimOk = !!themeSwitchedContrast &&
+        themeSwitchedContrast.dim >= 4.5;
+      // 一轮走完必须回到本次运行的档位：后面的步骤与截图仍按这一档走
+      out.themeRestored = themeModeOf() === themeStart &&
+        document.documentElement.getAttribute("data-theme") === themeApplied;
     }
     snap();
 
@@ -1296,55 +1426,7 @@ const MOCK = (theme) => `(function () {
     //      **一套**规范（见 RoomView.tsx / app.module.css 的注释）：同一个 24 × 24 盒与 viewBox、
     //      同一条 stroke-width（1.75）、同一套 round 线帽 / 接合、墨迹都居中于 (12,12)、
     //      主轴尺寸都是 16 单位（箭头的**高** = ⋯ 的**宽**）、⋯ 的圆点直径 = 2 × 描边宽。
-    //      量法：getBBox() 给的是**几何**包围盒（不含描边），四周各外扩半个墨迹厚度才是墨迹外接盒。
-    var iconGeomOf = function (btn) {
-      var svg = btn ? btn.querySelector("svg") : null;
-      var shapes = svg ? [].slice.call(svg.querySelectorAll("path, circle")) : [];
-      if (!svg || shapes.length === 0) return null;
-      var vb = (svg.getAttribute("viewBox") || "").split(" ").map(parseFloat);
-      var box = rect(svg);
-      if (!box || !(vb[2] > 0)) return null;
-      var scale = box.width / vb[2];
-      // 墨迹厚度：描边 = stroke-width，圆点 = 直径（一个圆点就是一个零长度描边段的圆头）。
-      // ⚠ 两者对**外接盒**的贡献不同：描边的几何包围盒是**路径中心线**，四周各要外扩半个笔画；
-      //    实心圆的包围盒**本身就是墨迹**，一点都不用外扩（第一版两边都外扩，于是 ⋯ 的墨迹范围
-      //    被算成 19.5 × 7，与箭头那 16 对不上 —— 冒烟当场把这条抓住了）。
-      var thicknessOf = function (s) {
-        if (s.tagName.toLowerCase() === "circle") return parseFloat(s.getAttribute("r")) * 2;
-        var w = s.getAttribute("stroke-width");
-        return w === null ? 0 : parseFloat(w);
-      };
-      var padOf = function (s) {
-        return s.tagName.toLowerCase() === "circle" ? 0 : thicknessOf(s) / 2;
-      };
-      var lo = { x: Infinity, y: Infinity };
-      var hi = { x: -Infinity, y: -Infinity };
-      var thickness = 0;
-      shapes.forEach(function (s) {
-        var b = s.getBBox();
-        var t = thicknessOf(s);
-        var pad = padOf(s);
-        thickness = Math.max(thickness, t);
-        lo.x = Math.min(lo.x, b.x - pad);
-        lo.y = Math.min(lo.y, b.y - pad);
-        hi.x = Math.max(hi.x, b.x + b.width + pad);
-        hi.y = Math.max(hi.y, b.y + b.height + pad);
-      });
-      var round1 = function (v) { return Math.round(v * 100) / 100; };
-      return {
-        viewBox: svg.getAttribute("viewBox"),
-        scale: Math.round(scale * 1000) / 1000,
-        boxPx: round1(box.width),
-        inkThicknessPx: round1(thickness * scale),
-        inkW: round1(hi.x - lo.x),
-        inkH: round1(hi.y - lo.y),
-        inkCenterX: round1((lo.x + hi.x) / 2),
-        inkCenterY: round1((lo.y + hi.y) / 2),
-        linecap: shapes[0].getAttribute("stroke-linecap"),
-        linejoin: shapes[0].getAttribute("stroke-linejoin"),
-        shapeCount: shapes.length,
-      };
-    };
+    //      量法（iconGeomOf）定义在场景开头：**step1 的主题按钮**三档也走同一把尺子。
     out.iconBack = iconGeomOf(roundCtl[0]);
     out.iconMore = iconGeomOf(roundCtl[1]);
     out.iconBackInkThicknessPx = out.iconBack ? out.iconBack.inkThicknessPx : null;
@@ -2924,17 +3006,26 @@ const MOCK = (theme) => `(function () {
     out.layoutPausedBeforePanel = stableScroll.scrollHeight - stableScroll.scrollTop - stableScroll.clientHeight > 8;
     // 另一半：**用户自己往上滚**必须真的降为「不跟随」——判据同样是状态按钮出现
     out.layoutPausedShowsJumpButton = !!byTestId("db-bottom-anchor");
-    // ---- item 1：「回到最新」那枚图标是**下箭头**，与房间头返回键**同源几何**
+    // ---- item 1 + issue #2：「回到最新」那枚图标是**下箭头**，与房间头返回键**同源几何**
     //      （docs/ui.md §3.1 的矢量规范 + §7.4）：同一个 24 × 24 viewBox、同一条 stroke-width 1.75、
     //      round 线帽 / 接合、墨迹居中 (12,12)、主轴 16 单位；箭头朝下 ⇒ 宽 > 高。
-    //      图标是装饰（aria-hidden），按钮的可访问名仍是文字「回到最新」。
+    //      issue #2 之后它是一枚**圆形图标钮**（与返回键共用 .ctlRound / .ctlIcon）：可见文字
+    //      一个都没有 ⇒ 可访问名只能由 aria-label / title 给（innerText 必须为空）。
     var anchorBtn = byTestId("db-bottom-anchor");
     var anchorSvg = anchorBtn ? anchorBtn.querySelector("svg") : null;
     out.jumpIconSvgShown = !!anchorSvg;
     out.jumpIconAriaHidden = !!anchorSvg && anchorSvg.getAttribute("aria-hidden") === "true";
-    out.jumpButtonAccessibleName = anchorBtn ? anchorBtn.innerText.trim() : null;
+    out.jumpButtonAccessibleName = anchorBtn ? (anchorBtn.getAttribute("aria-label") || "") : null;
     out.jumpButtonNamesPurpose = !!anchorBtn &&
-      anchorBtn.innerText.indexOf("回到最新") >= 0 && anchorBtn.innerText.trim().indexOf("←") < 0;
+      out.jumpButtonAccessibleName.indexOf("回到最新") >= 0 &&
+      (anchorBtn.getAttribute("title") || "") === out.jumpButtonAccessibleName;
+    out.jumpButtonHasNoText = !!anchorBtn && anchorBtn.innerText.trim() === "";
+    // 与返回键**同尺寸**：控件都 40 × 40 正圆，图标盒都 24
+    out.jumpControlSameSizeAsBack = !!anchorBtn && !!roundCtl[0] && !!anchorSvg &&
+      !!out.iconBack &&
+      Math.abs(rect(anchorBtn).width - rect(roundCtl[0]).width) < 0.6 &&
+      Math.abs(rect(anchorBtn).width - 40) < 0.6 &&
+      Math.abs(rect(anchorSvg).width - out.iconBack.boxPx) < 0.6;
     out.jumpIcon = iconGeomOf(anchorBtn);
     out.jumpIconInkCentered = !!out.jumpIcon &&
       Math.abs(out.jumpIcon.inkCenterX - 12) < 0.2 && Math.abs(out.jumpIcon.inkCenterY - 12) < 0.2;
@@ -2943,8 +3034,8 @@ const MOCK = (theme) => `(function () {
       Math.abs(Math.max(out.jumpIcon.inkW, out.jumpIcon.inkH) - 16) < 0.2;
     out.jumpIconPointsDown = !!out.jumpIcon && out.jumpIcon.inkW > out.jumpIcon.inkH;
     // 与返回键量到的**同一套规范**逐项相同：描边宽度 / 线帽 / 接合 / 形状数（只有朝向不同）。
-    // 描边比的是**用户单位**（SVG 里写死的数，缩放系数不算规范的一部分）——两枚图标的渲染盒
-    // 尺寸不同（房间头 60% × 40px = 24、这里 1.5em），拿像素比会把「同一套描边」判成不一致。
+    // issue #2 之后两枚的渲染盒也一样（都 24），但描边仍比**用户单位**（SVG 里写死的数），
+    // 缩放系数不算规范的一部分 —— 同一套规范因此不该被盒子的换算方式带偏。
     out.jumpIconStrokeUnits = out.jumpIcon
       ? Math.round((out.jumpIcon.inkThicknessPx / out.jumpIcon.scale) * 100) / 100
       : null;
@@ -3457,6 +3548,17 @@ const MOCK = (theme) => `(function () {
 
     // ---- admin 房管（issue #3）：权限前置、写操作二次确认、面板三块与错误原样展示
     out.adminIdentityFetched = calls.indexOf("room_session") >= 0;
+    // **预载**（issue #4/第 5 条：连接上就有房管权限的房间时把数据加载好）：身份就绪之后
+    // **不打开面板**也已经拉过三块名单 —— 数 IPC 调用即可（一次都没有 = 打开面板才拉，慢半拍）。
+    var adminListCallCounts = function (cmd) {
+      return calls.filter(function (c) { return c === cmd; }).length;
+    };
+    out.adminPreloadCalls = [
+      adminListCallCounts("admin_silent_list"),
+      adminListCallCounts("admin_blacklist_list"),
+      adminListCallCounts("admin_keywords_list")
+    ];
+    out.adminPreloadedBeforeOpen = out.adminPreloadCalls.every(function (n) { return n >= 1; });
     // **反面对照**（item 3）：先把身份发成 is_admin:false，⋯ 菜单里就不该再有「房管面板」这一项 ——
     // 口径是「有房管身份才有房管界面的选项」，不是置灰让人点开再看上游报错
     // （旧的 adminReadOnlyPanelStillOpen 已删）。身份按契约 §5 的 RoomSession 全量给
@@ -3529,7 +3631,8 @@ const MOCK = (theme) => `(function () {
       lastMute.args.hour === 1 && typeof lastMute.args.uid === "number" && lastMute.args.uid > 0;
     out.adminConfirmClosedAfterWrite = !byTestId("db-admin-confirm");
 
-    // 面板：三块列表；增删同样先二次确认
+    // 面板：三块名单收成**三个 tab**（issue #1）——一次只渲染当前那一块；计数读 tab 文案里的（N）。
+    // 单点动作在**行右键菜单**里、批量在批量条上（issue #4）；「增删」照旧先二次确认。
     byTestId("db-header-more").click();
     await sleep(250);
     var headerMenu2 = byTestId("db-context-menu");
@@ -3538,17 +3641,110 @@ const MOCK = (theme) => `(function () {
     await sleep(600);
     var adminPanel = byTestId("db-admin-panel");
     out.adminPanelShown = !!adminPanel;
-    out.adminPanelSections = adminPanel
-      ? ["禁言名单（1）", "黑名单（1）", "屏蔽词（2）"].filter(function (t) {
-          return adminPanel.innerText.indexOf(t) >= 0;
-        })
-      : [];
-    out.adminPanelListsRendered = out.adminPanelSections.length === 3;
-    out.adminPanelItemCounts = [
-      allByTestId("db-admin-silent-item").length,
-      allByTestId("db-admin-blacklist-item").length,
-      allByTestId("db-admin-keyword-item").length
-    ];
+    // 面板里**没有**「刷新」按钮、也**没有**「你是本直播间房管」那句提示（issue #5：入口只对房管
+    // 存在，面板里再说一遍身份是废话；手动重试入口随之取消，读取失败靠错误条说话），关闭入口仍在。
+    out.adminPanelNoRefreshButton = !!adminPanel && !buttonWith(adminPanel, "刷新");
+    out.adminPanelNoIdentityHint = !!adminPanel &&
+      adminPanel.innerText.indexOf("你是本直播间房管") < 0;
+    out.adminPanelClosable = !!byTestId("db-admin-close");
+    // 逐 tab 的取数口径：tab 的 [data-kind] 与行级 testid 一一对应
+    var ADMIN_KINDS = ["silent", "blacklist", "keywords"];
+    var adminRowTestId = function (adminKind) {
+      return adminKind === "silent" ? "db-admin-silent-item"
+        : adminKind === "blacklist" ? "db-admin-blacklist-item" : "db-admin-keyword-item";
+    };
+    var adminTabEls = function () { return allByTestId("db-admin-tab"); };
+    var adminTabOf = function (adminKind) {
+      return adminTabEls().filter(function (b) {
+        return b.getAttribute("data-kind") === adminKind;
+      })[0];
+    };
+    var adminSelectedTab = function () {
+      return adminTabEls().filter(function (b) {
+        return b.getAttribute("aria-selected") === "true";
+      })[0];
+    };
+    var adminSelectedKind = function () {
+      var el = adminSelectedTab();
+      return el ? el.getAttribute("data-kind") : null;
+    };
+    // 别跟上面那个「数右键菜单项」的 adminItemsOf 混了：这里数的是当前 tab 的行。
+    var adminListItemsOf = function (adminKind) {
+      return allByTestId(adminRowTestId(adminKind)).length;
+    };
+    // tab 文案形如「禁言（1）」：计数直接从那一枚 tab 的 innerText 里切出来（不写正则）
+    var adminTabCount = function (adminKind) {
+      var el = adminTabOf(adminKind);
+      if (!el) return null;
+      var t = el.innerText;
+      var open = t.lastIndexOf("（");
+      var close = t.lastIndexOf("）");
+      return open >= 0 && close > open ? Number(t.slice(open + 1, close)) : null;
+    };
+    // 走一遍三个 tab：切过去之后**只有这一块**的列表在 DOM 里，计数与 tab 文案对得上
+    var adminWalk = async function () {
+      var seen = {};
+      for (var wi = 0; wi < ADMIN_KINDS.length; wi += 1) {
+        var walkKind = ADMIN_KINDS[wi];
+        if (adminTabOf(walkKind)) adminTabOf(walkKind).click();
+        await sleep(280);
+        seen[walkKind] = {
+          selected: adminSelectedKind() === walkKind,
+          others: ADMIN_KINDS.reduce(function (sum, k) {
+            return k === walkKind ? sum : sum + adminListItemsOf(k);
+          }, 0),
+          items: adminListItemsOf(walkKind),
+          labelCount: adminTabCount(walkKind)
+        };
+      }
+      return seen;
+    };
+    var adminKindsShown = adminTabEls().map(function (b) { return b.getAttribute("data-kind"); });
+    out.adminTabKinds = adminKindsShown;
+    out.adminTabThreeKinds = adminKindsShown.join(",") === ADMIN_KINDS.join(",");
+    out.adminTabSinglePanel = allByTestId("db-admin-tabpanel").length === 1;
+    out.adminTabDefaultSilent = adminSelectedKind() === "silent";
+    // roving tabindex：只有选中的那一枚可 Tab 到（其余 -1），role / aria-selected / aria-controls 都在
+    out.adminTabRoving = adminTabEls().length === ADMIN_KINDS.length &&
+      adminTabEls().every(function (b) {
+        var on = b.getAttribute("aria-selected") === "true";
+        return b.getAttribute("role") === "tab" &&
+          b.getAttribute("tabindex") === (on ? "0" : "-1");
+      }) && !!adminSelectedTab();
+    var adminTabPanel = byTestId("db-admin-tabpanel");
+    out.adminTabPanelLinked = !!adminTabPanel && !!adminSelectedTab() &&
+      adminTabPanel.getAttribute("aria-labelledby") === adminSelectedTab().id &&
+      adminTabEls().every(function (b) {
+        return b.getAttribute("aria-controls") === adminTabPanel.id;
+      });
+    out.adminPanelSections = adminTabEls().map(function (b) { return b.innerText.trim(); });
+    var adminWalked = await adminWalk();
+    out.adminPanelListsRendered = ADMIN_KINDS.every(function (k) {
+      return adminWalked[k].selected && adminWalked[k].others === 0;
+    });
+    out.adminPanelItemCounts = {
+      silent: adminWalked.silent.items,
+      blacklist: adminWalked.blacklist.items,
+      keywords: adminWalked.keywords.items
+    };
+    out.adminPanelCountsMatchLabels = ADMIN_KINDS.every(function (k) {
+      return adminWalked[k].items === adminWalked[k].labelCount;
+    });
+    // 键盘：←→ 换 tab、Home / End 跳首尾，焦点跟着选中项走（WAI-ARIA tabs 口径）。
+    // 键事件派发在**已聚焦的那一枚 tab** 上，轨道自身的 keydown 因此收到它 —— 与真实按键同一条路径。
+    var adminKeyStep = async function (fromKind, key, expectKind) {
+      var fromEl = adminTabOf(fromKind);
+      if (!fromEl) return false;
+      pressKey(fromEl, key);
+      await sleep(280);
+      return adminSelectedKind() === expectKind &&
+        document.activeElement === adminTabOf(expectKind);
+    };
+    var adminKeyOk = await adminKeyStep("silent", "ArrowRight", "blacklist");
+    adminKeyOk = (await adminKeyStep("blacklist", "ArrowLeft", "silent")) && adminKeyOk;
+    adminKeyOk = (await adminKeyStep("silent", "End", "keywords")) && adminKeyOk;
+    adminKeyOk = (await adminKeyStep("keywords", "Home", "silent")) && adminKeyOk;
+    out.adminTabKeyboardFollows = adminKeyOk;
     // 房管面板是最高的一个（窄屏撞 45vh 上限），它展开时最能暴露「跟随被悄悄关掉」：
     // 修复前这里实测离底 398px，最新一条落在面板下方 318px 处。
     out.layoutAdminBottomGap = bottomGap(byTestId("db-chat-scroll"));
@@ -3572,37 +3768,143 @@ const MOCK = (theme) => `(function () {
     // 停一下让跑脚本的进程抓一张「房管面板三块」的截图
     snap();
     await sleep(1200);
+    // ---- 五面板互斥（issue #4）：房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏**同时最多开一个**。
+    //      开一个 → 其余四个同步都关；收起某一个不影响别人（panelSurvivesTabSwitch 那三条照旧成立）。
+    //      礼物栏这一档要先存在它：上面 gift 那段已把 ui.gift_panel_mode 选成 separate。
+    var openPanelCount = function () {
+      return (byTestId("db-panel") ? 1 : 0) + (byTestId("db-admin-panel") ? 1 : 0) +
+        (byTestId("db-gift-body") ? 1 : 0);
+    };
+    // 房管面板的开/关都只有一条路：⋯ 菜单里那一项（面板内没有开关自己的按钮）
+    var toggleAdminFromHeader = async function () {
+      byTestId("db-header-more").click();
+      await sleep(250);
+      var item = buttonWith(byTestId("db-context-menu"), "房管面板");
+      if (item) item.click();
+      await sleep(700);
+    };
+    out.panelExclusiveStart = openPanelCount() === 1 && !!byTestId("db-admin-panel");
+    clickTool("表情");
+    await sleep(450);
+    out.panelExclusiveEmoteClosesAdmin = !!byTestId("db-panel") &&
+      !byTestId("db-admin-panel") && !byTestId("db-gift-body") && openPanelCount() === 1;
+    clickTool("短语");
+    await sleep(350);
+    out.panelExclusivePhraseReplacesEmote = allByTestId("db-panel").length === 1 &&
+      !!byTestId("db-phrase-add") && openPanelCount() === 1;
+    clickTool("筛选");
+    await sleep(350);
+    out.panelExclusiveFilterReplacesPhrase = allByTestId("db-panel").length === 1 &&
+      !byTestId("db-phrase-add") && openPanelCount() === 1;
+    var exclusiveDockHead = byTestId("db-gift-dock")
+      ? byTestId("db-gift-dock").querySelector("button") : null;
+    if (exclusiveDockHead) exclusiveDockHead.click();
+    await sleep(450);
+    out.panelExclusiveGiftDockClosesPanel = !!byTestId("db-gift-body") &&
+      !byTestId("db-panel") && !byTestId("db-admin-panel") && openPanelCount() === 1;
+    await toggleAdminFromHeader();
+    out.panelExclusiveAdminClosesGiftDock = !!byTestId("db-admin-panel") &&
+      !byTestId("db-panel") && !byTestId("db-gift-body") && openPanelCount() === 1;
+
     // ---- 上游拒绝**原样展示**（code + message）：三块各自留痕、互不清空，面板留在原地。
-    //      这一档必须在**有权限**时测 —— 入口只对房管存在，身份被撤销时面板会直接收起（见下），
-    //      拿不到那块只读面板来读文本（旧口径「无权限也能开只读面板」已删）。
+    //      这一档必须在**有权限**时测 —— 入口只对房管存在，身份被撤销时面板会直接收起（见下）。
+    //      issue #5 之后面板里**没有**手动重试入口：重拉 = 关掉再开（⋯ →「房管面板」），
+    //      所以下面这条路径本身就是「重拉」这条路的验收面。
+    var reopenAdmin = async function () {
+      if (byTestId("db-admin-close")) byTestId("db-admin-close").click();
+      await sleep(300);
+      await toggleAdminFromHeader();
+    };
     window.__setAdminFail(true);
-    buttonWith(adminPanel, "刷新").click();
-    await sleep(700);
-    var panelText = byTestId("db-admin-panel").innerText;
-    out.adminPanelErrorRaw = panelText.indexOf("不是管理员") >= 0 &&
-      panelText.indexOf("UPSTREAM_ERROR") >= 0;
-    out.adminPanelErrorCount = allByTestId("db-admin-error").length;
-    out.adminPanelErrorsIndependent = out.adminPanelErrorCount === 3;
-    // 上游恢复之后**刷新**能把三块读回来、错误条随之消失
+    await reopenAdmin();
+    out.adminReopenRefetches = adminListCallCounts("admin_blacklist_list") >= 2;
+    var adminErrCount = {};
+    var adminErrRaw = {};
+    for (var ae = 0; ae < ADMIN_KINDS.length; ae += 1) {
+      var errKind = ADMIN_KINDS[ae];
+      if (adminTabOf(errKind)) adminTabOf(errKind).click();
+      await sleep(300);
+      var errText = (byTestId("db-admin-tabpanel") || { innerText: "" }).innerText;
+      adminErrRaw[errKind] = errText.indexOf("不是管理员") >= 0 &&
+        errText.indexOf("UPSTREAM_ERROR") >= 0;
+      adminErrCount[errKind] = allByTestId("db-admin-error").length;
+    }
+    out.adminPanelErrorRaw = ADMIN_KINDS.every(function (k) { return adminErrRaw[k]; });
+    out.adminPanelErrorCount = adminErrCount;
+    // 三块各自留痕、互不清空 —— 但**任一时刻只有当前 tab 那一条**在 DOM 里（切三个 tab 各看一次）
+    out.adminPanelErrorsIndependent = ADMIN_KINDS.every(function (k) {
+      return adminErrCount[k] === 1;
+    });
+    // 上游恢复之后「关掉再开」能把三块读回来、错误条随之消失
     window.__setAdminFail(false);
-    buttonWith(byTestId("db-admin-panel"), "刷新").click();
-    await sleep(700);
+    await reopenAdmin();
     out.adminPanelErrorClearedAfterRetry = allByTestId("db-admin-error").length === 0;
-    out.adminPanelListsAfterRetry = [
-      allByTestId("db-admin-silent-item").length,
-      allByTestId("db-admin-blacklist-item").length,
-      allByTestId("db-admin-keyword-item").length
-    ];
-    buttonWith(allByTestId("db-admin-keyword-item")[0], "删除").click();
+    var adminAfterRetry = await adminWalk();
+    out.adminPanelListsAfterRetry = {
+      silent: adminAfterRetry.silent.items,
+      blacklist: adminAfterRetry.blacklist.items,
+      keywords: adminAfterRetry.keywords.items
+    };
+    // ---- 单点动作：行的**右键菜单**（issue #4；行内那枚「删除」按钮已删），一次确认后执行
+    if (adminTabOf("keywords")) adminTabOf("keywords").click();
+    await sleep(300);
+    var adminKeywordRow = allByTestId(adminRowTestId("keywords"))[0];
+    out.adminRowHasNoInlineAction = !!adminKeywordRow &&
+      adminKeywordRow.querySelector("button") === null;
+    if (adminKeywordRow) openRowMenu(adminKeywordRow);
+    await sleep(250);
+    var adminRowMenu = byTestId("db-context-menu");
+    var adminRowDelBtn = adminRowMenu ? buttonWith(adminRowMenu, "删除") : null;
+    out.adminRowMenuShown = !!adminRowDelBtn;
+    if (adminRowDelBtn) adminRowDelBtn.click();
     await sleep(300);
     var wordConfirm = byTestId("db-admin-confirm");
     out.adminKeywordConfirmShown = !!wordConfirm && wordConfirm.innerText.indexOf("刷屏") >= 0;
-    buttonWith(wordConfirm, "确认删除").click();
+    if (wordConfirm) buttonWith(wordConfirm, "确认删除").click();
     await sleep(600);
     var wordDels = callsWithArgs.filter(function (c) { return c.cmd === "admin_keywords_del"; });
     var lastWordDel = wordDels[wordDels.length - 1];
     out.adminKeywordDelRequestShape = !!lastWordDel &&
       lastWordDel.args.roomId === 5440 && lastWordDel.args.word === "刷屏";
+
+    // ---- 批量（issue #4）：打开后行前出现勾选框、上方有全选、底部升起当前 tab 的动作条；
+    //      选中 N 项 → **一次**确认（文案含数量）→ 按序执行（N 次调用，顺序即屏幕顺序）。
+    if (adminTabOf("keywords")) adminTabOf("keywords").click();
+    await sleep(300);
+    if (byTestId("db-admin-batch")) byTestId("db-admin-batch").click();
+    await sleep(300);
+    var batchToggle = byTestId("db-admin-batch");
+    out.adminBatchControlsShown = !!batchToggle &&
+      batchToggle.getAttribute("aria-pressed") === "true" &&
+      !!byTestId("db-admin-select-all") && !!byTestId("db-admin-batch-bar") &&
+      allByTestId("db-admin-select").length === adminListItemsOf("keywords");
+    var adminBoxes = allByTestId("db-admin-select");
+    adminBoxes.forEach(function (box) { box.click(); });
+    await sleep(300);
+    var batchBar = byTestId("db-admin-batch-bar");
+    out.adminBatchBarShowsCount = !!batchBar && adminBoxes.length === 2 &&
+      batchBar.innerText.indexOf("已选 " + adminBoxes.length + " 项") >= 0;
+    var delsBeforeBatch = callsWithArgs.filter(function (c) {
+      return c.cmd === "admin_keywords_del";
+    }).length;
+    var batchActionBtn = byTestId("db-admin-batch-action");
+    if (batchActionBtn) batchActionBtn.click();
+    await sleep(300);
+    var batchConfirm = byTestId("db-admin-confirm");
+    var delsAtConfirm = callsWithArgs.filter(function (c) {
+      return c.cmd === "admin_keywords_del";
+    }).length;
+    out.adminBatchOneConfirmWithCount = !!batchConfirm &&
+      batchConfirm.innerText.indexOf("2 项") >= 0 &&
+      batchConfirm.innerText.indexOf("刷屏") >= 0 &&
+      batchConfirm.innerText.indexOf("广告") >= 0 &&
+      delsAtConfirm === delsBeforeBatch;
+    if (batchConfirm) buttonWith(batchConfirm, "确认批量").click();
+    await sleep(800);
+    var batchDels = callsWithArgs.filter(function (c) { return c.cmd === "admin_keywords_del"; });
+    out.adminBatchExecutesInOrder = batchDels.length === delsBeforeBatch + 2 &&
+      batchDels[batchDels.length - 2].args.word === "刷屏" &&
+      batchDels[batchDels.length - 1].args.word === "广告";
 
     // ---- 身份被撤销（item 3，契约 C6）：面板**自动收起**、入口随之从 ⋯ 菜单里消失；
     //      行右键那三项改成置灰并说明原因（它们是「权限前置」的另一半，仍照旧可判）。
@@ -3610,8 +3912,12 @@ const MOCK = (theme) => `(function () {
     await sleep(200);
     window.__setAdmin(false);
     window.__setAdminFail(true);
-    buttonWith(byTestId("db-admin-panel"), "刷新").click();
-    await sleep(700);
+    // 身份经 danmubox://session 事件送达（面板里已没有刷新按钮，所以撤销不再靠点它触发）
+    window.__emit("danmubox://session", {
+      room_id: 5440, my_medal_level: 0, my_medal_name: "", my_medal_worn: false,
+      my_guard_level: 0, danmaku_length: 40, is_admin: false
+    });
+    await sleep(500);
     out.adminPanelClosedAfterRevoke = !byTestId("db-admin-panel");
     byTestId("db-header-more").click();
     await sleep(250);
@@ -3668,16 +3974,51 @@ const MOCK = (theme) => `(function () {
     out.accountShowsIdentity = !!byTestId("db-account-name") &&
       byTestId("db-account-name").innerText.indexOf("本地测试") >= 0 &&
       byTestId("db-account-uid").innerText.indexOf("1000") >= 0;
-    out.accountOpenButtonShown = !!byTestId("db-account-open");
+    // ---- issue #8：**整行即入口**（独立的「账号」按钮已删）。这一行本身就是按钮语义：
+    //      role=button + tabIndex=0 + aria-label「账号管理」，行内不再有别的可点元素。
+    out.accountOpenButtonGone = byTestId("db-account-open") === null;
+    out.accountRowIsEntry = !!account &&
+      account.getAttribute("role") === "button" &&
+      account.getAttribute("tabindex") === "0" &&
+      (account.getAttribute("aria-label") || "").indexOf("账号管理") >= 0;
+    out.accountRowHasNoInnerButton = !!account && account.querySelector("button") === null;
     var followBefore = window.__followCalls;
     // 停一下让跑脚本的进程抓一张「账号区只留一行」的截图
     out.accountAreaReady = out.accountShown;
     snap();
     await sleep(900);
 
-    byTestId("db-account-open").click();
+    // 鼠标：点这一行开对话框；键盘：Enter / Space 等价（行是 div role=button，键事件由它的
+    // keydown 处理 —— 焦点先落上去再派发，与真实「Tab 到这一行再按」同一条路径）。
+    account.click();
     await sleep(400);
     out.accountDialogShown = !!byTestId("db-account-dialog");
+    // ---- issue #3：对话框排版（宽屏 / 窄屏同一套断言，两档各量一次）
+    // ① 「＋ 添加账号」在内容宽里**水平居中**（左右留白相等），且**不拉满整行** —— 拉满的行
+    //    左右留白当然也相等，所以「比参照块窄」必须一起判。时序：开扫码时这枚按钮**不在 DOM 里**，
+    //    所以只能在点它之前量。参照物取账号行：两者都是对话框里的一级块，都撑满内容宽。
+    var addBtnNow = byTestId("db-account-add");
+    var accountRowRef = allByTestId("db-account-row")[0];
+    out.accountAddShownBeforeScan = !!addBtnNow;
+    out.accountAddCenteredPx = addBtnNow && accountRowRef
+      ? Math.round(((rect(addBtnNow).left - rect(accountRowRef).left) -
+          (rect(accountRowRef).right - rect(addBtnNow).right)) * 10) / 10
+      : null;
+    out.accountAddCentered = out.accountAddCenteredPx !== null &&
+      Math.abs(out.accountAddCenteredPx) <= 1;
+    out.accountAddNotStretched = !!addBtnNow && !!accountRowRef &&
+      rect(addBtnNow).width < rect(accountRowRef).width - 8;
+    byTestId("db-account-close").click();
+    await sleep(300);
+    out.accountDialogClosedForKeyboard = !byTestId("db-account-dialog");
+    pressKey(account, "Enter");
+    await sleep(400);
+    out.accountRowEnterOpensDialog = !!byTestId("db-account-dialog");
+    byTestId("db-account-close").click();
+    await sleep(300);
+    pressKey(account, " ");
+    await sleep(400);
+    out.accountRowSpaceOpensDialog = !!byTestId("db-account-dialog");
     // 窄屏：账号对话框是自底部升起的 sheet（占满宽度、贴着视口底），可滚动、有关闭入口、热区 ≥ 40px
     if (NARROW) {
       var accountDlgEl = byTestId("db-account-dialog");
@@ -3735,6 +4076,21 @@ const MOCK = (theme) => `(function () {
     // 添加账号 = 默认入口：account_qr_start 不带 target，永不覆盖任何凭据
     byTestId("db-account-add").click();
     await sleep(400);
+    // ---- issue #3 ②③：二维码卡片与上方的一级块**同宽**（撑满对话框内容宽，不再是贴左的
+    //      fit-content）；它与上方块的间距 = 对话框的统一行间距（.accountDialog 的 gap），
+    //      **不另加外边距**（改前是 fit-content 242px + margin-top 20px）。
+    var qrCardEl = byTestId("db-account-qr");
+    var qrRowRef = allByTestId("db-account-row")[0];
+    var accountDlgForGap = byTestId("db-account-dialog");
+    var accountDlgGap = accountDlgForGap
+      ? parseFloat(getComputedStyle(accountDlgForGap).rowGap) : null;
+    out.accountQrSameWidthAsRow = !!qrCardEl && !!qrRowRef &&
+      Math.abs(rect(qrCardEl).width - rect(qrRowRef).width) <= 1;
+    out.accountQrGapPx = qrCardEl && qrRowRef
+      ? Math.round((rect(qrCardEl).top - rect(qrRowRef).bottom) * 10) / 10
+      : null;
+    out.accountQrGapIsDialogGap = out.accountQrGapPx !== null && accountDlgGap !== null &&
+      Math.abs(out.accountQrGapPx - accountDlgGap) <= 1;
     var startCalls = callsWithArgs.filter(function (c) { return c.cmd === "account_qr_start"; });
     var lastStart = startCalls[startCalls.length - 1];
     out.accountAddCallsQrStart = startCalls.length === 1;
@@ -3881,6 +4237,18 @@ const MOCK = (theme) => `(function () {
     out.accountBackToGuest = !!byTestId("db-account-guest") && !byTestId("db-account-dialog");
     out.accountGuestTextShown = (byTestId("db-account-guest") || { innerText: "" })
       .innerText.indexOf("游客态") >= 0;
+    // 游客态那一行**同样可点**（issue #8：那时它的作用就是去登录）—— 键盘 Enter 一样开对话框
+    var guestRow = byTestId("db-account");
+    out.accountGuestRowIsEntry = !!guestRow &&
+      guestRow.getAttribute("role") === "button" &&
+      guestRow.getAttribute("tabindex") === "0" &&
+      (guestRow.getAttribute("aria-label") || "").indexOf("账号管理") >= 0;
+    pressKey(guestRow, "Enter");
+    await sleep(400);
+    out.accountGuestRowOpensDialog = !!byTestId("db-account-dialog");
+    byTestId("db-account-close").click();
+    await sleep(300);
+    out.accountGuestDialogCloses = !byTestId("db-account-dialog");
 
     // ---- #18 房间标签条：显示主播名，不显示房间号。
     // 标签条只在**多于一个**房间时渲染（App 既有语义）。第二个房间在**多标签隔离**那一段

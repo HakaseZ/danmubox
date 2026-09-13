@@ -197,7 +197,7 @@ export function AccountManager({
         <div className={styles.accountList}>
           {accounts.length === 0 ? (
             <div className={styles.dialogSub} data-testid="db-account-empty">
-              还没有账号。用下面的「＋ 添加账号」扫码即可——扫完由后端按昵称自动命名，不用先起名字。
+              还没有账号。用下面的「＋ 添加账号」扫码即可。
             </div>
           ) : (
             accounts.map((account) => (
@@ -291,7 +291,7 @@ export function AccountManager({
           <button
             className={styles.accountAdd}
             data-testid="db-account-add"
-            title="扫码添加一个新账号（不会覆盖任何已有账号的凭据）"
+            title="添加账号"
             onClick={() => onStartQr()}
           >
             ＋ 添加账号
@@ -305,13 +305,9 @@ export function AccountManager({
                 ? `重新登录「${who(targetAccount)}」`
                 : "扫码添加账号"}
             </div>
-            {targetAccount ? (
+            {targetAccount && (
               <div className={styles.qrWarn} data-testid="db-account-qr-warn">
                 扫完会用新凭据覆盖该账号（{targetAccount.name}）现有的凭据
-              </div>
-            ) : (
-              <div className={styles.dialogSub}>
-                扫完由后端按昵称自动命名，不需要先起名字；不会动任何已有账号
               </div>
             )}
             {qr ? (

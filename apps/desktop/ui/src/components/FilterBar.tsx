@@ -67,7 +67,7 @@ export function FilterBar({ prefs, onChange }: Props) {
               }
             />
           </label>
-          <label title="弹幕前显示 HH:mm:ss（本地时区），同一列等宽对齐">
+          <label title="时间戳">
             <input
               type="checkbox"
               checked={prefs["ui.show_timestamp"]}
@@ -77,7 +77,7 @@ export function FilterBar({ prefs, onChange }: Props) {
             />
             时间戳
           </label>
-          <label title="进场/互动消息显示一会儿就淡出；关掉则一直显示">
+          <label title="互动消息自动消失">
             <input
               type="checkbox"
               checked={prefs["ui.interact_auto_hide"]}
@@ -87,7 +87,7 @@ export function FilterBar({ prefs, onChange }: Props) {
             />
             互动消息自动消失
           </label>
-          <label title="开播 / 下播 / 标题变更 / 公告">
+          <label title="系统通知">
             <input
               type="checkbox"
               checked={prefs["ui.system_notice"]}

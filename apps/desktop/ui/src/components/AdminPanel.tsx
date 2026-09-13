@@ -119,7 +119,6 @@ export function AdminPanel({
           />
           <button
             disabled={busy || parseUid(muteUid) === undefined}
-            title="时长在确认条上选"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
               const uid = parseUid(muteUid);

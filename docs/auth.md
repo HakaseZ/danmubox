@@ -60,8 +60,8 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 | 用户动作 | 无 | 粘贴 Cookie（`account_login_cookie`）或直接编辑 `config.toml`（§8.4） | 手机 B 站 App 扫一次码并确认 |
 | 本地凭据 | 仅 `buvid3` / `buvid4`（非账号凭据） | 该账号的全套字段 | 该账号的全套字段 |
 | 收弹幕 | 可收大部分 `danmaku` / `gift` / `superchat` / `interact` / `guard` / `system` | 完整 | 完整 |
-| 昵称与 UID | 部分被掩码，`uid` 常为 0，`uname` 可能为掩码串 | 完整 | 完整 |
-| 粉丝牌字段 | 可能缺失（`medal_level` / `medal_name` 为空值） | 完整 | 完整 |
+| 昵称与 UID | **与登录态一样完整**（2026-09-12 实测：`uid` 非 0、昵称不掩码，A3 / A21） | 完整 | 完整 |
+| 粉丝牌字段 | **齐全**（同上实测：`medal_level` / `medal_name` 有值） | 完整 | 完整 |
 | 发弹幕 | 不可（上游返回未登录错误） | 可（`bili_jct` 提供 `csrf`） | 可 |
 | 被限流概率 | 较高 | 低 | 低 |
 | 凭据有效期 | 不适用（`buvid3` 长期有效） | 取决于所填 `SESSDATA` 的剩余寿命 | 由服务端下发，本地无权威过期时间 |
@@ -468,22 +468,25 @@ sid = ""
 | 包类型 `package_kind` | 身份条件（本地判定） | 说明 |
 |---|---|---|
 | `common` | 无房间身份要求（登录态即可） | 通用包 |
+| `room` | 无身份门槛，需真实 `room_id` | UP 主大表情与房间专属表情（上游 `pkg_type = 2`） |
 | `medal` | `RoomSession.my_medal_level > 0` | 我在**该房间**有粉丝牌 |
 | `guard` | `RoomSession.my_guard_level ∈ {1, 2, 3}` | 我在该房间是大航海（1 总督 / 2 提督 / 3 舰长） |
-| `admin` | `RoomSession.is_admin == true` | 我在该房间是房管 |
+| `owned` | 登录态；未登录时上游退化为免费表情包 | 主站「我的表情」（`emotes_owned`；主站表情没有上游 `emoticon_unique`，唯一键 = `"upower_" + 表情 text`，A35 结案） |
 
-- 主播（`uid == Room.anchor_uid` 派生，契约 §5）不产生独立包类型；是否另有主播专属包待实测（见下表），实现按上表四类推进。
+- **没有房管包（`admin`）**：房管没有表情分类（A26 结案），`contract.md` §5 的 `package_kind` 只有上列 5 个；`RoomSession.is_admin` 不参与表情包判定。
+- 主播（`uid == Room.anchor_uid` 派生，契约 §5）不产生独立包类型；是否另有主播专属包待实测（见下表）。
 - 身份变化（进房解析、收到身份变更）后 MUST 重新加载，不得缓存跨身份的表情库。
 
 **待实测校准（表情包库）**
 
 | 项 | 现状 | 核对方法与步骤 |
 |---|---|---|
-| 上游端点与鉴权方式 | 候选为 `live.bilibili.com` 的直播间表情接口；未经实测，路径与参数不得写死 | 登录态下用 `DANMUBOX_LOG=debug` 抓一次真实加载，记录完整 URL、query、请求头与响应 `code` |
-| 响应包结构字段名 | 未知；本地 `Emote` 是契约 §5 的归一化形状，不假定上游字段名 | 抓取响应，记录每个包的类别字段、表情 key、文本与图片 URL 的字段路径 |
-| 游客是否可加载 `common` | 未知 | 清空凭据后重复加载，记录是否返回未登录错误 |
-| 粉丝牌 / 大航海 / 房管包的判定依据 | 上游可能另有「本房间身份」接口；本地先用 `RoomSession` 判定 | 在有牌、有舰、房管三种账号下各加载一次，比对返回包集合是否与身份一致 |
-| 是否存在主播专属包 | 未知 | 主播账号在自房间内加载一次，记录是否出现 `common`/`medal`/`guard`/`admin` 之外的类别 |
+| 上游端点与鉴权方式 | **已实测（A26）**：`GET /xlive/web-ucenter/v2/emoticon/GetEmoticons?platform=pc&room_id=<id>`（`platform=web` 被拒为 `code=500`），信封 `data.data[]` | 见 `protocol.md` 附录 A26 |
+| 响应包结构字段名 | **已实测（A26）**：表情字段 `emoji`（显示文本）/ `url` / `emoticon_unique` / `emoticon_id`，**没有 `text`**；分类看**表情级** `identity` 与 `perm`，包级 `pkg_perm` / `unlock_*` 无用 | 见 A26 与 A26 补充之三 |
+| 粉丝牌 / 大航海包的判定依据 | **已实测（A26）**：表情级 `identity`（4 = 粉丝团，1/2/3 = 总督/提督/舰长）加 `unlock_need_level`；房管**不在其中**（A26 结案） | 见 A26 |
+| 无权限表情的处置 | **已实测（A26 补充之三）**：上游照样返回，用表情级 `perm == 0` 标出；置灰判据就是它（字段缺失按可用） | 见 A26 补充之三 |
+| 游客是否可加载 `common` | **仍未实测** | 清空凭据后重复加载，记录是否返回未登录错误 |
+| 是否存在主播专属包 | **仍未实测** | 主播账号在自房间内加载一次，记录是否出现上列 5 类之外的类别 |
 
 ### 9.2 举报弹幕
 
@@ -497,16 +500,16 @@ sid = ""
 
 | 项 | 现状 | 核对方法与步骤 |
 |---|---|---|
-| 上游举报端点与请求字段 | 候选为直播弹幕举报接口；路径、方法、字段名均未实测，不得写死 | 登录态下举报一条自测弹幕，`DANMUBOX_LOG=debug` 抓取完整请求（URL、body、请求头） |
-| 举报理由/分类枚举 | 未知；界面选项必须以实测枚举为准，不得编造 | 抓取官方 web 端举报提交请求，记录分类字段的取值集合 |
-| `csrf` 的字段名与位置 | 推测为表单体字段（与发弹幕一致）；需确认是否存在 `csrf_token` 并存字段 | 对比官方请求的 body 与 query，确认字段名、是否放 query（放 query 一律禁止，§12） |
-| 成功与失败判定 | 未知 `code` 语义 | 分别制造一次成功与一次重复举报，记录 `code` / `message` 与频次限制行为 |
-| 是否存在举报频次限制 | 未知 | 连续举报多次，记录首次被拒的阈值与提示 |
+| 上游举报端点与请求字段 | **已实测（A27）**：先 `GET dMReport/ForReason` 取理由清单，再 `POST dMReport/Report`；字段 `reason` + `reason_id` / `roomid` / `msg` / `tuid` / `dm_type` / `id_str`（`ts` / `sign` 未上报也被接受） | 见 `protocol.md` §11.5 与附录 A27 |
+| 举报理由/分类枚举 | **已实测（A27）**：理由文案与 id 来自上游清单，`reason_id` 由文案反查；界面不许让用户手输理由 | 见 §11.5 |
+| `csrf` 的字段名与位置 | **已实测（A27 / §11.1）**：表单体里 `csrf` 与 `csrf_token` 同值；放 query 一律禁止（§12） | 见 `protocol.md` §11.1 |
+| 成功与失败判定 | **已实测（A27）**：界面走完整流程且无失败日志，即 `code=0`；非 0 code 会经 IPC 层报错 | 见 A27 |
+| 是否存在举报频次限制 | **仍未实测** | 连续举报多次，记录首次被拒的阈值与提示 |
 
 ### 9.3 关注列表与电池余额
 
 - 端口：`RoomCatalog`（关注列表 / 直播状态）与 `WalletProvider`（电池余额）（契约 §3）；IPC `follow_list` / `wallet_balance`（契约 §7）。
-- 关注列表凭据前提：**必须登录**（`SESSDATA`）；`DedeUserID` 是「查谁的关注」的 vmid 来源（上游是否要求显式 vmid 待实测）。只读，**不需要** `csrf`。
+- 关注列表凭据前提：**必须登录**（`SESSDATA`）；`DedeUserID` 是主站关注关系接口 `vmid` 参数的值（**该接口必须显式传 `vmid`**，实测见 A28 修正），直播侧 `GetWebList` 不需要显式 vmid。只读，**不需要** `csrf`。
 - 关注列表展示（领域形状见契约 §5）：`live_status == 1` 置顶（REQUIREMENTS.md 需求），同组内其余按 `group_name` 分组展示。
 - 电池余额凭据前提：**必须登录**；只读，端点取 **GET**，不需要 `csrf`（实测只用 Cookie 即返回 `code=0`）；本地以整数表示**电池**数量。上游**没有**独立的「电池」字段，换算 `电池 = 金瓜子 / 100`（2026-09-11 实测，见 `protocol.md` A29）。
 - 缓存与刷新：关注列表/直播状态只在 `follow_list` 触发时拉取，不得以轮询压上游；余额在每次进入礼物相关界面时按需拉取，不做后台轮询。
@@ -515,7 +518,7 @@ sid = ""
 
 | 项 | 现状 | 核对方法与步骤 |
 |---|---|---|
-| 关注列表上游端点与分页 | **已实测（2026-09-11）**：`GET /xlive/web-ucenter/v1/xfetter/GetWebList`，分页 `page` / `page_size`；vmid 随 `SESSDATA` 自动识别，无需显式传。**2026-09-13 修正：这个端点只返回在播房间**（关注 90 人 / 在播 0 人时给 `list=[]` + `not_living_num=90`）；未开播那一份另取：主站关注关系 `GET https://api.bilibili.com/x/relation/followings?vmid=<自己>&ps=50&pn=<页>` + 直播 `GET /room/v1/Room/get_status_info_by_uids?uids[]=<uid>...` | 已执行，见 `protocol.md` A28 修正 |
+| 关注列表上游端点与分页 | **已实测（2026-09-11）**：`GET /xlive/web-ucenter/v1/xfetter/GetWebList`，分页 `page` / `page_size`；该端点无需显式 vmid（随 `SESSDATA` 识别），分页终止按「本页条数 == `page_size`」判断（上游不给 `has_more`）。**2026-09-13 修正：这个端点只返回在播房间**（关注 90 人 / 在播 0 人时给 `list=[]` + `not_living_num=90`）；未开播那一份另取：主站关注关系 `GET https://api.bilibili.com/x/relation/followings?vmid=<自己>&ps=50&pn=<页>`（**必须显式传 `vmid`**）+ 直播 `GET /room/v1/Room/get_status_info_by_uids?uids[]=<uid>...` | 已执行，见 `protocol.md` A28 修正 |
 | `live_status` 的来源 | **已实测（2026-09-13）**：随关注列表返回（`live_status`），未开播的那一份随批量房间接口 `get_status_info_by_uids` 返回，取值口径一致（0 未开播 / 1 直播中 / 2 轮播） | 已执行（同上） |
 | `group_name`（关注分组）字段 | 直播侧两个关注端点都不给分组（见 A34）；分组在**主站**关注关系里（`tag` = 分组 id 数组） | 待产品决定是否新增端口，见 `protocol.md` A34 |
 | 电池余额端点与字段 | **已实测（2026-09-11）**：`GET /xlive/revenue/v1/wallet/myWallet`；字段 `data.gold`（金瓜子）/`silver`/`bp`；单位口径为电池 = gold / 100 | 已执行，端口实测返回 150；见 `protocol.md` A29 |
@@ -592,8 +595,8 @@ sid = ""
 
 - 被吞时上游外层 `code` 通常仍为成功值，因此**必须**检查 `msg` / `message` 的业务标记，不能只看外层 `code` 判成功。
 - 被吞弹幕的正文回显在 `data.mode_info.extra`（JSON 字符串）的 `content` 字段；本地可用它确认被吞的正是本次内容，但**不得**据此自动重发。
-- `blocked_platform` / `blocked_room` 的确切 `msg` / `message` 取值与判定顺序列入 §13 待实测，核对前不得作为稳定契约扩展到其他字段。
-- `rate_limited` / `medal_required` / `muted` / `failed` 对应的具体上游错误码未列出（契约 §5，待实测），实现 MUST 归一化到上表取值并保留原始 `code` / `message` 供排障。
+- `blocked_platform` / `blocked_room` 的映射沿用社区实现并**存疑**：`"f"` 的唯一真实样本出现在「发送者已把该主播拉黑」的房间（A16），不得据此把它当成稳定的平台风控判据、扩展到其他字段。
+- `rate_limited` / `medal_required` / `muted` / `failed` 对应的上游错误码仍未列全（契约 §5 与 A17）；已定的一条是 `code=10023`（发送者已拉黑该主播，上游原话「请先移除该用户黑名单」）→ `failed`，原话经 `SendReport.upstream_message` 带到界面。实现 MUST 归一化到上表取值并保留原始 `code` / `message` 供排障。
 
 ---
 
@@ -633,9 +636,9 @@ sid = ""
 | `host_list` 的典型条数与端口号 | 实测 6 项、`port=2243` / `ws_port=2244` / `wss_port=2245`，属服务端可调值 | 定期采样 `host_list`；实现从响应读取，不得硬编码 |
 | `data.token` 长度 | 实测 244–252 字符，非稳定契约 | 无需专门核对；实现不得断言长度 |
 | WS 认证回应中除 `code = 0` 之外的取值语义 | 无**权威**语义表，契约 §6 明确禁止编造 | 只有在复现到具体非 0 `code` 时，记录「code + 当时的 Cookie 状态 + 网络状态」到本文与 `protocol.md`，并标注为观察值而非规范值 |
-| 发弹幕被吞标记 `"f"` / `"k"` | 来自可复现的社区实现（契约 §5），**未经本项目真实发送确认** | 用真实账号在有房管/无房管的房间各发一条并观察业务响应 `msg`/`message` 与 `data.mode_info.extra`，回填 §11.3 |
-| `rate_limited` / `medal_required` / `muted` / `failed` 的上游错误码 | 契约 §5 未列出具体码值 | 分别制造限流、无牌发言、被禁言、其他失败各一次，记录 `code` / `message` 并回填 §11.3 |
-| 表情包库、举报、关注列表、电池余额的端点与字段 | 见 §9.1 / §9.2 / §9.3 各小节的「待实测校准」表 | 按各表步骤执行并回填；端点与字段以实测为准，不写入正式约定 |
+| 发弹幕被吞标记 `"f"` / `"k"` | **部分实测（A16）**：`"f"` 收到过一次（该样本的发送者当时把主播拉黑），成因未定；`"k"` 仍零样本。现映射（`f`→`blocked_platform`、`k`→`blocked_room`）沿用社区实现并**存疑** | 见 `protocol.md` §11.2 / §11.3 与 A16 |
+| `rate_limited` / `medal_required` / `muted` / `failed` 的上游错误码 | **部分实测（A17）**：`code=10023` = 发送者已拉黑该主播（上游原话「请先移除该用户黑名单」）→ `failed`；其余码仍未测 | 见 `protocol.md` A17 |
+| 表情包库、举报、关注列表、电池余额的端点与字段 | **已实测**：分别见 `protocol.md` A26 / A27 / A28 / A29（本节 §9 各表的现状列已同步结论） | — |
 
 ---
 

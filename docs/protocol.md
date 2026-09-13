@@ -80,13 +80,14 @@
 
 | 约束 | 取值 | 违反时的处理 |
 |---|---|---|
-| `headerLen` | 必须等于 `16` | 丢弃本包并计数 + `warn`；不拆分剩余字节 |
+| `headerLen` | `>= 16`（发送端固定写 `16`，见 §3.1） | 丢弃**本条流剩余的全部字节** + `debug` 日志，计入 `malformed_dropped`；不断连 |
 | `packetLen` 下限 | `>= headerLen` | 同上 |
-| `packetLen` 上限 | `<= 剩余缓冲区长度` | 视为截断包，丢弃剩余全部字节 + `warn` |
-| 单帧 `packetLen` 硬上限 | 16 MiB | 断开并进入重连流程，计入「异常帧」计数 |
-| 解压后单包上限 | 16 MiB（`contract.md` §4 规范性） | 丢弃该子包 + `warn`（解压炸弹护栏） |
-| 递归深度上限 | 4 层 | 丢弃该子包 + `warn` |
-| 尾部残留 | `< 16` 字节 | `warn` 并忽略，不影响本次连接 |
+| `packetLen` 上限 | `<= 剩余缓冲区长度` | 同上（视为截断包） |
+| 解压后单包上限 | 16 MiB（`MAX_DECOMPRESSED`，`contract.md` §4 规范性） | 丢弃该子包 + `warn`，计入 `oversize_dropped`；边读边限流，不会先撑爆内存 |
+| 递归深度上限 | 4 层（`MAX_DEPTH`） | 丢弃该层剩余数据 + `warn`，计入 `malformed_dropped` |
+| 尾部残留 | `< 16` 字节 | `debug` 日志并丢弃，计入 `malformed_dropped`，不影响本次连接 |
+
+帧级 `packetLen` 没有独立的硬上限：上限就是「不超过当前缓冲区」，超长帧由 WS 库自身的读限与连接超时兜底。
 
 ---
 
@@ -106,7 +107,7 @@
 | `op` | 名称 | 方向 | body 形态 | 处理 |
 |---|---|---|---|---|
 | `2` | 心跳 | 客户端 → 服务端 | 字面量字符串 `[object Object]` | 首包 60 秒内发出，收到 `op=3` 后重置为每 30 秒一次，见 §8.1 |
-| `3` | 心跳回应 / 人气值 | 服务端 → 客户端 | 4 字节大端无符号整数（人气值） | 解析为整数，计数 + `debug` 日志，并作为「连接存活」信号重置 WS 心跳周期 |
+| `3` | 心跳回应 / 人气值 | 服务端 → 客户端 | 4 字节大端无符号整数（人气值）；兼容历史上带 16 字节前缀的形态（body ≥ 20 字节时取偏移 16 起的 4 字节） | 解析为整数，计数 + `debug` 日志，并作为「连接存活」信号重置 WS 心跳周期 |
 | `5` | 业务消息 | 服务端 → 客户端 | 压缩子包拼接或 JSON（见 §6、§9） | 解包 → `cmd` 分发 → 归一化 → 广播 / 入会话缓冲 |
 | `7` | 认证 | 客户端 → 服务端 | JSON 对象（见 §7） | 连接建立后立即发送一次 |
 | `8` | 认证回应 | 服务端 → 客户端 | JSON 对象，含 `code` 字段 | `code=0` 视为成功；非 0 一律按认证失败处理（见 §13.3） |
@@ -160,7 +161,7 @@
 
 | 形态 | `uid` | `key` | 能力差异 |
 |---|---|---|---|
-| 游客 | `0` | `""` | 可收大部分弹幕 / 礼物 / SC；昵称可能掩码、UID 归一化为 `0` |
+| 游客 | `0` | `""` | 可收大部分弹幕 / 礼物 / SC；**载荷字段与登录态无差别**（2026-09-12 实测，A3 / A21：`uid` 非 0、昵称不掩码、粉丝牌与举报标识齐全），差异只在认证包形态与不可发送 |
 | 登录 | 真实 UID | `getDanmuInfo` 返回的 `token` | 完整字段、发送弹幕、粉丝牌信息完整 |
 
 ### 7.3 发送规则
@@ -279,9 +280,9 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 
 | 场景 | 处理 |
 |---|---|
-| brotli / zlib 解压抛错 | 丢弃该子包，按编码计入 `bad_brotli` / `bad_zlib`，连接继续 |
+| brotli / zlib 解压抛错 | 丢弃该子包并计入 `decompress_errors`（两种编码合用一个计数，不按编码细分），连接继续 |
 | 解压后为空 | 跳过，不计错 |
-| JSON 解析失败 | 丢弃该命令，计入 `malformed` + `debug` 日志（含原始字节长度，不含敏感字段） |
+| JSON 解析失败 | 丢弃该命令，计入 `malformed_dropped` + `debug` 日志（含原始字节长度，不含敏感字段） |
 | 同一帧内混合 `protover` 子包 | 按子包自身 `protover` 分别处理，不做统一假设 |
 | `op=5` 帧 body 为明文单命令 | 等价于单子包路径，走同一函数 |
 
@@ -310,14 +311,12 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 > 其中 `WATCHED_CHANGE.data.num`（累计看过）与 `ONLINE_RANK_COUNT.data.online_count`（在线人数）
 > 除计数外还要**冒泡给界面**（`Dispatch::RoomStats` → 契约 §5 `RoomStats`），其余几条只计数。
 
-**已知但直接丢弃的命令**：`STOP_LIVE_ROOM_LIST`（全站停播列表，与当前房间无关）、`HOT_ROOM_NOTIFY`（客户端刷新提示）、`DANMU_MSG_MIRROR`（非本房间镜像弹幕，计入 `mirrored_dropped`）。
+**已知但直接丢弃的命令**（判据是**载荷**而非命令名，见 A22；一律**不计入** `unknown_cmd`）：`ONLINE_RANK_V3`（`data.pb` 是 protobuf 高能榜，出现频率高）、`PLAYURL_RELOAD` / `PLAYURL_RELOAD_MASTER`（载荷只有播放地址）、`STOP_LIVE_ROOM_LIST`（全站停播列表）、`HOT_ROOM_NOTIFY`（客户端刷新提示）、`DANMU_MSG_MIRROR`（非本房间镜像弹幕，另计入 `mirrored_dropped`，见 §10.5）。
 
-其余所有 `cmd` 一律不产生 `Message`：记录 `debug` 日志（命令名 + `room_id`）并计入 `unknown_cmd`。`kind` 取值集合恒为六种，新增 `cmd` 不得新增 `kind`。
+其余所有 `cmd` 一律不产生 `Message`：记录 `debug` 日志（命令名 + `room_id`）并计入 `unknown_cmd`。带后缀的命令名（如 `DANMU_MSG:4:0:2:2:2:0`）先取 `:` 前的主干再查表。`kind` 取值集合恒为六种，新增 `cmd` 不得新增 `kind`。
 
 > **实测记录（2026-09-11）**：以游客态连接一个在线约 20 万的在播房间（房间号不写入仓库，见 `AGENT.md` §8）抓取 35 秒，实际出现 29 条业务载荷，全部落在上表：`DANMU_MSG`、`INTERACT_WORD_V2`、`ENTRY_EFFECT`、`WATCHED_CHANGE`、`LIKE_INFO_V3_UPDATE`、`LIKE_INFO_V3_CLICK`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`POPULARITY_CHANGE`、`ONLINE_RANK_COUNT`、`ONLINE_RANK_V3`、`RANK_CHANGED_V2`、`PK_INFO`、`WIDGET_BANNER`、`UNIVERSAL_EVENT_GIFT`、`UNIVERSAL_EVENT_GIFT_V2`、`SEND_GIFT_V2`、`HOT_ROOM_NOTIFY`、`STOP_LIVE_ROOM_LIST`。
 > 其中 `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` **尚无载荷样本**，不得凭命名猜测语义（见附录 A22）。
->
-> **2026-09-12 更正**：上一条把 `ONLINE_RANK_COUNT` / `ONLINE_RANK_V3` / `SEND_GIFT_V2` 也列成了未归类，但三者早已归位——`SEND_GIFT_V2` 走 V2 礼物管线（§10.2）；`ONLINE_RANK_COUNT` 在计数类里（`data` 的 `count` / `online_count`，与 `POPULARITY_CHANGE` 同口径，见 A23）；`ONLINE_RANK_V3` 载荷只有 `data.pb`（protobuf 高能榜），归入「已知且无关」。它们若仍计入 `unknown_cmd`，那个计数器就失去意义了。
 
 ### 10.1 `DANMU_MSG`（`kind=danmaku`）
 
@@ -331,8 +330,9 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `color` | `info[0][3]` | 十进制 RGB 整数；缺失 → `0` | 已实测（样本 `16777215`） |
 | `medal_level` | `info[0][15].user.medal.level` | 无粉丝牌 → `0` | 已实测（样本 `24`） |
 | `medal_name` | `info[0][15].user.medal.name` | 无粉丝牌 → `""` | 已实测 |
-| `guard_level` | `info[0][15].user.guard.level`，缺失时回落 `…user.medal.guard_level` | `0` 无 / `1` 总督 / `2` 提督 / `3` 舰长 | **仅观测到 0**（缺舰长样本，A12） |
-| `is_admin` | `info[2][2] == 1` | 经典槽位 | **未确认**：仅观测到 `0`，缺房管正向样本（A5） |
+| `guard_level` | **`info[7]`**（一个数字），缺失时回落 `info[0][15].user.guard.level`（二者同义） | `0` 无 / `1` 总督 / `2` 提督 / `3` 舰长 | 已实测（180 条：`info[7]=3` 43 条，A39） |
+| `medal_guard_level` | `info[0][15].user.medal.guard_level` | **粉丝牌自身**的舰长标记（牌子所属房间）；不画舰长标，只供牌面样式；与 `guard_level` **不得互相兜底** | 已实测（A39） |
+| `is_admin` | `info[2][2] == 1` | 经典槽位 | 已解决（2026-09-12 跨房间对照，A5） |
 | `upstream_id` | `info[0][15].extra` 是 JSON 字符串，取其中的 `id_str` | 举报弹幕所需 | 已实测（样本为 36 位十六进制串） |
 | `ts` | `info[0][4]`（毫秒） | 秒级备选在 `info[0][5]` | 已实测 |
 | `room_id` | 连接上下文 | 取真实 `room_id`，不信任载荷内房间字段 | 已确定（契约） |
@@ -435,7 +435,7 @@ JSON 里只有 `{dmscore, pb}`。
 | `upstream_id` | `data.id` | SC 标识（样本为数字 `18968196`），举报与去重都用得上 |
 | `ts` | `data.ts`，回落 `data.start_time` | **秒级**，×1000 归一化为毫秒 |
 | `medal_level` / `medal_name` | `data.medal_info.medal_level` / `.medal_name` | 样本 `10` / `粉丝团` |
-| `guard_level` | `data.user_info.guard_level`，回落 `medal_info.guard_level` | 样本两者都在 |
+| `guard_level` | `data.user_info.guard_level`（本房间大航海等级）；`data.medal_info.guard_level` 走 `medal_guard_level`，**两者不互相兜底** | 样本两者都在 |
 | `is_admin` | `data.user_info.manager` | 房管标记（样本 `0`）|
 
 **换算**：同一载荷还带 `data.rate = 1000`，即 1 元 = 1000 金瓜子——礼物金额（金瓜子）
@@ -487,7 +487,7 @@ JSON 里只有 `{dmscore, pb}`。
 
 处理约束：
 
-- 载荷缺失、base64 非法、或解码出空字节 → 丢弃该命令，计入 `malformed`，连接继续。
+- 载荷缺失、base64 非法、或解码出空字节 → 丢弃该命令，计入 `malformed_dropped`，连接继续。
 - 未知 `msg_type` 一律使用「互动」+ 原始枚举数值，禁止臆造语义（见 §15.2）。
 - V1（`INTERACT_WORD`，JSON）与 V2（protobuf）归一化到同一 `kind`，共用 `Message` 结构。
 
@@ -513,7 +513,7 @@ JSON 里只有 `{dmscore, pb}`。
 | 项 | 约定 |
 |---|---|
 | 默认行为 | **丢弃**，不广播、不入会话缓冲 |
-| 计数 | 计入 `mirror_dropped` 计数，供观测（见 §17.2） |
+| 计数 | 计入 `mirrored_dropped` 计数，供观测（见 §17.2） |
 | 日志 | `debug` 级别记录 `room_id` 与来源房间标识（若有），不记录敏感字段 |
 | 可配置性 | 本期不提供开关；将来若需要展示镜像弹幕，须先改 `contract.md` 再实现 |
 
@@ -560,7 +560,7 @@ JSON 里只有 `{dmscore, pb}`。
 | 情况 | 处理 |
 |---|---|
 | `cmd` 不在 §10.0 表内 | `debug` 日志（命令名、`room_id`）+ 丢弃；计入 `unknown_cmd` 计数 |
-| 载荷缺少 `cmd` 字段 | 同上，计入 `malformed` 计数 |
+| 载荷缺少 `cmd` 字段 | 同上，计入 `malformed_dropped` 计数 |
 | 载荷为数组 | 逐元素展开后按各元素自身 `cmd` 处理 |
 | `data` 字段形态与预期不符（可为对象或数组） | 统一按「对象包装为单元素数组」处理 |
 | 归一化必填字段缺失 | 使用零值填充并 `debug` 记录缺失字段名；不丢弃整条消息（计数类除外） |
@@ -793,7 +793,7 @@ stateDiagram-v2
 | 断线期间的弹幕 | 无法补收（协议不提供断点续传）；重连后重新开始接收 |
 | 会话缓冲 | 自动重连**不清空**缓冲；重连后继续在**同一次会话**内追加（见 §12.2） |
 | `LIVE` / `PREPARING` 状态 | 重连成功后以首帧或重取的房间信息重新校准 `live_status` |
-| 观测 | 通过 `danmubox://status` 暴露重连次数与最近错误，供排障（见 [`ipc.md`](ipc.md)） |
+| 观测 | 连接状态与最近一次失败原因经 `danmubox://status` 推出（`StatusEvent` = `room_id` / `state` / `detail`，见 [`ipc.md`](ipc.md)）；**重连次数不在该载荷里** |
 
 ---
 
@@ -881,17 +881,17 @@ stateDiagram-v2
 
 | 计数 | 含义 |
 |---|---|
-| `frames_rx` / `frames_tx` | 收 / 发帧总数 |
-| `subpackets` | 拆分出的子包数 |
-| `bad_brotli` / `bad_zlib` | brotli / zlib 解压失败次数 |
+| `packets` | 收到的 WS 帧总数（解析入口处累加，含全部 `op`） |
+| `messages` | 经 `MessageSink` 投递到事件总线的 `Message` 条数 |
+| `decompress_errors` | brotli / zlib 解压失败次数（合并计数） |
 | `oversize_dropped` | 解压后超过 16 MiB 被丢弃的子包数 |
-| `trailing_bytes` | 尾部残留字节帧数 |
-| `mirror_dropped` | `DANMU_MSG_MIRROR` 丢弃数 |
-| `unknown_cmd` | 未映射命令数 |
-| `malformed` | JSON / protobuf 解析失败或缺少 `cmd` 数 |
-| `reconnects` | 自动重连次数（手动重连另计） |
-| `auth_failures` | 认证失败次数（含 `code` 分布计数） |
-| `http_hb_failures` | HTTP 心跳失败次数 |
+| `malformed_dropped` | JSON / protobuf 解析失败、base64 非法、载荷缺 `cmd` 等被判畸形的载荷数 |
+| `mirrored_dropped` | `DANMU_MSG_MIRROR` 丢弃数 |
+| `unknown_cmd` | 未映射命令数（§10.0 的「已知但直接丢弃」不计入） |
+| `counter_updates` | 计数类命令更新次数（§10.7） |
+| `heartbeat_failures` | HTTP 心跳失败次数（§8.2） |
+
+以上即 `CounterSnapshot`（`crates/danmubox-core/src/bus.rs`）的字段集合，在 CLI 汇总与 `app_info` 中可见。
 
 ### 17.3 回放与 fixture
 

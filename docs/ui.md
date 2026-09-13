@@ -336,7 +336,9 @@
 
 色值为本项目本地设计 token，与 B 站网页端配色的差异见 §13。
 
-表情弹幕（`Message.emote` 非空）**画图不画字**：此时正文就是表情名，只显示文字会被当成「表情没渲染」。图与文字同高对齐，`alt` 与 `title` 都填表情名——图加载不出来时浏览器回退显示 alt，不至于变成空白。**真实载荷还说明它「整条就是一张表情」**：同一天的 11085 条真实 `DANMU_MSG` 里，35 个 `emoticon_unique` 与 `info[1]`（表情名）一一对应、尺寸**全部** 162×162、`emoticon_unique` 非空时 `info[5]`（emots 数组）恒为 `["", ""]`——表情包弹幕没有可排版的用户正文，因此按整条画图处理，不做「文字 + 行内表情」的排版（取证与夹具见 §15.3）。
+表情弹幕（`Message.emote` 非空）**画图不画字**：此时正文就是表情名，只显示文字会被当成「表情没渲染」。图与文字同高对齐，`alt` 与 `title` 都填表情名——图加载不出来时浏览器回退显示 alt，不至于变成空白。**真实载荷还说明它「整条就是一张表情」**：同一天的 11085 条真实 `DANMU_MSG` 里，35 个 `emoticon_unique` 与 `info[1]`（表情名）一一对应、尺寸**全部** 162×162——表情包弹幕没有可排版的用户正文，因此按整条画图处理。
+
+**另一族是「正文里的文字表情」（`[dog]` 这类）**，路由与上一条**不同**（2026-09-13 取证，`docs/protocol.md` §10.1.x / 附录 A42）：`info[0][13]` 是空槽位 `"{}"`，图只在 `extra.emots` 这个 map 里（键就是正文里那个 token）。后端**只在「正文整条恰好是一个 token」时**填 `Message.emote`，因此那一类照上面画图（实测盒 23.1×23.1px，图真实加载）；token 夹在别的字里时正文保持原文（`Message.emote` 是「整条画图」语义，设了会吞掉用户的话），**正文内的行内替换本实现没做**——那种行会原样显示 `点歌 大风吹 刘惜君[dog]`。夹具：`smoke/fixtures/danmaku-rows.json` 的 `emots`（整条）与 `emots-inline`（混排，取证用）。
 
 **弹幕行里的表情图宽高一律给死 + `object-fit: contain`**（`.contentEmote` 见方盒 / `.contentEmoteWide` 横条宽盒 / `.contentEmoteBulge`）：上游 CDN 的表情是原图直出，尺寸各档不同（通用表情 200×60 的横条、房间 / 粉丝牌 162×162 的方图），只写 `height` 时宽度会按原图比例算出来——改前实测：200×60 的那条渲染成 **23.1px 高 / 77px 宽**。这与「512×512 头像顶爆主页」「表情撑出面板格子」是同一个错误，**第三次**出现在弹幕行里。冒烟按 `rowInlineEmoteWideBox`（通用那条的盒高 = 1.1 × 行盒、宽高比 = 10:3）、`rowInlineEmoteTallerThanText`（画出来的高度 > 1em）与 `rowInlineEmoteFitsRow`（宽盒也不许撑破行）、`fixtureEmoteImgExplicitBox` / `fixtureEmoteImgInsideColumn`（真实夹具那条大表情弹幕）断言。
 

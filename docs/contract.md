@@ -179,7 +179,7 @@ sessdata = ""
 | `is_admin` | bool | 发送者是否房管（REQUIREMENTS.md 需求） |
 | `is_history` | bool | 是否来自进场回填（§4.3）；实时推送恒为 `false` |
 | `amount` | i64 | 礼物金瓜子或 SC 金额，非交易类为 0 |
-| `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。存整份而非只存图片地址，是为了让界面能把它**再发出去** |
+| `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。两种来源都算「表情弹幕」：① `info[0][13]` 是对象（`dm_type=1`，图在槽位里）；② **正文整条恰好是一个文字表情 token**（`[dog]` 这类，图在 `extra.emots[正文]` 里，见 `protocol.md` §10.1.x / A42）。正文里夹着别的字时**不设**本字段（本字段是「整条画图」语义，设了会吞掉正文）。存整份而非只存图片地址，是为了让界面能把它**再发出去** |
 | `reply_to_uid` | i64 | 被回复者的 uid；`0` 表示这条不是回复（上游把它塞在 `info[0][15].extra` 这个 JSON 字符串里，历史条目另有其路径） |
 | `reply_to_uname` | string | 被回复者昵称；非回复为空串 |
 | `reply_type_enum` | i64 | 上游回复类型枚举（实时 `extra.reply_type_enum`，历史 `reply.reply_type_enum`）。官方枚举 `{0: NO_REPLY, 1: NORMAL_REPLY, 2: MATCH_REPLY}`，但实测只有 `0`/`1` 出现、且与 `reply_mid` 是否非 0 完全同构——**不得**用它区分「纯 @」与「回复」（`protocol.md` A40） |

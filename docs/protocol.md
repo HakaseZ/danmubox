@@ -337,7 +337,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `ts` | `info[0][4]`（毫秒） | 秒级备选在 `info[0][5]` | 已实测 |
 | `room_id` | 连接上下文 | 取真实 `room_id`，不信任载荷内房间字段 | 已确定（契约） |
 | `amount` | — | 弹幕恒为 `0` | 已确定（契约） |
-| `emote_url` | `info[0][13].url`（**是对象时才有**） | 表情弹幕的图片地址；非表情弹幕该槽位是字符串 `"{}"`。上游混用 `http://` 与 `https://`，统一升为 https（`asset.rs`）；**图片 CDN 还有防盗链**：来源不是 bilibili 时一律 403（本地页面的 `Referer` 同样被拒），浏览器随即以 ORB 拦掉这个「不像图片的响应」，最终只显示一个问号——因此页面必须声明 `<meta name="referrer" content="no-referrer">`（实测不带 Referer 放行） | 已实测（某个在播房间（房间号不写入仓库），样例 `official_345`） |
+| `emote_url` | `info[0][13].url`（**是对象时才有**）；**正文整条就是一个文字表情 token 时**取 `info[0][15].extra.emots[正文].url`（见 §10.1.x 与附录 A42） | 表情弹幕的图片地址；非表情弹幕该槽位是字符串 `"{}"`。上游混用 `http://` 与 `https://`，统一升为 https（`asset.rs`）；**图片 CDN 还有防盗链**：来源不是 bilibili 时一律 403（本地页面的 `Referer` 同样被拒），浏览器随即以 ORB 拦掉这个「不像图片的响应」，最终只显示一个问号——因此页面必须声明 `<meta name="referrer" content="no-referrer">`（实测不带 Referer 放行） | 已实测（某个在播房间（房间号不写入仓库），样例 `official_345`） |
 
 ```json
 { "cmd": "DANMU_MSG",
@@ -367,7 +367,12 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 1. **表情信息的槽位与字段名与官方一致**。官方在解析弹幕时用的正是同一个槽位，并把它归一化成
    `emoticonOptions: { bulgeDisplay, emoticonUnique, inPlayerArea, isDynamic, height, width, url }`——
    与本实现 `EmoteRef` 的字段一一对应（`info[0][13]`）。官方另有一路兜底：载荷里若带 `emoticons` 映射，
-   则按弹幕正文 `emoticons[content]` 取表情。本实现只走 `info[0][13]`，实测未见过后者。
+   则按弹幕正文 `emoticons[content]` 取表情。**这一路已补实测（2026-09-13）**：上游把这份映射放在
+   `info[0][15].extra`（JSON 字符串）的 **`emots`** 键上（键就是正文里那个 token），
+   而且带 `emots` 的弹幕 `info[0][13]` **恒为空槽位** `"{}"` —— 两类互不重叠（49294 条真实
+   `DANMU_MSG`：带 `emots` 1196 条、槽位 13 全空；槽位 13 是对象的 4043 条、`emots` 全空）。
+   实现取这一路时**只在「正文恰好等于 token」时设 `Message.emote`**（与 `history.rs` 同一口径，
+   避免整条画图吞掉正文）；混排的 855 条保持原文，见附录 A42 与 `docs/ui.md` §15.3。
 2. **`emoticon_id` 的算法**：官方对 `emoticon_unique` 按 `_` 切分取**最后一段**作为 `emoticon_id`
    （`(""+unique).split("_").pop()`）。本实现不需要它（发送时 `msg` 传的是 `emoticon_unique` 本身），
    记录在此以免将来重复推导。
@@ -989,6 +994,7 @@ stateDiagram-v2
 | A34 | 关注分组的来源 | 「关注分组」（REQUIREMENTS §2.6）的数据从哪来——直播关注接口未提供 | 在官方网页端打开关注面板并抓请求，或核对主站关注接口的字段 | **已核实（2026-09-12）**：直播侧两个关注端点的字段表里都没有分组；官方直播页面产物里也搜不到。分组数据在**主站关注接口**（`docs/user/relation.md`：关注关系里带 `tag` = 分组 id 数组，默认分组时为 `null`）——属于**另一套上游**。要不要为它新增端口由产品决定；当前界面把关注一律归入「未分组」，与上游给的数据一致 | `follow.rs` |
 | A35 | `upower_` 表情家族（UP 主专属 / 充电表情） | 弹幕里出现的 `upower_[UP名_表情名]` 属于哪套体系；能否从直播表情接口取到 | 比对图片资源域；查主站表情接口 | **部分实测（2026-09-12）**：该家族**不在直播表情接口里**——对同一房间调用 `GetEmoticons` 只返回通用包，而实际收到的表情弹幕是 `upower_[Kirikosama_吃瓜]`，其图片地址在 `i0.hdslb.com/bfs/emote/`，**与直播表情的 `bfs/live/` 不是同一资源域**，因此属**主站表情体系**（UP 主专属 / 充电表情，对应信封里那个 `purchase_url`）。结论：**渲染不受影响**（弹幕自带 `url`，本实现照画）；但表情面板**取不到这一族**，要补需另找主站接口（同 A34 的性质）。接口文档只记 `platform` + `room_id` 两个参数，无开关可取 | `emote.rs`、§10 |
 | A35 结案（2026-09-12） | `upower_` 家族从哪取 | 社区文档 `docs/emoji/list.md`（主站表情）+ 实测一次请求 | **`GET https://api.bilibili.com/x/emote/user/panel/web?business=reply`**（Cookie 认证）——主站「我的表情」面板，返回**用户拥有**的表情包。实测：包「Kirikosama」`type=3`、20 个表情；表情 `text` 就是完整名字 `[Kirikosama_吃瓜]`，图片 url 尾段与实测收到的那条 `upower_[Kirikosama_吃瓜]` **完全一致**。由此确认唯一键构造：**`upower_` + 表情的 `text`**。`business=live` 返回 `-400`（只有 `reply` / `dynamic`）。注意主站表情对象**没有** `emoticon_unique` 字段，编号语义与直播那套不同，需按上式自行拼装 |
+| A42 | **正文里的行内文字表情**（`[dog]` 这类）图片从哪来；`info[0][13]` 之外还有没有别的表情路由 | 统计真实 `DANMU_MSG` 里 `info[0][13]` 的形态分布，并逐条比对 `info[0][15].extra` 的键集合 | 对 `/tmp/standalone.log`（2026-09-12 全天、49294 条 `DANMU_MSG` 的 debug 级原始载荷）做全量统计：`info[0][13]` 是对象的 4043 条、`extra.emots` 非空的 1196 条，**两类零重叠** | **已实测（2026-09-13，用户报「表情包【dog】渲染不出来」）**：上游对文字表情走**另一条路**——`info[0][13]` 是空槽位 `"{}"`，图片只在 `extra.emots` 这个 map 里，键是正文里的 token（`"[dog]"`），值形如 `{count, descript, emoji, emoticon_id, emoticon_unique, width, height, url}`。样本 `[dog]`：`emoticon_unique="emoji_208"`、`url=http://i0.hdslb.com/bfs/live/4428c84e….png`、`width/height=20`（图床实际 59×59，声明值是**行内显示尺寸**）。**`emoji_208` 不在 `GetEmoticons` 的任何包里**（该接口实测只有 `official_*` / `room_*`），所以这一族的表情面板取不到、只能从弹幕学（同 A35 的性质）。**正文与 token 的关系**：1196 条里 341 条「正文恰好等于 token」、855 条「token 夹在别的字里」。**处置**：`cmd.rs` 只在正文恰好等于某个 token 时设 `Message.emote`（与 `history.rs` A32 同一口径），混排的保持原文——`Message.emote` 是「整条画图」语义，替不了正文内的行内替换。夹具：`apps/desktop/ui/smoke/fixtures/danmaku-rows.json` 的 `emots` / `emots-inline`（完整原始记录，已脱敏） | `cmd.rs` §10.1、`docs/ui.md` §15.3 |
 
 ---
 

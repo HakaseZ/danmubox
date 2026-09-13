@@ -1,5 +1,5 @@
 {
-  "_note": "弹幕行的真实上游载荷（DANMU_MSG，只读固化自 2026-09-12 应用真实运行的 debug 日志）。结构与字段原样保留，**不允许手写**：手写夹具正是「图比格子宽 / 正文被挤」这类 bug 逃过验证的根因（同 emotes.json 的口径）。两条都是**完整原始记录**（`info` 全部 18 个槽位 + `extra` 原样），冒烟的场景与断言一律从这里派生。",
+  "_note": "弹幕行的真实上游载荷（DANMU_MSG，只读固化自 2026-09-12 应用真实运行的 debug 日志）。结构与字段原样保留，**不允许手写**：手写夹具正是「图比格子宽 / 正文被挤」这类 bug 逃过验证的根因（同 emotes.json 的口径）。四条都是**完整原始记录**（`info` 全部 18 个槽位 + `extra` 原样），冒烟的场景与断言一律从这里派生。",
   "sources": [
     {
       "key": "text",
@@ -27,6 +27,37 @@
         "info[2][0]（uid）→ <redacted>",
         "info[0][13].emoticon_unique 的房间号段 → room_<redacted>_53352（结构保留，房间号不入库）",
         "info[0][13].url 与 user.base.face 只脱敏哈希段"
+      ]
+    },
+    {
+      "key": "emots",
+      "kind": "DANMU_MSG",
+      "why": "用户 2026-09-13 报「表情包【dog】渲染不出来」的**完整原始记录**：正文 `info[1]` 就是 `[dog]`（整条只有这一个表情），但 `info[0][13]` 是**空槽位** `\"{}\"`，表情（图 `bfs/live/4428c84e….png`、`width/height=20`、`emoticon_unique=emoji_208`）只在 `info[0][15].extra` 这个 JSON 字符串的 **`emots` map** 里。同一天 49294 条真实 `DANMU_MSG` 的统计：**带 `emots` 的 1196 条，`info[0][13]` 全是空槽位**（两类互不重叠：槽位 13 是对象的 4043 条里 `emots` 全为空）——因此只看槽位 13 的实现会把这一族表情整个丢掉，界面就只剩原样的 `[dog]` 文本。",
+      "captured_from": "应用真实运行日志（debug 级 `原始业务载荷`），2026-09-12T10:09:30Z",
+      "sanitized": [
+        "昵称 → **等长掩码**（CJK 与全角 → 全角 ＊，ASCII → x；同 `text` 那一条的口径）",
+        "info[0][5]（发送者 uid）与 info[0][7]（校验位哈希）→ <redacted>",
+        "info[2][0]（uid）→ <redacted>",
+        "info[3][3]（主播房间号）与 info[3][12]（主播 uid）→ <redacted>",
+        "info[0][15].user.{uid} 与 user.medal.{ruid} → <redacted>（无牌时为 null，原样保留）",
+        "info[0][15].user.base.face / origin_info.face 只脱敏哈希段（`/member/noface.jpg` 是上游默认头像，无身份信息，原样）",
+        "额外要求：**该表情的图片地址原样保留**（`i0.hdslb.com/bfs/live/…png` 是公开表情资源，与 emotes.json 同一口径）——它是「上游确实给了图」的取证本身",
+        "extra 里的 user_hash / id_str → <redacted>（extra 是 JSON 字符串，脱敏后按同结构序列化回去）"
+      ]
+    },
+    {
+      "key": "emots-inline",
+      "kind": "DANMU_MSG",
+      "why": "同一天的**行内**文字表情：正文 `点歌 大风吹 刘惜君[dog]` 里夹着一个 `[dog]`，`extra.emots` 同样有 `[dog]` 的图片，但正文**不等于**这个 token。同样 1196 条带 `emots` 的弹幕里，341 条「正文恰好等于 token」、855 条「token 夹在别的字里」——后者要画图就必须在正文里做**行内替换**（本实现目前的 `Message.emote` 是「整条画图」语义，代替不了行内）。这条夹具是「行内不替换就只剩 `[dog]` 原文」的取证。",
+      "captured_from": "应用真实运行日志（debug 级 `原始业务载荷`），2026-09-12T07:50:27Z",
+      "sanitized": [
+        "昵称 / 粉丝牌名 / 主播名 → **等长掩码**（同 `text` 那一条的口径）",
+        "info[0][5]（发送者 uid）与 info[0][7]（校验位哈希）→ <redacted>",
+        "info[2][0]（uid）→ <redacted>",
+        "info[3][3]（主播房间号）与 info[3][12]（主播 uid）→ <redacted>",
+        "info[0][15].user.{uid} 与 user.medal.{ruid} → <redacted>",
+        "info[0][15].user.base.face / origin_info.face 只脱敏哈希段",
+        "extra 里的 user_hash / id_str → <redacted>"
       ]
     }
   ],
@@ -293,6 +324,265 @@
       528,
       [
         27
+      ],
+      null
+    ]
+  },
+  "emots": {
+    "cmd": "DANMU_MSG",
+    "dm_v2": "",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789207769778,
+        "<redacted>",
+        0,
+        "<redacted>",
+        0,
+        0,
+        0,
+        "",
+        0,
+        "{}",
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":0,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"[dog]\",\"user_hash\":\"<redacted>\",\"emoticon_unique\":\"\",\"bulge_display\":0,\"recommend_score\":5,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":{\"[dog]\":{\"count\":1,\"descript\":\"[dog]\",\"emoji\":\"[dog]\",\"emoticon_id\":208,\"emoticon_unique\":\"emoji_208\",\"height\":20,\"url\":\"http://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png\",\"width\":20}},\"is_audited\":false,\"id_str\":\"<redacted>\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "http://i0.hdslb.com/bfs/face/member/noface.jpg",
+              "is_mystery": false,
+              "name": "xxxxxxxx",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "http://i0.hdslb.com/bfs/face/member/noface.jpg",
+                "name": "xxxxxxxx"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": null,
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": "<redacted>",
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "[dog]",
+      [
+        "<redacted>",
+        "xxxxxxxx",
+        0,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [],
+      [
+        3,
+        0,
+        9868950,
+        ">50000",
+        0
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "<redacted>",
+        "ts": 1789207769
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      30,
+      [
+        2
+      ],
+      null
+    ]
+  },
+  "emots-inline": {
+    "cmd": "DANMU_MSG",
+    "dm_v2": "",
+    "info": [
+      [
+        0,
+        1,
+        25,
+        16777215,
+        1789199426822,
+        "<redacted>",
+        0,
+        "<redacted>",
+        0,
+        0,
+        0,
+        "",
+        0,
+        "{}",
+        "{}",
+        {
+          "extra": "{\"send_from_me\":false,\"master_player_hidden\":false,\"mode\":0,\"color\":16777215,\"dm_type\":0,\"font_size\":25,\"player_mode\":1,\"show_player_type\":0,\"content\":\"点歌 大风吹 刘惜君[dog]\",\"user_hash\":\"<redacted>\",\"emoticon_unique\":\"\",\"bulge_display\":0,\"recommend_score\":2,\"dm_score\":0,\"chronos_force_display\":0,\"main_state_dm_color\":\"\",\"objective_state_dm_color\":\"\",\"direction\":0,\"pk_direction\":0,\"quartet_direction\":0,\"anniversary_crowd\":0,\"yeah_space_type\":\"\",\"yeah_space_url\":\"\",\"jump_to_url\":\"\",\"space_type\":\"\",\"space_url\":\"\",\"animation\":{},\"emots\":{\"[dog]\":{\"count\":1,\"descript\":\"[dog]\",\"emoji\":\"[dog]\",\"emoticon_id\":208,\"emoticon_unique\":\"emoji_208\",\"height\":20,\"url\":\"http://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png\",\"width\":20}},\"is_audited\":false,\"id_str\":\"<redacted>\",\"icon\":null,\"show_reply\":true,\"reply_mid\":0,\"reply_uname\":\"\",\"reply_uname_color\":\"\",\"reply_is_mystery\":false,\"reply_type_enum\":0,\"hit_combo\":0,\"esports_jump_url\":\"\",\"is_mirror\":false,\"is_collaboration_member\":false,\"card\":{\"card_type\":0,\"oid_str\":\"\",\"oid_str_1\":\"\",\"origin_oid_str\":\"\",\"share_id\":\"\",\"share_origin\":\"\",\"from\":\"\",\"card_content\":null},\"voice\":null,\"background_type\":0}",
+          "mode": 0,
+          "show_player_type": 0,
+          "user": {
+            "anon": null,
+            "base": {
+              "face": "https://i2.hdslb.com/bfs/face/<redacted>.jpg",
+              "is_mystery": false,
+              "name": "＊xx＊",
+              "name_color": 0,
+              "name_color_str": "",
+              "official_info": {
+                "desc": "",
+                "role": 0,
+                "title": "",
+                "type": -1
+              },
+              "origin_info": {
+                "face": "https://i2.hdslb.com/bfs/face/<redacted>.jpg",
+                "name": "＊xx＊"
+              },
+              "risk_ctrl_info": null
+            },
+            "bubble_box": null,
+            "dm_config": {
+              "color": 16777215,
+              "length": 40,
+              "mode": 1
+            },
+            "guard": null,
+            "guard_leader": null,
+            "medal": {
+              "color": 6067854,
+              "color_border": 12632256,
+              "color_end": 12632256,
+              "color_start": 12632256,
+              "guard_icon": "",
+              "guard_level": 0,
+              "honor_icon": "",
+              "id": 1115127,
+              "is_light": 0,
+              "level": 3,
+              "name": "＊＊＊",
+              "ruid": "<redacted>",
+              "score": 10,
+              "typ": 0,
+              "user_receive_count": 0,
+              "v2_medal_color_border": "#919298CC",
+              "v2_medal_color_end": "#919298CC",
+              "v2_medal_color_level": "#919298E6",
+              "v2_medal_color_start": "#919298CC",
+              "v2_medal_color_text": "#FFFFFF"
+            },
+            "name_color": null,
+            "title": {
+              "old_title_css_id": "",
+              "title_css_id": ""
+            },
+            "uhead_frame": null,
+            "uid": "<redacted>",
+            "wealth": null
+          }
+        },
+        {
+          "activity_identity": "",
+          "activity_source": 0,
+          "not_show": 0
+        },
+        0
+      ],
+      "点歌 大风吹 刘惜君[dog]",
+      [
+        "<redacted>",
+        "＊xx＊",
+        0,
+        0,
+        0,
+        10000,
+        1,
+        ""
+      ],
+      [
+        3,
+        "＊＊＊",
+        "＊＊＊",
+        "<redacted>",
+        6067854,
+        "",
+        0,
+        12632256,
+        12632256,
+        12632256,
+        0,
+        0,
+        "<redacted>"
+      ],
+      [
+        27,
+        0,
+        5805790,
+        ">50000",
+        0
+      ],
+      [
+        "",
+        ""
+      ],
+      0,
+      0,
+      null,
+      {
+        "ct": "<redacted>",
+        "ts": 1789199426
+      },
+      0,
+      0,
+      null,
+      null,
+      0,
+      572,
+      [
+        37
       ],
       null
     ]

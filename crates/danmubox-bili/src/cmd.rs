@@ -297,6 +297,25 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+
+            // 另一族表情：**正文里的行内文字表情**（`[dog]`、`[大笑]` 这类），路由与
+            // 「表情弹幕」不同——`info[0][13]` 是**空槽位** `"{}"`，图只出现在这份 JSON 的
+            // `emots` map 里（键是正文里那个 token）。实测 49294 条真实 `DANMU_MSG`：
+            // 带 `emots` 的 1196 条，槽位 13 **全是** `"{}"`；槽位 13 是对象的 4043 条里
+            // `emots` 全为空——两类互不重叠，所以只看槽位 13 就整族丢掉，界面只剩 `[dog]` 原文
+            // （用户 2026-09-13 报的「表情包【dog】渲染不出来」）。
+            //
+            // 只有「**整条正文就是这个 token**」时才按整条画图，与 `history.rs` 同一口径：
+            // 正文里夹着别的字（本族 1196 条里 855 条如此）时保持原文——`Message.emote`
+            // 是「整条画图」语义，替不了正文内的行内替换，整段画掉会把用户的话吞了。
+            if message.emote.is_none() {
+                message.emote = parsed
+                    .get("emots")
+                    .and_then(Value::as_object)
+                    .and_then(|emots| emots.get(&message.content))
+                    .and_then(crate::emote::emote_ref_from_object)
+                    .map(Box::new);
+            }
         }
     }
 
@@ -822,6 +841,97 @@ mod tests {
         });
         let message = message(7, &payload, &counters()).expect("必须解出弹幕");
         assert!(message.emote.is_none(), "空 url 不得当成表情");
+    }
+
+    #[test]
+    fn inline_text_emote_danmaku_carries_the_image_url() {
+        // 用户 2026-09-13「表情包【dog】渲染不出来」的那条真实记录（夹具
+        // `smoke/fixtures/danmaku-rows.json` 的 `emots`）：正文就是 `[dog]`，
+        // `info[0][13]` 是**空槽位** `"{}"`，表情只在 `extra.emots` 里。
+        let extra = json!({
+            "emots": {"[dog]": {
+                "count": 1, "descript": "[dog]", "emoji": "[dog]", "emoticon_id": 208,
+                "emoticon_unique": "emoji_208", "width": 20, "height": 20,
+                "url": "http://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png"
+            }},
+            "id_str": "x"
+        })
+        .to_string();
+        let payload = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1_789_207_769_778i64, 1_789_207_769i64, 0, "x", 0, 0, 0, "", 0,
+                 "{}", "{}", {"extra": extra, "user": {"uid": 7, "base": {"name": "观众乙"}}}],
+                "[dog]"
+            ]
+        });
+        let message = message(7, &payload, &counters()).expect("必须解出弹幕");
+        assert_eq!(message.content, "[dog]", "正文仍是那个 token");
+        let emote = message.emote.expect("extra.emots 里的表情必须带出来");
+        assert_eq!(
+            emote.url,
+            "https://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png",
+            "表情图必须升级到 https，否则在客户端里根本加载不出来"
+        );
+        assert_eq!(emote.emoticon_unique, "emoji_208");
+        assert_eq!((emote.width, emote.height), (20, 20));
+        assert!(!emote.bulge_display, "文字表情没有 bulge_display，不得当成大表情");
+    }
+
+    #[test]
+    fn mixed_text_emote_danmaku_keeps_the_text() {
+        // 同一个 `emots` map，但正文里夹着别的字（真实记录：`点歌 大风吹 刘惜君[dog]`）。
+        // 这一支**不能**设 `emote`：`Message.emote` 是「整条画图」语义，会把正文吞掉。
+        let extra = json!({
+            "emots": {"[dog]": {
+                "emoticon_unique": "emoji_208", "width": 20, "height": 20,
+                "url": "http://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png"
+            }}
+        })
+        .to_string();
+        let payload = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1_789_199_426_822i64, 1_789_199_426i64, 0, "x", 0, 0, 0, "", 0,
+                 "{}", "{}", {"extra": extra, "user": {"uid": 7, "base": {"name": "观众乙"}}}],
+                "点歌 大风吹 刘惜君[dog]"
+            ]
+        });
+        let message = message(7, &payload, &counters()).expect("必须解出弹幕");
+        assert!(
+            message.emote.is_none(),
+            "正文不等于 token 时保持原文，不得整条画成表情"
+        );
+        assert_eq!(message.content, "点歌 大风吹 刘惜君[dog]");
+    }
+
+    #[test]
+    fn emote_danmaku_slot_wins_over_emots_map() {
+        // 两类在真实流量里互不重叠（实测 49294 条），但真同时出现时以槽位 13 为准：
+        // 那是「整条就是一张表情」的权威来源，`emots` 只是文字表情的补充。
+        let extra = json!({
+            "emots": {"[dog]": {
+                "emoticon_unique": "emoji_208", "width": 20, "height": 20,
+                "url": "http://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png"
+            }}
+        })
+        .to_string();
+        let payload = json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                [0, 1, 25, 16777215, 1, 1, 0, "x", 0, 0, 0, "", 0,
+                 {"emoticon_unique": "official_345", "width": 200, "height": 60,
+                  "url": "http://i0.hdslb.com/bfs/live/2ce08b31618d3ad0d34877bf949ef0089a0438b7.png"},
+                 "{}", {"extra": extra, "user": {"uid": 7, "base": {"name": "观众乙"}}}],
+                "[dog]"
+            ]
+        });
+        let message = message(7, &payload, &counters()).expect("必须解出弹幕");
+        assert_eq!(
+            message.emote.expect("必须有表情").emoticon_unique,
+            "official_345",
+            "槽位 13 的表情优先"
+        );
     }
 
     #[test]

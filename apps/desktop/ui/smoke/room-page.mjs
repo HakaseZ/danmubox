@@ -27,7 +27,7 @@
 //   step1  关注列表自动加载、列表页展示关注项
 //   step2  进房间、历史回填可见
 //   step3  头部在线/看过且无人气；系统/互动行的渲染与弱化；历史与实时同款
-//   step4  系统通知开关
+//   step4  系统类消息的白名单（勾「消息类型 → 系统」芯片，不是已删的「系统通知」开关）
 //   step5  互动行 8 秒后自动消失
 //   step6  关掉自动消失后互动行常驻
 //   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级；
@@ -37,16 +37,19 @@
 //   emotes 主站「我的表情」分组可见、能选中、发出去带的是唯一键
 //   menu   右键出菜单（复制 / ＠TA / 回复 / 屏蔽 / 主页 / 举报）并能关掉
 //   mention＠ 目标与文本同源：文本里的 @名字 被删掉后发送就不带目标；回复的引用条照旧带目标
-//   time   时间戳默认不渲染；开关打开后每行一列且等宽（纵向对齐）
+//   time   时间戳默认不渲染；开关打开后它是**身份行的最后一格**（无身份行的行走「只有时间」首行），
+//          右边缘与正文块的右边缘齐平、逐行等宽（纵向对齐），且不挤正文宽度
 //   limit  弹幕字数上限：上限来自 room_session.danmaku_length（40）；超限即截断并提示；
 //          工具行常显 已用/上限；@昵称 前缀不计入有效上限
 //   theme  主题**按钮**在**房间列表页页头**（点一下前进一档：亮 → 暗 → 自动，三下一轮回到原档；
 //          图标随档变且三档同一套矢量规范、切档真的落到 <html data-theme>、深浅对比度达标）
 //   gift   礼物栏在输入区下方、全宽、可折叠，展开不改变弹幕宽度
 //   admin  房管权限前置（**有房管身份才有入口**；不是房管时菜单里没有这一项）、写操作二次确认与
-//          请求形状、身份就绪即预载三块名单、面板三块收成三个 tab（roving tabindex + ←→/Home/End）、
-//          单点动作走行右键菜单、批量一次确认按序执行、上游 code + message 原样展示、
-//          身份被撤销后面板自动收起；面板里没有「刷新」按钮（重拉 = 关掉再开）
+//          请求形状、身份就绪即预载三块名单、面板三块收成三个 tab（roving tabindex + ←→/Home/End，
+//          tab 文案只有名单名、不带计数）、单点动作走行右键菜单、批量一次确认按序执行、
+//          上游 code + message 原样展示、身份被撤销后面板自动收起；面板里没有「刷新」按钮
+//          （重拉 = 关掉再开）；头部一行（tab 轨道 + 右侧一枚 X 关闭图标钮）、
+//          第 1 排 = 输入框 + 主操作 + 批量图标钮，批量模式下第 2 排紧贴它下方（全选 / 已选 N 项 / 动作）
 //   panels 五面板互斥：房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏同时最多开一个
 //   tabs   多标签隔离：切房间把面板 / 菜单 / 滚动跟随重置，草稿按「身份 × 房间」各留一份
 //   follow 未开播也列出（**真实取样夹具**：未开播项第 1 页可见且翻页到底一条不少）、按最后开播时间排序、>30 条分页
@@ -59,7 +62,7 @@
 //          单账号也能看到「＋ 添加账号」；
 //          添加 = account_qr_start（不带 target，永不覆盖）+ 2 秒轮询到 confirmed 后多一行且标为当前；
 //          「重新登录」要二次确认且文案写明会覆盖谁；删除当前账号后自动切走、只剩一个时禁止删除；
-//          退出登录后退回游客态
+//          退出登录后退回游客态；对话框里**没有关闭按钮**（关闭 = Esc 或点背景，两条路径各验一次）
 
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -395,12 +398,15 @@ const MOCK = (theme) => `(function () {
   var prefs = {
     "ui.font_scale": 1, "ui.theme": "${theme}", "ui.auto_scroll": true,
     "ui.pause_on_hover": false,
-    "ui.gift_panel_mode": "merged", "ui.interact_auto_hide": true, "ui.system_notice": false,
+    "ui.gift_panel_mode": "merged", "ui.interact_auto_hide": true,
     "ui.show_timestamp": false,
-    // 键清单照抄契约 §8（14 键）：关键词命中那三键随 item 9 一起删掉了，
+    // 键清单照抄契约 §8（13 键）：ui.system_notice 随「系统类只由 filter.kinds 把关」
+    // 一起删掉（两个门盖的消息集合逐字相同），关键词命中那三键随 item 9 一起删掉了，
     // 房管屏蔽词走 admin_keywords_*（IPC 命令，不是偏好键），不在这一份里。
     "composer.phrases": ["早上好"], "filter.uids": [],
-    "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard", "system"],
+    // 默认白名单**不含 system**（契约 §8.1 / §4.8）：系统行默认不渲染，
+    // 要看就现场勾「消息类型 → 系统」那一枚芯片（step4）。
+    "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard"],
     "filter.medal_level_min": 0, "history.buffer_rows": 5000,
     // 「最近观看」（契约 §8）：离线甲（room 300）先看过，**夹具第 1 条**（真实取样）后看过 ——
     // 用来看排序是否真的按它降序（见场景 step1 的 #16 断言）。
@@ -731,6 +737,18 @@ const MOCK = (theme) => `(function () {
     el.focus();
     el.dispatchEvent(new KeyboardEvent("keydown", { key: key, bubbles: true, cancelable: true }));
     el.dispatchEvent(new KeyboardEvent("keyup", { key: key, bubbles: true, cancelable: true }));
+    return true;
+  };
+  // 账号对话框（item 2 删掉了里面的「关闭」按钮）只剩两条关闭路径：**Esc** 与**点背景**。
+  // Esc 派发到 window —— 组件挂的就是 window.addEventListener("keydown")（与真实按键同一条
+  // 监听链）；点背景派发在对话框卡片外的那层遮罩上（组件的判据是 target === currentTarget，
+  // 直接派发到遮罩自身正好命中）。
+  var pressEscape = function () {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  };
+  var clickDialogBackdrop = function (dialogEl) {
+    if (!dialogEl || !dialogEl.parentElement) return false;
+    dialogEl.parentElement.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     return true;
   };
   // 图标几何取证（房间头两枚 / 「回到最新」/ 主题按钮三档共用）：getBBox() 给的是**几何**
@@ -3263,7 +3281,8 @@ const MOCK = (theme) => `(function () {
     out.filterPanelNoThemeSelect = !!filterPanel &&
       !filterPanel.querySelector('[data-testid="db-pref-theme"]');
     // 两块的内容都还在（都按**各自的 section** 数，不拿整块的 label 当分母）：
-    // 「消息类型」6 枚芯片（契约 §8 的 kind 全集）、「显示」= 字号滑杆 + 三枚开关 + 礼物栏下拉。
+    // 「消息类型」6 枚芯片（契约 §8 的 kind 全集）、「显示」= 字号滑杆 + **两枚**开关 + 礼物栏下拉
+    // （第三枚「系统通知」随 item 1 删除：系统类只由「消息类型」里的「系统」芯片把关）。
     // 开关的**文案**由下面的 step4 / step6 用 clickLabelIn 点到（点得到就说明文案在），
     // 这里只数控件、不解析 label 的 innerText（select 的 innerText 会把选项文本也算进来）。
     var filterSections = filterPanel ? [].slice.call(filterPanel.querySelectorAll("section")) : [];
@@ -3275,6 +3294,9 @@ const MOCK = (theme) => `(function () {
         })
       : [];
     out.filterPanelKindChipsComplete = out.filterPanelKindChips.length === 6;
+    // 六枚芯片的**文案**（契约 §8 的 KIND_LABEL）：系统那一枚就在这里，step4 点它
+    out.filterPanelKindChipLabels =
+      out.filterPanelKindChips.join(",") === "弹幕,礼物,SC,互动,大航海,系统";
     var displayHas = function (selector) {
       return !!displaySection && !!displaySection.querySelector(selector);
     };
@@ -3285,7 +3307,7 @@ const MOCK = (theme) => `(function () {
       giftMode: displayHas("select"),
     };
     out.filterPanelDisplayComplete = out.filterPanelDisplayControls.fontScale &&
-      out.filterPanelDisplayControls.switches === 3 &&
+      out.filterPanelDisplayControls.switches === 2 &&
       out.filterPanelDisplayControls.giftMode;
     // ---- item 8：短语与筛选面板同样没有标题与关闭按钮（db-panel-close 钩子整个界面不再提供），
     //      高度与表情面板同源（--panel-h）——逐个数进快照，最后比三者相等。
@@ -3293,6 +3315,28 @@ const MOCK = (theme) => `(function () {
       filterPanel.querySelectorAll('[data-testid="db-panel-close"]').length === 0 &&
       document.querySelectorAll('[data-testid="db-panel-close"]').length === 0;
     out.filterPanelHeightPx = filterPanel ? f1(rect(filterPanel).height) : null;
+    // ---- 字号滑杆只作用**弹幕区**（用户 2026-09-14：「字号只作用弹幕区」）：滑杆写的
+    //      ui.font_scale 由 MessageList 落成 scroller 上的 font-size: scale em，行的尺寸
+    //      全部按 em 派生 —— 面板不在 scroller 里，它的字号与 --panel-h（= 面板高度）是**常数**。
+    //      这里直接拨 scroller 的字号量一次（与下面 rowScaleProbe 同一个手法，量完立刻还原）：
+    //      正文的字号跟着变，面板的字号 / 高度必须纹丝不动。
+    var scaleScroller = byTestId("db-chat-scroll");
+    var scaleRowBody = byTestId("db-msg-body");
+    var scalePanelFont0 = filterPanel ? getComputedStyle(filterPanel).fontSize : null;
+    var scalePanelH0 = filterPanel ? rect(filterPanel).height : null;
+    var scaleRowFont0 = scaleRowBody ? parseFloat(getComputedStyle(scaleRowBody).fontSize) : NaN;
+    var scaleFontPrev = scaleScroller ? scaleScroller.style.fontSize : "";
+    // 同步量：**不 await** —— 与下面 rowScaleProbe 一样，改了 inline font-size 立刻读计算值
+    // （中间留窗口反而给 React 重渲染把这一行改回去的机会，会把「跟随」判成假失败）
+    if (scaleScroller) scaleScroller.style.fontSize = "1.6em";
+    out.panelFontConstantUnderScale = scalePanelFont0 !== null && !!filterPanel &&
+      getComputedStyle(filterPanel).fontSize === scalePanelFont0;
+    out.panelHeightConstantUnderScale = scalePanelH0 !== null && !!filterPanel &&
+      Math.abs(rect(filterPanel).height - scalePanelH0) < 1;
+    out.chatFontFollowsScale = !!scaleRowBody && !isNaN(scaleRowFont0) &&
+      parseFloat(getComputedStyle(scaleRowBody).fontSize) > scaleRowFont0;
+    if (scaleScroller) scaleScroller.style.fontSize = scaleFontPrev;
+    await sleep(250);
     // ---- theme 对比度（房间页这一档）：主题开关已搬到列表页页头（item 10，见 step1），
     //      房间页不再切档，只按**本次运行的那一档**判「正文 / 昵称对背景 ≥ 4.5:1」。
     //      SMOKE_THEMES 深浅各跑一遍，两档因此都成立；开关本身的断言在 step1 那一步。
@@ -3304,22 +3348,91 @@ const MOCK = (theme) => `(function () {
       themeNameEl ? getComputedStyle(themeNameEl).color : "", themeBodyBg);
     out.themeContrastBodyOk = out.themeBaseContrastBody >= 4.5;
     out.themeContrastDimOk = out.themeBaseContrastDim >= 4.5;
+    // ---- time 时间戳（用户 2026-09-14：「时间戳显示时放在最右边」）：它是**身份行的最后一格**、
+    //      靠右 —— 不再是行首的一列（旧版正文块因此被扣掉 --time-col 与一道间距）。
+    //      参考系跟着换：从「行内列对齐」换成「**正文块的右边缘**」。没有身份行的行
+    //      （system / 空昵称无徽标）里时间是正文块内的「只有时间」首行（见下面 step4）。
+    //      量「开关前」的正文几何要先来：开关关了它才是**不扣那一列**的基准。
+    var tsProbeRow0 = rowWith(timeoutText);
+    var tsProbeBody0 = tsProbeRow0 ? tsProbeRow0.querySelector('[data-testid="db-msg-body"]') : null;
+    var tsBodyLeft0 = tsProbeBody0 ? rect(tsProbeBody0).left : null;
+    var tsBodyWidth0 = tsProbeBody0 ? rect(tsProbeBody0).width : null;
     clickLabelIn(filterPanel, "时间戳");
     await sleep(400);
     var cells = allByTestId("db-msg-time").map(function (el) { return el.getBoundingClientRect(); });
     out.timeCellsShown = cells.length;
     out.timeWidthsEqual = cells.length > 0 && cells.every(function (r) { return Math.abs(r.width - cells[0].width) < 0.6; });
-    out.timeRightEdgesEqual = cells.length > 0 && cells.every(function (r) { return Math.abs(r.right - cells[0].right) < 0.6; });
+    var tsRows = rows().map(function (r) {
+      var t = r.querySelector('[data-testid="db-msg-time"]');
+      var identity = r.querySelector('[data-testid="db-msg-identity"]');
+      var body = r.querySelector('[data-testid="db-msg-body"]');
+      return t ? {
+        time: t,
+        identity: identity,
+        bodyBox: body ? rect(body) : null,
+        box: rect(t),
+        inIdentity: !!identity && identity.lastElementChild === t
+      } : null;
+    }).filter(Boolean);
+    // 有身份行的行：时间是 identity 的**最后一个孩子**（且那一行至少得有一条，否则这条断言空转）
+    out.timeInsideIdentityRow = tsRows.length > 0 && tsRows.every(function (p) { return p.inIdentity; });
+    // 右边缘：每行的时间右边缘 = **该行正文块的右边缘**（时间落在 identity 内、靠右推到底），
+    // 且逐行彼此相等（等宽 + 右对齐 = 纵向对齐那一格）
+    out.timeRightEdgesEqual = tsRows.length > 0 && tsRows.every(function (p) {
+      return !!p.bodyBox && Math.abs(p.box.right - p.bodyBox.right) < 0.6;
+    }) && cells.length > 0 && cells.every(function (r) { return Math.abs(r.right - cells[0].right) < 0.6; });
+    // 正文块不因时间戳挪位 / 变窄（旧版占掉行首一列，正文块整体右移且窄掉）
+    var tsProbeRow1 = rowWith(timeoutText);
+    var tsProbeBody1 = tsProbeRow1 ? tsProbeRow1.querySelector('[data-testid="db-msg-body"]') : null;
+    out.bodyLeftUnaffectedByTimestamp = tsBodyLeft0 !== null && !!tsProbeBody1 &&
+      Math.abs(rect(tsProbeBody1).left - tsBodyLeft0) < 0.6;
+    out.bodyWidthUnaffectedByTimestamp = tsBodyWidth0 !== null && !!tsProbeBody1 &&
+      Math.abs(rect(tsProbeBody1).width - tsBodyWidth0) < 0.6;
+    // 窄屏 360：正文宽仍占视口一半以上（时间戳挪走后「文字挤在右边」那个毛病不许回来）
+    if (NARROW) {
+      put("bodyWidthAtLeastHalfViewport", !!tsProbeBody1 &&
+        rect(tsProbeBody1).width >= window.innerWidth / 2);
+    }
+    // 超长昵称：可收缩的是**昵称**（省略号），时间那一格 flex: none 不可压 —— 它必须完整
+    // 落在身份行内（不被 identity 的 overflow: hidden 切掉），宽度也不许被压扁。
+    var longNick = "超长昵称样本一二三四五六七八九十甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉";
+    window.__emit("danmubox://message", window.__mk("danmaku", "超长昵称样本弹幕", false, { uname: longNick }));
+    await sleep(350);
+    var longNickRow = rowWith("超长昵称样本弹幕");
+    var longNickIdentity = longNickRow ? longNickRow.querySelector('[data-testid="db-msg-identity"]') : null;
+    var longNickTime = longNickRow ? longNickRow.querySelector('[data-testid="db-msg-time"]') : null;
+    out.timeNotClippedByLongIdentity = !!longNickIdentity && !!longNickTime && cells.length > 0 &&
+      Math.abs(rect(longNickTime).width - cells[0].width) < 0.6 &&
+      rect(longNickTime).right <= rect(longNickIdentity).right + 0.6;
+    // 开了时间戳也不许把行撑出横向滚动（昵称省略号 + 正文就地断行的另一半）
+    out.rowNoHorizontalOverflowWithTimestamp = rows().length > 0 &&
+      rows().every(function (r) { return r.scrollWidth <= r.clientWidth + 1; });
     snap();
 
-    // ---- step4 系统通知开关（语义不得改）：打开后**新来**的系统行要出现。
-    // 这里不拿很早以前那条（它已滚出虚拟列表的渲染范围），改发一条新的，断言更硬。
-    out.step4_toggledSystem = clickLabelIn(filterPanel, "系统通知");
+    // ---- step4 系统类白名单（语义不得改）：勾上「消息类型 → 系统」之后**新来**的系统行要出现。
+    //      这里点的**不再是**「系统通知」那枚开关（ui.system_notice 已随 item 1 删除，两个门
+    //      盖的消息集合逐字相同）：显示块只剩「时间戳」「互动消息自动消失」，面板里没有第二条
+    //      label 含「系统」二字，因此点到的必然是「消息类型」里那一枚「系统」芯片。
+    //      这里不拿很早以前那条（它已滚出虚拟列表的渲染范围），改发一条新的，断言更硬。
+    out.step4_toggledSystem = clickLabelIn(filterPanel, "系统");
     await sleep(400);
     window.__emit("danmubox://message", window.__mk("system", "分区变更二号"));
     await sleep(300);
-    out.step4_prefSystemNotice = window.__prefs["ui.system_notice"];
+    out.step4_kindsHasSystem = window.__prefs["filter.kinds"].indexOf("system") >= 0;
     out.step4_systemRenderedAfterToggle = text().indexOf("分区变更二号") >= 0;
+    // 系统行**没有身份行**（kind === "system" 不画）：时间独占正文块的**首行**，正文仍在下一行
+    var sysRow = rowWith("分区变更二号");
+    var sysText = sysRow ? sysRow.querySelector('[data-testid="db-msg-identity"]') : null;
+    var sysTime = sysRow ? sysRow.querySelector('[data-testid="db-msg-time"]') : null;
+    var sysBody = sysRow ? sysRow.querySelector('[data-testid="db-msg-body"]') : null;
+    out.timeOnOwnLineWhenNoIdentity = !!sysRow && sysTime !== null && sysBody !== null &&
+      sysText === null && sysTime.previousElementSibling === null &&
+      sysTime.parentElement === sysBody.parentElement &&
+      rect(sysTime).bottom <= rect(sysBody).top + 1;
+    // 无身份行的那一格同样靠右（.time 的定宽 + margin-left: auto 在块级盒上推到底），
+    // 右边缘与身份行里那一格同列（参照仍是正文块的右边缘）
+    out.timeRightAlignedWithoutIdentity = !!sysTime && !!sysBody &&
+      Math.abs(rect(sysTime).right - rect(sysBody).right) < 0.6;
     snap();
 
     // ---- step5 互动行 8 秒后自动消失（语义不得改）。这段等待同时也盖过了前面那条超时兜底
@@ -3631,7 +3744,9 @@ const MOCK = (theme) => `(function () {
       lastMute.args.hour === 1 && typeof lastMute.args.uid === "number" && lastMute.args.uid > 0;
     out.adminConfirmClosedAfterWrite = !byTestId("db-admin-confirm");
 
-    // 面板：三块名单收成**三个 tab**（issue #1）——一次只渲染当前那一块；计数读 tab 文案里的（N）。
+    // 面板：三块名单收成**三个 tab**（issue #1）——一次只渲染当前那一块。
+    // tab 文案**只有名单名**（旧的「禁言（1）」计数已随 item 3 删掉，计数改由
+    // adminPanelItemCounts 逐块量行数）。
     // 单点动作在**行右键菜单**里、批量在批量条上（issue #4）；「增删」照旧先二次确认。
     byTestId("db-header-more").click();
     await sleep(250);
@@ -3672,16 +3787,70 @@ const MOCK = (theme) => `(function () {
     var adminListItemsOf = function (adminKind) {
       return allByTestId(adminRowTestId(adminKind)).length;
     };
-    // tab 文案形如「禁言（1）」：计数直接从那一枚 tab 的 innerText 里切出来（不写正则）
-    var adminTabCount = function (adminKind) {
-      var el = adminTabOf(adminKind);
-      if (!el) return null;
-      var t = el.innerText;
-      var open = t.lastIndexOf("（");
-      var close = t.lastIndexOf("）");
-      return open >= 0 && close > open ? Number(t.slice(open + 1, close)) : null;
+    // ---- item 4：关闭入口是**图标钮**（tab 行右侧只剩它一枚）
+    //      —— X 号没有文字，可访问名走 aria-label / title，盒子是控件族的 40 × 40 正圆。
+    var adminCloseBtn = byTestId("db-admin-close");
+    out.adminCloseIsIconButton = !!adminCloseBtn &&
+      adminCloseBtn.innerText.trim() === "" &&
+      (adminCloseBtn.getAttribute("aria-label") || "").length > 0 &&
+      (adminCloseBtn.getAttribute("title") || "").length > 0 &&
+      !!adminCloseBtn.querySelector("svg");
+    var adminCloseBox = adminCloseBtn ? rect(adminCloseBtn) : null;
+    out.adminCloseIsRound40 = !!adminCloseBox && !!circleOf(adminCloseBtn) &&
+      Math.abs(adminCloseBox.width - 40) < 1 && Math.abs(adminCloseBox.height - 40) < 1 &&
+      circleOf(adminCloseBtn).round;
+    // tab 行（面板的第一行）= tab 轨道 + 右侧的关闭钮；轨道之外**只有关闭这一枚**按钮，
+    // 批量图标钮搬到了第 1 排（item 5），因此它**不在**轨道内。
+    var adminRail = byTestId("db-admin-tabs");
+    var adminHeadRow = adminPanel ? adminPanel.firstElementChild : null;
+    var adminHeadOthers = adminHeadRow
+      ? [].slice.call(adminHeadRow.querySelectorAll("button")).filter(function (b) {
+          return !adminRail || !adminRail.contains(b);
+        })
+      : [];
+    out.adminTabRowOnlyClose = !!adminRail && !!adminHeadRow && adminHeadRow.contains(adminRail) &&
+      adminHeadOthers.length === 1 && adminHeadOthers[0] === adminCloseBtn &&
+      !adminRail.contains(byTestId("db-admin-batch"));
+    // ---- item 5：两排都**贴顶**（第 1 排 = 输入框 + 主操作 + 批量图标钮；批量模式下第 2 排
+    //      紧贴第 1 排下方），名单芯片在第 1 排之下 —— 非批量模式下先量这一档。
+    var adminFormRow = adminPanel ? adminPanel.querySelector("input") : null;
+    adminFormRow = adminFormRow ? adminFormRow.parentElement : null;
+    var adminFormInput = adminFormRow ? adminFormRow.querySelector("input") : null;
+    var adminFormPrimary = adminFormRow
+      ? [].slice.call(adminFormRow.querySelectorAll("button")).filter(function (b) {
+          return b.getAttribute("data-testid") !== "db-admin-batch";
+        })[0]
+      : null;
+    var adminFormBatch = byTestId("db-admin-batch");
+    var adminCurrentFirstItem = adminSelectedKind()
+      ? allByTestId(adminRowTestId(adminSelectedKind()))[0] : null;
+    var sameRowAs = function (a, b) {
+      return !!a && !!b && Math.abs(centerY(a) - centerY(b)) < 2;
     };
-    // 走一遍三个 tab：切过去之后**只有这一块**的列表在 DOM 里，计数与 tab 文案对得上
+    var adminTabPanelEl = byTestId("db-admin-tabpanel");
+    out.adminFormRowAboveList = !!adminFormInput && !!adminFormPrimary &&
+      !!adminFormBatch && !!adminCurrentFirstItem &&
+      !!adminTabPanelEl && adminTabPanelEl.firstElementChild === adminFormRow &&
+      rect(adminFormInput).top < rect(adminCurrentFirstItem).top &&
+      sameRowAs(adminFormInput, adminFormPrimary) &&
+      sameRowAs(adminFormInput, adminFormBatch) &&
+      sameRowAs(adminFormPrimary, adminFormBatch);
+    // 两排都是**横向一排**（不换行）：flex-wrap 的计算值就是 nowrap
+    out.adminFormRowNoWrap = !!adminFormRow &&
+      getComputedStyle(adminFormRow).flexWrap === "nowrap";
+    // ---- item 4：批量图标钮（第 1 排末尾）—— 同样是图标钮，aria-pressed 说明它是**模式**；
+    //      打开态从透明底换成强调色填充（与工具行的选中态同一套语言）。
+    var adminBatchBgOff = adminFormBatch
+      ? getComputedStyle(adminFormBatch).backgroundColor : null;
+    out.adminBatchIsIconButton = !!adminFormBatch &&
+      adminFormBatch.innerText.trim() === "" &&
+      !!adminFormBatch.querySelector("svg") &&
+      (adminFormBatch.getAttribute("aria-label") || "").length > 0 &&
+      (adminFormBatch.getAttribute("title") || "").length > 0 &&
+      adminFormBatch.getAttribute("aria-pressed") === "false";
+    out.adminBatchOffIsTransparent = adminBatchBgOff === "rgba(0, 0, 0, 0)" ||
+      adminBatchBgOff === "transparent";
+    // 走一遍三个 tab：切过去之后**只有这一块**的列表在 DOM 里（行数由 adminPanelItemCounts 记账）
     var adminWalk = async function () {
       var seen = {};
       for (var wi = 0; wi < ADMIN_KINDS.length; wi += 1) {
@@ -3693,8 +3862,7 @@ const MOCK = (theme) => `(function () {
           others: ADMIN_KINDS.reduce(function (sum, k) {
             return k === walkKind ? sum : sum + adminListItemsOf(k);
           }, 0),
-          items: adminListItemsOf(walkKind),
-          labelCount: adminTabCount(walkKind)
+          items: adminListItemsOf(walkKind)
         };
       }
       return seen;
@@ -3727,9 +3895,9 @@ const MOCK = (theme) => `(function () {
       blacklist: adminWalked.blacklist.items,
       keywords: adminWalked.keywords.items
     };
-    out.adminPanelCountsMatchLabels = ADMIN_KINDS.every(function (k) {
-      return adminWalked[k].items === adminWalked[k].labelCount;
-    });
+    // tab 文案就是**名单名**（item 3：计数已从 tab 上删掉 —— 旧断言拿「（N）」当分母，
+    // 现在恒为 null，因此改成直接钉文案；行数由上面 adminPanelItemCounts 逐块记账）
+    out.adminPanelTabLabels = out.adminPanelSections.join(",") === "禁言,黑名单,屏蔽词";
     // 键盘：←→ 换 tab、Home / End 跳首尾，焦点跟着选中项走（WAI-ARIA tabs 口径）。
     // 键事件派发在**已聚焦的那一枚 tab** 上，轨道自身的 keydown 因此收到它 —— 与真实按键同一条路径。
     var adminKeyStep = async function (fromKind, key, expectKind) {
@@ -3761,6 +3929,8 @@ const MOCK = (theme) => `(function () {
       put("adminPanelNewestNotCovered", !!adminPanelNewest &&
         rect(adminPanelNewest).bottom <= adminPanelRect.top + 1);
       put("adminPanelClosable", !!byTestId("db-admin-close"));
+      // item 5：360 宽下面板**不许**横向溢出（两排都是 nowrap 的横向一排，输入框是唯一可缩的一项）
+      put("adminPanelNoHorizontalOverflow", adminPanel.scrollWidth <= adminPanel.clientWidth + 1);
       var adminHotspots = shortHotspots(adminPanel);
       put("adminPanelHotspotsBad", adminHotspots);
       put("adminPanelHotspotsAtLeast40", adminHotspots.length === 0);
@@ -3882,6 +4052,39 @@ const MOCK = (theme) => `(function () {
     adminBoxes.forEach(function (box) { box.click(); });
     await sleep(300);
     var batchBar = byTestId("db-admin-batch-bar");
+    // ---- item 5 的第 2 排（批量模式才出现）：紧贴第 1 排**正下方**（间距 = 那一排自己的上外边距
+    //      --sp-2 = 8px，不与名单的间距混淆）、仍在**第 1 条芯片之上**；行内三样（全选 /
+    //      已选 N 项 / 批量动作）同一排不换行；第 1 排的主操作按钮没被这一排挤走。
+    var batchFormRow = byTestId("db-admin-panel").querySelector("input").parentElement;
+    var batchFormInput = batchFormRow.querySelector("input");
+    var batchFormPrimary = [].slice.call(batchFormRow.querySelectorAll("button")).filter(function (b) {
+      return b.getAttribute("data-testid") !== "db-admin-batch";
+    })[0];
+    var batchSelectAll = byTestId("db-admin-select-all");
+    var batchFirstItem = allByTestId(adminRowTestId("keywords"))[0];
+    var batchBarBox = batchBar ? rect(batchBar) : null;
+    var batchGapPx = batchBarBox && batchFormRow
+      ? Math.round((batchBarBox.top - rect(batchFormRow).bottom) * 10) / 10 : null;
+    out.adminBatchBarGapPx = batchGapPx;
+    out.adminBatchBarSecondRow = batchGapPx !== null && batchGapPx >= -0.5 && batchGapPx <= 12 &&
+      !!batchFirstItem && batchBarBox.bottom <= rect(batchFirstItem).top + 1 &&
+      sameRowAs(batchSelectAll, byTestId("db-admin-batch-action")) &&
+      sameRowAs(batchFormPrimary, batchFormInput) &&
+      rect(batchFormPrimary).top < batchBarBox.top;
+    out.adminBatchBarNoWrap = !!batchBar && getComputedStyle(batchBar).flexWrap === "nowrap";
+    // item 4：批量钮是**模式**开关 —— aria-pressed 翻成 true 的同时底色从透明换成强调色填充
+    // （强调色的计算值就地取：选中 tab 的下边框色就是 var(--accent)，同一个令牌）
+    var accentRef = adminSelectedTab() ? getComputedStyle(adminSelectedTab()).borderBottomColor : null;
+    out.adminBatchOnIsAccentFill = !!accentRef && !!batchToggle && adminBatchBgOff !== null &&
+      accentRef.indexOf("0, 0, 0, 0") < 0 &&
+      getComputedStyle(batchToggle).backgroundColor === accentRef &&
+      getComputedStyle(batchToggle).backgroundColor !== adminBatchBgOff;
+    // item 12：批量开时第 2 排那两枚按钮也纳入 40px 热区体检（窄屏口径不变）
+    if (NARROW) {
+      var batchHotspots = shortHotspots(byTestId("db-admin-panel"));
+      put("adminPanelHotspotsWithBatchBad", batchHotspots);
+      put("adminPanelHotspotsWithBatchAtLeast40", batchHotspots.length === 0);
+    }
     out.adminBatchBarShowsCount = !!batchBar && adminBoxes.length === 2 &&
       batchBar.innerText.indexOf("已选 " + adminBoxes.length + " 项") >= 0;
     var delsBeforeBatch = callsWithArgs.filter(function (c) {
@@ -4008,14 +4211,20 @@ const MOCK = (theme) => `(function () {
       Math.abs(out.accountAddCenteredPx) <= 1;
     out.accountAddNotStretched = !!addBtnNow && !!accountRowRef &&
       rect(addBtnNow).width < rect(accountRowRef).width - 8;
-    byTestId("db-account-close").click();
+    // ---- item 2：对话框里**没有**「关闭」按钮了（db-account-close 在整个界面里都不存在），
+    //      关闭只剩两条路 —— **Esc** 与**点背景**。下面各走一次，每次都断卡片真的消失
+    //      （后面还各再走一次，两条路径都不是「只关得掉一次」）。
+    out.accountDialogCloseButtonGone = byTestId("db-account-close") === null;
+    pressEscape();
     await sleep(300);
-    out.accountDialogClosedForKeyboard = !byTestId("db-account-dialog");
+    out.accountDialogClosedByEscape = !byTestId("db-account-dialog");
     pressKey(account, "Enter");
     await sleep(400);
     out.accountRowEnterOpensDialog = !!byTestId("db-account-dialog");
-    byTestId("db-account-close").click();
+    var accountBackdropClicked = clickDialogBackdrop(byTestId("db-account-dialog"));
     await sleep(300);
+    out.accountDialogClosedByBackdrop = accountBackdropClicked &&
+      !byTestId("db-account-dialog");
     pressKey(account, " ");
     await sleep(400);
     out.accountRowSpaceOpensDialog = !!byTestId("db-account-dialog");
@@ -4028,7 +4237,9 @@ const MOCK = (theme) => `(function () {
         Math.abs(accountDlgRect.bottom - window.innerHeight) < 2 &&
         Math.abs(accountDlgRect.width - document.documentElement.clientWidth) < 2);
       put("accountDialogScrollable", getComputedStyle(accountDlgEl).overflowY === "auto");
-      put("accountDialogClosable", !!byTestId("db-account-close"));
+      // item 2：关闭入口不再是一枚按钮（卡片里没有 db-account-close）；「关得掉」由上面
+      // 的 Esc / 点背景两条断言负责，这里只钉「卡片里确实没有那枚按钮」。
+      put("accountDialogNoCloseButton", byTestId("db-account-close") === null);
       put("accountDialogHotspotsBad", accountDlgHotspots);
       put("accountDialogHotspotsAtLeast40", accountDlgHotspots.length === 0);
     }
@@ -4232,7 +4443,8 @@ const MOCK = (theme) => `(function () {
     out.accountLogoutCalled = calls.indexOf("account_logout") >= 0;
     out.accountRowShowsNotLoggedIn =
       (byTestId("db-account-row-status") || { innerText: "" }).innerText.trim() === "未登录";
-    byTestId("db-account-close").click();
+    // 关闭路径仍是 Esc（对话框里那枚「关闭」按钮已随 item 2 删除）
+    pressEscape();
     await sleep(400);
     out.accountBackToGuest = !!byTestId("db-account-guest") && !byTestId("db-account-dialog");
     out.accountGuestTextShown = (byTestId("db-account-guest") || { innerText: "" })
@@ -4246,9 +4458,9 @@ const MOCK = (theme) => `(function () {
     pressKey(guestRow, "Enter");
     await sleep(400);
     out.accountGuestRowOpensDialog = !!byTestId("db-account-dialog");
-    byTestId("db-account-close").click();
+    var guestBackdropClicked = clickDialogBackdrop(byTestId("db-account-dialog"));
     await sleep(300);
-    out.accountGuestDialogCloses = !byTestId("db-account-dialog");
+    out.accountGuestDialogCloses = guestBackdropClicked && !byTestId("db-account-dialog");
 
     // ---- #18 房间标签条：显示主播名，不显示房间号。
     // 标签条只在**多于一个**房间时渲染（App 既有语义）。第二个房间在**多标签隔离**那一段

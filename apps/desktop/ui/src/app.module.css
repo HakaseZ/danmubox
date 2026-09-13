@@ -463,8 +463,11 @@
   flex-wrap: wrap;
 }
 
+/* 「＋ 添加账号」：**在对话框内容宽里居中**（用户 2026-09-13 #3「添加账号按钮居中」）。
+   改前是 `align-self: flex-start`，这枚胶囊贴在最左边、与上下两块都不对齐（宽度仍是内容宽，
+   不拉伸成整行 —— 用户要的是居中，不是把按钮拉满）。 */
 .accountAdd {
-  align-self: flex-start;
+  align-self: center;
 }
 
 .addRow {
@@ -547,9 +550,11 @@
   min-width: 0;
 }
 
-/* 圆形控件：返回 / ⋯（几何由 --ctl-round 一处给出）。**电池不在此列**——
+/* 圆形控件：返回 / ⋯ / 「回到最新」（几何由 --ctl-round 一处给出）。**电池不在此列**——
    用户 2026-09-13：「电池不要圆形，仅 3 点选项需要」，它是输入区里的一枚圆角矩形（.battery）。
-   `--r-full` 作用在正方盒上就是正圆（圆角 = 半径），不需要各处再写 50%。 */
+   `--r-full` 作用在正方盒上就是正圆（圆角 = 半径），不需要各处再写 50%。
+   「回到最新」是第三枚成员（用户 2026-09-13 #2 让那枚悬浮按钮直接用它），因此它也跟着拿到
+   这套透明底 + hover 洗色 —— 三枚控件尺寸与悬停面必然是同一个（详见 `.bottomAnchor`）。 */
 .ctlRound {
   flex: none;
   width: var(--ctl-round);
@@ -569,9 +574,10 @@
   background: var(--hover-wash);
 }
 
-/* 圆形控件里的图标（返回 / ⋯）：**同一套矢量规范** —— 同一个 24 × 24 盒与 `viewBox`、
+/* 圆形控件里的图标（返回 / ⋯ / 「回到最新」）：**同一套矢量规范** —— 同一个 24 × 24 盒与 `viewBox`、
    同一条 `stroke-width`（1.75，写死在 SVG 里，不随字号变）、同一套 round 线帽 / 接合；
-   两枚的墨迹都**居中于 (12,12)**，主轴尺寸都是 16 单位（箭头的高 = ⋯ 的宽），
+   三枚的墨迹都**居中于 (12,12)**：实心主轴尺寸都是 16 单位（返回键箭头的高 = 下箭头「回到最新」的宽
+   = ⋯ 的宽；下箭头就是返回键转 90° 的结果），
    而 ⋯ 的圆点直径 = 2 × 描边宽（一个圆点就是一个零长度描边段的圆头）。详见 `RoomView.tsx`。
    60% × `--ctl-round`（40px）= 24px —— 缩放系数正好 1，viewBox 里 1 单位 = 屏幕上 1px。 */
 .ctlIcon {
@@ -1124,30 +1130,17 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* 「回到最新」（用户 2026-09-13 #2：「指这整个按钮删掉，用一个返回按钮旋转 90° 来代替」）：
+   形态**全部交给控件族** —— 按钮挂 `.ctlRound`（40 × 40 正圆、透明底、hover 洗色、同一套
+   禁用态），图标挂 `.ctlIcon`（60% 盒 = 24px），与房间头返回键 / ⋯ 是**同一个控件**
+   （矢量规范 §3.1）。所以这条规则只剩**定位**：沿用改前的两个位置令牌，仍悬浮在弹幕列表右下角
+   （`.chatArea` 是它的定位父级）。改前那个强调色胶囊底（`.bottomAnchor` 的 background / color /
+   gap / font-weight）连同 `.bottomAnchorIcon` 一并删掉 —— 用户要的就是「一枚返回键」本身，
+   它不再有自己的表面色；`.ctlRound` 的 transparent 底与顶栏那两枚一致。 */
 .bottomAnchor {
   position: absolute;
   right: var(--sp-5);
   bottom: var(--sp-4);
-  border-radius: var(--r-full);
-  background: var(--accent);
-  color: var(--on-accent);
-  border: none;
-  font-weight: 600;
-  /* 下箭头 + 文字排一行（图标盒子由 `.bottomAnchorIcon` 给，间距走令牌） */
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-}
-
-/* 「回到最新」的下箭头（用户 2026-09-13 #1）：与房间头的返回键**同源几何**
-   （docs/ui.md §3.1 的矢量规范 —— `viewBox="0 0 24 24"`、`stroke-width 1.75`、round 线帽、
-   墨迹居中 (12,12)、主轴 16 单位），只是方向朝下。
-   盒子取 `1.5em`：24 单位的盒里那 16 单位的墨迹因此正好 **1em** 高，与按钮里的文字同一档，
-   并随字号档（`ui.font_scale`，em 传递）一起缩放。 */
-.bottomAnchorIcon {
-  width: 1.5em;
-  height: 1.5em;
-  flex: none;
 }
 
 /* ---------------------------------------------------------------- 输入区 */
@@ -1888,17 +1881,21 @@
   margin-top: var(--sp-2);
 }
 
-/* 扫码面板（契约 §7）：二维码由后端离线渲染，状态文案与重试都在这里 */
+/* 扫码面板（契约 §7）：二维码由后端离线渲染，状态文案与重试都在这里。
+   宽度与间距**跟上面的元素同一条口径**（用户 2026-09-13 #3「展开的二维码卡片宽度和间距与上方
+   元素保持一致」）：这块和对话框头部 / 账号行一样是对话框里的一级块，宽度撑满对话框内容宽
+   （所以**不写** `width`，交给 `.accountDialog` 的默认 stretch —— 写 `fit-content` 时量出来是
+   贴左的 242px 卡片，与 646px 的头部 / 账号行明显不齐）；块间距由 `.accountDialog` 的统一
+   `gap`（`--sp-3` = 12px）给，**不另加** `margin-top`（改前 +`--sp-2`，量出来是 20px，
+   比相邻块多 8px）。`align-items: center` 保留：二维码图卡与标题 / 文案 / 按钮在图卡里居中。 */
 .qrPanel {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--sp-2);
-  margin-top: var(--sp-2);
   padding: var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-4);
-  width: fit-content;
 }
 
 .qrPanel img {

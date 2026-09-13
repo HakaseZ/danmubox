@@ -139,18 +139,28 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 | 实测样例（2026-09-11） | `img_url` → `https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png`，`img_key = 7cd084941338484aae1ad9425b84077c` |
 | 长度 | `img_key` 与 `sub_key` 各 32 字符，拼接后 64 字符 |
 
-### 4.3 按日缓存的必要性
+### 4.3 密钥缓存（按日轮换 + 30 分钟 TTL）
 
 `img_key` / `sub_key` 由服务端**按自然日轮换**。若进程跨日运行仍复用旧 key，签名会整体失效，所有受 WBI 保护的接口开始返回 `-352`——表现为「弹幕看着正常但每隔一阵拉不到 `getDanmuInfo`」。因此：
 
-1. 缓存结构为 `{ img_key, sub_key, mixin_key, fetched_at_day }`，`fetched_at_day` 为 UTC+8 的日期。
-2. 命中条件：`fetched_at_day == 今天`；否则重新调 `nav`。
-3. 兜底：任何受保护请求返回 `-352` 时，强制刷新 key 并**重试一次**；仍为 `-352` 则向上报 `UPSTREAM_ERROR`，不得无限重试。
-4. 缓存仅存于内存，不落盘（key 无长期价值，落盘只是多一处可泄漏面）。
+1. 缓存结构为 `{ img_key, sub_key, fetched_at, fetched_at_day }`（`danmubox-bili` 的 `WBI_KEY_CACHE`），`fetched_at_day` 为 UTC+8 的日期。
+2. 命中条件：`fetched_at_day == 今天` **且** `now - fetched_at < 30 分钟`；否则重新调 `nav`。
+   TTL 取 30 分钟：密钥按自然日轮换，半小时远短于轮换周期，命中因此不可能跨越轮换点，而「连发几条弹幕」这种场景之间必然命中。
+   两道判据都要——`Instant` 在系统休眠期间不前进，只靠 TTL 会把「睡一觉跨天」的旧 key 当成新鲜。
+3. **单飞**：并发调用共用一把锁（锁跨一次网络请求），多个发送同时到达时只打一次 `nav`，不会各打一次。
+4. **失败降级**：`nav` 取不到时错误原样上抛、缓存槽位保持不动，下一次调用照旧重新请求。缓存只用来省一次访问，绝不让发送因为缓存而失败。
+5. 缓存**仅存于内存**、进程级共享，不落盘（key 无长期价值，落盘只是多一处可泄漏面）。
+   放进程级而不是 `BiliHttp` 实例字段：桌面端每次发送都新建 `BiliHttp`（`apps/desktop` 的 `chat_send`），实例字段等于没缓存。
+   密钥与账号无关（游客态 `nav` 也下发同一份，§4.2），所以一个槽位即可。
+6. 取 key 的调用点全部经 `BiliHttp::wbi_keys()`：`send.rs`（发弹幕）、`report.rs`（举报）、`http.rs` 的 `danmu_info`（弹幕长连接的 `getDanmuInfo`）。
+   身份求证（`nav_identity`，§8.6）**不**走这份缓存——它每次都要问上游，不许拿上一次的结论冒充这一次。
+7. 兜底：任何受保护请求返回 `-352` 时，强制刷新 key 并**重试一次**；仍为 `-352` 则向上报 `UPSTREAM_ERROR`，不得无限重试。
+
+`mixin_key` 不单独缓存：由 key 现算（§4.5），成本是 64 个字符的置换，不值得再存一份。
 
 ### 4.4 签名步骤
 
-1. 取 `img_key` 与 `sub_key`（§4.2）。
+1. 取 `img_key` 与 `sub_key`（§4.2，经 §4.3 缓存）。
 2. 拼接 `raw = img_key + sub_key`（64 字符）。
 3. 按置换表重排：`mixin_key = (''.join(raw[i] for i in MIXIN_KEY_TAB))[:32]`——先按 `MIXIN_KEY_TAB` 取字符，再截断到 32 位。
 4. 组装参与签名的参数集合 `P`：本次请求的全部 query 参数，外加 `wts`（秒级）。**`w_rid` 本身不参与**。

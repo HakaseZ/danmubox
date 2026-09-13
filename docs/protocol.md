@@ -584,7 +584,7 @@ JSON 里只有 `{dmscore, pb}`。
 |---|---|---|
 | 载体 | `application/x-www-form-urlencoded` 的 **body** | 参数放 body 而非 query |
 | 附加参数 | `fontsize=25`、`rnd`、`csrf_token`（同 `csrf`）、`wts` | `csrf` 与 `csrf_token` 都取 `bili_jct` |
-| 签名 | 全部参数（含 `wts`）经 WBI 签名，附 `w_rid` | 复用 `auth.md` §4 的签名实现 |
+| 签名 | 全部参数（含 `wts`）经 WBI 签名，附 `w_rid` | 复用 `auth.md` §4 的签名实现；WBI 密钥按 §4.3 **缓存**（30 分钟 TTL + 按自然日失效），发送不重取 `nav` |
 | 默认值 | `color` 缺省 `16777215`（白）、`mode` 缺省 `1` | 越界取值的行为见 A18 |
 
 本地节流命中时**不发请求**，直接以 `RATE_LIMITED` 返回，并且**不刷新**节流窗口（避免被拦下的尝试延后下一次合法发送）。

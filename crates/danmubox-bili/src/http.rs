@@ -2,7 +2,8 @@
 //!
 //! 对应 `docs/protocol.md` §2.1、§8.2 与 `docs/auth.md` §3、§4、§5。
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::LazyLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use danmubox_core::{Error, Result, Room};
 use reqwest::header::{HeaderMap, HeaderValue, COOKIE, REFERER, USER_AGENT};
@@ -75,11 +76,48 @@ pub enum CookieMode {
     Store(std::sync::Arc<danmubox_core::ConfigStore>),
 }
 
+/// WBI 密钥的缓存时长（`docs/auth.md` §4.3）。
+///
+/// key 由服务端**按自然日**轮换，30 分钟远短于轮换周期，命中因此不可能跨越轮换点；
+/// 而「连发几条弹幕」这种目标场景之间必然命中。
+const WBI_KEY_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// 取回来的一份 WBI 密钥 + 它的新鲜度依据。
+struct CachedWbiKeys {
+    img_key: String,
+    sub_key: String,
+    fetched_at: Instant,
+    /// UTC+8 的自然日（`docs/auth.md` §4.3 的 `fetched_at_day`）。
+    ///
+    /// 单调时钟在系统休眠期间不前进，只看 `fetched_at` 会把「睡一觉跨天」的旧 key
+    /// 当新鲜，所以日期是这里的兜底判据。
+    fetched_day: i64,
+}
+
+impl CachedWbiKeys {
+    fn is_fresh(&self, now: Instant, today: i64) -> bool {
+        self.fetched_day == today
+            && now
+                .checked_duration_since(self.fetched_at)
+                .is_some_and(|age| age < WBI_KEY_TTL)
+    }
+}
+
+/// 进程内共享的 WBI 密钥缓存。
+///
+/// 桌面端**每次发送都新建 `BiliHttp`**（`apps/desktop` 的 `chat_send` 即如此），
+/// 缓存放在实例字段里等于没缓存，所以必须是进程级静态槽位。密钥与账号无关
+/// （游客态 `nav` 也下发同一份，`docs/auth.md` §4.2），一个槽位即可。
+static WBI_KEY_CACHE: LazyLock<tokio::sync::Mutex<Option<CachedWbiKeys>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(None));
+
 /// B 站 HTTP 客户端。Cookie 只在进程内传递，绝不写日志。
 #[derive(Clone)]
 pub struct BiliHttp {
     client: reqwest::Client,
     cookie: CookieMode,
+    /// `nav` 端点。生产恒为 `EP_NAV`；测试指到本地桩服务器以计数请求。
+    nav_url: String,
 }
 
 impl BiliHttp {
@@ -109,7 +147,18 @@ impl BiliHttp {
             .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::Internal(format!("build http client: {e}")))?;
-        Ok(Self { client, cookie })
+        Ok(Self {
+            client,
+            cookie,
+            nav_url: EP_NAV.to_string(),
+        })
+    }
+
+    /// 仅测试：把 `nav` 指到本地桩服务器，用于计数请求（生产恒为 `EP_NAV`）。
+    #[cfg(test)]
+    fn with_nav_url(mut self, url: String) -> Self {
+        self.nav_url = url;
+        self
     }
 
     fn current_cookie(&self) -> Option<String> {
@@ -389,9 +438,38 @@ impl BiliHttp {
     }
 
     /// WBI 的 `img_key` / `sub_key`，取自 `nav` 的图片文件名。
+    ///
+    /// **带进程内缓存**（`WBI_KEY_CACHE`，`docs/auth.md` §4.3）：密钥按自然日轮换，
+    /// 缓存 TTL 30 分钟，因此「连发弹幕」不再每条都重打一次 `nav`。
+    ///
+    /// 取不到时把错误原样交给调用方，**缓存槽位保持不动**，下一次调用照旧重试——
+    /// 缓存只用来省一次访问，绝不让发送因为缓存而失败。
     pub(crate) async fn wbi_keys(&self) -> Result<(String, String)> {
+        // 单飞：锁跨一次网络请求，并发到达的调用排队后只会看到新鲜槽位，
+        // 不会各打一次 `nav`。
+        let mut slot = WBI_KEY_CACHE.lock().await;
+        let today = utc8_day();
+        if let Some(keys) = slot.as_ref() {
+            if keys.is_fresh(Instant::now(), today) {
+                tracing::debug!(target: "danmubox_bili::http", "WBI 密钥缓存命中");
+                return Ok((keys.img_key.clone(), keys.sub_key.clone()));
+            }
+        }
+        let (img_key, sub_key) = self.fetch_wbi_keys().await?;
+        tracing::debug!(target: "danmubox_bili::http", "WBI 密钥已刷新");
+        *slot = Some(CachedWbiKeys {
+            img_key: img_key.clone(),
+            sub_key: sub_key.clone(),
+            fetched_at: Instant::now(),
+            fetched_day: today,
+        });
+        Ok((img_key, sub_key))
+    }
+
+    /// 无条件向 `nav` 取一次密钥；缓存读写由 [`Self::wbi_keys`] 负责。
+    async fn fetch_wbi_keys(&self) -> Result<(String, String)> {
         let value = self
-            .get(EP_NAV)
+            .get(&self.nav_url)
             .send()
             .await
             .map_err(|e| Error::Upstream(format!("nav: {e}")))?
@@ -427,6 +505,17 @@ fn stem(url: &str) -> String {
         .next()
         .unwrap_or_default()
         .to_string()
+}
+
+/// UTC+8 的自然日序号（`docs/auth.md` §4.3 的 `fetched_at_day`）。
+///
+/// 用日期而非单调时钟兜底：系统休眠期间 `Instant` 不前进，只靠它会把跨天的旧 key 当新鲜。
+fn utc8_day() -> i64 {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    ((seconds + 8 * 3600) / 86_400) as i64
 }
 
 fn default_headers() -> HeaderMap {
@@ -510,6 +599,8 @@ fn map_room_play_info(play: &Value, h5: &Value, input: &str) -> Result<Room> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     /// 真实载荷夹具（只读抓取，2026-09-12）：公开测试房间 `1`（真实 `room_id` 5440）。
     ///
@@ -617,5 +708,149 @@ mod tests {
     fn stem_strips_path_and_extension() {
         assert_eq!(stem("https://i0.hdslb.com/bfs/wbi/abc123.png"), "abc123");
         assert_eq!(stem(""), "");
+    }
+
+    /// 合成（非真实）的 `nav` 响应：两个 32 位十六进制 key，形状与实测一致。
+    const NAV_OK: &str = r#"{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/0123456789abcdef0123456789abcdef.png","sub_url":"https://i0.hdslb.com/bfs/wbi/fedcba9876543210fedcba9876543210.png"}}}"#;
+
+    /// 缓存是**进程级**静态槽位（`WBI_KEY_CACHE`），碰它的测试必须串行，
+    /// 否则互相清空 / 互相喂桩数据会互相打架。
+    ///
+    /// 用异步锁而不是 `std::sync::Mutex`：这几个测试要跨 `await` 持锁，
+    /// 持 `std` 的锁等 IO 会被 clippy 的 `await_holding_lock` 拦下（也确实会阻塞运行时线程）。
+    static CACHE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+    /// 本地 `nav` 桩服务器：按顺序回放 `bodies`（最后一份复用），统计收到的请求数。
+    fn spawn_nav_stub(bodies: &[&str], delay: Duration) -> (String, Arc<AtomicUsize>) {
+        use std::io::{BufRead, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定本地 nav 桩");
+        let address = listener.local_addr().expect("本地 nav 桩地址");
+        let queue: Arc<Mutex<Vec<String>>> =
+            Arc::new(Mutex::new(bodies.iter().map(|body| body.to_string()).collect()));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&hits);
+
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                // 读到请求头结束再回，避免在客户端发完请求前抢跑（reqwest 会报 broken pipe）。
+                let mut reader =
+                    std::io::BufReader::new(stream.try_clone().expect("克隆桩连接"));
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if line == "\r\n" => break,
+                        Ok(_) => {}
+                    }
+                }
+                counter.fetch_add(1, Ordering::SeqCst);
+                let body = {
+                    let mut queue = queue.lock().expect("桩队列");
+                    if queue.len() > 1 {
+                        queue.remove(0)
+                    } else {
+                        queue.last().cloned().unwrap_or_default()
+                    }
+                };
+                std::thread::sleep(delay);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        (format!("http://{address}/nav"), hits)
+    }
+
+    async fn reset_wbi_cache() {
+        *WBI_KEY_CACHE.lock().await = None;
+    }
+
+    /// 回归护栏（`docs/auth.md` §4.3）：连续两次取 WBI 密钥只该打一次 `nav`。
+    ///
+    /// 改前 `wbi_keys` 每次无条件请求 `nav`，本测试会数到 2 次——发送链路上那
+    /// ~130ms 的结构性浪费就是这么来的。加回来等于把这条护栏拆了，测试立刻变红。
+    #[tokio::test]
+    async fn consecutive_wbi_key_reads_hit_nav_once() {
+        let _guard = CACHE_TEST_LOCK.lock().await;
+        let (nav_url, hits) = spawn_nav_stub(&[NAV_OK], Duration::ZERO);
+        reset_wbi_cache().await;
+        let http = BiliHttp::new().unwrap().with_nav_url(nav_url);
+
+        let first = http.wbi_keys().await.expect("第一次取 key");
+        let second = http.wbi_keys().await.expect("第二次取 key");
+
+        assert_eq!(first, second, "两次取到同一份密钥");
+        assert_eq!(first.0, "0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "连续两次取 key 只该打一次 nav"
+        );
+    }
+
+    /// 并发安全：多条发送同时到达时，`nav` 也只该被打一次（单飞），不同时打多个。
+    #[tokio::test]
+    async fn concurrent_wbi_key_reads_hit_nav_once() {
+        let _guard = CACHE_TEST_LOCK.lock().await;
+        let (nav_url, hits) = spawn_nav_stub(&[NAV_OK], Duration::from_millis(80));
+        reset_wbi_cache().await;
+        let http = BiliHttp::new().unwrap().with_nav_url(nav_url);
+
+        let (first, second, third, fourth) = tokio::join!(
+            http.wbi_keys(),
+            http.wbi_keys(),
+            http.wbi_keys(),
+            http.wbi_keys()
+        );
+
+        for keys in [&first, &second, &third, &fourth] {
+            assert!(keys.is_ok(), "并发取 key 都该成功：{keys:?}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "并发取 key 只该打一次 nav");
+    }
+
+    /// 失败降级：`nav` 取不到时错误照旧上抛，且**不写缓存**——下一次调用重新请求，
+    /// 上游恢复后自动回到正常，不需要重启进程。
+    #[tokio::test]
+    async fn failed_nav_fetch_is_not_cached_and_next_call_retries() {
+        let _guard = CACHE_TEST_LOCK.lock().await;
+        let (nav_url, hits) = spawn_nav_stub(&[r#"{"code":0,"data":{}}"#, NAV_OK], Duration::ZERO);
+        reset_wbi_cache().await;
+        let http = BiliHttp::new().unwrap().with_nav_url(nav_url);
+
+        let error = http.wbi_keys().await.expect_err("nav 没有 wbi_img 时必须报错");
+        assert_eq!(error.code(), "UPSTREAM_ERROR");
+        let recovered = http.wbi_keys().await.expect("上游恢复后重新取到 key");
+        assert_eq!(recovered.0, "0123456789abcdef0123456789abcdef");
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "失败的那次不许被缓存");
+    }
+
+    /// 轮换兜底（`docs/auth.md` §4.3）：TTL 到点、或跨 UTC+8 自然日，缓存都必须失效。
+    #[test]
+    fn cached_keys_go_stale_on_ttl_and_day_rollover() {
+        let now = Instant::now();
+        let keys = CachedWbiKeys {
+            img_key: "a".into(),
+            sub_key: "b".into(),
+            fetched_at: now,
+            fetched_day: 100,
+        };
+
+        assert!(keys.is_fresh(now, 100), "刚取回来必须算新鲜");
+        assert!(
+            keys.is_fresh(now + WBI_KEY_TTL - Duration::from_millis(1), 100),
+            "TTL 之内仍算新鲜"
+        );
+        assert!(!keys.is_fresh(now + WBI_KEY_TTL, 100), "TTL 到点必须重取");
+        assert!(!keys.is_fresh(now, 101), "跨自然日必须重取");
     }
 }

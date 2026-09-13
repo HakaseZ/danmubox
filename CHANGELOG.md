@@ -88,6 +88,23 @@
   `mentionContrastOnSurface` / `mentionSaturation`。`mentionNoBackground` 与
   `mentionHighlightedWithoutUpstreamColor` 照旧保留（后者改比对 `--mention`）。
   文档同步：`docs/ui.md` §4.1（@ 高亮行）、§4.3、§9.2（令牌表）、§15（断言清单）。
+- **WBI 签名密钥加进程内缓存：连发弹幕不再每条重打一次 `nav`**（用户 2026-09-13「发送弹幕的响应是不是有些慢」的取证结论）。
+  实测（应用自身日志，同一次真实发送）「点击 → 界面知道已发出」= 460.6ms，其中 `GET nav` 取密钥那一腿 **133.5ms（29%）**，
+  而它**每次发送都重打一次**：`BiliSender::send`（`send.rs:163`）、`BiliReporter::report`（`report.rs:146`）、
+  `BiliHttp::danmu_info`（`http.rs:239`）三处都直取 `nav`，全程没有任何缓存——`docs/auth.md` §4.3 早就写明要按日缓存，实现里一直缺着。
+  现在 `BiliHttp::wbi_keys` 走进程级 `WBI_KEY_CACHE`（`LazyLock<tokio::sync::Mutex<Option<CachedWbiKeys>>>`）：
+  TTL **30 分钟**，并要求 `fetched_day`（UTC+8 自然日）相同——密钥按自然日轮换，30 分钟远短于轮换周期，命中不可能跨越轮换点；
+  日期这道兜底是因为系统休眠期间 `Instant` 不前进，「睡一觉跨天」的旧 key 不能算新鲜。**并发单飞**：锁跨一次网络请求，
+  同时到达的多个发送排队后只看到新鲜槽位，不会各打一次。**失败降级**：取不到时错误原样上抛、槽位不动，下一次调用重新请求——
+  缓存只用来省一次访问，绝不让发送因为缓存而失败。缓存放实例字段没用（桌面端 `chat_send` 每次发送都新建 `BiliHttp`），
+  所以必须是进程级静态槽位；密钥与账号无关（游客态 `nav` 也下发同一份），一个槽位即可。
+  数字（本机、同一条真实路径，连取 5 次）：改前 **229.2 / 38.7 / 50.7 / 36.1 / 41.3 ms**（每次都付 nav 腿）；
+  改后 **248.7 / 0.0 / 0.0 / 0.0 / 0.0 ms**（只有第一次付）。按上面日志口径推算，「已发出」从 **~460ms 降到 ~330ms**
+  （不含上游回播那 1.36s——那一段没有我们的代码可打点）。
+  回归护栏（`http.rs` 测试，改前必红）：`consecutive_wbi_key_reads_hit_nav_once`（连取两次只允许 1 次 `nav`，
+  关掉缓存实测数到 2）、`concurrent_wbi_key_reads_hit_nav_once`（4 并发 → 1 次，关掉缓存实测 4）、
+  `failed_nav_fetch_is_not_cached_and_next_call_retries`（失败不写缓存、上游恢复后自动重取）、
+  `cached_keys_go_stale_on_ttl_and_day_rollover`（TTL / 跨自然日边界）。文档同步：`docs/auth.md` §4.3、§4.4、`docs/protocol.md` §11.1。
 
 - **状态点改灰 + 两处同源、`@` 只留字色、两枚图标统一矢量规范**（用户 2026-09-13 的第 3 批更正）：
   1. **断连那一档从橙改灰**（用户：「我觉得灰色也不错，橙色的需求改成灰色」）。`--live-idle` 不再取 `--warn`，

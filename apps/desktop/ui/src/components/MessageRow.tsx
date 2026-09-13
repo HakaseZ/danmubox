@@ -194,7 +194,8 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
           ) : (
             <span className={highlight}>{withMentions(text)}</span>
           )}
-          {/* 礼物行始终显示数量（连击聚合后的次数）；其余类型只在合并时显示。
+          {/* 礼物行始终显示数量（连击折叠后的次数）；其余类型不再有 ×N ——
+              「相似消息合并」已整条删除（P49），count > 1 只可能来自礼物连击。
               它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。 */}
           {(count > 1 || message.kind === "gift") && (
             <span className={styles.merged}>×{count}</span>

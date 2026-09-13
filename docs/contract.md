@@ -365,8 +365,6 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.theme` | string | `"system"` | `system` / `dark` / `light` |
 | `ui.auto_scroll` | boolean | `true` | 是否自动跟随最新 |
 | `ui.pause_on_hover` | boolean | `true` | 鼠标悬停暂停自动滚动 |
-| `ui.merge_similar` | boolean | `true` | 是否合并相似消息 |
-| `ui.merge_window_ms` | integer | `8000` | 相似消息合并窗口 |
 | `ui.gift_panel_mode` | string | `"merged"` | `merged`（礼物混在弹幕栏）/ `separate`（独立礼物栏） |
 | `ui.interact_auto_hide` | boolean | `true` | 互动/进场消息显示一会儿后自动消失（`false` = 常驻） |
 | `ui.system_notice` | boolean | `false` | 是否显示系统通知（开播 / 下播 / 标题变更 / 公告） |
@@ -418,7 +416,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 时间戳显示开关 / 用户头像 / 粉丝牌与身份标识（#6） | §5 `Message.face`、§8 `ui.show_timestamp`、`ui.md` |
 | 主站「我的表情」可发送（#8） | §5 `Emote.package_kind=owned`、§7 `emotes_owned` |
 | 房管功能：禁言 / 黑名单 / 屏蔽词（#3） | §7 `admin_*`、`protocol.md` A36 |
-| 过滤与合并相似 | §8 `filter.*` / `ui.merge_*` |
+| 过滤与显示开关 | §8 `filter.*` / `ui.show_timestamp` / `ui.system_notice` / `ui.interact_auto_hide` |
 | 多房间标签页 | `ui.md` |
 | 多账号（单文件多 profiles，界面统一叫「账号」） | §4.1、§5 `Account`、§7 `accounts_list` / `account_switch` |
 | 草稿与最近发送记录（会话内） | §4.3 |

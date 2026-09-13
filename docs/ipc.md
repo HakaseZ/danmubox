@@ -81,7 +81,7 @@
 | `admin_keywords_del` | `roomId: number`、`word: string` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 删除屏蔽词 |
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；交给界面前按 `live_status == 1` 置顶（契约 §5），完整展示排序见 `docs/ui.md` §2.2 |
 | `wallet_balance` | 无 | `WalletBalance` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额；单位与刷新时机见 §3.2 |
-| `prefs_get` | 无 | `PrefsSnapshot`（契约 §8 全部 19 键的**生效值**） | `INTERNAL` | 未写入过的键返回契约 §8 默认值 |
+| `prefs_get` | 无 | `PrefsSnapshot`（契约 §8 全部 17 键的**生效值**） | `INTERNAL` | 未写入过的键返回契约 §8 默认值 |
 | `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形 |
 | `app_info` | 无 | `AppInfo` | — | 版本、数据目录、构建信息、日志级别、平台；不含任何凭据 |
 
@@ -211,10 +211,9 @@ type WalletBalance = { battery: number };
 
 type ReportResult = { ok: boolean; upstream_code: number | null; upstream_message: string | null };
 
-type PrefsSnapshot = {            // 契约 §8 的 19 键全量，键名即契约字面
+type PrefsSnapshot = {            // 契约 §8 的 17 键全量，键名即契约字面
   "ui.font_scale": number; "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean; "ui.pause_on_hover": boolean;
-  "ui.merge_similar": boolean; "ui.merge_window_ms": number;
   "ui.gift_panel_mode": "merged" | "separate";
   "ui.interact_auto_hide": boolean;   // 互动/进场消息显示一会儿后自动消失（默认 true）
   "ui.system_notice": boolean;        // 系统通知显示（默认 false）

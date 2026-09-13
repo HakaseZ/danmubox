@@ -81,15 +81,6 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         ),
         spec("ui.auto_scroll", Ty::Bool, json!(true), None, None, None),
         spec("ui.pause_on_hover", Ty::Bool, json!(true), None, None, None),
-        spec("ui.merge_similar", Ty::Bool, json!(true), None, None, None),
-        spec(
-            "ui.merge_window_ms",
-            Ty::Int,
-            json!(8000),
-            Some(0.0),
-            Some(600_000.0),
-            None,
-        ),
         spec(
             "ui.gift_panel_mode",
             Ty::Str,

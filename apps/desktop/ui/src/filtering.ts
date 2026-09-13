@@ -1,4 +1,4 @@
-// 显示层的纯逻辑：过滤、合并相似、徽标派生、时间格式化。
+// 显示层的纯逻辑：过滤、礼物连击折叠、徽标派生、时间格式化。
 // 这些规则来自 docs/ui.md 与 docs/contract.md §8 的偏好键，放这里便于单测。
 
 import type { FollowedRoom, Message, Prefs } from "./types";
@@ -106,7 +106,7 @@ export function formatCount(value: number): string {
 
 export interface DisplayRow {
   message: Message;
-  /** 合并了几条（1 表示未合并）。 */
+  /** 礼物连击折叠了几条（1 表示未折叠）；只有礼物连击会 > 1。 */
   count: number;
 }
 
@@ -199,18 +199,19 @@ export function paginate<T>(
 }
 
 /**
- * 过滤 + 合并相似消息。合并规则：同一 uid、同一内容、且在 `ui.merge_window_ms`
- * 窗口内连续出现的消息合成一行，`count` 记录条数（docs/ui.md §8.4）。
+ * 过滤 + 礼物连击折叠。只折叠**礼物连击**：同一次连击的每条礼物共享 `combo_id`，
+ * 合成一行，`count` 记条数、`amount` 累加。
  *
- * **本地乐观行不参与任何合并**（用户 2026-09-13 的决定，docs/ui.md §4.4）：刚发出的那条必须
+ * 这里**不做**「相似消息合并」（同 uid + 同正文 + 时间窗）——用户 2026-09-13 明确
+ * 那条功能不是他要的、也没必要，整条删除（见 `docs/requests.md` P49）。
+ *
+ * **本地乐观行不参与礼物连击折叠**（用户 2026-09-13 的决定，docs/ui.md §4.4）：刚发出的那条必须
  * 自己单独站一行，否则「我这条到底发出去没有」会被折进上一行的 ×N 里。判据取 `local_id < 0`
  * （本地行恒为负，见 `store.insertPending`）而不是 `send_state` —— 乐观行插入时**不带**
  * `send_state`（它与已确认行渲染逐项相同），只有这条负数前缀能一直认出它。
  */
 export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
   const rows: DisplayRow[] = [];
-  const mergeEnabled = prefs["ui.merge_similar"];
-  const windowMs = prefs["ui.merge_window_ms"];
 
   for (const message of messages) {
     if (!passesFilter(message, prefs)) continue;
@@ -219,19 +220,12 @@ export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
     const pending = message.local_id < 0 ||
       (last !== undefined && last.message.local_id < 0);
     // 礼物连击：同一次连击的每条礼物共享 `combo_id`，一律折叠成一行。
-    // 它不受「合并相似消息」开关影响——连击刷屏本来就是同一个动作的重复。
+    // 连击刷屏本来就是同一个动作的重复。
     const sameCombo =
       last !== undefined &&
       message.combo_id.length > 0 &&
       last.message.combo_id === message.combo_id;
-    const mergeable = !pending && (sameCombo || (
-      mergeEnabled &&
-      message.kind === "danmaku" &&
-      last !== undefined &&
-      last.message.kind === "danmaku" &&
-      last.message.uid === message.uid &&
-      last.message.content === message.content &&
-      message.ts - last.message.ts <= windowMs));
+    const mergeable = !pending && sameCombo;
 
     if (mergeable) {
       last.count += 1;

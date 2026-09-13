@@ -168,16 +168,6 @@ export function FilterBar({ prefs, onChange }: Props) {
           系统通知
         </label>
         <label>
-          <input
-            type="checkbox"
-            checked={prefs["ui.merge_similar"]}
-            onChange={(event) =>
-              onChange({ "ui.merge_similar": event.target.checked })
-            }
-          />
-          合并相似
-        </label>
-        <label>
           礼物栏
           <select
             value={prefs["ui.gift_panel_mode"]}

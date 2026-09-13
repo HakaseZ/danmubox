@@ -378,7 +378,7 @@ const MOCK = (theme) => `(function () {
   var nextId = 1;
   var prefs = {
     "ui.font_scale": 1, "ui.theme": "${theme}", "ui.auto_scroll": true,
-    "ui.pause_on_hover": false, "ui.merge_similar": true, "ui.merge_window_ms": 8000,
+    "ui.pause_on_hover": false,
     "ui.gift_panel_mode": "merged", "ui.interact_auto_hide": true, "ui.system_notice": false,
     "ui.show_timestamp": false,
     "composer.phrases": ["早上好"], "filter.keywords": [], "filter.keywords_mode": "hide",

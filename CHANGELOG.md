@@ -26,6 +26,20 @@
 
 ### Removed
 
+- **「合并相似消息」整条机制删除**（用户 2026-09-13：「这个合并功能直接去掉吧，不是我想的那种功能，
+  而且不太有必要」）。触发这个决定的是界面上看到的 `×2`：同一房间被反复「进场」时，每次回填的最近 10 条
+  历史带的是**上游原始时间戳**，同一条弹幕第二次进来 `ts` 完全一致 → 落进「同 uid + 逐字相同正文 +
+  `ts` 差 ≤ 窗口」的判据 → 显示成 `×2`。**合并逻辑本身没写错，是这个功能不被需要**（另有一票在查
+  「为什么反复进场」，与本条无关）。
+  删除范围：`filtering.ts` 的 `toDisplayRows` 里那条 `mergeEnabled && …` 分支；偏好键
+  `ui.merge_similar` / `ui.merge_window_ms` 从 `crates/danmubox-core/src/prefs.rs` 的 SPECS、
+  `docs/contract.md` §8（`PrefsSnapshot` 现 **17 键**）、`docs/ipc.md`、前端 `types.ts` 与筛选面板
+  「合并相似」开关**整条删掉**；冒烟夹具里那两个键一并移除。**礼物连击折叠保留**（同 `combo_id` 相邻折叠、
+  `amount` 累加，`docs/ui.md` §8.4 由「合并相似消息」改写为只描述它），`×N` 因此只在礼物行出现 ——
+  礼物连击仍折叠、弹幕不再被人为合并。
+  规格：`docs/ui.md` §8.4 / §4.1 计数格 / §8.5 显示面板 / §7 虚拟列表措辞、`docs/contract.md` §8 与 §9 溯源行、
+  `docs/requests.md` P49（尚未合入 main，按台账规矩记「进行中」）。
+
 - **「从收到的弹幕里学表情、补进表情面板」整条机制删除**（用户 2026-09-13：「那确实就是学来的根本发不了嘛，
   直接把这个去掉，不需要学来表情包」）。删掉的是 `filtering.ts` 的 `collectSeenEmotes` 与它的整条管线：
   `App.tsx` 的 `seenEmotes` 计算与透传、`RoomView.tsx` / `Composer.tsx` 的 prop、`Composer.tsx` 里把它

@@ -297,8 +297,6 @@ export interface Prefs {
   "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean;
   "ui.pause_on_hover": boolean;
-  "ui.merge_similar": boolean;
-  "ui.merge_window_ms": number;
   "ui.gift_panel_mode": "merged" | "separate";
   /** 互动/进场消息显示一会儿后自动消失；关掉则常驻。 */
   "ui.interact_auto_hide": boolean;

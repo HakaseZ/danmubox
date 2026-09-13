@@ -341,8 +341,8 @@ impl ConfigStore {
     /// 写入某个账号的凭据：不存在则新建，已存在则**覆盖**（重新登录同一个账号）。
     ///
     /// `make_active` 决定写入后是否把它设为当前账号。调用方负责「重名怎么办」：
-    /// 扫码新增用 `unique_account_name` 避开已占用的名字，手填 Cookie 时显式给名字
-    /// 就是要覆盖那个账号的凭据。
+    /// 扫码新增用 `unique_account_name` 避开已占用的名字；重新登录某个账号时显式给出
+    /// 它的名字就是要覆盖那个账号的凭据。
     pub fn save_profile(&self, name: &str, profile: Profile, make_active: bool) -> Result<()> {
         let name = validate_account_name(name)?;
         let mut config = self.snapshot();

@@ -704,29 +704,6 @@ async fn account_logout(
     Ok(session)
 }
 
-/// 手填 Cookie 建成一个账号（需求 §2.5 的三种登录方式之一）。
-///
-/// 必填 `SESSDATA` / `bili_jct` / `DedeUserID`，缺一即 `BAD_REQUEST`；落盘前先向
-/// `nav` 求证，确认凭据真的能用（否则界面会出现一个「已登录」却连不上的账号）。
-/// `name` 缺省时按昵称自动生成；给了名字就写进那个账号（已存在 = 重新登录）。
-#[tauri::command]
-async fn account_login_cookie(
-    state: State<'_, AppState>,
-    cookie: String,
-    name: Option<String>,
-) -> ApiResult<Account> {
-    let before = state.store.active_name();
-    let account = state
-        .auth
-        .login_cookie(&cookie, name.as_deref())
-        .await
-        .map_err(ApiError::from)?;
-    if state.store.active_name() != before {
-        reconnect_all(&state);
-    }
-    Ok(account)
-}
-
 /// 扫码登录的第一步：取回二维码内容并在本地编成 SVG（离线，不联网渲染）。
 #[derive(serde::Serialize)]
 struct QrStart {
@@ -1026,7 +1003,6 @@ pub fn run() {
             account_switch,
             account_remove,
             account_logout,
-            account_login_cookie,
             account_qr_start,
             account_qr_poll,
             rooms_list,

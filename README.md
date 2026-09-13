@@ -33,7 +33,7 @@
 - 表情包库（按身份加载）、身份徽标（主播 / 房管 / 总督 / 提督 / 舰长）
 - 礼物栏（独立礼物栏或与弹幕混合）、电池余额
 - 关注列表（直播中置顶）、多房间标签页、虚拟列表、自动滚动、过滤与关键词告警
-- 三种登录：游客、手填 Cookie（直接编辑 `config.toml`）、扫码（默认入口）
+- 登录：扫码（唯一入口，手机 B 站 App 扫码）与游客态；凭据文件 `config.toml` 仍可手工编辑，但没有导入界面
 - 单次房内会话的内存弹幕缓冲（上限 5000 条）+ 房间内「刷新」手动重连
 
 ### 2.2 不做（本期明确排除）
@@ -140,7 +140,7 @@ danmubox/
 | 登录态 | `cargo run -p danmubox-cli -- session` | 只输出状态与当前账号名，不含 Cookie 值 |
 | 扫码登录 / 新增账号 | `cargo run -p danmubox-cli -- login [账号名]` | 终端渲染二维码，轮询至确认；不带账号名 = 新增账号（确认后按昵称自动起名），带 = 给该账号重新登录 |
 | 登出 | `cargo run -p danmubox-cli -- logout [账号名]` | 清空该账号（缺省 = 当前账号）的凭据；账号条目保留 |
-| 账号管理 | `cargo run -p danmubox-cli -- accounts [--use <名字>\|--create\|--remove <名字>\|--cookie -]` | 不带参数列出账号（登录状态 + 昵称 / uid）；`--create` 扫码新增；`--cookie -` 从 stdin 收手填 Cookie |
+| 账号管理 | `cargo run -p danmubox-cli -- accounts [--use <名字>\|--create\|--remove <名字>]` | 不带参数列出账号（登录状态 + 昵称 / uid）；`--create` 扫码新增；`--use` / `--remove` 切换 / 删除 |
 | 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败）；`--emote <唯一键>` 发表情弹幕 |
 | 电池 / 关注 / 表情 / 房管（CLI） | `cargo run -p danmubox-cli -- wallet`、`follow`、`emotes <房间>`、`emotes-owned`、`admin-lists <房间>` | 逐项核对上游能力的只读入口；`admin-lists` 需房管身份 |
 | 全局参数 | `--config <路径>` | 以上任何子命令都接受，用于指定另一份 `config.toml`（调试 / 多环境并存） |
@@ -154,7 +154,7 @@ danmubox/
 | 项 | 说明 |
 |---|---|
 | 网络出口 | 仅连接 B 站直播相关域名（WS 长连与 REST 接口） |
-| 凭据文件 | `config.toml`，**明文 TOML**，权限 **0600**，位于本机数据目录；可直接手工编辑，「手填 Cookie」即编辑该文件 |
+| 凭据文件 | `config.toml`，**明文 TOML**，权限 **0600**，位于本机数据目录；可直接手工编辑（界面与 CLI 都不提供 Cookie 导入入口） |
 | 偏好文件 | `prefs.json`，只存被显式改过的界面偏好，不含任何凭据 |
 | 弹幕缓冲 | 仅内存环形缓冲，上限 5000 条（`history.buffer_rows`）；生命周期 = 一次房内会话，离开房间即销毁清空，重进是新会话 |
 | 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android 应用私有目录 |

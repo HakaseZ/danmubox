@@ -21,7 +21,7 @@ pub mod wbi;
 mod ws;
 
 pub use admin::BiliAdmin;
-pub use auth::{profile_from_cookie_string, profile_from_cookies, qr_state_from_code, BiliAuth};
+pub use auth::{profile_from_cookies, qr_state_from_code, BiliAuth};
 pub use emote::BiliEmotes;
 pub use follow::BiliFollow;
 pub use http::{normalize_room_input, BiliHttp, CookieMode, DanmuInfo, NavIdentity};

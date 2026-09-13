@@ -423,6 +423,21 @@
   background: var(--hover-wash);
 }
 
+/* 非当前账号整行即「切到它」的靶子（用户 2026-09-13 去掉专门的「切换」按钮）。
+   悬停只加底色、不动边框：强调色边框是「当前账号」的记号，不能让可点的行看起来像当前行。 */
+.accountItemSwitchable {
+  cursor: pointer;
+}
+
+.accountItemSwitchable:hover {
+  background: var(--hover-wash);
+}
+
+.accountItemSwitchable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .accountWho {
   display: flex;
   flex-direction: column;
@@ -450,26 +465,6 @@
 
 .accountAdd {
   align-self: flex-start;
-}
-
-.accountAdvanced {
-  align-self: flex-start;
-  font-size: var(--fs-2);
-  color: var(--fg-dim);
-  background: transparent;
-}
-
-.accountCookie {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  padding: var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-3);
-}
-
-.accountCookie input {
-  font-size: var(--fs-2);
 }
 
 .addRow {

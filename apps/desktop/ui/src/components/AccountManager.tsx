@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { Avatar } from "./Avatar";
 import type { Account, AccountQr, QrState, SessionState } from "../types";
@@ -21,7 +21,42 @@ interface Props {
   onStartQr: (target?: string) => void;
   onCancelQr: () => void;
   onPollQr: () => void;
-  onLoginCookie: (cookie: string, name?: string) => Promise<boolean>;
+}
+
+/** 整行可点时的 DOM 属性（当前账号行返回 `undefined`）。 */
+type SwitchRowProps = {
+  role: "button";
+  tabIndex: number;
+  "aria-label": string;
+  onClick: () => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+};
+
+/**
+ * 非当前账号的行：整行就是「切到它」（用户 2026-09-13：「用户直接点击切换，不要那个专门的切换按钮」）。
+ *
+ * 给按钮语义与 `tabIndex`，键盘 Enter / Space 与鼠标点击等价；当前账号行**不给**这些属性——
+ * 它没有可切的目标，点了也不该有副作用（连焦点都不该停在它上面）。
+ * 行内的动作按钮（重新登录 / 退出登录 / 删除）由 `.accountActions` 容器统一 `stopPropagation`，
+ * 点它们不会顺带触发切号。
+ */
+function switchRowProps(
+  account: Account,
+  onSwitch: (name: string) => void,
+): SwitchRowProps | undefined {
+  if (account.active) return undefined;
+  return {
+    role: "button",
+    tabIndex: 0,
+    "aria-label": `切到「${who(account)}」`,
+    onClick: () => onSwitch(account.name),
+    onKeyDown: (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      // Space 默认滚页面、Enter 可能触发别的默认行为；这一下只做「切换」。
+      event.preventDefault();
+      onSwitch(account.name);
+    },
+  };
 }
 
 const QR_HINT: Record<QrState, string> = {
@@ -60,8 +95,7 @@ function statusOf(account: Account): string {
  * 2. 覆盖路径（「重新登录」某个账号）**必须显式确认**，文案写明会覆盖谁的凭据；
  * 3. 每一行都露出**昵称 + uid**，当前账号另有「已登录 · 当前」标记——覆盖的是谁必须看得见。
  *
- * 三种登录方式都在这里可达：扫码（默认入口）、手填 Cookie（折叠的高级入口）、
- * 游客（退出登录即清凭据，条目保留，可随时重新扫码）。
+ * 两条路径都在这里可达：扫码（唯一登录入口）、游客（退出登录即清凭据，条目保留，可随时重新扫码）。
  */
 export function AccountManager({
   accounts,
@@ -76,13 +110,8 @@ export function AccountManager({
   onStartQr,
   onCancelQr,
   onPollQr,
-  onLoginCookie,
 }: Props) {
   const [confirm, setConfirm] = useState<Confirm | null>(null);
-  const [cookieOpen, setCookieOpen] = useState(false);
-  const [cookie, setCookie] = useState("");
-  const [cookieName, setCookieName] = useState("");
-  const [cookieBusy, setCookieBusy] = useState(false);
 
   // 每 2 秒问一次扫码状态（契约 §7）；过期与出错都停下来，交给「重新获取」重来。
   // 轮询回调存 ref：它在父组件里是内联箭头，若进依赖表，任何一次 store 更新都会重开定时器。
@@ -174,8 +203,11 @@ export function AccountManager({
             accounts.map((account) => (
               <div
                 key={account.name}
-                className={`${styles.accountItem} ${account.active ? styles.accountItemActive : ""}`}
+                className={`${styles.accountItem} ${
+                  account.active ? styles.accountItemActive : styles.accountItemSwitchable
+                }`}
                 data-testid="db-account-row"
+                {...switchRowProps(account, onSwitch)}
               >
                 <Avatar url={account.face} name={who(account)} />
                 <div className={styles.accountWho}>
@@ -193,16 +225,13 @@ export function AccountManager({
                 >
                   {statusOf(account)}
                 </span>
-                <div className={styles.accountActions}>
-                  {!account.active && (
-                    <button
-                      data-testid="db-account-switch"
-                      title={`切到「${who(account)}」（后端会用它的凭据重连各房间）`}
-                      onClick={() => onSwitch(account.name)}
-                    >
-                      切换
-                    </button>
-                  )}
+                {/* 行内动作一律不冒泡到行：点「重新登录 / 退出登录 / 删除」不该顺带切号
+                    （键鼠都是：按钮上的 Enter 也会冒泡到行的 keydown 处理） */}
+                <div
+                  className={styles.accountActions}
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
                   <button
                     data-testid="db-account-rescan"
                     title={`用扫码重新登录「${who(account)}」（会覆盖它现有的凭据，需确认）`}
@@ -317,62 +346,6 @@ export function AccountManager({
             </div>
           </div>
         )}
-
-        <button
-          className={styles.accountAdvanced}
-          data-testid="db-account-cookie-toggle"
-          aria-expanded={cookieOpen}
-          onClick={() => setCookieOpen((open) => !open)}
-        >
-          {cookieOpen ? "收起「手填 Cookie」" : "高级：手填 Cookie"}
-        </button>
-
-        {cookieOpen && (
-          <div className={styles.accountCookie} data-testid="db-account-cookie">
-            <div className={styles.dialogSub}>
-              Cookie 只用于这一次登录，不回显、不进日志；账号名可留空，由后端按昵称自动命名。
-            </div>
-            <input
-              data-testid="db-account-cookie-input"
-              type="password"
-              autoComplete="off"
-              placeholder="SESSDATA=…; bili_jct=…; DedeUserID=…"
-              value={cookie}
-              onChange={(event) => setCookie(event.target.value)}
-            />
-            <input
-              data-testid="db-account-cookie-name"
-              placeholder="账号名（可留空）"
-              value={cookieName}
-              onChange={(event) => setCookieName(event.target.value)}
-            />
-            <button
-              data-testid="db-account-cookie-submit"
-              disabled={cookieBusy || cookie.trim().length === 0}
-              onClick={() => {
-                const value = cookie.trim();
-                if (value.length === 0) return;
-                const name = cookieName.trim();
-                setCookieBusy(true);
-                void onLoginCookie(value, name.length > 0 ? name : undefined).then(
-                  (ok) => {
-                    setCookieBusy(false);
-                    if (!ok) return;
-                    setCookie("");
-                    setCookieName("");
-                  },
-                );
-              }}
-            >
-              {cookieBusy ? "登录中…" : "用 Cookie 登录"}
-            </button>
-          </div>
-        )}
-
-        <div className={styles.dialogSub}>
-          游客态不登录也能收弹幕；发送需要登录。三种方式：扫码（默认）、手填 Cookie、
-          退出登录（回到游客态）。
-        </div>
       </div>
     </div>
   );

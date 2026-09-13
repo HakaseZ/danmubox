@@ -89,13 +89,6 @@ enum Command {
         /// 删除一个账号（不许删掉最后一个）
         #[arg(long)]
         remove: Option<String>,
-        /// 手填 Cookie 建成账号；只接受 `-`（从标准输入读 `k=v; k=v`），
-        /// 需要含 SESSDATA / bili_jct / DedeUserID
-        #[arg(long, value_name = "-")]
-        cookie: Option<String>,
-        /// 与 `--cookie` 搭配：写进这个账号（缺省按昵称自动起名）
-        #[arg(long)]
-        name: Option<String>,
     },
     /// 打印电池余额（需登录）
     Wallet,
@@ -139,8 +132,6 @@ async fn main() -> Result<()> {
             create,
             timeout,
             remove,
-            cookie,
-            name,
         } => {
             accounts(
                 &store,
@@ -149,8 +140,6 @@ async fn main() -> Result<()> {
                     create,
                     timeout,
                     remove,
-                    cookie,
-                    name,
                 },
             )
             .await?
@@ -576,8 +565,6 @@ struct AccountsArgs {
     create: bool,
     timeout: u64,
     remove: Option<String>,
-    cookie: Option<String>,
-    name: Option<String>,
 }
 
 async fn accounts(store: &Arc<ConfigStore>, args: AccountsArgs) -> Result<()> {
@@ -586,17 +573,12 @@ async fn accounts(store: &Arc<ConfigStore>, args: AccountsArgs) -> Result<()> {
         args.create,
         args.remove.is_some(),
         args.use_account.is_some(),
-        args.cookie.is_some(),
     ]
     .iter()
     .filter(|flag| **flag)
     .count();
     if actions > 1 {
-        anyhow::bail!("`--create` / `--remove` / `--use` / `--cookie` 只能给一个");
-    }
-    if args.name.is_some() && args.cookie.is_none() {
-        // 扫码新增与删除 / 切换都不需要名字：名字由昵称派生，或数据里已有。
-        anyhow::bail!("`--name` 只与 `--cookie` 搭配使用（扫码新增的名字按昵称自动生成）");
+        anyhow::bail!("`--create` / `--remove` / `--use` 只能给一个");
     }
 
     // 新增账号没有「先起名」这一步：直接走扫码，名字在确认后由昵称派生。
@@ -614,25 +596,6 @@ async fn accounts(store: &Arc<ConfigStore>, args: AccountsArgs) -> Result<()> {
         let state = auth.switch_account(&name).await?;
         println!("# 已切换到账号 `{name}`");
         println!("{}", session_json(&state)?);
-        print_accounts(&auth).await?;
-        return Ok(());
-    }
-    if let Some(cookie) = args.cookie {
-        // 只收 `-`：把凭据写进命令行会让它进进程表与 shell 历史（`docs/auth.md` §12 红线 9）。
-        if cookie != "-" {
-            anyhow::bail!(
-                "`--cookie` 只接受 `-`（从标准输入读）：凭据写进命令行会进进程表与 shell 历史"
-            );
-        }
-        let mut raw = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw)
-            .context("从标准输入读取 Cookie 失败")?;
-        let account = auth.login_cookie(&raw, args.name.as_deref()).await?;
-        println!(
-            "# 已用 Cookie 建成账号 `{}`（昵称 {}，uid {}）并设为当前",
-            account.name, account.nickname, account.uid
-        );
-        print_session(store).await?;
         print_accounts(&auth).await?;
         return Ok(());
     }

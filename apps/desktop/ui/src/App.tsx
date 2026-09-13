@@ -28,7 +28,6 @@ export function App() {
   const switchAccount = useApp((state) => state.switchAccount);
   const removeAccount = useApp((state) => state.removeAccount);
   const logoutAccount = useApp((state) => state.logoutAccount);
-  const loginCookie = useApp((state) => state.loginCookie);
   const qr = useApp((state) => state.qr);
   const qrState = useApp((state) => state.qrState);
   const qrError = useApp((state) => state.qrError);
@@ -195,7 +194,6 @@ export function App() {
           onStartQr={(target) => void startAccountQr(target)}
           onCancelQr={cancelAccountQr}
           onPollQr={() => void pollAccountQr()}
-          onLoginCookie={loginCookie}
         />
       )}
 

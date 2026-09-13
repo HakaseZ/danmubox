@@ -118,7 +118,7 @@ graph LR
 | `asset` | 上游静态资源地址规范化：表情图 `http://` 统一升级为 `https://` | —（被 `emote` 使用） |
 | `ws` | 连接与重连状态机：认证包、WS 心跳（首包 60s / 之后每 30s）、`op=8` 认证回应、退避与抖动 | `LiveSource` |
 | `history` | 进场回填：取最近 10 条弹幕（`LiveSource::recent`） | —（被 `ws` 使用） |
-| `auth` | 账号列表与 `nav` 求证、扫码、手填 Cookie、切换 / 登出 / 删除，凭据落盘 | `AuthProvider` |
+| `auth` | 账号列表与 `nav` 求证、扫码、切换 / 登出 / 删除，凭据落盘 | `AuthProvider` |
 | `send` | 发弹幕：本地节流、请求拼装、被吞判定与 `SendOutcome` 归一化 | `DanmakuSender` |
 | `report` | 举报：固定理由清单与举报请求，结果码只透传 | `DanmakuReporter` |
 | `emote` | 按身份加载直播间表情包库，外加主站「我的表情」 | `EmoteProvider` |
@@ -132,7 +132,7 @@ graph LR
 
 | 端口（契约 §3） | 职责（契约原文） | 输入 → 输出领域模型 | 实现落点 |
 |---|---|---|---|
-| `AuthProvider` | 登录态、账号清单与切换、扫码流程、凭据读写 | 无输入 → `SessionState`；`accounts` → `Account[]`；`begin_qr` / `poll_qr` → `QrChallenge` / `QrPoll`；`login_cookie` / `switch_account` / `logout` / `remove_account` → `SessionState` 或 `Account` | `bili::auth` |
+| `AuthProvider` | 登录态、账号清单与切换、扫码流程、凭据读写 | 无输入 → `SessionState`；`accounts` → `Account[]`；`begin_qr` / `poll_qr` → `QrChallenge` / `QrPoll`；`switch_account` / `logout` / `remove_account` → `SessionState` | `bili::auth` |
 | `LiveSource` | 房间解析、建立 / 断开连接、事件流、进场回填、本人房内身份 | 房间号 / 短号 / URL → `Room`；`room_id` → `Message[]`（回填）或 `RoomSession`；`room_id` + `MessageSink` + `Cancel` → 连接期间持续产出 `Message` 与状态变化 | `bili::ws`（房间解析经 `bili::http`，回填经 `bili::history`） |
 | `DanmakuSender` | 发送弹幕（含表情弹幕与被吞状态归一化） | `room_id` + 内容 / 颜色 / 模式 + 可选 `EmoteToken` / `ReplyTarget` → `SendReport`（`SendOutcome` + 上游原始 code / message） | `bili::send` |
 | `DanmakuReporter` | 举报弹幕 | 无输入 → `ReportReason[]`；`Message` + 理由 → 成功 / 失败 | `bili::report` |

@@ -6,7 +6,8 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use danmubox_core::{Error, Result, Room};
-use reqwest::header::{HeaderMap, HeaderValue, COOKIE, REFERER, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, USER_AGENT};
+use reqwest::StatusCode;
 use serde_json::Value;
 
 use crate::wbi;
@@ -191,18 +192,54 @@ impl BiliHttp {
     }
 
     /// GET 并同时取回 JSON 与 `Set-Cookie`（扫码轮询需要读回凭据）。
+    ///
+    /// 解析失败时带上 HTTP 状态、`content-type` 与响应体开头：上游在风控或 CDN 抽风时会用
+    /// **非 JSON 的页面**应答（实测 412 验证页是 `text/html`，见 `docs/protocol.md` A45），
+    /// 只报一句 `error decoding response body` 的话，现场没有任何可查的线索。
+    ///
+    /// **瞬时的非 JSON 应答重试一次**（`attempt == 1` 且状态不是 4xx）：第一次什么都没拿到，
+    /// 再问一次即可恢复；4xx 是上游明确的拒绝（例如 412 风控），重试只会白费一次请求、
+    /// 还可能让风控升级，因此不重试。
+    ///
+    /// 本函数只发 **GET**——幂等、只读，重试不会产生副作用，所以重试**不可能重复发弹幕**：
+    /// 发弹幕走 [`Self::post_form`]，那里一律不重试。
     pub async fn get_with_cookies(&self, url: &str) -> Result<(Value, Vec<(String, String)>)> {
-        let response = self
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
-        let cookies = collect_set_cookies(response.headers());
-        let value = response
-            .json::<Value>()
-            .await
-            .map_err(|e| Error::Upstream(format!("响应解析失败: {e}")))?;
-        Ok((value, cookies))
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let response = self
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
+            let status = response.status();
+            let content_type = header_text(response.headers(), CONTENT_TYPE);
+            let cookies = collect_set_cookies(response.headers());
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| Error::Upstream(format!("读取响应失败: {e}")))?;
+            match serde_json::from_slice::<Value>(&body) {
+                Ok(value) => return Ok((value, cookies)),
+                Err(_) if attempt == 1 && !status.is_client_error() => {
+                    tracing::debug!(
+                        target: "danmubox_bili::http",
+                        url,
+                        status = status.as_u16(),
+                        "上游返回的不是 JSON，按瞬时故障重试一次"
+                    );
+                }
+                Err(_) => {
+                    return Err(Error::Upstream(decode_failure(
+                        "GET",
+                        url,
+                        status,
+                        &content_type,
+                        &body,
+                    )))
+                }
+            }
+        }
     }
 
     /// `buvid3` / `buvid4`：`getDanmuInfo` 的必需 Cookie。
@@ -416,6 +453,10 @@ impl BiliHttp {
     }
 
     /// POST 表单。`body` 必须已是签名后的查询串（含 `w_rid`）。
+    ///
+    /// 与 [`Self::get_with_cookies`] 同款诊断（状态 / `content-type` / 响应体开头），
+    /// 但 **POST 一律不重试**：请求可能已经生效——上游回了页面而不是 JSON，并不能证明它没写进去，
+    /// 重试就可能把同一条弹幕发两遍、或把同一个用户禁言两次。
     pub async fn post_form(&self, url: &str, body: &str) -> Result<Value> {
         // body 里含 csrf 与弹幕原文，一律不记；只记目标地址。
         tracing::debug!(target: "danmubox_bili::http", method = "POST", url, "上游请求");
@@ -431,10 +472,14 @@ impl BiliHttp {
             .send()
             .await
             .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
-        response
-            .json::<Value>()
+        let status = response.status();
+        let content_type = header_text(response.headers(), CONTENT_TYPE);
+        let raw = response
+            .bytes()
             .await
-            .map_err(|e| Error::Upstream(format!("响应解析失败: {e}")))
+            .map_err(|e| Error::Upstream(format!("读取响应失败: {e}")))?;
+        serde_json::from_slice::<Value>(&raw)
+            .map_err(|_| Error::Upstream(decode_failure("POST", url, status, &content_type, &raw)))
     }
 
     /// WBI 的 `img_key` / `sub_key`，取自 `nav` 的图片文件名。
@@ -523,6 +568,149 @@ fn default_headers() -> HeaderMap {
     headers.insert(USER_AGENT, HeaderValue::from_static(UA));
     headers.insert(REFERER, HeaderValue::from_static(REFERER_LIVE));
     headers
+}
+
+/// 疑似凭据的键名：凭据文件的字段，加上上游下发过的会话令牌。
+///
+/// 错误信息里只放响应体的开头，但「上游把请求原样回显」在风控页上并非不可能，
+/// 所以这些键的值必须在出门之前被抹掉（`AGENT.md` §8）。
+const SECRET_KEYS: [&str; 7] = [
+    "dedeuserid__ckmd5",
+    "dedeuserid",
+    "sessdata",
+    "bili_jct",
+    "csrf_token",
+    "qrcode_key",
+    "csrf",
+];
+
+/// 值的结束符（属于值之外的第一个字符就能收尾）。
+fn is_value_end(ch: char) -> bool {
+    matches!(
+        ch,
+        '&' | ';' | ',' | '"' | '\'' | '}' | ')' | '<' | ' ' | '\t' | '\r' | '\n'
+    )
+}
+
+/// 在**小写副本** `lowered` 里找 `from` 之后最靠前的一个凭据键名 → （位置, 键名）。
+///
+/// 同一位置命中多个键名时取**最长**的那个：`dedeuserid__ckmd5` 与 `csrf_token` 分别把
+/// `dedeuserid` 与 `csrf` 包在里面，先匹配短的会把键名截成两段。
+fn next_secret_key(lowered: &str, from: usize) -> Option<(usize, &'static str)> {
+    SECRET_KEYS
+        .iter()
+        .filter_map(|key| {
+            lowered[from..]
+                .find(key)
+                .map(|offset| (from + offset, *key))
+        })
+        .min_by_key(|(at, key)| (*at, std::cmp::Reverse(key.len())))
+}
+
+/// 把 `key=value` / `"key":"value"` 里的值抹成 `***`，其余文本原样保留。
+///
+/// 只认「键名 + 分隔符 + 值」三种成分齐全的位置：上游原话 `CSRF 校验失败` 里的键名之后
+/// 没有分隔符，不能被改写——错误信息里保留上游原话才有诊断价值。
+fn redact_secrets(text: &str) -> String {
+    let lowered = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut search = 0;
+    while let Some((at, key)) = next_secret_key(&lowered, search) {
+        let after_key = at + key.len();
+        match secret_value(&text[after_key..]) {
+            Some((value_at, value_len)) => {
+                let value_start = after_key + value_at;
+                let value_end = value_start + value_len;
+                out.push_str(&text[copied..value_start]);
+                out.push_str("***");
+                copied = value_end;
+                search = value_end;
+            }
+            // 只是键名本身（例如上游原话里出现 `csrf` 一词）：原样保留，从键名之后继续找。
+            None => search = after_key,
+        }
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// 键名之后若跟着「分隔符 + 值」→ 返回（分隔符长度, 值长度）。
+///
+/// 分隔符是 `=` / `:` / 引号，允许中间夹空格（`"csrf": "值"`）；值到下一个 `is_value_end`
+/// 字符为止。只有键名而没有值 → `None`。
+fn secret_value(rest: &str) -> Option<(usize, usize)> {
+    let mut delimited = false;
+    for (index, ch) in rest.char_indices() {
+        match ch {
+            '=' | ':' | '"' | '\'' => delimited = true,
+            ' ' | '\t' if delimited => {}
+            _ => {
+                if !delimited || is_value_end(ch) {
+                    return None;
+                }
+                let length = rest[index..]
+                    .find(is_value_end)
+                    .unwrap_or(rest.len() - index);
+                return Some((index, length));
+            }
+        }
+    }
+    None
+}
+
+/// 响应体开头至多 `limit` 字节的可读文本：丢控制字符、抹疑似凭据，截断时以 `…` 收尾。
+///
+/// 空体返回 `（空）`——「上游回了 200 但没给身体」和「回了别的页面」是两种故障，
+/// 文案里必须能一眼分开。
+fn body_head(body: &[u8], limit: usize) -> String {
+    let head = &body[..body.len().min(limit)];
+    let lossy = String::from_utf8_lossy(head);
+    // 切口可能落在多字节字符中间，末尾那个替换符是切出来的，不代表上游内容。
+    let text = lossy.trim_end_matches(char::REPLACEMENT_CHARACTER);
+    let visible: String = text.chars().filter(|ch| !ch.is_control()).collect();
+    let visible = redact_secrets(&visible);
+    if visible.is_empty() {
+        return "（空）".to_string();
+    }
+    if body.len() > limit {
+        return format!("{visible}…");
+    }
+    visible
+}
+
+/// 响应体不是 JSON 时的错误文案：端点路径、HTTP 状态、`content-type`、响应体开头。
+///
+/// 端点只取**路径**：查询串里有 `qrcode_key` / `anchor_id` 一类值，请求体（csrf、弹幕原文）
+/// 更是绝不能出门（`AGENT.md` §8）。地址解析不出来时连路径都不报，只报「无法解析」。
+fn decode_failure(
+    method: &str,
+    url: &str,
+    status: StatusCode,
+    content_type: &str,
+    body: &[u8],
+) -> String {
+    let path = url::Url::parse(url)
+        .map(|parsed| parsed.path().to_string())
+        .unwrap_or_else(|_| "<无法解析的地址>".into());
+    format!(
+        "{method} {path} 响应不是 JSON：HTTP {status}，content-type={content_type}，响应体前 {} 字节：{}",
+        DECODE_BODY_HEAD_BYTES,
+        body_head(body, DECODE_BODY_HEAD_BYTES)
+    )
+}
+
+/// 解码失败文案里回显的响应体长度上限。够看清是 HTML 错误页、验证页还是空体，
+/// 又不至于把上游整页塞进错误信息。
+const DECODE_BODY_HEAD_BYTES: usize = 128;
+
+/// 响应头的文本值；缺头或非 UTF-8 → `<无>`。
+fn header_text(headers: &HeaderMap, name: reqwest::header::HeaderName) -> String {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<无>")
+        .to_string()
 }
 
 fn require_ok(value: &Value, what: &str) -> Result<()> {
@@ -721,14 +909,23 @@ mod tests {
     static CACHE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
         LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-    /// 本地 `nav` 桩服务器：按顺序回放 `bodies`（最后一份复用），统计收到的请求数。
-    fn spawn_nav_stub(bodies: &[&str], delay: Duration) -> (String, Arc<AtomicUsize>) {
+    /// 本地桩服务器：按顺序回放 `responses`（最后一份复用），统计收到的请求数。
+    ///
+    /// 每份响应是「状态码、`content-type`、响应体」；返回**基址**（调用方自己拼路径，
+    /// 因此任意端点都能桩住）与命中计数。
+    fn spawn_stub(responses: &[(u16, &str, &str)], delay: Duration) -> (String, Arc<AtomicUsize>) {
         use std::io::{BufRead, Write};
 
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定本地 nav 桩");
-        let address = listener.local_addr().expect("本地 nav 桩地址");
-        let queue: Arc<Mutex<Vec<String>>> =
-            Arc::new(Mutex::new(bodies.iter().map(|body| body.to_string()).collect()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定本地桩");
+        let address = listener.local_addr().expect("本地桩地址");
+        let queue: Arc<Mutex<Vec<(u16, String, String)>>> = Arc::new(Mutex::new(
+            responses
+                .iter()
+                .map(|(status, content_type, body)| {
+                    (*status, content_type.to_string(), body.to_string())
+                })
+                .collect(),
+        ));
         let hits = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&hits);
 
@@ -748,17 +945,17 @@ mod tests {
                     }
                 }
                 counter.fetch_add(1, Ordering::SeqCst);
-                let body = {
+                let (status, content_type, body) = {
                     let mut queue = queue.lock().expect("桩队列");
                     if queue.len() > 1 {
                         queue.remove(0)
                     } else {
-                        queue.last().cloned().unwrap_or_default()
+                        queue.first().cloned().unwrap_or_default()
                     }
                 };
                 std::thread::sleep(delay);
                 let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status} X\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
                 let _ = stream.write_all(head.as_bytes());
@@ -767,7 +964,17 @@ mod tests {
             }
         });
 
-        (format!("http://{address}/nav"), hits)
+        (format!("http://{address}"), hits)
+    }
+
+    /// 本地 `nav` 桩服务器：按顺序回放 `bodies`（最后一份复用），统计收到的请求数。
+    fn spawn_nav_stub(bodies: &[&str], delay: Duration) -> (String, Arc<AtomicUsize>) {
+        let responses: Vec<(u16, &str, &str)> = bodies
+            .iter()
+            .map(|body| (200u16, "application/json", *body))
+            .collect();
+        let (base, hits) = spawn_stub(&responses, delay);
+        (format!("{base}/nav"), hits)
     }
 
     async fn reset_wbi_cache() {
@@ -852,5 +1059,160 @@ mod tests {
         );
         assert!(!keys.is_fresh(now + WBI_KEY_TTL, 100), "TTL 到点必须重取");
         assert!(!keys.is_fresh(now, 101), "跨自然日必须重取");
+    }
+
+    /// 回归护栏（issue 2609132259 #6）：上游用**非 JSON 的页面**应答时（实测 412 风控页是
+    /// `text/html`，见 `docs/protocol.md` A45），错误里必须能看出「哪个端点、什么状态、
+    /// 什么内容」——只报一句 `error decoding response body` 等于没有线索。
+    #[tokio::test]
+    async fn non_json_get_names_endpoint_status_and_body_head() {
+        let (base, hits) = spawn_stub(
+            &[(
+                412,
+                "text/html",
+                "<!DOCTYPE html>\n<html lang=\"zh-cn\"><head><title>出错啦! - bilibili.com</title>",
+            )],
+            Duration::ZERO,
+        );
+        let url = format!(
+            "{base}/xlive/web-ucenter/v1/banned/GetSilentUserList?room_id=5440&csrf=SECRET"
+        );
+        let error = BiliHttp::new()
+            .unwrap()
+            .get_with_cookies(&url)
+            .await
+            .expect_err("412 的 HTML 页面不是 JSON");
+
+        assert_eq!(error.code(), "UPSTREAM_ERROR");
+        let text = error.to_string();
+        assert!(
+            text.starts_with("upstream error: "),
+            "前缀语义不许变：{text}"
+        );
+        assert!(
+            text.contains("GET /xlive/web-ucenter/v1/banned/GetSilentUserList"),
+            "{text}"
+        );
+        assert!(text.contains("HTTP 412"), "{text}");
+        assert!(text.contains("content-type=text/html"), "{text}");
+        assert!(
+            text.contains("<!DOCTYPE html>"),
+            "响应体开头要给出来：{text}"
+        );
+        assert!(
+            !text.contains("room_id=5440") && !text.contains("SECRET"),
+            "查询串不许进错误信息：{text}"
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "4xx 是上游的明确拒绝，重试没有意义"
+        );
+    }
+
+    /// 瞬时的非 JSON（CDN 错误页那类 5xx 应答）重试一次就该恢复。
+    #[tokio::test]
+    async fn transient_non_json_get_retries_once_then_succeeds() {
+        let (base, hits) = spawn_stub(
+            &[
+                (502, "text/html", "<html>502 Bad Gateway</html>"),
+                (200, "application/json", r#"{"code":0,"data":{}}"#),
+            ],
+            Duration::ZERO,
+        );
+        let (value, _) = BiliHttp::new()
+            .unwrap()
+            .get_with_cookies(&format!("{base}/x"))
+            .await
+            .expect("重试一次后应当成功");
+
+        assert_eq!(value["code"], 0);
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "只重试一次");
+    }
+
+    /// 重试有上限：两次都不是 JSON 就报错，不会没完没了地打上游。
+    #[tokio::test]
+    async fn repeated_non_json_get_gives_up_after_one_retry() {
+        let (base, hits) = spawn_stub(&[(502, "text/html", "<html>502</html>")], Duration::ZERO);
+        let error = BiliHttp::new()
+            .unwrap()
+            .get_with_cookies(&format!("{base}/x"))
+            .await
+            .expect_err("两次都不是 JSON");
+
+        assert_eq!(error.code(), "UPSTREAM_ERROR");
+        assert!(error.to_string().contains("HTTP 502"), "{error}");
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "最多两次");
+    }
+
+    /// POST **一律不重试**：请求可能已经生效，重试就会重复发弹幕 / 重复禁言。
+    /// 同一测试顺带护栏回显内容——响应体里夹带的凭据值必须在进错误信息前被抹掉。
+    #[tokio::test]
+    async fn post_form_never_retries_and_redacts_reflected_credentials() {
+        let (base, hits) = spawn_stub(
+            &[(
+                412,
+                "text/html",
+                "<html>csrf=REAL-SECRET&room_id=5440</html>",
+            )],
+            Duration::ZERO,
+        );
+        let error = BiliHttp::new()
+            .unwrap()
+            .post_form(
+                &format!("{base}/xlive/web-ucenter/v1/banned/GetSilentUserList"),
+                "room_id=5440&csrf=REAL-SECRET",
+            )
+            .await
+            .expect_err("HTML 页面不是 JSON");
+
+        assert_eq!(error.code(), "UPSTREAM_ERROR");
+        let text = error.to_string();
+        assert!(
+            text.contains("POST /xlive/web-ucenter/v1/banned/GetSilentUserList"),
+            "{text}"
+        );
+        assert!(
+            text.contains("HTTP 412") && text.contains("content-type=text/html"),
+            "{text}"
+        );
+        assert!(text.contains("csrf=***"), "键名后的值必须被抹掉：{text}");
+        assert!(!text.contains("REAL-SECRET"), "凭据不许进错误信息：{text}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "POST 不重试");
+    }
+
+    /// 错误信息里的响应体开头：128 字节封顶、控制字符清掉（错误信息是单行日志）、
+    /// 空体写明「（空）」——「上游回了空体」与「上游回了别的页面」是两种故障。
+    #[test]
+    fn body_head_is_bounded_visible_and_marks_empty_or_truncated() {
+        assert_eq!(body_head(b"", 128), "（空）");
+        assert_eq!(body_head(b"{\"code\":0}\r\n", 128), r#"{"code":0}"#);
+
+        let long = "x".repeat(300);
+        let head = body_head(long.as_bytes(), 128);
+        assert!(head.ends_with('…'), "截断了就要有标记：{head}");
+        assert_eq!(head.trim_end_matches('…').len(), 128, "超出部分不许带上");
+    }
+
+    /// 凭据抹除只认「键名 + 分隔符 + 值」三种成分齐全的位置：上游原话 `CSRF 校验失败`
+    /// 不许被改写（错误信息里保留上游原话才有诊断价值），而 `key=value` / `"key": "value"`
+    /// / 长短键名并存这几种形态都必须抹干净。
+    #[test]
+    fn redaction_covers_cookie_and_token_shapes_without_touching_prose() {
+        assert_eq!(
+            redact_secrets("SESSDATA=abc; bili_jct=def&z=1"),
+            "SESSDATA=***; bili_jct=***&z=1"
+        );
+        assert_eq!(
+            redact_secrets(r#"{"csrf_token":"tok","k":"v"}"#),
+            r#"{"csrf_token":"***","k":"v"}"#
+        );
+        assert_eq!(redact_secrets(r#"{"csrf": "tok"}"#), r#"{"csrf": "***"}"#);
+        assert_eq!(redact_secrets("CSRF 校验失败"), "CSRF 校验失败");
+        assert_eq!(
+            redact_secrets("dedeuserid__ckmd5=zz"),
+            "dedeuserid__ckmd5=***",
+            "长键名不许被短键名截断"
+        );
     }
 }

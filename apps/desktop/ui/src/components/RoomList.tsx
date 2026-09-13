@@ -12,6 +12,7 @@ import type {
   Account,
   AppInfo,
   FollowedRoom,
+  Prefs,
   RoomView as RoomViewData,
   SessionState,
 } from "../types";
@@ -28,6 +29,10 @@ interface Props {
   followed: FollowedRoom[];
   /** `ui.recent_watched`：房间号 → 最近一次打开的时刻，关注列表据此降序（用户 #16）。 */
   recentWatched: Record<string, number>;
+  /** `ui.theme` 当前档位。列表页页头是它**唯一**的开关（用户 2026-09-13 #10）。 */
+  theme: Prefs["ui.theme"];
+  /** 写回 `ui.theme`；落到 `<html data-theme>` 由 App 的 effect 负责（本组件只写偏好）。 */
+  onTheme: (value: Prefs["ui.theme"]) => void;
   onAdd: (input: string) => void;
   onOpen: (roomId: number) => void;
   onRemove: (roomId: number) => void;
@@ -56,6 +61,8 @@ export function RoomList({
   onOpenAccounts,
   followed,
   recentWatched,
+  theme,
+  onTheme,
   onAdd,
   onOpen,
   onRemove,
@@ -87,7 +94,30 @@ export function RoomList({
 
   return (
     <div className={styles.listPage} data-testid="db-list-page">
-      <h1>弹幕框</h1>
+      {/*
+        页头一行：标题在左、**主题开关**在右（用户 2026-09-13 #10：主题是全局的，主界面就该能切）。
+        开关原先在房间页筛选面板的「显示」块里 —— 那里只有进房间、且展开面板才够得着，
+        与「全局」不符。三档取值仍是 `ui.theme`（契约 §8），落到 `<html data-theme>` 由 App 的
+        effect 负责；这里只写偏好，不做第二处解析。
+      */}
+      <div className={styles.listHeader}>
+        <h1>弹幕框</h1>
+        <label
+          className={styles.themePicker}
+          title="跟随系统 = 随操作系统外观自动切换；整应用一套深浅配色"
+        >
+          主题
+          <select
+            data-testid="db-pref-theme"
+            value={theme}
+            onChange={(event) => onTheme(event.target.value as Prefs["ui.theme"])}
+          >
+            <option value="system">跟随系统</option>
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select>
+        </label>
+      </div>
 
       {/*
         账号区只留一行：当前身份 + 一个「账号」按钮（用户 2026-09-12：「切换身份的功能好像没法选」）。

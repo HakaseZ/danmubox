@@ -421,7 +421,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 举报弹幕（同官方行为） | §3 `DanmakuReporter`、§5 `upstream_id`、§7 `chat_report` |
 | 举报理由从固定清单里选 | §3 `DanmakuReporter::reasons()`、§7 `report_reasons` |
 | 上游代码完全分离 | §3 端口与依赖方向 |
-| cookie 配置文件 / 默认扫码 / 有则直读 | §4.1（其中「手填 Cookie」的导入入口已于 2026-09-13 按用户裁决从全链路移除，只剩「直接编辑该文件」；REQUIREMENTS.md 原文的三种方式须由用户自行修订） |
+| cookie 配置文件 / 默认扫码 / 有则直读 | §4.1（其中「手填 Cookie」的导入入口已于 2026-09-13 按用户裁决从全链路移除，只剩「直接编辑该文件」；`REQUIREMENTS.md` §2.5 已同步为「游客 / 扫码」两种方式） |
 | 房管身份 | §5 `is_admin` |
 | 本房间粉丝牌等级 | §5 `RoomSession.my_medal_level` |
 | 礼物事件 / 独立礼物栏或混合 | §8 `ui.gift_panel_mode` |

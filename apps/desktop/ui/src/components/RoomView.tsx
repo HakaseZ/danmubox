@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminPanel } from "./AdminPanel";
-import { Composer } from "./Composer";
+import { Composer, type PanelKind } from "./Composer";
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
 import { useApp } from "../store";
@@ -95,6 +95,9 @@ export const LIVE_TEXT: Record<LiveKind, string> = {
  * ```
  *
  * 面板与礼物栏都在正常文档流里（不是浮层），所以展开时只会挤压弹幕列表，不会盖住最新弹幕。
+ *
+ * **房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏五者互斥**（用户 2026-09-13 第 4 条）：
+ * 同时最多开一个 —— 五个面板状态都在这里（输入区那三个是受控的），打开一个就收起另外四个。
  */
 export function RoomView({
   room,
@@ -121,6 +124,9 @@ export function RoomView({
   const [messageMenu, setMessageMenu] = useState<{ at: MenuPoint; message: Message } | null>(null);
   const [reportTarget, setReportTarget] = useState<Message>();
   const [giftOpen, setGiftOpen] = useState(false);
+  // 输入区的三个弹出面板（表情 / 短语 / 筛选）：状态**提到这里**，因为互斥的对手
+  // 是房管面板与独立礼物栏（用户 2026-09-13 第 4 条：五个面板同时最多开一个）。
+  const [panel, setPanel] = useState<PanelKind | null>(null);
   // 房管面板与待确认的写操作（issue #3）。写操作一律先落到 `adminConfirm` 再执行：
   // 禁言 / 拉黑 / 解除 / 增删词都会不可逆地影响他人。
   const [adminOpen, setAdminOpen] = useState(false);
@@ -180,10 +186,58 @@ export function RoomView({
   const runAdmin = useApp((store) => store.runAdmin);
   const loggedIn = session?.logged_in ?? false;
 
+  /**
+   * 面板互斥（用户 2026-09-13 第 4 条）：**房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏
+   * 五个面板同时最多开一个**。打开任何一个都把其它四个收起来；收起某一个不动别人
+   * （所以「再点一次工具按钮收起」这条老路照旧）。
+   *
+   * 三个入口都收在这里：`onPanel`（输入区三个面板，受控）、`toggleAdminPanel`、
+   * `toggleGiftDock`。确认条（`adminConfirm`）跟着房管面板走：面板一收就撤销，
+   * 免得一条无主的待确认动作挂在屏幕上。
+   */
+  const onPanel = useCallback(
+    (next: PanelKind | null) => {
+      // 打开表情面板就顺手刷新（身份可能变过）：「我的表情」只在上次失败时重试。
+      if (next === "emotes") {
+        void loadEmotes(room.room_id);
+        void loadOwnedEmotes(true);
+      }
+      setPanel(next);
+      if (next === null) return;
+      setAdminOpen(false);
+      setAdminConfirm(null);
+      setGiftOpen(false);
+    },
+    [loadEmotes, loadOwnedEmotes, room.room_id],
+  );
+
+  const toggleAdminPanel = () => {
+    const next = !adminOpen;
+    setAdminOpen(next);
+    setAdminConfirm(null);
+    if (next) {
+      setPanel(null);
+      setGiftOpen(false);
+    }
+    // 打开时顺手重取身份与三块列表：以远端为准（身份 / 名单都可能刚变过）。
+    void loadRoomIdentity(room.room_id);
+    if (next) void loadAdmin(room.room_id);
+  };
+
+  const toggleGiftDock = () => {
+    const next = !giftOpen;
+    setGiftOpen(next);
+    if (next) {
+      setPanel(null);
+      setAdminOpen(false);
+      setAdminConfirm(null);
+    }
+  };
+
   // 切房间（多标签）时把本页的**临时界面状态**清干净（用户 2026-09-13 第 2 条）：
   // 多标签只是切渲染，`RoomView` 的组件实例被 React 复用，本地状态不显式清就会串台 ——
   // 最刺眼的是上一个房间的房管面板 / 待确认写操作还开着（`adminOpen` / `adminConfirm`），
-  // 还有上一个房间的行菜单、举报目标与 @ 目标（`pendingAction`）落到新房间头上。
+  // 还有输入区那三个弹出面板（`panel`）、上一个房间的行菜单、举报目标与 @ 目标（`pendingAction`）。
   // 输入草稿**不在这里重置**：它按房间各留一份，由 `Composer` 自己按 `roomId` 存取（契约 C1）。
   // 这里用 effect 而不是给 `RoomView` 加 `key`：加 key 会把整棵子树重挂（含 `Composer`），
   // 草稿与「不是整页重挂」的口径相冲；弹幕列表的滚动/跟随另用 `MessageList` 的 key 处理（见下）。
@@ -194,6 +248,7 @@ export function RoomView({
     setReportTarget(undefined);
     setReasonId("");
     setGiftOpen(false);
+    setPanel(null);
     setAdminOpen(false);
     setAdminConfirm(null);
     setPendingAction(null);
@@ -227,6 +282,15 @@ export function RoomView({
   useEffect(() => {
     if (loggedIn) void loadRoomIdentity(room.room_id);
   }, [loggedIn, loadRoomIdentity, room.room_id]);
+
+  // 房管数据**进房就加载**（用户 2026-09-13 第 4 条：「连接到有房管权限的直播间时就加载好
+  // 房管的数据」）：身份是**异步到的**（`room_session` 一次 + 事件更新），所以 `isAdmin`
+  // 必须在依赖里 —— 没有它，进房那一帧身份还是 false，这一批数据就永远不会被拉。
+  // 打开面板时再静默重拉一次（见 `toggleAdminPanel`），保证看到的是新鲜的。
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadAdmin(room.room_id);
+  }, [isAdmin, loadAdmin, room.room_id]);
 
   useEffect(() => {
     if (reportTarget) void loadReportReasons();
@@ -412,14 +476,7 @@ export function RoomView({
       ? [
           {
             label: adminOpen ? "收起房管面板" : "房管面板",
-            onSelect: () => {
-              const next = !adminOpen;
-              setAdminOpen(next);
-              setAdminConfirm(null);
-              // 打开时顺手重取身份与三块列表：以远端为准（身份 / 名单都可能刚变过）。
-              void loadRoomIdentity(room.room_id);
-              if (next) void loadAdmin(room.room_id);
-            },
+            onSelect: toggleAdminPanel,
           },
         ]
       : []),
@@ -618,21 +675,19 @@ export function RoomView({
         </div>
       )}
 
-      {/* 房管面板（issue #3）：三块列表 + 增删。入口只在 `isAdmin` 时出现（第 3 条，契约 C6），
-          因此这里渲染出来就是房管身份；`isAdmin` 仍原样传下去，作为身份刚被撤销那一帧的兜底提示。
-          它是文档流里的一块（不是浮层），与输入区的面板一样只挤压弹幕列表 */}
+      {/* 房管面板（issue #3）：三块列表收成三个 tab，单点在右键菜单、批量在多选动作条。
+          入口只在 `isAdmin` 时出现（第 3 条，契约 C6），因此渲染出来就是房管身份 ——
+          面板里不再有身份提示；打开即静默刷新（第 5 条），所以读取失败的**错误条必须留在面板里**
+          （没有手动刷新按钮，错误是唯一的反馈）。
+          它是文档流里的一块（不是浮层），与输入区的面板一样只挤压弹幕列表；
+          与输入区面板 / 独立礼物栏**互斥**（第 4 条）：开它就关那四个（见上面的三个入口） */}
       {adminOpen && (
         <AdminPanel
-          isAdmin={isAdmin}
           silent={adminSilent}
           blacklist={adminBlacklist}
           keywords={adminKeywords}
           errors={adminErrors}
           busy={adminBusy}
-          onRefresh={() => {
-            void loadAdmin(room.room_id);
-            void loadRoomIdentity(room.room_id);
-          }}
           onConfirm={setAdminConfirm}
           onClose={() => {
             setAdminOpen(false);
@@ -686,14 +741,11 @@ export function RoomView({
         balance={balance}
         onRefreshBalance={() => void loadBalance()}
         pendingAction={pendingAction}
+        panel={panel}
+        onPanel={onPanel}
         prefs={prefs}
         onPrefs={onPrefs}
         onSend={onSend}
-        onOpenEmotes={() => {
-          // 面板打开：按房间包每次刷新（身份可能变过），「我的表情」只在上次失败时重试。
-          void loadEmotes(room.room_id);
-          void loadOwnedEmotes(true);
-        }}
         onRetryOwned={() => void loadOwnedEmotes(true)}
         onNotice={onNotice}
       />
@@ -704,7 +756,7 @@ export function RoomView({
           <button
             className={styles.giftDockHead}
             aria-expanded={giftOpen}
-            onClick={() => setGiftOpen((value) => !value)}
+            onClick={toggleGiftDock}
           >
             <span className={styles.giftDockTitle}>礼物 / SC（{giftRows.length}）</span>
             <span className={styles.giftDockSummary}>

@@ -16,8 +16,10 @@ import {
 } from "../types";
 import styles from "../app.module.css";
 
-/** 输入区上方三个弹出面板：同时只开一个，向上展开（issue #8）。 */
-type PanelKind = "emotes" | "phrases" | "filter";
+/** 输入区上方三个弹出面板：同时只开一个，向上展开（issue #8）。
+ *  状态**归 `RoomView`**（issue 2609132259 #4：与房管面板 / 独立礼物栏一起互斥，同时最多开一个），
+ *  `Composer` 只收受控的 `panel` 与 `onPanel`。 */
+export type PanelKind = "emotes" | "phrases" | "filter";
 
 /** 草稿按「身份 × 房间」各留一份：正文、回复目标、@ 目标三者同属一份草稿（契约 C1）。 */
 interface ComposerDraft {
@@ -75,6 +77,10 @@ interface Props {
   onRefreshBalance: () => void;
   /** 行菜单里点的 @ / 回复，点一次应用一次（token 变则重放）。 */
   pendingAction?: { kind: "mention" | "reply"; message: Message; token: number } | null;
+  /** 展开中的面板（受控，见 `PanelKind`）：`null` = 都收起。 */
+  panel: PanelKind | null;
+  /** 请求把面板切到某个 / 收起（`null`）：互斥与互斥带来的副作用都在 `RoomView` 一处收口。 */
+  onPanel: (panel: PanelKind | null) => void;
   prefs: Prefs;
   onPrefs: (patch: Partial<Prefs>) => void;
   onSend: (
@@ -82,7 +88,6 @@ interface Props {
     emote?: EmoteToken,
     reply?: ReplyTarget,
   ) => Promise<SendOutcome | undefined>;
-  onOpenEmotes: () => void;
   /** 面板里「我的表情」加载失败后的重试入口。 */
   onRetryOwned: () => void;
   onNotice: (text: string) => void;
@@ -117,10 +122,11 @@ export function Composer({
   balance,
   onRefreshBalance,
   pendingAction,
+  panel,
+  onPanel,
   prefs,
   onPrefs,
   onSend,
-  onOpenEmotes,
   onRetryOwned,
   onNotice,
 }: Props) {
@@ -129,7 +135,6 @@ export function Composer({
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [mention, setMention] = useState<{ mid: number; uname: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [panel, setPanel] = useState<PanelKind | null>(null);
   // 表情分组 tab：null = 还没选过，显示第一组（顺序固定，见 PACKAGE_ORDER）。
   const [emoteTab, setEmoteTab] = useState<EmotePackage | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -175,7 +180,7 @@ export function Composer({
       setReplyTo(saved?.replyTo ?? null);
       setMention(saved?.mention ?? null);
       loadedDraftKeyRef.current = draftKey;
-      setPanel(null);
+      onPanel(null);
       setEmoteTab(null);
       setPhraseMenu(null);
       setEditingPhrase(null);
@@ -184,7 +189,7 @@ export function Composer({
       return;
     }
     composerDrafts.set(draftKey, { text: draft, replyTo, mention });
-  }, [draftKey, draft, replyTo, mention]);
+  }, [draftKey, draft, replyTo, mention, onPanel]);
 
   // 行菜单送来的动作：@ 与回复各应用一次（token 每次点击都变，不会自激）。
   useEffect(() => {
@@ -236,12 +241,12 @@ export function Composer({
       // 面板里弹出的右键菜单也归面板：它的「编辑 / 删除」点下去时面板必须还在
       // （`pointerdown` 连右键一起收，菜单项不在面板 DOM 里，不排除就会被关掉）。
       if (target instanceof Element && target.closest('[data-testid="db-context-menu"]')) return;
-      setPanel(null);
+      onPanel(null);
     };
     // 捕获阶段：先于被点元素的处理收起面板，避免「点了一下别人、面板还挂在上面」
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [panel]);
+  }, [panel, onPanel]);
 
   const customPhrases = prefs["composer.phrases"] ?? [];
 
@@ -402,13 +407,12 @@ export function Composer({
     });
   };
 
+  /**
+   * 工具按钮：点已展开的那个 = 收起（② 再点一次工具按钮），点别的 = 换上它。
+   * 真正的落地在 `RoomView` 的 `onPanel`（互斥与「打开表情面板时刷表情」都在那里）。
+   */
   const togglePanel = (kind: PanelKind) => {
-    if (panel === kind) {
-      setPanel(null);
-      return;
-    }
-    if (kind === "emotes") onOpenEmotes();
-    setPanel(kind);
+    onPanel(panel === kind ? null : kind);
   };
 
   const commitPhrase = (text: string) => {
@@ -510,7 +514,7 @@ export function Composer({
       setDraft("");
       setReplyTo(null);
       setMention(null);
-      setPanel(null);
+      onPanel(null);
     }
   };
 

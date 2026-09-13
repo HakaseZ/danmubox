@@ -1347,12 +1347,6 @@
   margin-bottom: var(--sp-2);
 }
 
-.panelTitle {
-  font-size: var(--fs-2);
-  font-weight: 600;
-  color: var(--fg-dim);
-}
-
 /* 房管面板（issue #3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表 */
 .adminPanel {
   border-top: 1px solid var(--border);
@@ -1362,15 +1356,96 @@
   overflow-y: auto;
 }
 
-.adminSection {
-  margin-bottom: var(--sp-2);
+/* 三块列表收成**横向 tab 轨道**（issue 2609132259 #1）：外观与表情分组的轨道同一套
+   （选中 = 强调色下边 + 底色抬起 + 字重加粗，`:focus-visible` 另给），方向改成横排 ——
+   房管面板通栏，横排比竖排省高度。轨道自己横向滚（窄屏三个 tab 放不下时不必挤压关闭按钮）。 */
+.adminRail {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.adminSectionHead {
+.adminRail::-webkit-scrollbar {
+  display: none;
+}
+
+.adminTab {
+  flex: none;
+  font-size: var(--fs-2);
+  padding: var(--sp-1) var(--sp-2);
+  white-space: nowrap;
+  color: var(--fg-dim);
+  /* 只有下边一条（选中时上强调色）：横排 tab 的框线留着会读成一排按钮 */
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--r-2) var(--r-2) 0 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* 选中态挂在 `aria-selected` 上而不是某个类名上（与表情轨道同一口径）：
+   屏幕阅读器读到的与眼睛看到的同一处来源 */
+.adminTab[aria-selected="true"] {
+  color: var(--accent-text);
+  font-weight: 600;
+  background: var(--bg-input);
+  border-bottom-color: var(--accent);
+}
+
+.adminTab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 条数不与名字争字重：名字加粗、条数始终次级 */
+.adminTabCount {
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+
+/* 「批量」是**模式**不是一次性动作：打开态用强调色描边，与工具行的选中态同一套语言 */
+.adminToggleOn {
+  color: var(--accent-text);
+  border-color: var(--accent);
+  background: var(--bg-input);
+}
+
+/* 批量模式的「全选」行（在名单上方） */
+.adminPickHead {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   margin-bottom: var(--sp-1);
+}
+
+/* 一行里的「勾选框 + 名字」：复选框本体不撑高，热区交给这一层 label（窄屏见文件末尾的 40px 口径） */
+.adminPick {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  cursor: pointer;
+}
+
+/* 当前 tab 底部的批量动作条：已选数量 + 该 tab 的批量动作 */
+.adminBatchBar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+
+/* 批量模式下勾中的行：与勾选框同一个状态（不靠 hover 也一眼看得出选了谁） */
+.adminItem[data-picked="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
 }
 
 .adminList {
@@ -2196,6 +2271,12 @@
 
   .adminInput {
     width: 100%;
+  }
+
+  /* 批量模式的勾选行：复选框本体不撑高（撑了会变形），热区交给它外面那层 label
+     —— 与筛选面板的复选框同一条口径（见上面那条 min-height 规则） */
+  .adminPanel label {
+    min-height: var(--tap-min);
   }
 
   .panelSearch {

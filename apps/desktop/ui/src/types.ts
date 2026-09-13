@@ -201,8 +201,13 @@ export interface AdminUser {
 }
 
 /**
- * 房管写操作的待确认对象（`docs/ui.md` §4.5 / §6.6）。
+ * 房管写操作的待确认对象（`docs/ui.md` §4.5 / §4.9）。
  * 这些操作会不可逆地影响他人，因此一律先出确认条，且文案要说清对象与时长。
+ *
+ * `batch` 是面板**批量模式**提交的一批**同类**动作（成员按屏幕上的顺序排列）：
+ * 一次确认覆盖整批，执行时按序逐个 await、失败即停（`store.runAdmin`）。
+ * 批量不新开一条执行通道 —— 它复用同一批成员动作，因此「确认文案 / 结果文案 / 上游调用」
+ * 三处都只有一份口径。
  */
 export type AdminAction =
   | { kind: "mute"; uid: number; uname: string; hour: number }
@@ -210,7 +215,8 @@ export type AdminAction =
   | { kind: "blacklist_add"; uid: number; uname: string }
   | { kind: "blacklist_del"; uid: number; uname: string }
   | { kind: "keyword_add"; word: string }
-  | { kind: "keyword_del"; word: string };
+  | { kind: "keyword_del"; word: string }
+  | { kind: "batch"; actions: AdminAction[] };
 
 /** 禁言时长档（`admin_mute` 的 `hour`，契约 §7：-1 永久 / 0 本场 / 其余小时数）。 */
 export const MUTE_HOURS: { hour: number; label: string }[] = [
@@ -230,7 +236,45 @@ function who(uname: string, uid: number): string {
   return uname.length > 0 ? `${uname}（uid ${uid}）` : `uid ${uid}`;
 }
 
-/** 二次确认的文案（确认条上原样显示，说清对象与时长）。 */
+/** 一条动作的对象：人写「昵称（uid）」，词写「词」，批量（只会出现在文案的兜底分支）写条数。 */
+function targetOf(action: AdminAction): string {
+  switch (action.kind) {
+    case "mute":
+    case "unmute":
+    case "blacklist_add":
+    case "blacklist_del":
+      return who(action.uname, action.uid);
+    case "keyword_add":
+    case "keyword_del":
+      return `「${action.word}」`;
+    case "batch":
+      return `${action.actions.length} 项`;
+  }
+}
+
+/** 批量条的动词（面板只会批量这三类，其余落到通用说法）：文案与动作同源，不各自写一遍。 */
+function batchVerb(action: AdminAction): string {
+  switch (action.kind) {
+    case "unmute":
+      return "解除禁言";
+    case "blacklist_del":
+      return "移出黑名单";
+    case "keyword_del":
+      return "删除屏蔽词";
+    default:
+      return "处理";
+  }
+}
+
+/** 批量对象的名字串：只列前几个，多的折成省略号（确认条不该被一屏名字撑爆）。 */
+function targetList(actions: AdminAction[], limit = 5): string {
+  const names = actions.map(targetOf);
+  return names.length <= limit
+    ? names.join("、")
+    : `${names.slice(0, limit).join("、")}…`;
+}
+
+/** 二次确认的文案（确认条上原样显示，说清对象与时长；批量必须含数量）。 */
 export function adminActionText(action: AdminAction): string {
   switch (action.kind) {
     case "mute":
@@ -245,6 +289,11 @@ export function adminActionText(action: AdminAction): string {
       return `添加屏蔽词「${action.word}」`;
     case "keyword_del":
       return `删除屏蔽词「${action.word}」`;
+    case "batch": {
+      const first = action.actions[0];
+      const verb = first === undefined ? "处理" : batchVerb(first);
+      return `${verb} ${action.actions.length} 项：${targetList(action.actions)}`;
+    }
   }
 }
 
@@ -256,6 +305,7 @@ export const ADMIN_CONFIRM_LABEL: Record<AdminAction["kind"], string> = {
   blacklist_del: "确认移出",
   keyword_add: "确认添加",
   keyword_del: "确认删除",
+  batch: "确认批量",
 };
 
 /** 成功后的提示文案。 */
@@ -273,6 +323,11 @@ export function adminDoneText(action: AdminAction): string {
       return `已添加屏蔽词「${action.word}」`;
     case "keyword_del":
       return `已删除屏蔽词「${action.word}」`;
+    case "batch": {
+      const first = action.actions[0];
+      const verb = first === undefined ? "处理" : batchVerb(first);
+      return `已${verb} ${action.actions.length} 项`;
+    }
   }
 }
 

@@ -424,22 +424,23 @@ impl LiveSource for BiliLive {
                 return Ok(());
             }
 
-            match outcome {
-                Ok(true) if started.elapsed() >= HEALTHY_SESSION => {
-                    backoff = INITIAL_BACKOFF;
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    sink.publish_status(room_id, ConnState::Disconnected, err.to_string());
-                    tracing::warn!(
-                        room_id,
-                        %err,
-                        backoff_ms = backoff.as_millis() as u64,
-                        "连接中断，准备重连"
-                    );
-                }
+            // 会话活过 `HEALTHY_SESSION` 就算「健康」：无论它是被取消收场还是**掉线**
+            // 收场，退避都回到起点。旧实现把重置写在 `Ok(true)` 这一支里——那是「被取消」
+            // 的收场；掉线走的是 `Err` 分支，于是同一天里每次掉线都把退避翻倍，实测日志
+            // 里 `5s→10s→20s→40s→60s` 单调爬升、**从不回落**：断连后要干等一分钟才重连，
+            // 用户看到的就是「断了就回不来了」。
+            let healthy = started.elapsed() >= HEALTHY_SESSION;
+            if let Err(err) = outcome {
+                sink.publish_status(room_id, ConnState::Disconnected, err.to_string());
+                tracing::warn!(
+                    room_id,
+                    %err,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "连接中断，准备重连"
+                );
             }
 
+            backoff = wait_after_break(backoff, healthy);
             let wait = jitter(backoff);
             tokio::select! {
                 _ = cancel.cancelled() => return Ok(()),
@@ -457,6 +458,18 @@ pub fn next_backoff(current: Duration) -> Duration {
         MAX_BACKOFF
     } else {
         doubled
+    }
+}
+
+/// 一次中断之后，为**下一次**连接尝试准备的退避基数（`docs/contract.md` §4）。
+///
+/// 活过 `HEALTHY_SESSION` 的连接算「健康会话」：它的中断是偶发的，退避回到 5 秒起点。
+/// 没活过阈值的（连不上、认证失败、刚握手就被断）继续 `next_backoff` 递增，60 秒封顶。
+pub fn wait_after_break(current: Duration, healthy: bool) -> Duration {
+    if healthy {
+        INITIAL_BACKOFF
+    } else {
+        current
     }
 }
 
@@ -495,6 +508,17 @@ mod tests {
                 Duration::from_secs(60),
             ]
         );
+    }
+
+    /// 一次健康会话（活过 `HEALTHY_SESSION`）掉线之后，退避必须回到 5 秒起点。
+    /// 旧实现只在「被取消」收场时才重置，掉线（`Err`）一律翻倍——实测日志里
+    /// `5s→10s→20s→40s→60s` 单调爬升、从不回落，断连后要干等一分钟才重连。
+    #[test]
+    fn healthy_session_drops_the_backoff_back_to_the_start() {
+        assert_eq!(wait_after_break(MAX_BACKOFF, true), INITIAL_BACKOFF);
+        // 连续失败（没活过阈值）不缩短等待，照旧递增、60 秒封顶。
+        assert_eq!(wait_after_break(INITIAL_BACKOFF, false), INITIAL_BACKOFF);
+        assert_eq!(wait_after_break(MAX_BACKOFF, false), MAX_BACKOFF);
     }
 
     #[test]

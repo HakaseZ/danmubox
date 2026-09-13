@@ -63,7 +63,7 @@
 | `rooms_remove` | `roomId: number` | `void` | `ROOM_NOT_FOUND` `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
 | `rooms_connect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 建立会话：创建 supervisor、创建会话缓冲、开始收包。幂等：已连接时直接返回当前状态 |
 | `rooms_disconnect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` | 断开并**结束会话、清空缓冲**。幂等：已断开时直接返回 |
-| `rooms_reconnect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` | 房间内「刷新」按钮：主动断开并立即重连（跳过退避）。**不清空缓冲、不结束会话**；连接中/退避中/已连接三种状态均可调用 |
+| `rooms_reconnect` | `roomId: number` | `RoomView` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` | 房间内「刷新」按钮：主动断开并立即重连（跳过退避）。**不清空缓冲、不结束会话**；连接中/退避中/已连接三种状态均可调用。会话已因 `rooms_disconnect` 结束（或房间被移除）时**重建一次会话**（全新会话、缓冲从空开始，等价于重新进房）——断连之后这颗键不得变成死键。`ROOM_NOT_FOUND` 只剩「房间未登记」一种情形 |
 | `history_query` | `roomId: number`、`limit?: number`、`after?: number`、`before?: number`、`kinds?: MessageKind[]`、`uid?: number`、`q?: string` | `Message[]`（snake_case，按 `ts` 升序） | `ROOM_NOT_FOUND` `BAD_REQUEST` `INTERNAL` | 只查**当前房内会话缓冲**（契约 §4.3）；无活跃会话（缓冲已销毁）时返回空数组，不报错。不跨会话、不回放、不导出 |
 | `chat_send` | `roomId: number`、`content: string`、`color?: number`、`mode?: number` | `ChatSendResult` | `BAD_REQUEST` `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | `color` 缺省 16777215、`mode` 缺省 1，**两者都原样透传不做范围校验**——A18 实测：上游对 `mode` 与越界 `color` 都不做范围检查，且会把过暗颜色改写成白（可读性规范化）；**唯一要避免的是 `color=0`**（上游参数层直接拒绝 `-400`）。本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发 |
 | `chat_report` | `roomId: number`、`upstreamId: string`、`reason: number` | `ReportResult` | `BAD_REQUEST` `ROOM_NOT_FOUND` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕；`upstreamId` 取 `Message.upstream_id`（契约 §5，举报必需）；`reason` 为上游举报类型码，取值见 §3.2 |

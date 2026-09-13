@@ -691,4 +691,91 @@ mod tests {
         );
         runtime.close().await.unwrap();
     }
+
+    /// 假适配器：第一次连接报告成功后**自行掉线**（上游 reset 就是这种收场），
+    /// 之后的每一次都挂在那里等取消。用来观察「掉线之后有没有真的重连」。
+    struct DroppingSource {
+        attempts: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl LiveSource for DroppingSource {
+        async fn recent(&self, _room_id: i64) -> Result<Vec<Message>> {
+            Ok(Vec::new())
+        }
+
+        async fn resolve_room(&self, _input: &str) -> Result<Room> {
+            Ok(Room::default())
+        }
+
+        async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {
+            Ok(RoomSession {
+                room_id,
+                ..Default::default()
+            })
+        }
+
+        async fn stream(&self, room_id: i64, sink: MessageSink, cancel: Cancel) -> Result<()> {
+            use std::sync::atomic::Ordering;
+            let nth = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            sink.publish_status(room_id, ConnState::Connected, format!("第 {nth} 次连接"));
+            if nth == 1 {
+                return Err(crate::Error::Upstream("模拟掉线".into()));
+            }
+            cancel.cancelled().await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn dropped_connection_recovers_and_refresh_restarts_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let bus = EventBus::default();
+        let counters = Arc::new(Counters::default());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let source: Arc<dyn LiveSource> = Arc::new(DroppingSource {
+            attempts: Arc::clone(&attempts),
+        });
+        let room = Room {
+            room_id: 7,
+            ..Default::default()
+        };
+        let mut events = bus.subscribe();
+        let runtime = RoomRuntime::spawn(room, 5000, bus.clone(), counters, source);
+
+        // 掉线不等人：第一次连接一断，核心必须立刻再起一次，而不是停在断连态。
+        settle().await;
+        assert!(
+            attempts.load(Ordering::SeqCst) >= 2,
+            "掉线后引擎必须立刻重连（当前只尝试了 {} 次）",
+            attempts.load(Ordering::SeqCst)
+        );
+
+        // 「刷新」= 用户手里那颗键：必须再发起一次连接，并推出 connecting，
+        // 否则菜单点了没有任何反应（断连态会一直挂着）。
+        let before = attempts.load(Ordering::SeqCst);
+        runtime.reconnect();
+        settle().await;
+        assert!(
+            attempts.load(Ordering::SeqCst) > before,
+            "「刷新」必须真的再发起一次连接"
+        );
+
+        let mut saw_manual = false;
+        let mut last_state = None;
+        while let Ok(event) = events.try_recv() {
+            if let Event::Status(status) = event {
+                saw_manual |= status.detail.contains("手动重连");
+                last_state = Some(status.state);
+            }
+        }
+        assert!(saw_manual, "手动重连必须广播 connecting（点完不能没有反应）");
+        assert_eq!(
+            last_state,
+            Some(ConnState::Connected),
+            "最后的状态不得停在断连"
+        );
+        runtime.close().await.unwrap();
+    }
 }

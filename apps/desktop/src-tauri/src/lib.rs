@@ -257,13 +257,32 @@ async fn rooms_connect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()
     let source: Arc<dyn LiveSource> =
         Arc::new(BiliLive::with_store(Arc::clone(&state.store)).map_err(ApiError::from)?);
     let buffer_rows = state.prefs.lock().expect("prefs poisoned").buffer_rows();
-
-    // **存在性检查与插入必须在同一把锁内完成**：界面在 StrictMode 下会并发触发连接，
-    // 若分两次加锁，两个调用都会通过检查并各自 `spawn` 一个运行时——于是同一个房间
-    // 会有两套会话缓冲，两套都从 `local_id = 1` 开始回填，界面收到重复 id
-    // （表现为 React 报「two children with the same key, 1」且刷满日志）。
-    // `RoomRuntime::spawn` 是同步的（内部只起任务），因此在锁内构造是安全的。
     let mut rooms = state.rooms.lock().expect("rooms poisoned");
+    spawn_runtime(
+        &mut rooms,
+        room_id,
+        buffer_rows,
+        state.bus.clone(),
+        Arc::clone(&state.counters),
+        source,
+    )
+}
+
+/// 建一次房内会话（幂等：房间已有会话时原样返回）。
+///
+/// **存在性检查与插入必须在同一把锁内完成**：界面在 StrictMode 下会并发触发连接，
+/// 若分两次加锁，两个调用都会通过检查并各自 `spawn` 一个运行时——于是同一个房间
+/// 会有两套会话缓冲，两套都从 `local_id = 1` 开始回填，界面收到重复 id
+/// （表现为 React 报「two children with the same key, 1」且刷满日志）。
+/// `RoomRuntime::spawn` 是同步的（内部只起任务），因此**在锁内构造是安全的**。
+fn spawn_runtime(
+    rooms: &mut Rooms,
+    room_id: i64,
+    buffer_rows: usize,
+    bus: EventBus,
+    counters: Arc<Counters>,
+    source: Arc<dyn LiveSource>,
+) -> ApiResult<()> {
     if rooms.runtimes.contains_key(&room_id) {
         return Ok(());
     }
@@ -272,14 +291,10 @@ async fn rooms_connect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()
             format!("房间 {room_id} 未登记"),
         )));
     };
-    let runtime = RoomRuntime::spawn(
-        room,
-        buffer_rows,
-        state.bus.clone(),
-        Arc::clone(&state.counters),
-        source,
+    rooms.runtimes.insert(
+        room_id,
+        RoomRuntime::spawn(room, buffer_rows, bus, counters, source),
     );
-    rooms.runtimes.insert(room_id, runtime);
     Ok(())
 }
 
@@ -300,13 +315,49 @@ async fn rooms_disconnect(state: State<'_, AppState>, room_id: i64) -> ApiResult
 /// 房间内「刷新」：立即重建连接，**不清空**会话缓冲（`docs/contract.md` §4.3）。
 #[tauri::command]
 fn rooms_reconnect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()> {
-    let rooms = state.rooms.lock().expect("rooms poisoned");
-    let runtime = rooms.runtimes.get(&room_id).ok_or_else(|| ApiError {
-        code: "ROOM_NOT_FOUND".into(),
-        message: format!("房间 {room_id} 尚未连接"),
-    })?;
-    runtime.reconnect();
-    Ok(())
+    let buffer_rows = state.prefs.lock().expect("prefs poisoned").buffer_rows();
+    let mut rooms = state.rooms.lock().expect("rooms poisoned");
+    refresh_room(
+        &mut rooms,
+        room_id,
+        buffer_rows,
+        state.bus.clone(),
+        Arc::clone(&state.counters),
+        || {
+            Ok(Arc::new(BiliLive::with_store(Arc::clone(
+                &state.store,
+            ))?) as Arc<dyn LiveSource>)
+        },
+    )
+}
+
+/// 「刷新连接」的全部决策，`rooms_reconnect` 只是它的 IPC 外壳。
+///
+/// - **会话还在**（连接中 / 退避中 / 已连接）→ `reconnect()`：只终止当前这一次连接，
+///   立即发起下一次，**缓冲不变**，仍属同一次会话。
+/// - **会话已经不在了**（用户点过「断开连接」，或房间被移除后又加了回来）→ 当场重建
+///   一次会话：与「进房间」等价，缓冲从空开始（契约 §4.3：离开房间即销毁，重进是
+///   全新会话）。
+///
+/// 第二种情况曾经直接返回 `ROOM_NOT_FOUND`（「房间 X 尚未连接」），于是菜单里那颗
+/// 「刷新连接」在断连之后就是一颗**死键**：界面弹一条错误，连接回不来，用户只能退出
+/// 房间再进来——而 `docs/ui.md` §3.3 明写 `disconnected` 档（含「已主动断开」）
+/// 是「点击立即重连」。备凭据、建 HTTP 客户端只在真需要新建会话时才做
+/// （`make_source` 是惰性的），刷一条活着的连接不付这份钱。
+fn refresh_room(
+    rooms: &mut Rooms,
+    room_id: i64,
+    buffer_rows: usize,
+    bus: EventBus,
+    counters: Arc<Counters>,
+    make_source: impl FnOnce() -> danmubox_core::Result<Arc<dyn LiveSource>>,
+) -> ApiResult<()> {
+    if let Some(runtime) = rooms.runtimes.get(&room_id) {
+        runtime.reconnect();
+        return Ok(());
+    }
+    let source = make_source().map_err(ApiError::from)?;
+    spawn_runtime(rooms, room_id, buffer_rows, bus, counters, source)
 }
 
 #[tauri::command]
@@ -1005,7 +1056,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use danmubox_core::bus::{Cancel, ConnState, MessageSink};
     use danmubox_core::ports::SendReport;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn report(outcome: SendOutcome, code: Option<i64>, message: Option<&str>) -> SendReport {
         SendReport {
@@ -1054,5 +1107,116 @@ mod tests {
         // 被吞不是 ok，界面同样要给说法。
         assert!(send_detail(&report(SendOutcome::BlockedPlatform, Some(0), Some("f"))).is_some());
         assert!(send_detail(&report(SendOutcome::BlockedRoom, Some(0), Some("k"))).is_some());
+    }
+
+    /// 假适配器：只记「被叫起来连接了几次」，报一次已连接后挂起等取消。
+    struct CountingLive {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl LiveSource for CountingLive {
+        async fn recent(&self, _room_id: i64) -> danmubox_core::Result<Vec<Message>> {
+            Ok(Vec::new())
+        }
+
+        async fn resolve_room(&self, _input: &str) -> danmubox_core::Result<Room> {
+            Ok(Room::default())
+        }
+
+        async fn room_identity(&self, room_id: i64) -> danmubox_core::Result<RoomSession> {
+            Ok(RoomSession {
+                room_id,
+                ..Default::default()
+            })
+        }
+
+        async fn stream(
+            &self,
+            room_id: i64,
+            sink: MessageSink,
+            cancel: Cancel,
+        ) -> danmubox_core::Result<()> {
+            let nth = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            sink.publish_status(room_id, ConnState::Connected, format!("第 {nth} 次连接"));
+            cancel.cancelled().await;
+            Ok(())
+        }
+    }
+
+    async fn settle() {
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    }
+
+    #[tokio::test]
+    async fn refresh_after_disconnect_reconnects_instead_of_failing() {
+        // 房间号用公开测试房间，避免把任何真实房间号写进仓库（契约 §4.1）。
+        const ROOM: i64 = 1;
+        let bus = EventBus::new(BUS_CAPACITY);
+        let counters = Arc::new(Counters::default());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let source: Arc<dyn LiveSource> = Arc::new(CountingLive {
+            attempts: Arc::clone(&attempts),
+        });
+        let mut rooms = Rooms::default();
+        rooms.meta.insert(
+            ROOM,
+            Room {
+                room_id: ROOM,
+                ..Default::default()
+            },
+        );
+
+        // ① 进房间：建会话，适配器去连。
+        spawn_runtime(&mut rooms, ROOM, 16, bus.clone(), Arc::clone(&counters), Arc::clone(&source))
+            .unwrap();
+        settle().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1, "进房间必须真的去连");
+
+        // ② 断开连接：`rooms_disconnect` 的效果就是会话被摘掉、缓冲随之销毁。
+        let runtime = rooms.runtimes.remove(&ROOM).expect("会话应该在");
+        runtime.close().await.unwrap();
+        assert!(!rooms.runtimes.contains_key(&ROOM));
+
+        // ③ 刷新连接：会话没了也必须把连接拉回来（旧实现返回 `ROOM_NOT_FOUND`，
+        //    界面上这颗键就是死的，用户只能退出房间再进来）。
+        let mut events = bus.subscribe();
+        refresh_room(
+            &mut rooms,
+            ROOM,
+            16,
+            bus.clone(),
+            Arc::clone(&counters),
+            || Ok(Arc::clone(&source)),
+        )
+        .expect("断连后刷新不得报错");
+        settle().await;
+
+        assert!(
+            rooms.runtimes.contains_key(&ROOM),
+            "刷新必须重新建起会话（否则房间永远停在断连态）"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "刷新必须真的再发起一次连接，而不是只把状态改回去"
+        );
+
+        // 状态不得停在断连：刷完之后总线上必须出现这条新连接的状态事件。
+        let mut last_state = None;
+        while let Ok(event) = events.try_recv() {
+            if let Event::Status(status) = event {
+                if status.room_id == ROOM {
+                    last_state = Some(status.state);
+                }
+            }
+        }
+        assert_eq!(
+            last_state,
+            Some(ConnState::Connected),
+            "刷新之后必须回到「已连接」这一档"
+        );
+
+        rooms.runtimes.remove(&ROOM).expect("会话应该在").close().await.unwrap();
     }
 }

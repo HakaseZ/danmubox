@@ -401,6 +401,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
   async refresh(roomId) {
     try {
       await api.roomsReconnect(roomId);
+      // 重连可能把已经结束的会话（用户点过「断开连接」）重新建起来，
+      // 也可能只是把当前连接掐了重连——两种情况下 `connected` 都以重拉结果为准，
+      // 否则房间头菜单里的「断开连接」会拿着旧状态一直置灰。
+      set({ rooms: await api.roomsList() });
     } catch (error) {
       set({ error: describeError(error) });
     }

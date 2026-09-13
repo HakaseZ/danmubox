@@ -28,4 +28,4 @@ pub use http::{normalize_room_input, BiliHttp, CookieMode, DanmuInfo, NavIdentit
 pub use report::BiliReporter;
 pub use send::{failure_detail, outcome_from_response, swallowed_content, BiliSender, Throttle};
 pub use wallet::BiliWallet;
-pub use ws::{jitter, next_backoff, BiliLive, INITIAL_BACKOFF, MAX_BACKOFF};
+pub use ws::{jitter, next_backoff, wait_after_break, BiliLive, INITIAL_BACKOFF, MAX_BACKOFF};

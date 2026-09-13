@@ -74,7 +74,7 @@
 | `chat_report` | `message: Message, reason: ReportReason` | `void` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕。`message` 取列表里那一条（实现读它的 `upstream_id` / `uid` / `content`；**`upstream_id` 必需**，为空 → `BAD_REQUEST`）；`reason` 来自 `report_reasons`（同时上报文案与 `id`）。前端签名见 `apps/desktop/ui/src/ipc.ts` 的 `chatReport(message, reason)` |
 | `report_reasons` | 无 | `ReportReason[]` | `UPSTREAM_ERROR` `INTERNAL` | 举报理由清单：请求上游 `dMReport/ForReason` 并解析 `data.data[]`，每项 `ReportReason { id, reason }`。**条数由上游决定**，不是本地硬编码清单；不要求登录 |
 | `emotes_list` | `room_id: i64` | `Emote[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 按**真实会话身份**（取自会话缓存）加载表情包库：无牌/有牌/房管/大航海看到的面板不同；无活跃会话时退回零身份。`Emote.locked` 由上游 `perm` 派生，`true` = 当前身份用不了（界面置灰，不隐藏） |
-| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`is_admin` / `my_guard_level` / `my_medal_level` / `my_medal_name` / `my_medal_worn`）。无活跃会话 → 全零身份而**不报错**；界面据此决定房管入口是否亮起（拿不到身份即按无权限渲染，不靠试错）。同步命令 |
+| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`is_admin` / `my_guard_level` / `my_medal_level` / `my_medal_name` / `my_medal_worn`）。无活跃会话 → 全零身份而**不报错**；界面据此决定房管入口**是否出现**（`is_admin` 不为 `true` 时该入口不渲染；拿不到身份即按无权限处理，不靠试错，`ui.md` §4.9）。同步命令 |
 | `emotes_owned` | 无 | `Emote[]` | `UPSTREAM_ERROR` `INTERNAL` | 主站「我的表情」：用户**拥有**的表情包（`upower_` 家族）。`package_kind="owned"`、`room_id=0`、唯一键 = `"upower_" + 表情 text`；未登录时上游退化为免费表情包，因此**不报** `NOT_LOGGED_IN` |
 | `admin_mute` | `room_id: i64, uid: i64, hour: i64, msg: Option<String>` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
 | `admin_unmute` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 解除禁言 |
@@ -500,7 +500,7 @@ sequenceDiagram
 |---|---|
 | 应用启动 | `bootstrap`：并行 `app_info` + `session_status` + `rooms_list` + `prefs_get` + `accounts_list`，再 `subscribeEvents` 订阅 §4 的 7 个事件名（每类 handler 可选） |
 | 进入房间 | `openRoom`：清空 `messages` 与房管/身份 → `history_query`（`limit: 0`）回填 → `rooms_connect`；`RoomView` 渲染时按登录态触发 `loadEmotes` / `loadOwnedEmotes` / `loadRoomIdentity` / `loadBalance` |
-| 切换房间 | 只切 `activeRoomId` 并清掉上一间的 `messages`；事件继续到达，非激活房间的弹幕直接丢弃（`onMessage` 判 `room_id`） |
+| 切换房间 | 只切 `activeRoomId` 并清掉上一间的 `messages`；事件继续到达，非激活房间的弹幕直接丢弃（`onMessage` 判 `room_id`）。**界面本地状态同时重置**：`RoomView` 收起弹出面板 / 房管面板 / 菜单 / 举报条 / 房管确认条并清掉 @·回复目标，`MessageList` 随 `key` 重建、滚动与跟随回到初始；只有输入草稿按房间各留一份（`ui.md` §2.3、§6.5.1） |
 | 离开房间（关标签 / 移除房间） | 清空 `messages`、清掉互动与发送定时器、删该房间 `roomIdentities`、清空房管三块；core 侧缓冲同步销毁 |
 | 手动重连 | 不触碰 store 切片；`rooms_reconnect` 后重拉 `rooms_list` 取连接态 |
 | 应用卸载 / HMR | `bootstrap` 每次订阅前先 `unsubscribe?.()`；订阅函数由模块级变量持有，**不允许匿名 `listen` 后丢弃句柄**（热重载后会重复监听） |

@@ -131,7 +131,7 @@
 
   /* 触屏与弹出层 */
   --tap-min: 40px; /* 窄屏 sheet / 对话框里的热区下限（触屏） */
-  --live-dot: 10px; /* 直播状态点的**视觉**直径（元素盒仍是 --sp-3，热区不跟着缩） */
+  --live-dot: 8px; /* 直播状态点的**视觉**直径（元素盒仍是 --sp-3，热区不跟着缩） */
   --title-gap: 2.5em; /* 循环滚动的标题：两份拷贝之间的间隙（跟着标题字号走） */
   /* 房间头顶栏：**半透明**的一层 + 自上而下的一道高光（参考截图的层次做法）。
      值只从本主题已有的槽里混出来 —— 深色下就是「半透明深色」，浅色下自动是半透明白面，
@@ -537,8 +537,8 @@
    两层：外壳 = **改前的元素盒尺寸**（--sp-3 12px，热区与悬停面），里面那颗点 = --live-dot。
    为什么要两层：用户 2026-09-13 追加「开播状态标稍微缩小一点」，同时要求**热区不许跟着缩**。
    拿 padding 撑热区不行 —— `background` 会铺满 padding 区，圆角一夹就成一颗更大的圆，
-   「点」与「热区」就分不开了；两层各自独立，看得见的那颗点（12 → 10px）仍比标签页上的
-   连接点（.dot，--sp-2）大一号。颜色挂在内层（所以「这颗点是什么颜色」在 DOM 上读得到）。 */
+   「点」与「热区」就分不开了；两层各自独立，看得见的那颗点（12 → 10 → 8px）与标签页上的
+   连接点（.dot，--sp-2 = 8px）同档。颜色挂在内层（所以「这颗点是什么颜色」在 DOM 上读得到）。 */
 .liveDotBox {
   flex: none;
   width: var(--sp-3);
@@ -548,7 +548,7 @@
   justify-content: center;
 }
 
-/* 看得见的那颗点：直径 --live-dot（12 → 10px）。颜色挂在它自己身上（不是外层壳），
+/* 看得见的那颗点：直径 --live-dot（12 → 10 → 8px）。颜色挂在它自己身上（不是外层壳），
    所以「这颗点是什么颜色」在 DOM 上仍然读得到（冒烟读 db-live-dot 的 background-color）。 */
 .liveDot {
   width: var(--live-dot);
@@ -560,7 +560,7 @@
   background-color: var(--live-on);
 }
 
-/* 开播才带一圈同色柔光（柔光跟着点一起缩，视觉占位 18 → 16px） */
+/* 开播才带一圈同色柔光（柔光跟着点一起缩，视觉占位 18 → 14px） */
 .liveOn {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--live-on) 22%, transparent);
 }
@@ -853,20 +853,20 @@
   white-space: nowrap;
 }
 
-/* 「回复 @昵称」标记：弱化、定宽截断（完整名字在 title 里），不抢正文（issue #13b）。
-   它与「纯 @ 某人」共用这一个槽位（昵称之后、正文之前）：两种形态的差别只是文案与层级，
-   不各开一列；收包侧的 `reply_type_enum` / `show_reply` 尚未进契约，因此此刻只有「回复」这一种形态。 */
-.replyTo {
-  flex: none;
-  max-width: 14em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-3);
-  color: var(--fg-dim);
-  background: color-mix(in srgb, var(--fg-dim) 14%, transparent);
-  border-radius: var(--r-1);
-  padding: 0 var(--sp-1);
+/* 正文里的 @昵称（用户 2026-09-13 第 1 条）：身份牌后那个「回复 @某人」的牌子与正文里
+   自带的 @ 重复，牌子已删；@ 改在**正文里**就地强化 —— 配色**参照身份牌**（.badge）：
+   同一个字符色（--badge-fg）压同一套强调色渐变底（与 .badgeAdmin 一字不差），
+   深浅两套主题下都是这个配色，不新造颜色。
+   它只是正文里的**一格内联元素**：不换行、不缩字号，长名字随正文一起折行。 */
+.mention {
+  color: var(--badge-fg);
+  background-image: linear-gradient(
+    45deg,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 62%, var(--badge-lift))
+  );
+  border-radius: 0.35em;
+  padding: 0 0.25em;
 }
 
 .badges {
@@ -876,7 +876,8 @@
 }
 
 /* 身份牌：**长方形**（参考图口径：蓝底白字的房间牌是矩形，不是胶囊）——45° 渐变 +
-   1px 描边 + 白字，圆角只留一点点（0.25em，约为牌高的 1/5）。
+   1px 描边 + 白字。圆角 0.45em（≈ 牌高的 1/3）：用户 2026-09-13「圆角大一些，现在看着
+   有点方」，仍明显小于半高（0.675em），所以还是矩形、不是胶囊。
    尺寸用 em，跟着 `ui.font_scale` 一起缩放（docs/ui.md §4.2）；高度走 `--badge-h`
    （= 0.9 × 行盒，**不跟头像走**，见 `.row`）。 */
 .badge {
@@ -885,7 +886,7 @@
   gap: var(--sp-1);
   height: var(--badge-h);
   padding: 0 0.45em;
-  border-radius: 0.25em;
+  border-radius: 0.45em;
   border: 1px solid var(--badge-border);
   box-sizing: border-box;
   font-size: var(--fs-1);
@@ -1219,31 +1220,23 @@
 /* 普通档（通用组）的图片盒：= 1.5 × `--fs-6`，与 `.pickerItem` 自己的字号无关。
    与上一条同一个理由，**也必须注册**：不注册的话 `calc(var(--fs-6) * 1.5)` 会在**使用处**
    按各元素自己的字号解析 —— 格子的字号是 `--fs-6`（1.15em），网格的字号是面板字号（1em），
-   同一个式子会得出 27.8px 与 24.2px 两个值，「网格区恰好两行」这个等式就散了。 */
+   同一个式子会得出 27.8px 与 24.2px 两个值，「网格区恰好三行」这个等式就散了。 */
 @property --emote-size-sm {
   syntax: "<length>";
   inherits: true;
   initial-value: 32px;
 }
 
-/* 表情面板的**网格区高度 = 两行表情格**（用户 2026-09-12：上一版两行**大**表情仍有 100px 高，
-   面板总高 257px 还是太高 ——「高度降低到 2 排表情包」）。
-   三个量都在**面板这一层**算：格子高 = 图片盒 + 格子上下内边距（--sp-1），网格高 = 两行 + 一道行距。
-   高度写死（不是 max-height）：换分组时格子数始终是两行，滚动条该出就出。
-   **两行按当前那一组的格子尺寸算**（见 .emoteBodyBig）：通用组是小格，
-   本房间 / 粉丝牌 / 大航海是放大档 —— 一律按小格算会把放大档那组切成一行半（第二行只剩半格），
-   一律按大格算就是上一版那个「嫌高」的高度。两组都**恰好看到两行**，面板随组变矮。 */
+/* 表情面板的**网格区高度 = 三行大表情格**（用户 2026-09-13：两行嫌矮，「改到 3 行」）。
+   **高度固定**在**大表情**那一档（--emote-size-big + 格子上下内边距 + 两道行距），
+   通用组也用同一个高度 —— 换个分组面板不会忽高忽低，也不会把通用组切成一行半。
+   三个量都在**面板这一层**算：格子高 = 图片盒 + 格子上下内边距（--sp-1），网格高 = 三行 + 两道行距。
+   高度写死（不是 max-height）：内容超出就在网格里滚动。 */
 .picker {
   --emote-size-sm: calc(var(--fs-6) * 1.5);
   --emote-size-big: calc(var(--fs-7) * 2.2);
-  --emote-row-h: calc(var(--emote-size-sm) + var(--sp-1) * 2);
   --emote-row-h-big: calc(var(--emote-size-big) + var(--sp-1) * 2);
-  --emote-grid-h: calc(var(--emote-row-h) * 2 + var(--sp-1));
-}
-
-/* 放大档那一组（非通用）：网格与轨道都换成「两行放大格」的高度 */
-.pickerBig {
-  --emote-grid-h: calc(var(--emote-row-h-big) * 2 + var(--sp-1));
+  --emote-grid-h: calc(var(--emote-row-h-big) * 3 + var(--sp-1) * 2);
 }
 
 .phrasesBody {
@@ -1353,8 +1346,8 @@
 /* 表情面板主体：左边一条**竖向 tab 轨道**，右边表情网格（用户 2026-09-12：
    「给表情的全是按钮，根本框不住表情图标，可以直接仿照官方实现」）。
    两列各自滚：轨道自己滚、网格自己滚，谁都不会被对方的高度带着走。
-   两列的高度都是 --emote-grid-h（= 两行表情格，见 .picker）：轨道因此**等高**，
-   分组多过两行时就在自己的列里上下滚动（用户 2026-09-12：「左边也加入上下滚动」）。 */
+   两列的高度都是 --emote-grid-h（= 三行大表情格，见 .picker）：轨道因此**等高**，
+   分组多过三行时就在自己的列里上下滚动（用户 2026-09-12：「左边也加入上下滚动」）。 */
 .emoteBody {
   flex: 1;
   min-height: 0;
@@ -1374,7 +1367,7 @@
   min-width: 0;
   min-height: 0;
   max-width: 42%;
-  /* 与网格**同高**（两行表情格），分组多过两行就在轨道里滚（用户 2026-09-12：
+  /* 与网格**同高**（三行大表情格），分组多过三行就在轨道里滚（用户 2026-09-12：
      「左边也加入上下滚动」——上一版轨道按内容撑高，组一多就把面板顶高、把网格挤窄）。 */
   height: var(--emote-grid-h);
   overflow-y: auto;
@@ -1431,7 +1424,7 @@
 }
 
 /* 表情格：等宽格子（一行放几个由宽度定），格子里的图居中。
-   高度固定成**两行表情格**（--emote-grid-h，见 .picker）：超出的部分在网格里滚动。 */
+   高度固定成**三行大表情格**（--emote-grid-h，见 .picker）：超出的部分在网格里滚动。 */
 .emoteGrid {
   flex: 1;
   min-width: 0;
@@ -1456,7 +1449,7 @@
      （--emote-size-sm 已注册成 <length>，在这里就是 px），格子与网格因此量的是同一个数。 */
   --emote-size: var(--emote-size-sm);
   box-sizing: border-box;
-  /* 格子高度**显式给死**（图片盒 + 上下内边距），不靠内容撑：这样「网格区 = 两行表情格」
+  /* 格子高度**显式给死**（图片盒 + 上下内边距），不靠内容撑：这样「网格区 = 三行大表情格」
      这个等式两边量的是同一件事（改前靠内容撑时，按钮那 1px 边框会让实测值多出 2px）。 */
   height: calc(var(--emote-size) + var(--sp-1) * 2);
   display: flex;
@@ -1610,6 +1603,18 @@
   object-fit: contain;
   margin-block: calc((var(--row-line) - var(--emote)) / 2);
   vertical-align: middle;
+}
+
+/* 通用表情（上游原图 200×60 的**横条**）走宽盒：见方盒 + contain 之后，横条的可见高度
+   只剩盒宽的 30% —— 实测 23.1px 的方盒里那条横条只有 6.9px 高，比一行字还矮，
+   「看起来是当成文本渲染了」（用户 2026-09-13 第 7 条）。
+   高度仍是 `--emote`（比文字高 10%，行盒照旧吸收那 10%），宽度按这一族的 10:3 长宽比
+   **写成固定的算式**（不是原图的像素）—— 宽高都由 CSS 给死，仍然不依赖原图尺寸，
+   只是选了一个与这一族长宽比相称的盒子：contain 之后横条正好填满，可见高度 = `--emote`。
+   方图（房间 / 粉丝牌 162×162）不走这里，仍用上面的见方盒。 */
+.contentEmoteWide {
+  width: calc(var(--emote) * 10 / 3);
+  height: var(--emote);
 }
 
 /* 官方把「大表情」（bulge）画两倍大并加圆角；这一档尺寸太大，独占一行。
@@ -1991,12 +1996,8 @@
   }
 
   /* 窄屏的触屏热区下限（下面那条 .picker button{min-height}）把表情格撑到 --tap-min，
-     两行的算式得用**同一个数**，否则第二行会被切掉一截、面板高度也对不上。 */
+     三行的算式得用**同一个数**，否则最后一行会被切掉一截、面板高度也对不上。 */
   .picker {
-    --emote-row-h: max(var(--emote-size-sm) + var(--sp-1) * 2, var(--tap-min));
-  }
-
-  .pickerBig {
     --emote-row-h-big: max(var(--emote-size-big) + var(--sp-1) * 2, var(--tap-min));
   }
 

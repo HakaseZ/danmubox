@@ -1,5 +1,6 @@
 import { Avatar } from "./Avatar";
 import type { MenuPoint } from "./ContextMenu";
+import type { ReactNode } from "react";
 import {
   alertsOn,
   badgesFor,
@@ -11,6 +12,28 @@ import {
 import type { Message, Prefs } from "../types";
 import { INTERACT_AUTO_HIDE_MS } from "../types";
 import styles from "../app.module.css";
+
+/** 正文里的 @昵称（用户 2026-09-13 第 1 条）：`@` 之后到空白或句读为止都算名字
+    （昵称里不会有空格）。命中的那一段由 `.mention` 就地强调 —— 配色取身份牌的字符色。 */
+const MENTION_RE = /@[^\s@,，。、:：;；!！?？.．"“”'‘’()（）[\]【】<>《》]+/g;
+
+/** 把正文按 `@昵称` 切成「普通文字 / 强调片段」两族，其余字符原样保留。 */
+function withMentions(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let end = 0;
+  for (const match of text.matchAll(MENTION_RE)) {
+    const at = match.index ?? 0;
+    if (at > end) nodes.push(text.slice(end, at));
+    nodes.push(
+      <span key={at} className={styles.mention} data-testid="db-msg-mention">
+        {match[0]}
+      </span>,
+    );
+    end = at + match[0].length;
+  }
+  if (end < text.length) nodes.push(text.slice(end));
+  return nodes;
+}
 
 interface Props {
   row: DisplayRow;
@@ -28,11 +51,6 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   // 正文统一用主题前景色：上游允许发送者自定义弹幕颜色（舰长/老爷常见金黄），
   // 用户 2026-09-12 要求「所有文本统一一下」，因此不再照色渲染。
   const highlight = alertsOn(message, prefs) ? styles.highlight : undefined;
-  // 被 @ 的名字用上游给的颜色（与粉丝牌真彩色同一口径：空串不是颜色，缺失就不上色）
-  const replyNameColor =
-    message.reply_uname_color !== undefined && message.reply_uname_color.length > 0
-      ? message.reply_uname_color
-      : undefined;
   // 一枚徽标都没有时不渲染空徽标组：空的 flex 项会白吃掉簇内的一道间距
   const hasBadges =
     badges.anchor ||
@@ -98,8 +116,10 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
           身份行内只用 --sp-1（贴）；与正文的「分」由换行本身给出，不再有 --sp-2 外边距。 */}
       <span className={styles.text}>
         {message.kind !== "system" && (hasBadges || message.uname.length > 0) && (
-          // 身份行：昵称 + 身份牌 + 回复标记**是一个整体**（都属于「谁在说话」）。
+          // 身份行：昵称 + 身份牌**是一个整体**（都属于「谁在说话」）。
           // 牌在昵称**右边**（参考图：蓝底白字的房间牌跟在用户名后面）。
+          // 「回复了谁」不再另起一格（用户 2026-09-13 第 1 条：与正文里自带的 @ 重复）——
+          // 身份行的最后那一枚「回复 @某人」的牌子已删，@ 改在**正文里**就地强调（见 withMentions）。
           <span className={styles.identity} data-testid="db-msg-identity">
             {message.uname.length > 0 && (
               // 昵称**不吃**弹幕自身颜色：那是正文的颜色，套到人名的后果是普通弹幕
@@ -142,32 +162,14 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
                 )}
               </span>
             )}
-            {message.reply_to_uid !== 0 && message.reply_to_uname.length > 0 && (
-              // 「回复了谁」看得到（用户 #13b）：排在身份行的最后（昵称与身份牌之后、
-              // 正文那一行之前）。这一格同时是「纯 @ 某人」的槽位：两种形态只差文案与层级，
-              // 不各开一列；收包侧的 `reply_type_enum` / `show_reply` 还没进契约，
-              // 所以此刻只有「回复」这一种形态。长昵称按 `.replyTo` 截断，完整名字在 title 里。
-              <span
-                className={styles.replyTo}
-                data-testid="db-msg-reply"
-                title={`回复 @${message.reply_to_uname}`}
-              >
-                回复{" "}
-                {/* 被 @ 的名字单独一格：上游给了颜色就上色（实测 #FB7299），没给就沿用标记的弱化色 */}
-                <span
-                  data-testid="db-msg-reply-name"
-                  style={replyNameColor ? { color: replyNameColor } : undefined}
-                >
-                  @{message.reply_to_uname}
-                </span>
-              </span>
-            )}
           </span>
         )}
         {/* 正文：文字与表情图**同一个行盒**——表情不另起一列、不另站一个基线。
             正文统一用主题前景色：上游允许发送者自定义弹幕颜色（舰长/老爷常见金黄），
             用户 2026-09-12 要求「所有文本统一一下」，因此不再照色渲染。
-            大表情（bulge）尺寸太大，由 `.contentEmoteBulge` 单独占一行。 */}
+            正文里的 @昵称 就地强调（用户 2026-09-13 第 1 条），其余文字原样。
+            大表情（bulge）尺寸太大，由 `.contentEmoteBulge` 单独占一行；
+            通用表情（原图 200×60 的横条）走 `.contentEmoteWide` 的宽盒，见那条注释。 */}
         <span className={styles.content} data-testid="db-msg-body">
           {message.emote ? (
             // 表情弹幕：正文就是表情名，只显示文字会让人以为「表情没渲染」，
@@ -175,14 +177,18 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             // 尺寸走 `--emote`（从行盒派生），随 `ui.font_scale` 联动（docs/ui.md §4.1）。
             <img
               className={`${styles.contentEmote} ${
-                message.emote.bulge_display ? styles.contentEmoteBulge : ""
+                message.emote.bulge_display
+                  ? styles.contentEmoteBulge
+                  : message.emote.width >= message.emote.height * 2
+                    ? styles.contentEmoteWide
+                    : ""
               } ${highlight ?? ""}`}
               src={message.emote.url}
               alt={message.content}
               title={message.content}
             />
           ) : (
-            <span className={highlight}>{text}</span>
+            <span className={highlight}>{withMentions(text)}</span>
           )}
           {/* 礼物行始终显示数量（连击聚合后的次数）；其余类型只在合并时显示。
               它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。 */}

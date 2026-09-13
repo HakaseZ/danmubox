@@ -400,7 +400,7 @@ export function RoomView({
                 d="M15 4.5 7.5 12l7.5 7.5"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2"
+                strokeWidth="1.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -475,7 +475,17 @@ export function RoomView({
               setHeaderMenu({ x: rect.left - 120, y: rect.bottom + 2 });
             }}
           >
-            ⋯
+            {/* ⋯ 画成**矢量**（三个圆点）而不是文字字形：文字字形的墨迹厚度由字体决定
+                （实测 Chromium 下 14px 的 U+22EF 墨迹只有 1px，WebKit 又是另一套字体），
+                两枚圆形控件因此「整体粗细」不一致（用户 2026-09-13 第 4 条：返回与右侧三点
+                磅重不一致）。圆点直径 = 返回那一笔的描边宽 = **1.5px**（两枚图标原来分别是
+                2px 与 1px，取折中），两个数在冒烟里逐个量（`iconStrokeBackPx` /
+                `iconStrokeMorePx`）。盒子仍是 `.ctlIcon`（24 × 24），控件尺寸一点没动。 */}
+            <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="7" cy="12" r="0.75" fill="currentColor" />
+              <circle cx="12" cy="12" r="0.75" fill="currentColor" />
+              <circle cx="17" cy="12" r="0.75" fill="currentColor" />
+            </svg>
           </button>
         </div>
       </div>

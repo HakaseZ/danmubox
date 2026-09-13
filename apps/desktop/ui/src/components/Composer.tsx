@@ -437,14 +437,14 @@ export function Composer({
     <>
       {panel === "emotes" && (
         <div
-          className={`${styles.picker} ${activeKind === "common" ? "" : styles.pickerBig}`}
+          className={styles.picker}
           data-testid="db-panel"
           style={panelFont}
           ref={panelRef}
         >
           {/* 面板顶上**没有标题、也没有「关闭」**（用户 2026-09-12：「表情包栏顶部的表情和
               关闭不需要」）：收起面板靠再点一次「表情」或点输入区外面（见上面那条 pointerdown）。
-              少掉这一行之后，两行表情格就是面板的全部高度。 */}
+              少掉这一行之后，三行大表情格就是面板的全部高度。 */}
           {/* 「我的表情」拉失败只在面板里提示并可重试：输入框与已加载的分组照常可用 */}
           {ownedError !== undefined && (
             <div className={styles.panelError} data-testid="db-owned-error">
@@ -461,7 +461,7 @@ export function Composer({
             <div className={styles.empty}>没有可用表情（或尚未加载）</div>
           ) : (
             // 面板主体分两列：左边**竖向 tab 轨道**（分组），右边表情网格。
-            // 两列**各自滚且同高**（轨道高 = 网格高 = 两行表情格）：分组多了在轨道里上下滚，
+            // 两列**各自滚且同高**（轨道高 = 网格高 = 三行大表情格）：分组多了在轨道里上下滚，
             // 表情多了在网格里上下滚（用户 2026-09-12：「左边也加入上下滚动」）。
             <div className={styles.emoteBody}>
               {/* 分组 tab 轨道：一组一个 tab，选中那格左侧一条强调色 + 底色抬起 + 字重加粗。
@@ -751,18 +751,21 @@ export function Composer({
                 onClick={onRefreshBalance}
               >
                 <svg className={styles.batteryIcon} viewBox="0 0 24 24" aria-hidden="true">
+                  {/* **竖着**的电池（用户 2026-09-13 第 3 条：官方的电池标是竖的，
+                      横过来的那个看着像一根电量条，容易被当成「显示电量」的指示）。
+                      机身 10×16 的竖矩形 + 顶上那截极柱；图标盒尺寸没动（.batteryIcon = 1.1em）。 */}
                   <rect
-                    x="2"
-                    y="7"
-                    width="16"
-                    height="10"
+                    x="7"
+                    y="5"
+                    width="10"
+                    height="16"
                     rx="3"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="2"
                   />
                   <path
-                    d="M20.5 10.5v3"
+                    d="M11 3h2"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="2"

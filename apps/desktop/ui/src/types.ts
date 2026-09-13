@@ -40,7 +40,9 @@ export interface Message {
   reply_to_uname: string;
   /**
    * 被 @ 的昵称的颜色（契约 §5）：上游 `extra.reply_uname_color`，实测 `#FB7299`。
-   * 与粉丝牌真彩色同一口径——**空串不是颜色**，缺失时沿用标记自身的弱化色，不拿黑色顶替。
+   * **界面不再消费它**（用户 2026-09-13 第 1 条：身份牌后那枚「回复 @某人」的牌子会与正文里
+   * 自带的 @ 重复，已删；@ 改在正文里就地强调，配色取身份牌的字符色）。字段照旧带出，
+   * 与 `Message.color` 一样只留在契约里。
    */
   reply_uname_color?: string;
   is_admin: boolean;

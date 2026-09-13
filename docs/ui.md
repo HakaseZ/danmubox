@@ -169,7 +169,7 @@
 │ ┌通用（38）┐   [😀][😂][👍][大表情图]…（非通用的按大表情档放大； │
 │ │我的表情（20）│  无权限的置灰但照常列出，点一下就发出去；      │
 │ │本房间（10）│ ← 分组 tab 轨道（竖向、与网格同高、自己上下滚） │
-│ └粉丝牌（17）┘  网格区固定两行表情格，超出滚动                 │
+│ └粉丝牌（17）┘  网格区固定**三行大表情格**（两组同高），超出滚动                 │
 ├──────────────────────────────────────────────────────────────┤
 │ 说点什么…（Enter 发送，Shift+Enter 换行）                       │
 │ [表情][短语][筛选]                        [ 发送 ]              │
@@ -187,7 +187,7 @@
 | 返回列表 | `xs` / `md` 下从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-reply` / `db-msg-reply-name` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-panel-close` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-send-hint` / `db-composer-tools` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-panel-close` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-send-hint` / `db-composer-tools` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
 
 ### 2.4 会话缓冲生命周期（契约 §4.3）
 
@@ -219,7 +219,8 @@
 | 元素 | 取值与来源 |
 |---|---|
 | 返回 | **圆形左箭头按钮**（几何由 `--ctl-round` 一处给出；可访问名仍是「返回房间列表」）。回到房间列表页（等同关闭当前房间页）。**顶栏的圆形控件只剩它**与 `⋯` |
-| 直播状态点 | **红 = 下播 / 绿 = 开播 / 橙 = 未连接**（用户 2026-09-13 的三态口径）。判据是「**本房间的连接态** × 上游 `live_status`」：连接态不是 `connected`（含 `connecting` / `disconnected` / `error`，取自 `danmubox://status`，与房间标签页上的圆点同源）→ **橙**（没连上就不知道在不在播）；连上了且 `live_status == 1` → **绿**；其余（`0` 下播、`2` 轮播）→ **红**（轮播不是开播）。色值走 `--live-on` / `--live-off` / `--live-idle`。文案只进 `title` / `aria-label`（「开播 / 下播 / 未连接」），**不上屏** |
+| 两枚图标的粗细 | **都是矢量、粗细都是 1.5px**（用户 2026-09-13 第 4 条：「返回和右侧的三点整体粗细不一致，2 者折中一下」）：返回是一笔 `stroke-width: 1.5`（`.ctlIcon` 24px 盒 / `viewBox` 24，缩放系数 1）；`⋯` 是三个 `r = 0.75` 的圆点（直径 1.5px）。改前两者分别是 **2px** 与 **1px**（后者是文字字形 U+22EF 的墨迹厚度，由字体决定、两引擎还不一样），1.5px 是二者的折中。控件尺寸一点没动（两枚仍是 `--ctl-round` = 40 × 40 正圆）。冒烟按 `iconWeightsCompromised` /`iconWeightsMatch`（两个数逐位相等）断言 —— `⋯` 不再是文字，因此也**不再随字体变化** |
+| 直播状态点 | **红 = 下播 / 绿 = 开播 / 橙 = 未连接**（用户 2026-09-13 的三态口径）。判据是「**本房间的连接态** × 上游 `live_status`」：连接态不是 `connected`（含 `connecting` / `disconnected` / `error`，取自 `danmubox://status`，与房间标签页上的圆点同源）→ **橙**（没连上就不知道在不在播）；连上了且 `live_status == 1` → **绿**；其余（`0` 下播、`2` 轮播）→ **红**（轮播不是开播）。色值走 `--live-on` / `--live-off` / `--live-idle`。**看得见的那颗点直径 `--live-dot` = 8px**（用户 2026-09-13：「并且要改小一点」——12 → 10 → 8 逐档缩小）：它画在**外壳**里（`db-live-dot-box`，仍是 `--sp-3` = 12px），因此**热区 / 悬停面不跟着缩**（用户明确要求可点面积不变）。文案只进 `title` / `aria-label`（「开播 / 下播 / 未连接」），**不上屏** |
 | 标题 / 房间号 | 房间元信息（`follow_list` / `rooms_list` / `getRoomPlayInfo` 解析结果）；**紧跟状态点右侧、同一排**，不再独占一排。放不下时**循环滚动**（marquee，见下），不再用省略号截断；完整标题始终在 `title` 属性里 |
 | 观众数 | 当前在线（`ONLINE_RANK_COUNT` 的 `online_count`）与累计看过（`WATCHED_CHANGE` 的 `num`），两个都显示（用户 2026-09-12 / 2026-09-13：电池挪走后这两个占顶栏）；上游还没给过的一侧不显示，不用 `—` 或 `0` 顶替。人气值不再展示 |
 | 电池 | **不在顶栏**（用户 2026-09-13：「电池数量挪到底部发送按钮左侧」）：它是输入区工具行里、发送按钮左侧的一枚控件，且**不是圆形**（见 §6.4） |
@@ -308,9 +309,9 @@
 | 身份行在上、正文行在下 | 正文块是**上下两行**（参考图 `打开哔哩哔哩继续观看.png` 的口径）：第一行「用户名 + 身份牌」，第二行正文**另起一行**、左起点与用户名对齐。两块都是块级，所以正文必然落在自己的行上（结构本身给的悬挂缩进，不需要 `padding-left` / 负 `text-indent`）。⚠ 正文块用 **`display: flow-root`** 而不是 `block`：块级大表情带一个负的 `margin-block`，普通块会与它**边距折叠**、把整个正文块上提 1.05px 骑到身份行上（2026-09-13 改块级当天冒烟实测 bodyTop 比身份行底边高 1.1px；旧版是网格项，网格项的边距不折叠，所以看不出这毛病）。用户 2026-09-13：「长文本弹幕自动换行还是没有实现好」——根因就是旧的**左右两列**排法：窄屏 360 下身份簇吃掉正文块的 56%（旧版 140px / 500px 上限口径下仍有 4 成），正文列只剩 112–165px，长文本自然折得又窄又碎 |
 | 正文拿到整行宽度 | 正文的可用宽度 = 行宽 − 时间戳列 − 头像列，**不再被身份簇挤走**。改前实测（Chromium，真实夹具那条 21 字弹幕）：360 宽下正文 **165.1px**（占视口 45.9%，同一段折 **4 行**）、宽屏 1440 下 1201.6px；改后窄屏 **305.8px**（80.0%，同一段 **2 行**）、宽屏 **1385.8px**（96.2%），两种视口都 ≥ 视口的 50%。旧的 `--identity-max-w`（14em / 窄屏 10em）与 `grid-template-columns` 是**给两列分宽度**才存在的，随布局一起删掉。冒烟按 `fixtureTextBodyKeepsHalfViewport`（正文 ≥ 视口一半）、`fixtureTextBodyFillsBlock`（正文吃满正文块）、`fixtureBodyAlignedWithName`（正文左边缘 = 用户名左边缘）断言 |
 | 头像顶部对齐身份行、比它稍高 | 头像 = **1.25 × 行盒**（26.25px），身份行（用户名 + 身份牌那一行）的行盒 = 1 × 行盒（21px）—— 用户 2026-09-13：「头像需要比身份簇稍微高一些，太小了看不清」。头像列的**顶边**与身份行顶边对齐（参考图口径，不是垂直居中）。行高由正文块的两行决定，所以放大头像**不会**把行撑高。冒烟按 `layoutAvatarTopAlignedWithIdentity`（顶边差 < 1.5px）、`rowAvatarTallerThanIdentity`（≥ 1.15 倍）、`rowBadgeNotFollowingAvatar`（牌不跟着放大）与 `layoutAvatarNotRowCentered`（反面对照）断言 |
-| 间距只有 --sp-1 | 行内（头像↔正文块、身份行内部：昵称↔身份牌↔回复标记）一律 `--sp-1`（4px）；身份行与正文行之间的「分」由**换行本身**给出，不再有 `--sp-2` 外边距。行与行之间的留白由行容器的上下内边距给（`--sp-2`，参考图里行间距明显）。行内出现第三种间距值即为 bug（§9.1） |
-| 身份牌在昵称右侧 | 昵称 + 徽标组（+ 回复标记）装在同一个身份行里（`data-testid="db-msg-identity"`），行内 `--sp-1`、不留弹性空白；**顺序是「昵称 → 身份牌」（参考图：蓝底白字的房间牌跟在用户名后面），不是牌在名前**。昵称是行内唯一允许收缩的一格（`flex: 0 1 auto` + `min-width: 0` + 14em 省略号），徽标组保持自己的宽度；两者一起超出行宽时由身份行的 `overflow: hidden` 截断，不产生横向滚动。没有徽标时不渲染空徽标组（空盒会白吃一道间距） |
-| 表情与文字同流 | 表情图放在正文块（`data-testid="db-msg-body"`）**里面**，与文字同一个行盒：尺寸 `--emote` = 1.1 × 行盒，上下各给一个负 `margin-block` 把超出行盒的那 10% 扣掉（图照画那么大，行盒与逐行间距不变）。`bulge_display` 的大表情（2 × `--emote`）是块级、独占一行。表情不另起一列、不与文字各站一个基线 |
+| 间距只有 --sp-1 | 行内（头像↔正文块、身份行内部：昵称↔身份牌）一律 `--sp-1`（4px）；身份行与正文行之间的「分」由**换行本身**给出，不再有 `--sp-2` 外边距。行与行之间的留白由行容器的上下内边距给（`--sp-2`，参考图里行间距明显）。行内出现第三种间距值即为 bug（§9.1） |
+| 身份牌在昵称右侧 | 昵称 + 徽标组装在同一个身份行里（`data-testid="db-msg-identity"`），行内 `--sp-1`、不留弹性空白；**顺序是「昵称 → 身份牌」（参考图：蓝底白字的房间牌跟在用户名后面），不是牌在名前**。昵称是行内唯一允许收缩的一格（`flex: 0 1 auto` + `min-width: 0` + 14em 省略号），徽标组保持自己的宽度；两者一起超出行宽时由身份行的 `overflow: hidden` 截断，不产生横向滚动。没有徽标时不渲染空徽标组（空盒会白吃一道间距） |
+| 表情与文字同流 | 表情图放在正文块（`data-testid="db-msg-body"`）**里面**，与文字同一个行盒：高度 `--emote` = 1.1 × 行盒，上下各给一个负 `margin-block` 把超出行盒的那 10% 扣掉（图照画那么大，行盒与逐行间距不变）。宽度按族给死：**横条族（通用 200×60）走 `.contentEmoteWide`，盒宽 = 10/3 × `--emote`**（用户 2026-09-13 第 7 条：「通用表情在弹幕里渲染得有点小，看起来是当成文本渲染了」——见方盒 + `contain` 之后那条横条只剩 **6.9px** 高，比一行字还矮）；方图族（房间 / 粉丝牌 162×162）仍是见方盒。`bulge_display` 的大表情（2 × `--emote`）是块级、独占一行。表情不另起一列、不与文字各站一个基线 |
 | 多行正文悬挂缩进 | 折行只发生在正文行内部，每一行的左边缘都等于它自己的首行起点，也等于用户名的左边缘 —— 不是回到头像下面、也不是被挤到右侧。由 `layoutHangIndentAligned`（**每一行**的左边界都与首行一致，`layoutHangIndentLineLefts` 记全部行盒的左边缘）在两个视口断言 |
 | 尺度同源、头像单独一档 | 行盒高 `--row-line` 是唯一基准：**头像 = 1.25 × 行盒**（用户 2026-09-13 要求头像比身份簇稍高）、身份牌 = 0.9 × 行盒（`--badge-h` **不跟头像走**，2026-09-13 的坑：复用 `var(--avatar)` 会让牌随头像一起放大）、表情 = 1.1 × 行盒（§9.2）。基准用 `@property --row-line { syntax: "<length>" }` 注册——自定义属性默认在**使用处**按元素自己的字号解析，徽标（`--fs-1` = 0.79em）会把「0.9 行盒」算成 14.9px 而不是 18.9px，旧版三个尺度各自为政就是这么来的（用户 #3）。冒烟按 `rowScaleCoherent`（1.25 / 0.9 / 1.1）与 `rowScaleFollowsFontSlider`（0.85 / 1 / 1.6 三档字号下比值不变）断言 |
 
@@ -320,7 +321,7 @@
 | 头像 | `Message.face`；空串不渲染，加载失败退化为昵称首字符占位（§4.2）。对齐口径见 §4.2：**垂直居中于首行** |
 | 身份牌 | 见 §4.2，尺寸随字号缩放（em）。排在昵称**右侧**（同一身份行，`--sp-1`） |
 | 昵称 | 身份行的**第一格**（身份牌跟在它后面），`--fg-dim`（低正文一档），**不吃**弹幕自身颜色：普通弹幕的颜色是 `16777215`（白），套到人名上在浅色主题里等于隐形（用户 2026-09-12 实测「用户名是白色、看不见」）。超长时 14em 截断，名字 + 牌一起超出行宽时由身份行截断 |
-| 回复标记 | `reply_to_uid != 0`（契约 §5）时显示在**身份行的最后**（昵称与身份牌之后、正文那一行之前）（`data-testid="db-msg-reply"`，弱化小标、定宽截断 14em、完整名字在 `title`）；非回复（`reply_to_uid == 0` 或 `reply_to_uname` 为空串）不渲染这一格。它不占正文行的宽度，因此不妨碍正文折行与时间戳/昵称的纵向对齐。被 @ 的名字单独一格（`db-msg-reply-name`）：上游给了 `reply_uname_color`（实测 `#FB7299`）就上色，空串沿用标记自身的弱化色（**空串不是颜色**，与粉丝牌真彩色同一口径）。这一格也是「纯 @ 某人」的槽位——收包侧区分不出 @ 与回复（引擎 2026-09-12 实测：`extra` 45 个键里没有任何指回被回复弹幕的 id，`reply_type_enum` 与 `reply_mid != 0` 同构、`show_reply` 恒为 `true`），因此两种形态共用这一格、只差文案，不各开一列 |
+| @ 高亮（正文内） | 正文里的 `@昵称` **就地强调**（用户 2026-09-13 第 1 条）：身份牌后那枚「回复 @某人」的牌子与正文里自带的 @ 重复，**牌子已删**；@ 由展示层从 `content` 里识别（`@` 之后到空白或句读为止都算名字），命中的一段套 `.mention`（`data-testid="db-msg-mention"`），配色**参照身份牌**：字符色取 `--badge-fg`、底取身份牌那道强调色渐变（与 `.badgeAdmin` 同一套），因此深浅两套主题下都与身份牌一致、不新造颜色。它与回复关系**无关**：没有 `reply_*` 字段的弹幕，正文里有 @ 照样高亮；反过来 `reply_to_uid != 0` 而正文里没有 @ 时，行内不再出现任何「回复」字样（上游 `reply_uname_color` 因此不再被界面消费，留在契约 §5 里）。高亮只加壳不改字，冒烟按 `replyChipGone`（`db-msg-reply` / `db-msg-reply-name` 一律不存在）、`mentionHighlighted`、`mentionColorMatchesBadge`（颜色 = 身份牌字符色）、`mentionWorksWithoutReply`、`mentionBodyTextIntact` 断言 |
 | 正文 | 折行；**不吃弹幕自身颜色**（`Message.color` 界面一处都不消费，正文与昵称 / 时间戳 / 徽标同用主题前景色，见 §4.3）；超过 4 行截断并给「展开」 |
 | 合并计数 | `count > 1` 或 `kind == gift` 时在正文**行内**末尾渲染 `×N`：跟在最后一行文字后面，不另占一行、不另开一栏 |
 
@@ -337,13 +338,13 @@
 
 表情弹幕（`Message.emote` 非空）**画图不画字**：此时正文就是表情名，只显示文字会被当成「表情没渲染」。图与文字同高对齐，`alt` 与 `title` 都填表情名——图加载不出来时浏览器回退显示 alt，不至于变成空白。**真实载荷还说明它「整条就是一张表情」**：同一天的 11085 条真实 `DANMU_MSG` 里，35 个 `emoticon_unique` 与 `info[1]`（表情名）一一对应、尺寸**全部** 162×162、`emoticon_unique` 非空时 `info[5]`（emots 数组）恒为 `["", ""]`——表情包弹幕没有可排版的用户正文，因此按整条画图处理，不做「文字 + 行内表情」的排版（取证与夹具见 §15.3）。
 
-**弹幕行里的表情图宽高一律给死（见方）+ `object-fit: contain`**（`.contentEmote` / `.contentEmoteBulge`）：上游 CDN 的表情是原图直出，尺寸各档不同（通用表情 200×60 的横条、房间 / 粉丝牌 162×162 的方图），只写 `height` 时宽度会按原图比例算出来——改前实测：200×60 的那条渲染成 **23.1px 高 / 77px 宽**。这与「512×512 头像顶爆主页」「表情撑出面板格子」是同一个错误，**第三次**出现在弹幕行里。冒烟按 `rowInlineEmoteBoxSquare`（同一档里 200×60 与 162×162 必须渲染成同一个盒）与 `fixtureEmoteImgExplicitBox` / `fixtureEmoteImgInsideColumn`（真实夹具那条表情弹幕）断言。
+**弹幕行里的表情图宽高一律给死 + `object-fit: contain`**（`.contentEmote` 见方盒 / `.contentEmoteWide` 横条宽盒 / `.contentEmoteBulge`）：上游 CDN 的表情是原图直出，尺寸各档不同（通用表情 200×60 的横条、房间 / 粉丝牌 162×162 的方图），只写 `height` 时宽度会按原图比例算出来——改前实测：200×60 的那条渲染成 **23.1px 高 / 77px 宽**。这与「512×512 头像顶爆主页」「表情撑出面板格子」是同一个错误，**第三次**出现在弹幕行里。冒烟按 `rowInlineEmoteWideBox`（通用那条的盒高 = 1.1 × 行盒、宽高比 = 10:3）、`rowInlineEmoteTallerThanText`（画出来的高度 > 1em）与 `rowInlineEmoteFitsRow`（宽盒也不许撑破行）、`fixtureEmoteImgExplicitBox` / `fixtureEmoteImgInsideColumn`（真实夹具那条大表情弹幕）断言。
 
 表情尺寸**不用固定像素、全部用 em**，因此跟着 `ui.font_scale` 一起缩放（用户 2026-09-12：字号要同步调整表情尺寸）：
 
 | 位置 | 尺寸 | 说明 |
 |---|---|---|
-| 弹幕正文里的表情 | `--emote` = `1.1 × --row-line` | 以**行盒高**为基准；`ui.font_scale = 1`（正文 14px、行盒 21px）时 = 23.1px。超出行盒的 10% 由负 `margin-block` 从行盒里扣掉，所以一行表情不会把行高撑得忽高忽低 |
+| 弹幕正文里的表情 | 高度 `--emote` = `1.1 × --row-line`；宽度按族各给死：见方盒（房间 / 粉丝牌 162×162）与**宽盒** `10/3 × --emote`（通用 200×60 的横条） | 以**行盒高**为基准；`ui.font_scale = 1`（正文 14px、行盒 21px）时高 = 23.1px。超出行盒的 10% 由负 `margin-block` 从行盒里扣掉，所以一行表情不会把行高撑得忽高忽低。宽盒见 §4.1（用户 2026-09-13 第 7 条：通用表情原来只有 6.9px 高，看着像文字） |
 | `bulge_display = true`（大表情） | `2 × --emote` + 4px 圆角 | 官方把这类表情画两倍大，见官方 `emoticon.bulge img { height: 40px }` |
 | 表情面板里的缩略图 | 通用 `1.5em`；**非通用（本房间 / 粉丝牌 / 大航海）`2.2em`** | 非通用那几族本来是大图，缩成通用那么大看不清（用户 2026-09-12） |
 
@@ -371,14 +372,14 @@
 - 两个槽位**可并列**：如「房管 + 舰长」同时渲染；「主播 + 总督」也允许（上游字段允许时）。
 - 主播与房管不得同时出现（同一人）；`uid == anchor_uid` 时忽略 `is_admin`。
 - 徽标顺序固定为 `[职衔槽][大航海槽][粉丝牌]`，**整组挂在昵称右侧**（用户 2026-09-13 的参考图口径：用户名在前，蓝底白字的房间牌跟在后面）；徽标不是行首元素，也不占行首竖条。
-- 昵称、徽标组、回复标记属于**同一个身份行**（`data-testid="db-msg-identity"`，行内间距 `--sp-1`，顺序为「昵称 → 身份牌 → 回复标记」）：身份是「谁在说话」的一部分，它在正文的**上一行**（§4.1），不是与正文并列的一栏。
+- 昵称与徽标组属于**同一个身份行**（`data-testid="db-msg-identity"`，行内间距 `--sp-1`，顺序为「昵称 → 身份牌」；「回复标记」那一格已按用户 2026-09-13 第 1 条**删除**，见 §4.1 的 @ 高亮）：身份是「谁在说话」的一部分，它在正文的**上一行**（§4.1），不是与正文并列的一栏。
 - **大航海槽只认 `Message.guard_level`（本房间的大航海等级）**：粉丝牌上的 `medal_guard_level` 是**牌子所属房间**的身份，只用于牌面样式，**不得**拿它兜底画舰长标——否则「戴着别的房间舰长牌的人」在本房间也会亮出舰长标（用户 2026-09-12 反馈 #12，契约 §5 已把两者分层）。
 
 **形状照官方聊天栏量得的值**（2026-09-12 取官方直播间前端产物）：
 
 | 项 | 官方 | 本界面 |
 |---|---|---|
-| 徽标形状 | 胶囊：`border-radius: 8px`、`height: 15px`、`padding: 2px 6px 2px 2px`、12px 白字 | **长方形**（参考图口径，用户 2026-09-13）：尺寸用 em（`height: var(--badge-h)` = 0.9 × 行盒 / `font-size: 0.79em` / `border-radius: 0.25em`）随 `ui.font_scale` 缩放，牌高**不跟头像走** |
+| 徽标形状 | 胶囊：`border-radius: 8px`、`height: 15px`、`padding: 2px 6px 2px 2px`、12px 白字 | **长方形**（参考图口径，用户 2026-09-13）：尺寸用 em（`height: var(--badge-h)` = 0.9 × 行盒 / `font-size: 0.79em` / `border-radius: 0.45em`：用户 2026-09-13「身份标识的圆角大一些，现在看着有点方」，仍小于半高 0.675em，所以还是矩形不是胶囊）随 `ui.font_scale` 缩放，牌高**不跟头像走** |
 | 描边 | `1px solid var(--borderColor)`（牌面同色系） | 粉丝牌有 `medal_color_border` 时用它，否则 `1px solid color-mix(in srgb, #fff 45%, transparent)` |
 | 底色 | `linear-gradient(45deg, v2_medal_color_start, v2_medal_color_end)` | 主播 / 房管 / 大航海用本地 token 的同款 45° 渐变；粉丝牌见下 |
 | 等级格 | 右侧独立一格、宽度固定（1 位 `4px` / 3 位 `15px`），白字 | 右侧独立一格（`tabular-nums`，深色半透明底） |
@@ -414,7 +415,7 @@
 
 | kind | 使用的 `Message` 字段 |
 |---|---|
-| `danmaku` | `ts` `uname` `content` `medal_level` `medal_name` `guard_level` `is_admin` `uid` `reply_to_uid` `reply_to_uname` |
+| `danmaku` | `ts` `uname` `content` `medal_level` `medal_name` `guard_level` `is_admin` `uid`（`reply_to_uid` / `reply_to_uname` 界面不再消费，见 §4.1 的 @ 高亮） |
 | `gift` | `ts` `uname` `content`（礼物描述） `amount` `uid` |
 | `superchat` | `ts` `uname` `content` `amount` `uid` |
 | `interact` | `ts` `uname` `content`（行为描述） `uid` |
@@ -423,7 +424,7 @@
 
 统一规则：`uid == 0` 且 `uname` 为空时昵称显示「游客」；`medal_level == 0` 不渲染粉丝牌；`guard_level == 0` 不渲染大航海徽标。
 
-`Message.color` 仍在契约 §5 里（引擎原样带出；发送侧的 `chat_send.color` 照旧透传），但**界面一处都不消费它**：正文与昵称都用主题 token，因此 `0` / `0xFFFFFF`（上游给普通弹幕的白）/ 越界值都不需要特判，也没有 `cssColor` 一类的换算。依据是用户 2026-09-12 的两次实测反馈——先报「他人用户名是白色、看不见」（浅色主题下白字等于隐形），后报「正文偏黄」；统一后**同屏所有正文一个颜色、所有昵称一个颜色**（冒烟按 `rowBodyNotPaintedByDanmakuColor` / `rowNameNotPaintedByDanmakuColor` / `rowAllBodiesSameColor` / `namesAllSameColor` / `rowLightBodyNotPaintedByDanmakuColor` 断言）。被 @ 的名字是唯一例外：仍按上游 `reply_uname_color` 上色（空串不上色）。
+`Message.color` 仍在契约 §5 里（引擎原样带出；发送侧的 `chat_send.color` 照旧透传），但**界面一处都不消费它**：正文与昵称都用主题 token，因此 `0` / `0xFFFFFF`（上游给普通弹幕的白）/ 越界值都不需要特判，也没有 `cssColor` 一类的换算。依据是用户 2026-09-12 的两次实测反馈——先报「他人用户名是白色、看不见」（浅色主题下白字等于隐形），后报「正文偏黄」；统一后**同屏所有正文一个颜色、所有昵称一个颜色**（冒烟按 `rowBodyNotPaintedByDanmakuColor` / `rowNameNotPaintedByDanmakuColor` / `rowAllBodiesSameColor` / `namesAllSameColor` / `rowLightBodyNotPaintedByDanmakuColor` 断言）。正文里的 `@昵称` 是唯一被强调的一段，但它用的也是**身份牌那一套 token**（`--badge-fg` + 强调色渐变底），不消费 `reply_uname_color`（§4.1）。
 
 ### 4.4 本地发送回显与被吞标记
 
@@ -657,9 +658,9 @@
 
 **一屏只画一组**（用户 2026-09-12：「表情面板改成 tab」）：分组不再纵向堆在同一个滚动区里，点 tab 切组、切组回到格子顶部；tab 只列**当前有内容的组**（派生值，不留在 state 里）。
 
-**网格区高度 = 两行表情格，按当前那一组自己的格子尺寸算**（用户 2026-09-12 反馈 2：「高度降低到 2 排表情包」——上一版按两行**大**表情给高度，网格 100.1px、面板总高 257px，用户仍嫌高）：`.picker` 上算好 `--emote-size-sm = 1.5 × --fs-6` 与 `--emote-size-big = 2.2 × --fs-7`（**两者都注册成 `@property` 的 `<length>`**，在面板那一层就算成 px 继承下去）、`--emote-row-h = --emote-size-sm + 2 × --sp-1`（图片盒 + 格子上下内边距）、`--emote-row-h-big = --emote-size-big + 2 × --sp-1`、`--emote-grid-h = 2 × --emote-row-h + --sp-1`（两行 + 一道行距）；非通用组的面板根节点再加 `.pickerBig` 把它换成 `2 × --emote-row-h-big + --sp-1`。网格与左侧轨道都取 `height: var(--emote-grid-h)`，超出各自滚动。**高度写死而不是 `max-height`**：换分组时格子数始终是两行，滚动条该出就出。窄屏（≤520px）另有触屏热区下限把格子撑到 `--tap-min`，所以那两个行高算式在窄屏改用 `max(…, --tap-min)` —— 两边必须用同一个数，否则第二行会被切掉一截（冒烟按 `panelEmoteGridTwoCommonRows` / `panelEmoteGridTwoBigRows` / `panelEmoteHeightIsTwoRows` 断言）。
+**网格区高度 = 三行大表情格，两组同一个高度**（用户 2026-09-13 第 2 条：「表情 2 行感觉稍微矮了，改到 3 行……按大表情的高度固定，也就是说大表情展示的时候能看到完整的 3 行，这个高度固定下来，通用表情也用这个高度」）：`.picker` 上算好 `--emote-size-sm = 1.5 × --fs-6` 与 `--emote-size-big = 2.2 × --fs-7`（**两者都注册成 `@property` 的 `<length>`**，在面板那一层就算成 px 继承下去）、`--emote-row-h-big = --emote-size-big + 2 × --sp-1`（图片盒 + 格子上下内边距）、`--emote-grid-h = 3 × --emote-row-h-big + 2 × --sp-1`（三行 + 两道行距）。网格与左侧 tab 轨道都用这一个高度，**与当前是哪一组无关**：通用组看到的也是三行大格，换组时面板不会忽高忽低（改前 `.pickerBig` 那一套「按组算高度」已随本次改动删除）。
 
-**为什么不是「一律按小格算两行」**：放大档那几族（本房间 / 粉丝牌 / 大航海）的格子本来就比通用组高，一律按小格算会让它们只剩一行半（第二行被切掉近 20px）。「恰好看到两行」按组内自己的格子算才成立，而面板照样明显变矮（宽屏：通用组网格 68.3px / 面板 84.3px，放大档 100.1px / 116.1px；改前 100.1px / 257px）。
+**为什么通用组也按大格算**：高度是「大表情那一档」的口径 —— 大表情必须**完整看到 3 行**（用户明确要求），而通用组的格子比它矮，按同一高度只会看到更多行、不会切掉半行。改前按组算高度时，窄屏通用组只有两行 40px 的格子，大表情那一组才有三行的位置。实测（Chromium，宽 1440×900 / 窄 360×844）：网格 **152.1px**（= 3 × 48.04 + 2 × 4）、面板整块 **169.1px**（宽）/ **177.1px**（窄），两组**逐位相同**。冒烟按 `panelEmoteGridThreeBigRows`（网格 = 3 × 大格 + 2 × 行距）、`panelEmoteGridSameHeightForBothGroups`（通用组与大表情组的网格高相等）、`panelEmoteHeightIsGridPlusPadding` 断言。
 
 **tab 是轨道，不是一排按钮**（用户 2026-09-12：「给表情的全是按钮，根本框不住表情图标，可以直接仿照官方实现」）：
 
@@ -689,7 +690,7 @@
 | 打开 | 工具行「表情」按钮；再点关闭；打开时保持输入框焦点与草稿（面板在输入框**上方**向上展开） |
 | 加载时机 | ①进房间且会话就绪后拉一次 `emotes_owned`（与房间无关，成功一次即不再请求）；②面板打开时若**上次失败**再试一次，并在面板里给「我的表情加载失败：<原样 code + message>」+「重试」。**失败绝不阻塞输入框**，已加载的分组照常可用。`locked` 是**按调用者身份当场算**的（同一房间换账号会变），所以换房间 / 换账号后要重新拉一次 `emotes_list`，否则会沿用旧身份算出来的灰 |
 | 分组 tab | 列出接口给了的组（顺序固定：通用 → 我的表情 → 本房间 → 粉丝牌 → 大航海），tab 上带该组的条数；身份变化（进不同房间）时重建并回到「通用」。冒烟按 `panelEmoteRailStacked` / `panelEmoteRailLeftOfGrid` / `panelEmoteTabIsRealTab` / `panelEmoteTabSelectedStyleDistinct` / `panelEmoteTabArrowKeys` / `panelEmoteTabArrowUpReturns` 断言 |
-| 网格 | 等宽格子 `repeat(auto-fill, minmax(4.5em, 1fr))`（列宽下限按通用表情 200×60 的长宽比定：3em 时 `contain` 后图只剩 7px 高，认不出是哪个），一行放几个由列宽定；格子里的图居中。**表情格与左侧轨道各滚各的**；网格区高度 = **两行表情格**（按当前那一组的格子高，见上），因此面板整体高度就是「两行表情格 + 上下内边距」这一量级（宽屏 85.3px、窄屏 109px）。窄屏 360 下面板 / 轨道 / 网格三块都**不许出现横向溢出**（冒烟 `panelNoHorizontalOverflow`）。长列表虚拟化或分页加载 |
+| 网格 | 等宽格子 `repeat(auto-fill, minmax(4.5em, 1fr))`（列宽下限按通用表情 200×60 的长宽比定：3em 时 `contain` 后图只剩 7px 高，认不出是哪个），一行放几个由列宽定；格子里的图居中。**表情格与左侧轨道各滚各的**；网格区高度 = **三行大表情格**（`--emote-grid-h`，与当前哪一组无关，见上），因此面板整体高度就是「三行大表情格 + 上下内边距」这一量级（宽屏 169.1px、窄屏 177.1px）。窄屏 360 下面板 / 轨道 / 网格三块都**不许出现横向溢出**（冒烟 `panelNoHorizontalOverflow`）。长列表虚拟化或分页加载 |
 | 表情图 | `<img>` 的**宽高一律由 CSS 显式给出**（`width: 100%` + `height: var(--emote-size)`）并配 `object-fit: contain`，图因此**完整落在自己的格子里**（冒烟 `panelEmoteFitsCell` / `panelEmoteImgExplicitBox`，溢出量由 `panelEmoteOverflowPx` 记账）。**不许让 `<img>` 按原图尺寸渲染**：上游表情是原图直出（实测通用表情 200×60、粉丝牌 / 本房间 162×162、主站「我的表情」162×162），只写 `height` 时宽度按原图比例算——200×60 的 `1.5em` 高会得到 **5em** 宽，撑出 3em 的格子（改前实测见下）。这与「512×512 头像撑爆主页」「弹幕行里的表情」是同一个错误：共用组件的尺寸不许依赖原图尺寸。图片加载失败时回退显示 `Emote.text` 文本（该格与相邻格等高，行高同样跟 `--emote-size`），不阻断点选 |
 | 无权限的表情 | `Emote.locked == true` 的格子**照常列出**但置灰：`filter: grayscale(1)` + `opacity: .45`——灰的是颜色不是尺寸，仍能认出是哪一个；**不隐藏、不禁用**（`title` 说明「点一下直接发送；当前身份用不了，置灰只是提示，能不能发由上游判定」）。**字段缺失（老后端）= 可用**，不许整面板变灰（契约 §5：置灰是提示，真正的闸门在上游发送侧；缺 `perm` 的映射由 `crates/danmubox-bili/src/emote.rs` 的单测覆盖，界面只消费 `locked` 这个布尔值）。冒烟按 `panelLockedEmoteListed` / `panelLockedEmoteDimmed` / `panelLockedEmoteSameSize` / `panelLockedEmoteSelectable` / `panelUnlockedEmoteNotDimmed` 断言 |
 | 尺寸 | 通用 `1.5em`、**非通用（我的表情 / 本房间 / 粉丝牌 / 大航海）`2.2 × --fs-7`**（= `--emote-size-big`，在面板那一层算成 px），全部相对面板字号（= 正文基准 × `ui.font_scale`），因此字号一改表情跟着变（用户 2026-09-12） |
@@ -702,7 +703,7 @@
 | 度量（WebKit） | 改前 | 改后 |
 |---|---|---|
 | 面板里的输入框 | 1（搜索框） | **0**（`panelNoSearch`） |
-| 网格区高度 vs **两行表情格** | 一律按两行**大**表情：网格 **100.1px** = 两行 **48.0px** + 行距 **4.0px**（面板被面板头与轨道撑到 257–271px 高） | 按**当前那一组**的格子：通用组 **68.3px**（宽）/ **84.0px**（窄，触屏下限 40px 撑起）、放大档那一组仍是 **100.1px**；面板整块 **85.3px**（宽）/ **109px**（窄）。冒烟按 `panelEmoteGridTwoCommonRows` / `panelEmoteGridTwoBigRows` / `panelEmoteHeightIsTwoRows` 断言，面板高 **257px**；通用组内容 568px → 超出滚动（`narrow_panelEmoteGridOverflows`） |
+| 网格区高度 | 两行**大**表情：网格 **100.1px**、面板 **257px**（用户 2026-09-13：「2 行感觉稍微矮了」） | **三行大表情**：网格 **152.1px** = 3 × **48.0px** + 2 × **4.0px**，面板整块 **169.1px**（宽）/ **177.1px**（窄）；**通用组与大表情组同高**（冒烟 `panelEmoteGridThreeBigRows` / `panelEmoteGridSameHeightForBothGroups`）。通用组内容 568px → 仍超出滚动（`narrow_panelEmoteGridOverflows`） |
 | 点一次表情格发出的请求 | 0（只往草稿插名字） | **1 次 `chat_send`**，`emote.emoticon_unique` = 点中的那一个（`ownedEmoteSentOnClick` / `panelLockedEmoteSelectable`），草稿仍是空串、面板不关（`ownedEmoteNoSecondStep`） |
 
 **「图比格子宽」这件事的取证口径（2026-09-12 的教训）**：这一条**曾经用 64×64 的正方形手写夹具验过并「通过」**，而真站的通用表情是 200×60 的横条，尺寸特征完全不同 —— 手写夹具把 bug 藏住了。现在冒烟里的表情**全部由 `apps/desktop/ui/smoke/fixtures/emotes.json` 派生**（该文件是只读 GET 固化的真实响应：`GetEmoticons` 与 `/x/emote/user/panel/web`，账号侧标识已脱敏、结构未改），假图只替换像素内容、**固有尺寸与真实图逐张一致**。
@@ -722,6 +723,7 @@
 | 项 | 规则 |
 |---|---|
 | 位置 | **输入区工具行、发送按钮左侧**（用户 2026-09-13：「电池数量挪到底部发送按钮左侧」；顶栏那个位置改给「当前在线 / 看过」两个数值）。形态是**圆角矩形**（`--r-2`：图标 + 数值的一枚控件），**不是圆形**——用户 2026-09-13：「电池不要圆形，仅 3 点选项需要」，顶栏的返回与 `⋯` 才是 `--r-full` 正圆。它与发送按钮同在一个不可换行的「发送簇」（`.sendCluster`）里：窄屏工具行换行时两者不会被拆到两排 |
+| 图标 | **竖着的电池**（用户 2026-09-13 第 3 条：官方的电池标是竖的，横过来那个像一根电量条、容易被读成「电量」）：SVG 里机身是 `10 × 16` 的竖矩形 + 顶上一小截极柱（`viewBox 0 0 24 24`）。改前是 `16 × 10` 的横矩形 + 右侧极柱。图标盒尺寸没动（`.batteryIcon` = 1.1em，实测 13.2 × 13.2px）。冒烟按 `batteryIconShape`（矩形的 `height > width`）断言 |
 | 形状的判据 | 圆角**不等于**半短边（正圆与胶囊都等于半短边，都算「圆」）。冒烟按 `batteryNotRound`（圆角 < 半短边 − 1px）、`batteryLeftOfSend`（x 坐标在发送按钮左侧）、`batteryInComposer`、`batteryText` 断言 |
 | 刷新时机 | 进入房间时、每次送礼成功后、点击数值手动刷新 |
 | 未登录 | 显示「—」，`title`「登录后可见」 |
@@ -957,7 +959,7 @@
 | 房间列表页 | 单列、居中、左右留白 24px | 单列，左右留白 12px |
 | 房间头 | **一排**（用户 2026-09-13 的更正）：◀返回（圆形）· ●状态点 · 直播间标题（`--fs-5` 加粗，放不下就循环滚动） ······ 在线 / 看过 · `⋯`（圆形）。标题不再另起一排，电池不在顶栏 | 同一套一排结构；两枚圆形控件直径都是 `--ctl-round`（= `--tap-min` 40px）。标题是 `flex: 1 1 0` + `min-width: 0`，因此窄屏也**不会**被甩到第二排；任何宽度下**不许横向滚动** |
 | 弹幕列表 | 唯一生长区与滚动区 | 同左 |
-| 弹出面板（表情 / 短语 / 筛选） | 文档流里的一块，向上展开，只挤压列表（不遮最新一条）；限高 `--live-dot`（= 10px：状态点**看得见的那颗点**的直径，元素盒仍是 `--sp-3` 12px、热区不缩）、`--title-gap`（= 2.5em：循环滚动的标题两份拷贝之间的间隙）、`--panel-max-h` = 260px。**表情面板是例外**：面板顶上去掉了标题与「关闭」，网格区与左侧轨道同高、都定死为**两行表情格**（`--emote-grid-h`，按当前那一组的格子高算，§6.3），因此面板实际高度只有两行 + 上下内边距（宽屏 85.3px、窄屏 109px），两列各自滚 | **同一口径**：也在文档流里，只挤压列表、不遮最新一条；区别只在限高——窄屏用视口份额 `--panel-max-h-narrow` = **45vh**（844px 下 ≈ 380px），内容超出由**面板内部滚动**承担，不去吃列表空间。表情面板按两行表情格定高（比 45vh 更矮），顶上没有标题与「关闭」（再点一次「表情」或点输入区外面收起） |
+| 弹出面板（表情 / 短语 / 筛选） | 文档流里的一块，向上展开，只挤压列表（不遮最新一条）；限高 `--live-dot`（= 8px：状态点**看得见的那颗点**的直径，元素盒仍是 `--sp-3` 12px、热区不缩）、`--title-gap`（= 2.5em：循环滚动的标题两份拷贝之间的间隙）、`--panel-max-h` = 260px。**表情面板是例外**：面板顶上去掉了标题与「关闭」，网格区与左侧轨道同高、都定死为**三行大表情格**（`--emote-grid-h`，两组同一个高度，§6.3），因此面板实际高度只有三行 + 上下内边距（宽屏 169.1px、窄屏 177.1px），两列各自滚 | **同一口径**：也在文档流里，只挤压列表、不遮最新一条；区别只在限高——窄屏用视口份额 `--panel-max-h-narrow` = **45vh**（844px 下 ≈ 380px），内容超出由**面板内部滚动**承担，不去吃列表空间。表情面板按两行表情格定高（比 45vh 更矮），顶上没有标题与「关闭」（再点一次「表情」或点输入区外面收起） |
 | 房管面板 | 同弹出面板（文档流、只挤压列表、限高 260px） | 同弹出面板（文档流、限高 45vh、内部滚动、有「关闭」） |
 | 账号管理对话框 | 居中卡片（`max-width: 680px`），顶对齐，点背景或 `Esc` 关闭 | 贴底 sheet：占满宽度、顶部圆角、内容可滚动、头部「关闭」。它是**模态流程**（不是在读弹幕时顺手展开的面板），所以这里用覆盖式而不是挤压 |
 | 输入区 | 输入框占满宽度；工具行一行放得下（面板入口在左，发送簇 = 电池 + 发送在右） | 输入框占满宽度；工具行**放不下就换行**，不挤成小方块；换行以「发送簇」为单位，电池不会被拆到发送按钮之外的排 |

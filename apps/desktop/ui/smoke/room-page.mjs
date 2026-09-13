@@ -1090,10 +1090,11 @@ const MOCK = (theme) => `(function () {
     out.liveDotRestored = dotColor() === liveExpectedColor && !!byTestId("db-live-dot") &&
       byTestId("db-live-dot-box").getAttribute("data-live") === String(fixtureRoom.live_status) &&
       byTestId("db-live-dot-box").getAttribute("data-state") === (liveIsOn ? "on" : "off");
-    // ---- 状态点**缩小一档**（用户 2026-09-13 追加：「开播状态标稍微缩小一点」）。
-    //      两层：看得见的那颗点（db-live-dot，--live-dot = 10px）画在外壳（db-live-dot-box，
+    // ---- 状态点**逐档缩小**（用户 2026-09-13：先「稍微缩小一点」12 → 10，本次第 5 条「改小一点」
+    //      再降一档到 8）。
+    //      两层：看得见的那颗点（db-live-dot，--live-dot）画在外壳（db-live-dot-box，
     //      仍是旧的 --sp-3 12px）里面；悬停 / 热区**不跟着缩**（用户明确要求「别让可点面积变小」）。
-    //      两个数都记进快照：改的是**数字**（12 → 10），不是删断言。
+    //      两个数都记进快照：改的是**数字**，不是删断言。
     var liveDotEl = byTestId("db-live-dot");
     var liveDotBoxEl = byTestId("db-live-dot-box");
     var liveDotBox = rect(liveDotEl);
@@ -1108,12 +1109,88 @@ const MOCK = (theme) => `(function () {
     };
     out.liveDotVisualPx = liveDotBox ? Math.round(liveDotBox.width * 10) / 10 : null;
     out.liveDotHitPx = liveDotBoxEl ? Math.round(rect(liveDotBoxEl).width * 10) / 10 : null;
-    // 看得见的那颗点 = --live-dot（10px）；热区 / 悬停面（外壳）仍是改前的 12px，没跟着缩
+    // 看得见的那颗点 = --live-dot（8px）；热区 / 悬停面（外壳）仍是改前的 12px，没跟着缩
     out.liveDotVisualIsToken = !!liveDotBox &&
       Math.abs(liveDotBox.width - cssLengthOf("--live-dot")) < 0.6;
-    out.liveDotShrunk = !!liveDotBox && !!liveDotBoxEl && liveDotBox.width < 12 &&
+    // 用户 2026-09-13 第 5 条：「并且要改小一点」——**再小一档**（12 → 10 → 8）。
+    // 判据里的 10 是**上一档**：这回必须比它更小；外壳（热区 / 悬停面）仍是 12px 不动。
+    out.liveDotShrunk = !!liveDotBox && !!liveDotBoxEl && liveDotBox.width < 10 &&
       rect(liveDotBoxEl).width > liveDotBox.width &&
       Math.abs(rect(liveDotBoxEl).width - 12) < 0.6;
+    // ---- 三态语义（用户 2026-09-13 第 5 条）：**橙 = 断连 / 红 = 已连接但未开播 / 绿 = 已连接且开播**。
+    //      逐状态发真实事件把三种状态各走一遍（status + room 两个来源），把「状态名 → 颜色」记下来，
+    //      再判两件事：① 三个色互不相同；② 每个状态的颜色等于它该有的那个令牌。
+    var liveStates = [];
+    var recordLive = function () {
+      liveStates.push({
+        state: byTestId("db-live-dot-box").getAttribute("data-state"),
+        color: dotColor(),
+      });
+    };
+    // ① 已连接 & 未开播 → 红
+    window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "connected", detail: "" });
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: 0 });
+    await sleep(300);
+    recordLive();
+    // ② 已连接 & 开播 → 绿
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: 1 });
+    await sleep(300);
+    recordLive();
+    // ③ 断连 → 橙（与在不在播无关：连接态掉线时根本不知道播没播）
+    window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "disconnected", detail: "" });
+    await sleep(300);
+    recordLive();
+    // 复位到夹具那一档，后面的断言按同一口径继续
+    window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "connected", detail: "" });
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: fixtureRoom.live_status });
+    await sleep(300);
+    out.liveDotStates = liveStates;
+    out.liveDotStatesDistinct = liveStates.length === 3 &&
+      liveStates[0].color !== liveStates[1].color &&
+      liveStates[1].color !== liveStates[2].color &&
+      liveStates[0].color !== liveStates[2].color;
+    out.liveDotStateMapping = liveStates.length === 3 &&
+      liveStates[0].state === "off" && liveStates[0].color === liveOffColor &&
+      liveStates[1].state === "on" && liveStates[1].color === liveOnColor &&
+      liveStates[2].state === "idle" && liveStates[2].color === liveIdleColor;
+    out.liveDotRestoredAfterStates = dotColor() === liveExpectedColor &&
+      byTestId("db-live-dot-box").getAttribute("data-state") === (liveIsOn ? "on" : "off");
+    // ---- 图标**粗细**取证（用户 2026-09-13 第 4 条：返回与 ⋯ 的磅重不一致，取折中）。
+    //      两枚图标现在都是矢量（返回一笔描边、⋯ 三个圆点），于是「粗细」在两边是同一件事：
+    //      返回 = stroke-width ×（渲染盒 / viewBox），⋯ = 圆点直径 × 同一系数。
+    //      ⚠ 改前 ⋯ 是文字字形，它的墨迹厚度由字体决定（实测 Chromium 下 14px 的 U+22EF 只有 1px，
+    //      而返回那一笔是 2px）—— 这正是两者看起来不一致的根因，也是必须换成矢量图的原因。
+    var moreBtnBoxOf = function (btn) {
+      var box = rect(btn);
+      return box ? [Math.round(box.width * 10) / 10, Math.round(box.height * 10) / 10] : null;
+    };
+    var iconWeightOf = function (btn) {
+      var svg = btn ? btn.querySelector("svg") : null;
+      if (!svg) return null;
+      var box = rect(svg);
+      var viewBox = (svg.getAttribute("viewBox") || "0 0 24 24").split(" ");
+      var unit = parseFloat(viewBox[2]);
+      var shape = svg.querySelector("path, circle");
+      if (!box || !shape || !(unit > 0)) return null;
+      var scale = box.width / unit;
+      var raw = shape.tagName.toLowerCase() === "circle"
+        ? parseFloat(shape.getAttribute("r")) * 2
+        : parseFloat(shape.getAttribute("stroke-width") || getComputedStyle(shape).strokeWidth);
+      return { px: Math.round(raw * scale * 100) / 100, raw: raw, scale: Math.round(scale * 1000) / 1000,
+        boxW: Math.round(box.width * 10) / 10, tag: shape.tagName.toLowerCase() };
+    };
+    out.iconBack = iconWeightOf(roundCtl[0]);
+    out.iconMore = iconWeightOf(roundCtl[1]);
+    out.iconStrokeBackPx = out.iconBack ? out.iconBack.px : null;
+    out.iconStrokeMorePx = out.iconMore ? out.iconMore.px : null;
+    // 改前：返回 2.00px、⋯ 1.00px（文字字形，实测）；折中 = 1.5px —— 两边现在都必须是 1.5px
+    out.iconWeightsCompromised = !!out.iconBack && !!out.iconMore &&
+      Math.abs(out.iconBack.px - 1.5) < 0.1 && Math.abs(out.iconMore.px - 1.5) < 0.1;
+    // 反面对照：两枚图标的粗细必须一致（差 < 0.15px），且控件本身尺寸不变（40 × 40 正圆）
+    out.iconWeightsMatch = !!out.iconBack && !!out.iconMore &&
+      Math.abs(out.iconBack.px - out.iconMore.px) < 0.15 &&
+      Math.abs(rect(roundCtl[0]).width - rect(roundCtl[1]).width) < 0.6;
+    out.iconMoreBoxPx = moreBtnBoxOf(roundCtl[1]);
     // 圆点仍是**正圆**（圆角 = 半径）
     out.liveDotIsCircle = !!liveDotEl &&
       Math.abs(liveDotEl.getBoundingClientRect().width -
@@ -1192,6 +1269,18 @@ const MOCK = (theme) => `(function () {
     out.batteryNotRound = !!batteryBox && batteryRadius > 0 &&
       batteryRadius < Math.min(batteryBox.width, batteryBox.height) / 2 - 1;
     out.batteryText = batteryEl ? batteryEl.innerText.trim() : null;
+    // ---- 电池图标形状取证（用户 2026-09-13 第 3 条：官方是**竖**着的电池，横着像电量条）。
+    //      量图标盒的宽高比 + SVG 里那个矩形与极柱的**朝向**（宽 > 高 = 横着）。
+    var batterySvgEl = batteryEl ? batteryEl.querySelector("svg") : null;
+    var batteryRects = batterySvgEl ? [].slice.call(batterySvgEl.querySelectorAll("rect")) : [];
+    out.batteryIconBoxPx = batterySvgEl
+      ? [Math.round(rect(batterySvgEl).width * 10) / 10, Math.round(rect(batterySvgEl).height * 10) / 10]
+      : null;
+    out.batteryIconShape = batteryRects.length > 0 ? {
+      rectW: parseFloat(batteryRects[0].getAttribute("width")),
+      rectH: parseFloat(batteryRects[0].getAttribute("height")),
+      viewBox: batterySvgEl.getAttribute("viewBox"),
+    } : null;
 
     // 输入区：输入框占满宽度；工具行放不下就换行，不许挤成小方块
     var composerEl0 = document.querySelector("textarea").parentElement;
@@ -1234,15 +1323,20 @@ const MOCK = (theme) => `(function () {
       medal_level: 3, medal_name: "兜底牌"
     }));
     // 回复关系（issue #13b）与「舰长标只认本房间」（issue #12）的样本行
-    window.__emit("danmubox://message", window.__mk("danmaku", "这条是回复", false, {
+    window.__emit("danmubox://message", window.__mk("danmaku", "这条是回复 @被回复的人 你好", false, {
       // 上游自定义颜色的弹幕（舰长/老爷常见金黄）。用户名与正文都不许被它染色——
       // 用户 2026-09-12 的原始反馈：用户名被染成白色看不见、正文偏黄。
       color: 16776960,
       reply_to_uid: 777, reply_to_uname: "被回复的人", reply_uname_color: "#FB7299"
     }));
     // 上游没给配色（空串）时不上色：**空串不是颜色**，与粉丝牌真彩色同一口径
-    window.__emit("danmubox://message", window.__mk("danmaku", "没有配色的回复", false, {
+    window.__emit("danmubox://message", window.__mk("danmaku", "没有配色的回复 @另一个被回复的人 哦", false, {
       reply_to_uid: 778, reply_to_uname: "另一个被回复的人", reply_uname_color: ""
+    }));
+    // 正文里的 @ 与「回复关系」**不是一回事**（用户 2026-09-13 第 1 条）：这条没有任何
+    // reply_* 字段，正文里的 @ 照样高亮——高亮认的是正文，不是回复标记。
+    window.__emit("danmubox://message", window.__mk("danmaku", "没有回复关系也 @路人乙 高亮", false, {
+      uname: "路人甲"
     }));
     // 排版样本（issue #8 的「一条弹幕要像一个整体」）：
     // ① 长正文：在 360 与 1440 两个视口都会折行，用来量折行后的首字位置；
@@ -1472,9 +1566,61 @@ const MOCK = (theme) => `(function () {
       ? { w: f1(inlineSampleBox.width), h: f1(inlineSampleBox.height), naturalW: inlineSampleImg.naturalWidth,
           naturalH: inlineSampleImg.naturalHeight, fit: getComputedStyle(inlineSampleImg).objectFit }
       : null;
-    out.rowInlineEmoteBoxSquare = !!inlineSampleBox && !isNaN(lineBoxPxHere) &&
-      Math.abs(inlineSampleBox.width - inlineSampleBox.height) < 0.6 &&
-      Math.abs(inlineSampleBox.height - lineBoxPxHere * 1.1) < 0.6;
+    // ---- 行内通用表情的**渲染盒 vs 文字高**取证（用户 2026-09-13 第 7 条：
+    //      「通用表情在弹幕里渲染得有点小，看起来是当成文本渲染了」）。
+    //      通用表情的原图是 200×60 的**横条**：见方盒 + contain 之后，可见高度只有盒宽的 30%。
+    //      这里把「盒」「原图」「正文行高」「一行文字的墨迹高」四个数一起记下来。
+    var textInkProbe = (function () {
+      var probe = document.createElement("span");
+      probe.textContent = "字";
+      probe.style.position = "absolute";
+      probe.style.visibility = "hidden";
+      inlineSampleBody.appendChild(probe);
+      var box = rect(probe);
+      var result = { h: f1(box.height), fontSize: getComputedStyle(probe).fontSize };
+      probe.parentNode.removeChild(probe);
+      return result;
+    })();
+    out.rowInlineEmoteContext = inlineSampleBox ? {
+      boxW: f1(inlineSampleBox.width),
+      boxH: f1(inlineSampleBox.height),
+      naturalW: inlineSampleImg.naturalWidth,
+      naturalH: inlineSampleImg.naturalHeight,
+      visibleRatioW: Math.round((inlineSampleBox.width / inlineSampleImg.naturalWidth) * 1000) / 1000,
+      bodyLinePx: Math.round(lineBoxPxHere * 10) / 10,
+      // 1em 在这里是多少：字号的 px 值（「比普通文字高」的基准）
+      emPx: parseFloat(getComputedStyle(inlineSampleBody).fontSize),
+      // 图**画出来**的高度（contain 之后）：盒与横条同比例时它就等于盒高
+      visibleH: f1(Math.min(
+        inlineSampleBox.height,
+        inlineSampleBox.width / (inlineSampleImg.naturalWidth / inlineSampleImg.naturalHeight),
+      )),
+      emTokenPx: (function () {
+        var v = getComputedStyle(inlineSampleBody).getPropertyValue("--emote");
+        return v.trim();
+      })(),
+      textInkPx: textInkProbe.h,
+      imgTop: f1(rect(inlineSampleImg).top),
+      bodyTop: f1(rect(inlineSampleBody).top),
+      bodyBottom: f1(rect(inlineSampleBody).bottom),
+      rowH: f1(rect(inlineSampleRow).height),
+    } : null;
+    // 改后（用户 2026-09-13 第 7 条）：通用表情在行内拿到**与它原图长宽比相称的宽盒** ——
+    // 高度仍是 --emote（= 1.1 × 行盒），宽度写成固定的 10:3 算式。三条一起判：
+    // ① 盒高 = 1.1 × 行盒（不是 1em，也不是原图高度）；② 宽高比 = 10:3（横条正好填满盒）；
+    // ③ 画出来的高度**大于 1em**（= 字号）—— 这就是「别当成文本渲染」的可验形式。
+    out.rowInlineEmoteWideBox = !!inlineSampleBox && !isNaN(lineBoxPxHere) &&
+      Math.abs(inlineSampleBox.height - lineBoxPxHere * 1.1) < 0.6 &&
+      Math.abs(inlineSampleBox.width / inlineSampleBox.height - 10 / 3) < 0.06;
+    out.rowInlineEmoteTallerThanText = !!out.rowInlineEmoteContext &&
+      out.rowInlineEmoteContext.visibleH > out.rowInlineEmoteContext.emPx + 1 &&
+      out.rowInlineEmoteContext.visibleH >= out.rowInlineEmoteContext.bodyLinePx - 0.6;
+    // 宽盒也不许撑破行：盒右边缘仍在行内，行与正文块都没有横向溢出
+    out.rowInlineEmoteFitsRow = !!inlineSampleRow && !!inlineSampleBox &&
+      inlineSampleBox.right <= rect(inlineSampleRow).right + 1 &&
+      Math.max(0, inlineSampleRow.scrollWidth - inlineSampleRow.clientWidth) === 0 &&
+      Math.max(0, inlineSampleBody.scrollWidth - inlineSampleBody.clientWidth) === 0 &&
+      getComputedStyle(inlineSampleImg).objectFit === "contain";
     // 夹具那条表情包弹幕（bulge：2 倍档）：同样是**见方 + contain** 的显式盒
     out.fixtureEmoteImgExplicitBox = !!out.fixtureEmoteRow && !isNaN(lineBoxPxHere) &&
       out.fixtureEmoteRow.imgFit === "contain" && out.fixtureEmoteRow.imgW !== null &&
@@ -1507,24 +1653,42 @@ const MOCK = (theme) => `(function () {
       trueMedalText.indexOf("63, 180, 246") >= 0;
     out.medalFallbackGradientApplied = fallbackMedalText.indexOf("linear-gradient") >= 0 &&
       fallbackMedalText !== trueMedalText;
-    // 回复关系可见（issue #13b）：只有真正的回复才画「回复 @昵称」
+    // ---- @ 高亮（用户 2026-09-13 第 1 条）：身份行最后那枚「回复 @某人」的牌子与正文里
+    //      自带的 @ 重复，牌子**删掉**；@ 改在**正文里**就地强调，配色**参照身份牌**的字符色。
+    //      改前的取证：那枚牌子是 .replyTo 一格（文案「回复 @昵称」、弱化色 + 14% 灰底 +
+    //      4px 圆角，排在身份牌右侧）—— 改前快照里的 replyLabelBox 就是它的几何。
+    out.replyChipGone =
+      document.querySelectorAll('[data-testid="db-msg-reply"], [data-testid="db-msg-reply-name"]')
+        .length === 0;
     var replyRow = rowWith("这条是回复");
-    var replyLabel = replyRow ? replyRow.querySelector('[data-testid="db-msg-reply"]') : null;
-    out.replyLabelShown = !!replyLabel && replyLabel.innerText.indexOf("被回复的人") >= 0;
-    var plainRow = rowWith("无头像的弹幕");
-    out.replyLabelAbsentWhenNotReply = !!plainRow &&
-      !plainRow.querySelector('[data-testid="db-msg-reply"]');
-    // 被 @ 的名字用上游给的 reply_uname_color 上色；空串则保持标记自身的弱化色（不上色）
-    var replyNameEl = replyRow ? replyRow.querySelector('[data-testid="db-msg-reply-name"]') : null;
-    var replyNamePaint = replyNameEl
-      ? (replyNameEl.getAttribute("style") || "") + "|" + getComputedStyle(replyNameEl).color
-      : "";
-    out.replyNameColorApplied =
-      replyNamePaint.indexOf("#FB7299") >= 0 || replyNamePaint.indexOf("251, 114, 153") >= 0;
+    var mentionOf = function (row) {
+      return row ? row.querySelector('[data-testid="db-msg-mention"]') : null;
+    };
+    var replyMention = mentionOf(replyRow);
+    out.mentionHighlighted = !!replyMention && replyMention.innerText === "@被回复的人";
+    // 颜色 = 身份牌的**字符色**：与身份牌上的文字同一个计算值，也就是 --badge-fg 令牌
+    var badgeFgColor = cssColorOf("--badge-fg");
+    var plainBadgeEl = [].slice.call(document.querySelectorAll('[data-testid="db-msg-badges"] > *'))
+      .filter(function (el) {
+        return (el.getAttribute("style") || "").indexOf("linear-gradient") < 0;
+      })[0];
+    out.mentionColorMatchesBadge = !!replyMention && !!plainBadgeEl &&
+      getComputedStyle(replyMention).color === getComputedStyle(plainBadgeEl).color &&
+      getComputedStyle(replyMention).color === badgeFgColor;
+    // 高亮认的是**正文**，不是回复关系：没有任何 reply_* 字段的那条照样高亮
+    var plainMentionRow = rowWith("没有回复关系也");
+    out.mentionWorksWithoutReply = !!mentionOf(plainMentionRow) &&
+      mentionOf(plainMentionRow).innerText === "@路人乙";
+    // 切分只加壳、不改字：正文的文字一个不丢
+    var replyBodyEl = replyRow ? replyRow.querySelector('[data-testid="db-msg-body"]') : null;
+    out.mentionBodyTextIntact = !!replyBodyEl &&
+      replyBodyEl.innerText === "这条是回复 @被回复的人 你好";
+    // 另一条回复（上游没给配色）也跟着高亮，且**没有**被上游色染过
     var noColorRow = rowWith("没有配色的回复");
-    var noColorNameEl = noColorRow ? noColorRow.querySelector('[data-testid="db-msg-reply-name"]') : null;
-    out.replyNameColorAbsentWhenEmpty = !!noColorNameEl &&
-      (noColorNameEl.getAttribute("style") || "") === "";
+    var noColorMention = mentionOf(noColorRow);
+    out.mentionHighlightedWithoutUpstreamColor = !!noColorMention &&
+      noColorMention.innerText === "@另一个被回复的人" &&
+      getComputedStyle(noColorMention).color === badgeFgColor;
     // 舰长标只认本房间的 guard_level：戴着别的房间舰长牌（medal_guard_level=3）不亮舰长标（issue #12）
     // 判据看**徽标元素本身**的文本（正文里出现「舰长」两字不算）
     var hasGuardBadge = function (row) {
@@ -1546,6 +1710,36 @@ const MOCK = (theme) => `(function () {
     var badgeBodyEl = badgeRow ? badgeRow.querySelector('[data-testid="db-msg-body"]') : null;
     out.layoutNameBadgeGap = badgesEl && badgeNameEl
       ? Math.round((rect(badgesEl).left - rect(badgeNameEl).right) * 10) / 10
+      : null;
+    // ---- 身份牌圆角取证（用户 2026-09-13 第 6 条：「圆角大一些，现在看着有点方」）。
+    //      两族都量：房间牌（.badge，圆角 0.25em）与粉丝牌（同样挂在 .badge 上）。
+    var cornerRadiusOf = function (el) {
+      if (!el) return null;
+      var cs = getComputedStyle(el);
+      var box = rect(el);
+      return {
+        radiusPx: Math.round((parseFloat(cs.borderTopLeftRadius) || 0) * 10) / 10,
+        heightPx: Math.round(box.height * 10) / 10,
+        raw: cs.borderTopLeftRadius,
+      };
+    };
+    out.badgeRadius = badgesEl ? cornerRadiusOf(badgesEl.children[0]) : null;
+    out.medalBadgeRadius = badgesEl
+      ? cornerRadiusOf([].slice.call(badgesEl.children).filter(function (el) {
+          return (el.getAttribute("style") || "").indexOf("linear-gradient") >= 0;
+        })[0])
+      : null;
+    // 用户 2026-09-13 第 6 条：「身份标识的圆角大一些，现在看着有点方」。
+    // 改前圆角 0.25em（≈ 牌高的 18.5%，实测 3.5px / 牌高 18.9px），改后 0.45em（≈ 33%）。
+    // 两条一起判：① 圆角**比改前大**（> 牌高的 25%）；② 仍是矩形不是胶囊（< 半高）。
+    out.badgeRadiusGrew = (function () {
+      var b = out.badgeRadius;
+      if (!b || b.heightPx === 0) return false;
+      var ratio = b.radiusPx / b.heightPx;
+      return ratio > 0.25 && b.radiusPx > 4 && ratio < 0.5;
+    })();
+    out.badgeRadiusRatio = out.badgeRadius && out.badgeRadius.heightPx > 0
+      ? Math.round((out.badgeRadius.radiusPx / out.badgeRadius.heightPx) * 1000) / 1000
       : null;
     out.layoutBadgeAfterName = !!badgesEl && !!badgeNameEl &&
       rect(badgesEl).left >= rect(badgeNameEl).right - 1;
@@ -1760,7 +1954,14 @@ const MOCK = (theme) => `(function () {
 
     // ---- 行尾「⋯」删掉（用户 #5：与右键菜单重复）；房间头那一个保留
     out.rowMenuTriggerGone = rows().length > 0 && rows().every(function (r) { return !buttonWith(r, "⋯"); });
-    out.headerMenuTriggerKept = !!buttonWith(byTestId("db-room-header"), "⋯");
+    // 房间头那个 ⋯ 现在画的是**矢量三点**（不再是文字字形，见 RoomView 里那条注释）：
+    // 判据改成「按钮还在、里面有图、aria-label 说明它是更多菜单」
+    out.headerMenuTriggerKept = (function () {
+      var more = byTestId("db-header-more");
+      return !!more && !!more.querySelector("svg") &&
+        (more.getAttribute("aria-label") || "").indexOf("更多") >= 0 &&
+        !buttonWith(byTestId("db-room-header"), "⋯");
+    })();
 
     // ---- 工具行只剩三个面板入口：表情 / 短语 / 筛选（用户 #7：「最近」整条链路删掉）
     var toolLabels = [].slice.call(byTestId("db-composer-tools").querySelectorAll("button"))
@@ -1926,8 +2127,9 @@ const MOCK = (theme) => `(function () {
     var commonSizes = commonMetrics;
     // ---- 「上方的搜索也没必要」（用户 2026-09-12）：面板里**不再有输入框**
     out.panelNoSearch = !!panel && panel.querySelectorAll("input").length === 0;
-    // ---- 「既然表情包做了滚动，展开只展示 2 行（大表情的 2 行，以此高度为标准）就行」：
-    //      网格区高度 = 两行**大表情**（那几族本来就是最大的一档）+ 一道行距，内容超出滚动。
+    // ---- 「表情行数改到 3 行、按大表情的高度固定下来」（用户 2026-09-13 第 2 条）：
+    //      网格区高度 = **三行大表情格** + 两道行距，**与当前是哪一组无关**（通用组同一个高度），
+    //      内容超出就在网格里滚。两个数都在快照里：通用组一个、大表情组一个，再比它们相等。
     var gridEl = byTestId("db-emote-group");
     var gridStyle = getComputedStyle(gridEl);
     var rowGapOf = function (el) { return parseFloat(getComputedStyle(el).rowGap) || 0; };
@@ -1944,15 +2146,16 @@ const MOCK = (theme) => `(function () {
     };
     out.panelEmoteHeaderGone = out.panelEmoteSpace.closeButtons === 0 &&
       out.panelEmoteSpace.headlineOnly === 0 && !out.panelEmoteSpace.hasCloseWord;
-    // 网格高 = **两行当前这一组的格子** + 一道行距；面板高 = 两行 + 上下内边距（没有别的行）
+    // 通用组的网格高（它是**三行大表情格**，与当前是哪一组无关）：
+    // 数字进快照，下面的 panelEmoteGridSameHeightForBothGroups 拿它和大表情组那个数比相等。
     var commonCellH = commonMetrics.length > 0
       ? Math.max.apply(null, commonMetrics.map(function (m) { return m.cellH; })) : 0;
     out.panelEmoteCommonCellHeightPx = f1(commonCellH);
-    out.panelEmoteGridTwoCommonRows = commonMetrics.length > 0 &&
-      Math.abs(rect(gridEl).height - (commonCellH * 2 + rowGapOf(gridEl))) <= 1;
+    out.panelEmoteCommonGridHeightPx = f1(rect(gridEl).height);
     var panelPad = getComputedStyle(panel);
     out.panelHeightPx = f1(rect(panel).height);
-    out.panelEmoteHeightIsTwoRows = Math.abs(rect(panel).height -
+    // 面板高 = 网格高 + 上下内边距（面板里除了网格没有别的行）
+    out.panelEmoteHeightIsGridPlusPadding = Math.abs(rect(panel).height -
       (parseFloat(panelPad.paddingTop) + rect(gridEl).height + parseFloat(panelPad.paddingBottom))) <= 1;
     // ---- 左侧 tab 轨道**自己能上下滚**（用户 2026-09-12：「左边也加入上下滚动」），
     //      而且滚动条的槽不挤窄右边的网格（scrollbar-gutter: stable）。
@@ -1961,8 +2164,14 @@ const MOCK = (theme) => `(function () {
     out.panelEmoteRailScrollable = getComputedStyle(railEl).overflowY === "auto";
     railEl.scrollTop = railEl.scrollHeight;
     await sleep(250);
-    out.panelEmoteRailScrolled = railEl.scrollTop > 1 &&
-      railEl.scrollHeight > railEl.clientHeight + 1;
+    // 「轨道自己能上下滚」= **超出时滚得动**，不是「一定要超出」：用户 2026-09-13 第 2 条把网格区
+    // 从两行改到三行大表情格（152.1px）之后，5 个分组（约 140px）在宽屏下**放得下了** —— 轨道
+    // 本来就不再溢出，硬要求 scrollTop > 1 等于要求「必须溢出」，那是把改前的偶然当契约。
+    // 判据因此写成两支：① 内容没超出 → 不滚是正确行为；② 超出 → 必须真的滚起来。
+    // 溢出量进快照（panelEmoteRailOverflowPx），下次谁再改高度，这两个数一起看。
+    var railOverflowPx = railEl.scrollHeight - railEl.clientHeight;
+    out.panelEmoteRailOverflowPx = railOverflowPx;
+    out.panelEmoteRailScrolled = railOverflowPx > 1 ? railEl.scrollTop > 1 : true;
     out.panelEmoteRailKeepsGridWidth = Math.abs(rect(gridEl).width - gridWidthBefore) < 0.6;
     railEl.scrollTop = 0;
     await sleep(200);
@@ -1989,15 +2198,21 @@ const MOCK = (theme) => `(function () {
     out.layoutEmoteSizes = commonSizes;
     out.layoutEmoteSizesBig = bigSizes;
     out.layoutNonCommonEmoteBigger = !!commonH && !!bigH && bigH.height >= commonH.height * 1.4;
-    // ---- 网格区高度 = **两行大表情** + 一道行距（用户 2026-09-12 的第 3 条）。
+    // ---- 网格区高度 = **三行大表情** + 两道行距（用户 2026-09-13 第 2 条）。
     //      大表情那一档的高度从**格子**量（--emote-size-big 注册成 <length>，格子与网格区
     //      因此用的是同一个绝对值；不注册的话格子会再乘一次自己的字号、差 1.3 倍）。
     var bigRowH = Math.max.apply(null, bigMetrics.map(function (m) { return m.cellH; }));
     var gridRowGap = parseFloat(getComputedStyle(gridEl).rowGap) || 0;
     out.panelEmoteBigRowHeightPx = f1(bigRowH);
     out.panelEmoteGridRowGapPx = f1(gridRowGap);
-    out.panelEmoteGridTwoBigRows = bigMetrics.length > 0 &&
-      Math.abs(rect(gridEl).height - (bigRowH * 2 + gridRowGap)) <= 1;
+    out.panelEmoteBigGridHeightPx = f1(rect(gridEl).height);
+    out.panelEmoteGridThreeBigRows = bigMetrics.length > 0 &&
+      Math.abs(rect(gridEl).height - (bigRowH * 3 + gridRowGap * 2)) <= 1;
+    // 两组**同一个高度**（用户 2026-09-13 第 2 条：大表情那一档的高度固定下来，通用组也用它）：
+    // 换了分组面板不忽高忽低，通用组也正好看到三行大格。
+    out.panelEmoteGridSameHeightForBothGroups =
+      out.panelEmoteCommonGridHeightPx !== null &&
+      Math.abs(out.panelEmoteCommonGridHeightPx - out.panelEmoteBigGridHeightPx) < 0.6;
     // ---- 用户报的那条：表情**溢出了格子边框**。改前实测（WebKit，360×844，通用组）：
     //      格子 47.6 × 32，图 80.7 × 24.2 → 右边越出格子 33.1px。
     //      改后：图必须完整落在格子里（溢出 0），且宽高由 CSS 显式给出（「object-fit: contain」）。
@@ -2545,7 +2760,7 @@ const MOCK = (theme) => `(function () {
     clickTool("短语");
     await sleep(200);
 
-    buttonWith(null, "⋯").click();
+    byTestId("db-header-more").click();
     await sleep(250);
     var headerMenu = byTestId("db-context-menu");
     out.headerMenuItems = headerMenu ? [].slice.call(headerMenu.querySelectorAll("button")).map(function (b) { return b.innerText; }) : [];
@@ -2605,7 +2820,7 @@ const MOCK = (theme) => `(function () {
     out.adminConfirmClosedAfterWrite = !byTestId("db-admin-confirm");
 
     // 面板：三块列表；增删同样先二次确认
-    buttonWith(null, "⋯").click();
+    byTestId("db-header-more").click();
     await sleep(250);
     var headerMenu2 = byTestId("db-context-menu");
     out.adminPanelMenuItemShown = !!buttonWith(headerMenu2, "房管面板");

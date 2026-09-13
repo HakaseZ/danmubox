@@ -274,7 +274,7 @@ async fn rooms_connect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()
 /// 若分两次加锁，两个调用都会通过检查并各自 `spawn` 一个运行时——于是同一个房间
 /// 会有两套会话缓冲，两套都从 `local_id = 1` 开始回填，界面收到重复 id
 /// （表现为 React 报「two children with the same key, 1」且刷满日志）。
-/// `RoomRuntime::spawn` 是同步的（内部只起任务），因此**在锁内构造是安全的**。
+/// `RoomRuntime::spawn_on` 是同步的（内部只起任务），因此**在锁内构造是安全的**。
 fn spawn_runtime(
     rooms: &mut Rooms,
     room_id: i64,
@@ -293,7 +293,16 @@ fn spawn_runtime(
     };
     rooms.runtimes.insert(
         room_id,
-        RoomRuntime::spawn(room, buffer_rows, bus, counters, source),
+        // 显式用 Tauri 的全局 runtime 句柄，而不是当前线程的 runtime 上下文：
+        // `rooms_reconnect` 是同步 command，跑在主线程上，那里没有 runtime。
+        RoomRuntime::spawn_on(
+            tauri::async_runtime::handle().inner(),
+            room,
+            buffer_rows,
+            bus,
+            counters,
+            source,
+        ),
     );
     Ok(())
 }
@@ -1218,5 +1227,42 @@ mod tests {
         );
 
         rooms.runtimes.remove(&ROOM).expect("会话应该在").close().await.unwrap();
+    }
+
+    /// 回归（应用级 panic）：`rooms_reconnect` 是**同步** command，Tauri 把它跑在
+    /// 主线程上——那里没有 Tokio runtime 上下文。「断连之后再点刷新」会当场新建
+    /// 一次会话（`refresh_room` → `spawn_runtime` → `RoomRuntime::spawn`），只要这
+    /// 条路径把「当前线程一定有 runtime」当成理所当然，应用就会在用户点「刷新连接」
+    /// 那一刻 panic 退出，而不是把连接连回来。
+    ///
+    /// 所以这条测试**故意不**进 `#[tokio::test]`：它要的就是「当前线程没有 runtime」
+    /// 这个真实处境。断言的是可观察结果——会话真的建起来了。
+    #[test]
+    fn spawning_session_without_ambient_runtime_must_not_panic() {
+        // 房间号用公开测试房间，避免把任何真实房间号写进仓库（契约 §4.1）。
+        const ROOM: i64 = 1;
+        let bus = EventBus::new(BUS_CAPACITY);
+        let counters = Arc::new(Counters::default());
+        let source: Arc<dyn LiveSource> = Arc::new(CountingLive {
+            attempts: Arc::new(AtomicUsize::new(0)),
+        });
+        let mut rooms = Rooms::default();
+        rooms.meta.insert(
+            ROOM,
+            Room {
+                room_id: ROOM,
+                ..Default::default()
+            },
+        );
+
+        spawn_runtime(&mut rooms, ROOM, 16, bus, counters, source)
+            .expect("主线程（无 runtime 上下文）上刷新也必须能把会话建起来");
+
+        assert!(
+            rooms.runtimes.contains_key(&ROOM),
+            "会话必须真的建起来，连接才可能回得来"
+        );
+
+        drop(rooms);
     }
 }

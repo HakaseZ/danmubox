@@ -162,6 +162,11 @@ pub struct RoomRuntime {
 
 impl RoomRuntime {
     /// 启动一次房内会话：订阅总线喂缓冲，并驱动适配器的连接循环。
+    ///
+    /// 用当前线程的 runtime 上下文（`Handle::current()`）来托后台任务。**只在
+    /// 调用方身处 Tokio runtime 里时才可用**——从普通线程（例如 Tauri 的同步
+    /// command）调用会 panic：「there is no reactor running」。那种场合要么把调用
+    /// 方变成 async，要么用 [`RoomRuntime::spawn_on`] 显式给一个 runtime 句柄。
     pub fn spawn(
         room: Room,
         buffer_rows: usize,
@@ -169,6 +174,31 @@ impl RoomRuntime {
         counters: Arc<Counters>,
         source: Arc<dyn LiveSource>,
     ) -> Self {
+        Self::spawn_on(
+            &tokio::runtime::Handle::current(),
+            room,
+            buffer_rows,
+            bus,
+            counters,
+            source,
+        )
+    }
+
+    /// 同上，但由调用方给定 runtime 句柄：**任何线程**都可以建会话，后台任务落在
+    /// 那个 runtime 上。
+    ///
+    /// 存在的理由：界面上的「刷新连接」是 Tauri 的**同步** command，跑在主线程上，
+    /// 那里没有 runtime 上下文；断连之后刷新会走到这里当场新建会话。把 runtime
+    /// 句柄当参数传进来，这条路就不必依赖「当前线程刚好在 runtime 里」。
+    pub fn spawn_on(
+        handle: &tokio::runtime::Handle,
+        room: Room,
+        buffer_rows: usize,
+        bus: EventBus,
+        counters: Arc<Counters>,
+        source: Arc<dyn LiveSource>,
+    ) -> Self {
+        let handle = handle.clone();
         let buffer = Arc::new(Mutex::new(MessageBuffer::new(buffer_rows)));
         let cancel = Cancel::new();
         let session_state = Arc::new(Mutex::new(RoomSession {
@@ -185,7 +215,7 @@ impl RoomRuntime {
             let source = Arc::clone(&source);
             let session_state = Arc::clone(&session_state);
             let bus = bus.clone();
-            tokio::spawn(async move {
+            handle.spawn(async move {
                 match source.room_identity(room_id).await {
                     Ok(identity) => {
                         *session_state.lock().expect("session poisoned") = identity.clone();
@@ -200,7 +230,7 @@ impl RoomRuntime {
         let collector = {
             let buffer = Arc::clone(&buffer);
             let mut rx = bus.subscribe();
-            tokio::spawn(async move {
+            handle.spawn(async move {
                 loop {
                     match rx.recv().await {
                         Ok(Event::Message(message)) => {
@@ -220,11 +250,12 @@ impl RoomRuntime {
         };
 
         let restart = Arc::new(tokio::sync::Notify::new());
+        let driver_handle = handle.clone();
         let driver = {
             let sink = MessageSink::new(bus.clone(), counters);
             let session = cancel.clone();
             let restart = Arc::clone(&restart);
-            tokio::spawn(async move {
+            handle.spawn(async move {
                 // 进场回填（`docs/contract.md` §4.3）：先把上游能给的最近若干条铺进总线，
                 // 再开始连接——顺序因此天然是「历史在前、实时在后」，不需要额外的排序。
                 // 上游该接口不可靠且会成批返回空（见 `docs/protocol.md` 附录 A30），
@@ -250,7 +281,8 @@ impl RoomRuntime {
                         let source = Arc::clone(&source);
                         let sink = sink.clone();
                         let connection = connection.clone();
-                        tokio::spawn(async move { source.stream(room_id, sink, connection).await })
+                        driver_handle
+                            .spawn(async move { source.stream(room_id, sink, connection).await })
                     };
                     let mut attempt = attempt;
 

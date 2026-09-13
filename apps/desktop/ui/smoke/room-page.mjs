@@ -1167,10 +1167,18 @@ const MOCK = (theme) => `(function () {
     //      判据用 **HSL 饱和度**，不硬编码色值：三档色在两套主题里本来就不同值，而「绿 / 红有彩、
     //      灰没彩」是语义本身。阈值 0.2 —— 改前的橙（#e9a038 / #c2410c）是 80% / 88%，
     //      红 / 绿都在 65% 以上，灰（--fg-dim：#8696a0 / #54656f）只有 12% / 14%。
+    //      ⚠ 解析**不用正则**：MOCK 是模板字符串，反斜杠在模板求值时就没了 —— 实测写
+    //      /rgba?\(([^)]+)\)/ 经过模板会变成 /rgba?(([^)]+))/，捕获到的是带括号的 "(37, 211, 102)"，
+    //      parseFloat 直接 NaN（第一版就是这么红的）—— 与上面 luminance 同一个理由，那里也是 indexOf 切的。
     var saturationOf = function (css) {
-      var m = /rgba?\(([^)]+)\)/.exec(css);
-      if (!m) return null;
-      var ch = m[1].split(",").map(function (v) { return parseFloat(v) / 255; });
+      if (!css) return null;
+      var open = css.indexOf("(");
+      var close = css.indexOf(")");
+      if (open < 0 || close < 0) return null;
+      var parts = css.slice(open + 1, close).split(",");
+      if (parts.length < 3) return null;
+      var ch = parts.slice(0, 3).map(function (v) { return parseFloat(v) / 255; });
+      if (ch.some(isNaN)) return null;
       var max = Math.max(ch[0], ch[1], ch[2]);
       var min = Math.min(ch[0], ch[1], ch[2]);
       var delta = max - min;
@@ -1203,11 +1211,17 @@ const MOCK = (theme) => `(function () {
       var box = rect(svg);
       if (!box || !(vb[2] > 0)) return null;
       var scale = box.width / vb[2];
-      // 墨迹厚度：描边 = stroke-width，圆点 = 直径（一个圆点就是一个零长度描边段的圆头）
+      // 墨迹厚度：描边 = stroke-width，圆点 = 直径（一个圆点就是一个零长度描边段的圆头）。
+      // ⚠ 两者对**外接盒**的贡献不同：描边的几何包围盒是**路径中心线**，四周各要外扩半个笔画；
+      //    实心圆的包围盒**本身就是墨迹**，一点都不用外扩（第一版两边都外扩，于是 ⋯ 的墨迹范围
+      //    被算成 19.5 × 7，与箭头那 16 对不上 —— 冒烟当场把这条抓住了）。
       var thicknessOf = function (s) {
         if (s.tagName.toLowerCase() === "circle") return parseFloat(s.getAttribute("r")) * 2;
         var w = s.getAttribute("stroke-width");
         return w === null ? 0 : parseFloat(w);
+      };
+      var padOf = function (s) {
+        return s.tagName.toLowerCase() === "circle" ? 0 : thicknessOf(s) / 2;
       };
       var lo = { x: Infinity, y: Infinity };
       var hi = { x: -Infinity, y: -Infinity };
@@ -1215,11 +1229,12 @@ const MOCK = (theme) => `(function () {
       shapes.forEach(function (s) {
         var b = s.getBBox();
         var t = thicknessOf(s);
+        var pad = padOf(s);
         thickness = Math.max(thickness, t);
-        lo.x = Math.min(lo.x, b.x - t / 2);
-        lo.y = Math.min(lo.y, b.y - t / 2);
-        hi.x = Math.max(hi.x, b.x + b.width + t / 2);
-        hi.y = Math.max(hi.y, b.y + b.height + t / 2);
+        lo.x = Math.min(lo.x, b.x - pad);
+        lo.y = Math.min(lo.y, b.y - pad);
+        hi.x = Math.max(hi.x, b.x + b.width + pad);
+        hi.y = Math.max(hi.y, b.y + b.height + pad);
       });
       var round1 = function (v) { return Math.round(v * 100) / 100; };
       return {
@@ -1750,8 +1765,10 @@ const MOCK = (theme) => `(function () {
     // 用户 2026-09-13 的更正：「高亮我要求的是使用字体颜色，不是背景」—— @ 那一格**只许有颜色**：
     // 底色 / 背景图都没有（上一版那层 45° 强调色渐变底已删），内边距与圆角也没加回来。
     var mentionStyle = replyMention ? getComputedStyle(replyMention) : null;
+    // 同样不用正则（见上面 saturationOf 那条注）：这三种写法都是「没有底色」。
     var noPaint = function (value) {
-      return value === "none" || value === "transparent" || value === "rgba(0, 0, 0, 0)";
+      return value === "none" || value === "transparent" || value === "rgba(0, 0, 0, 0)" ||
+        value.indexOf("0, 0, 0, 0") >= 0;
     };
     out.mentionNoBackground = !!mentionStyle &&
       noPaint(mentionStyle.backgroundImage) && noPaint(mentionStyle.backgroundColor) &&
@@ -3280,8 +3297,8 @@ const MOCK = (theme) => `(function () {
         p.at.tabs.every(function (c) { return c === p.want; });
     });
     out.liveDotTwoSitesSameState = dotPairs.every(function (p) {
-      return p.at.headerState === p.kind && p.at.tabs.length === 2 &&
-        p.at.tabs.every(function (s) { return s === p.kind; });
+      return p.at.headerState === p.kind && p.at.tabStates.length === 2 &&
+        p.at.tabStates.every(function (s) { return s === p.kind; });
     });
     // 尺寸**维持现状**：标签页那颗点换的只是配色来源（旧 .dot 的 --sp-2 → 现在这条 .liveDot
     // 的 --live-dot），看得见的那颗点仍是 8px、外壳（热区 / 悬停面）仍是 12px。

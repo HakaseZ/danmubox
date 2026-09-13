@@ -22,17 +22,31 @@
 //
 // `--from-snapshot <file>`：不起浏览器，只判定一份已有快照（给宿主引擎那条链路用，
 // 见 `smoke/wkwebview-host.swift` 与 docs/ui.md §15）。
+// `--precheck [file]`：只跑**起浏览器之前的两道闸门**（① `node --check` ② 每个主题各构造一次
+// HTML），不起浏览器；不给文件就检查本运行器要跑的那个场景文件。
+//
+// **改过 `room-page.mjs` 就必须重跑那两道闸门**（规则见 `AGENT.md` §9）：那个文件里有几百行注释
+// 活在**模板字符串内部**，未转义的反引号在那里**不是语法错** —— 模板提前收尾，后面那截文本会变成
+// 合法的表达式，`node --check` 照样通过，只有求值到那一行才炸（2026-09-13 连炸两次）；同理模板串里的
+// **反斜杠会被吃掉**（`/rgba?\(/` 求值后是 `/rgba?((/`），所以正则不要写在模板字符串里。
 // 换 Chrome：CHROME_BIN=/path/to/chrome node smoke/run-headless.mjs
 // 截图目录：SMOKE_SHOT_DIR（默认系统临时目录）。两个引擎要指到**不同**目录，否则同名截图互相覆盖。
 
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { webkit } from "playwright";
-
-import { buildSmokeHtml } from "./room-page.mjs";
 
 /** 期望为 false 的布尔字段（其余布尔断言都必须为 true）。 */
 const EXPECTED_FALSE = new Set([
@@ -464,15 +478,8 @@ async function openWebKit() {
 
 /* ==================================================================== 场景驱动（两引擎共用） */
 
-// 每个主题各生成一份 HTML（mock 里的 ui.theme 不同），同一个进程里换页跑，不用重建产物
-const smokeDir = mkdtempSync(join(tmpdir(), "danmubox-smoke-"));
-const htmlPaths = new Map(
-  THEMES.map((theme) => {
-    const file = join(smokeDir, `room-page-${theme}.html`);
-    writeFileSync(file, buildSmokeHtml(theme));
-    return [theme, file];
-  }),
-);
+// 每个主题一份 HTML（`htmlPaths`），由入口的预检**构造那一步的结果**写盘 —— 见「入口」一节的说明：
+// 场景 HTML 只在预检里构造一次，这里不重复求值。
 
 /** 一个视口里跑完整个场景，返回快照。 */
 async function runViewport({ viewPage, shoot, shotDir, name, width, height, theme }) {
@@ -588,8 +595,86 @@ if (snapshotFlag >= 0) {
   process.exit(0);
 }
 
+/* ------------------------------ 起浏览器之前的**两道闸门**（规则见 AGENT.md §9；理由见文件头）
+
+   ① 语法：`node --check`；② **构造**：每个主题各把 HTML 真的求值一遍。
+   两道都过才往下走；任一道不过就**带精确行号立刻退出** —— 一次浏览器启动都不必浪费。
+   `--precheck [file]` 只跑这两道（默认检查本运行器要跑的那个场景文件）。 */
+
+/** 本运行器要跑的场景文件：断言与 mock 都在这一个文件里。 */
+const SCENARIO_FILE = fileURLToPath(new URL("./room-page.mjs", import.meta.url));
+
+/**
+ * 立刻退出前把话说完：`console.error` 写管道时是异步的，`process.exit` 会把没落地的输出截掉，
+ * 所以失败路径用同步写（错误定位正是这里唯一要交付的东西，不能被截掉半行）。
+ */
+function fatal(lines) {
+  writeSync(2, lines.filter(Boolean).join("\n") + "\n");
+  process.exit(2);
+}
+
+/** 两道闸门；返回 主题 → HTML（入口直接拿它写盘，不重复构造）。 */
+async function precheckScenario(file) {
+  try {
+    execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (error) {
+    fatal([
+      `[smoke] ✗ 场景文件语法检查未通过（node --check ${file}）—— 不起浏览器，立刻退出：`,
+      error.stderr?.toString() ?? String(error),
+    ]);
+  }
+
+  let scenario;
+  try {
+    scenario = await import(pathToFileURL(file).href);
+  } catch (error) {
+    fatal([
+      `[smoke] ✗ 场景文件加载失败（import ${file}）—— 不起浏览器，立刻退出：`,
+      error?.stack ?? String(error),
+    ]);
+  }
+  if (typeof scenario.buildSmokeHtml !== "function") {
+    fatal([`[smoke] ✗ ${file} 没有导出 buildSmokeHtml —— 构造闸门无从谈起`]);
+  }
+
+  const built = new Map();
+  for (const theme of THEMES) {
+    try {
+      built.set(theme, scenario.buildSmokeHtml(theme));
+    } catch (error) {
+      fatal([
+        `[smoke] ✗ ${file} 过了 node --check，但构造 HTML（主题 ${theme}）时炸了 —— 不起浏览器，立刻退出：`,
+        error?.stack ?? String(error),
+        "[smoke] （这类错的根因通常是模板字符串里未转义的反引号，或正则里的反斜杠被模板吃掉；" +
+          "产物没构建（npm run build）也会在这里报 ENOENT）",
+      ]);
+    }
+  }
+  log(`✓ 预检通过：${file} 语法 OK，${THEMES.length} 个主题的 HTML 都构造出来了（未启浏览器）`);
+  return built;
+}
+
+// 闸门必须在起浏览器**之前**：默认检查本运行器要跑的那个文件，`--precheck <file>` 用来在
+// 接线之前先检查一份候选场景文件（只检查、随后即退出，不会有「检查这个、跑那个」的错位）。
+const precheckFlag = process.argv.indexOf("--precheck");
+const precheckArg = precheckFlag >= 0 ? process.argv[precheckFlag + 1] : null;
+const scenarioFile =
+  precheckArg && !precheckArg.startsWith("--") ? resolve(precheckArg) : SCENARIO_FILE;
+const builtHtml = await precheckScenario(scenarioFile);
+if (precheckFlag >= 0) process.exit(0);
+
 const engine = parseEngine(process.argv.slice(2), process.env);
 const shotDir = process.env.SMOKE_SHOT_DIR ?? tmpdir();
+
+// 每个主题各生成一份 HTML（mock 里的 ui.theme 不同），同一个进程里换页跑，不用重建产物
+const smokeDir = mkdtempSync(join(tmpdir(), "danmubox-smoke-"));
+const htmlPaths = new Map(
+  THEMES.map((theme) => {
+    const file = join(smokeDir, `room-page-${theme}.html`);
+    writeFileSync(file, builtHtml.get(theme));
+    return [theme, file];
+  }),
+);
 
 const swept = sweepStaleBrowsers();
 if (swept > 0) log(`清掉上次残留的浏览器进程 ${swept} 个`);

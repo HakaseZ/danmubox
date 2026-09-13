@@ -166,6 +166,10 @@ export function RoomView({
   // 房管权限前置：身份来自 `room_session`（进房时取一次 + 事件更新）。
   // 拿不到身份时 `is_admin` 为 undefined → 按**无权限**渲染，而不是先放行再看上游错误码。
   const isAdmin = useApp((store) => store.roomIdentities[room.room_id]?.is_admin) === true;
+  // 弹幕字数上限（第 12 条 / 契约 C3）：随本人身份一起来的 `danmaku_length`
+  // （上游 `getInfoByUser` 的 `data.property.danmu.length`）。取不到时 Composer 按官方缺省 20 回落，
+  // 这里不兜底、不写死数值。
+  const danmakuLength = useApp((store) => store.roomIdentities[room.room_id]?.danmaku_length);
   const adminSilent = useApp((store) => store.adminSilent);
   const adminBlacklist = useApp((store) => store.adminBlacklist);
   const adminKeywords = useApp((store) => store.adminKeywords);
@@ -175,6 +179,33 @@ export function RoomView({
   const loadAdmin = useApp((store) => store.loadAdmin);
   const runAdmin = useApp((store) => store.runAdmin);
   const loggedIn = session?.logged_in ?? false;
+
+  // 切房间（多标签）时把本页的**临时界面状态**清干净（用户 2026-09-13 第 2 条）：
+  // 多标签只是切渲染，`RoomView` 的组件实例被 React 复用，本地状态不显式清就会串台 ——
+  // 最刺眼的是上一个房间的房管面板 / 待确认写操作还开着（`adminOpen` / `adminConfirm`），
+  // 还有上一个房间的行菜单、举报目标与 @ 目标（`pendingAction`）落到新房间头上。
+  // 输入草稿**不在这里重置**：它按房间各留一份，由 `Composer` 自己按 `roomId` 存取（契约 C1）。
+  // 这里用 effect 而不是给 `RoomView` 加 `key`：加 key 会把整棵子树重挂（含 `Composer`），
+  // 草稿与「不是整页重挂」的口径相冲；弹幕列表的滚动/跟随另用 `MessageList` 的 key 处理（见下）。
+  useEffect(() => {
+    setShowLogs(false);
+    setHeaderMenu(null);
+    setMessageMenu(null);
+    setReportTarget(undefined);
+    setReasonId("");
+    setGiftOpen(false);
+    setAdminOpen(false);
+    setAdminConfirm(null);
+    setPendingAction(null);
+  }, [room.room_id]);
+
+  // 房管入口按身份出现（第 3 条，契约 C6）：面板打开期间身份被撤销（事件更新 / 会话重建）
+  // 就收起面板与确认条 —— 不能让「非房管还开着房管面板」这一档留下来。
+  useEffect(() => {
+    if (isAdmin) return;
+    setAdminOpen(false);
+    setAdminConfirm(null);
+  }, [isAdmin]);
 
   useEffect(() => {
     if (loggedIn) void loadBalance();
@@ -221,7 +252,9 @@ export function RoomView({
     observer.observe(viewport);
     observer.observe(copy);
     return () => observer.disconnect();
-  }, [titleText, prefs["ui.font_scale"]]);
+    // `room.room_id` 也在依赖里：两个房间的标题文字可能一样，但「在线 / 看过」两个数值
+    // 占的宽度不同、可视宽度因此不同，只拿文字当依赖会留下上一个房间量出的滚动结论。
+  }, [titleText, prefs["ui.font_scale"], room.room_id]);
 
   // 礼物金额统计与排行（需求 §2.7）：只算本次会话；金额口径是金瓜子（协议 §10.2）。
   const giftStats = useMemo(() => {
@@ -371,17 +404,25 @@ export function RoomView({
   };
 
   const headerMenuItems: MenuItem[] = [
-    {
-      label: adminOpen ? "收起房管面板" : "房管面板",
-      onSelect: () => {
-        const next = !adminOpen;
-        setAdminOpen(next);
-        setAdminConfirm(null);
-        // 面板没权限也能打开（看上游原样回应）；打开时顺手刷新身份与三块列表。
-        void loadRoomIdentity(room.room_id);
-        if (next) void loadAdmin(room.room_id);
-      },
-    },
+    // 房管入口（第 3 条，契约 C6）：**只有确认是本房间房管**才出现这一项。
+    // 判据与官方 web 一致（`protocol.md` A38：`getInfoByUser` → `data.badge.is_room_admin || admin_level > 0`，
+    // 本实现落在 `RoomSession.is_admin`）。拿不到身份（`undefined`）= 无权限 = **没有这个入口**，
+    // 不是置灰让用户点开看上游报错 —— 用户要的是「有房管身份才有房管界面的选项」。
+    ...(isAdmin
+      ? [
+          {
+            label: adminOpen ? "收起房管面板" : "房管面板",
+            onSelect: () => {
+              const next = !adminOpen;
+              setAdminOpen(next);
+              setAdminConfirm(null);
+              // 打开时顺手重取身份与三块列表：以远端为准（身份 / 名单都可能刚变过）。
+              void loadRoomIdentity(room.room_id);
+              if (next) void loadAdmin(room.room_id);
+            },
+          },
+        ]
+      : []),
     { label: "刷新连接", onSelect: onRefresh },
     {
       label: "断开连接",
@@ -506,8 +547,11 @@ export function RoomView({
         </div>
       </div>
 
-      {/* 唯一的生长区：面板与礼物栏展开时只有它会变矮 */}
+      {/* 唯一的生长区：面板与礼物栏展开时只有它会变矮。
+          `key` 绑房间号：换房即重建这个组件，滚动位置 / 是否跟随 / 悬停暂停随之回到初始
+          （`MessageList` 是本轮 C 票的文件，这里只给 key，不改它）。 */}
       <MessageList
+        key={room.room_id}
         rows={chatRows}
         anchorUid={room.anchor_uid}
         prefs={prefs}
@@ -574,7 +618,8 @@ export function RoomView({
         </div>
       )}
 
-      {/* 房管面板（issue #3）：三块列表 + 增删，无权限也能打开看上游原样回应。
+      {/* 房管面板（issue #3）：三块列表 + 增删。入口只在 `isAdmin` 时出现（第 3 条，契约 C6），
+          因此这里渲染出来就是房管身份；`isAdmin` 仍原样传下去，作为身份刚被撤销那一帧的兜底提示。
           它是文档流里的一块（不是浮层），与输入区的面板一样只挤压弹幕列表 */}
       {adminOpen && (
         <AdminPanel
@@ -626,6 +671,11 @@ export function RoomView({
       )}
 
       <Composer
+        roomId={room.room_id}
+        // 草稿的分键是 `${identityKey}:${roomId}`（契约 C1 修订）：换房、换号都各留一份，
+        // 所以这里既不去清草稿、也不给 `Composer` 加 `key`（重挂会连草稿一起丢）。
+        identityKey={session?.logged_in ? String(session.uid ?? 0) : "guest"}
+        danmakuLength={danmakuLength}
         disabled={!room.connected}
         loggedIn={loggedIn}
         lastOutcome={lastOutcome}

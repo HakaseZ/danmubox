@@ -4,7 +4,9 @@ import type { AdminAction, AdminUser } from "../types";
 import styles from "../app.module.css";
 
 interface Props {
-  /** 是不是本直播间房管。只影响提示文案——只读列表无权限也允许打开看上游回应。 */
+  /** 是不是本直播间房管（`RoomSession.is_admin`）。只影响提示文案：面板入口本身**只在房管时出现**
+   *  （docs/ui.md §4.9，用户 2026-09-13 第 3 条），因此 `false` 这一档只覆盖「身份刚被撤销 /
+   *  重取不到」的兜底渲染——列表与写操作的口径不变。 */
   isAdmin: boolean;
   silent: AdminUser[];
   blacklist: AdminUser[];
@@ -31,8 +33,9 @@ function parseUid(value: string): number | undefined {
  * 房管面板（issue #3）：禁言名单 / 黑名单 / 屏蔽词三块，每块都有列表与增删。
  *
  * 三条规则来自需求：
- * - 三块**都允许无权限时打开**：上游会拒绝并给出 `code` + `message`，界面原样展示，
- *   不翻译成自造文案、也不在本地假装成功。
+ * - 三块列表**照常请求上游**：上游会拒绝并给出 `code` + `message`，界面原样展示，
+ *   不翻译成自造文案、也不在本地假装成功。非房管**没有打开本面板的入口**（docs/ui.md §4.9），
+ *   所以这一档只是身份刚被撤销时的兜底。
  * - 所有写操作（禁言 / 拉黑 / 解除 / 增删词）都只提交给上层，由那里出**二次确认**——
  *   这些动作会不可逆地影响他人。
  * - 增删的输入沿用输入区已有的样式（input + 按钮，屏蔽词回车即可添加）。
@@ -59,7 +62,7 @@ export function AdminPanel({
         <span className={styles.previewLabel}>
           {isAdmin
             ? "你是本直播间房管"
-            : "只读：你不是本直播间房管；列表可以看上游回应，写操作会被上游拒绝"}
+            : "房管身份已失效：只读展示上游回应，写操作会被上游拒绝"}
         </span>
         <span className={styles.composerSpacer} />
         <button onMouseDown={(event) => event.preventDefault()} onClick={onRefresh} disabled={busy}>

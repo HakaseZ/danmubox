@@ -284,6 +284,14 @@ pub struct RoomSession {
     pub my_medal_worn: bool,
     pub my_guard_level: i64,
     pub is_admin: bool,
+    /// **本房间的弹幕字数上限**（上游 `getInfoByUser` 的 `data.property.danmu.length`，
+    /// 即官方前端读的 `danmaku_length`；实测当前账号 × 8 个房间 = 40，见 `docs/protocol.md` A44）。
+    ///
+    /// 它是**上游按房间下发**的值：输入侧的闸门（截断 + 计数）读的就是它，不在界面写死数字。
+    /// `0` = 还没取到身份（会话刚建立 / 游客 / 上游失败）——界面按上游缺省 20 处理，
+    /// 不把它当成「一个字都不许发」。
+    #[serde(default)]
+    pub danmaku_length: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

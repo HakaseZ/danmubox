@@ -1145,6 +1145,14 @@
   flex: 1;
 }
 
+/* 字数计数 `已用/上限`（item 12）：贴右、与发送簇同一行；等宽数字，打字时数字不左右抖 */
+.inputCount {
+  flex: none;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* 发送簇：电池 + 发送按钮同进同退（窄屏换行时不许被拆开） */
 .sendCluster {
   flex: none;
@@ -1208,15 +1216,44 @@
 /* ---------------------------------------------------------------- 弹出面板 */
 
 /* 面板在输入区上方、向上展开：它是文档流里的一块，展开只会挤压弹幕列表。
-   窄屏下同一块只换限高（见文件末尾的断点），仍不脱离文档流。 */
+   窄屏下同一块只换限高（见文件末尾的断点），仍不脱离文档流。
+
+   三个面板共用**同一副骨架与同一个高度**（契约 C7，用户 item 8「展开高度看齐表情界面」）：
+   表情格的三个尺寸档与网格高度算在面板这一层（表情格、左侧轨道、短语与筛选面板
+   量的是同一批数），`--panel-h` = 三行大表情格 + 面板上下内边距。 */
 .picker,
 .phrases,
 .filterPanel {
+  /* 大表情 / 普通表情两档图片盒的尺寸。**两者都已注册成 <length>**（见上面两条 @property）：
+     不注册的话 `calc(var(--fs-7) * 2.2)` 会在**使用处**按格子自己的字号再乘一次，
+     「网格区恰好三行」那个等式就散了。 */
+  --emote-size-sm: calc(var(--fs-6) * 1.5);
+  --emote-size-big: calc(var(--fs-7) * 2.2);
+  /* 表情面板的**网格区高度 = 三行大表情格**（用户 2026-09-13：两行嫌矮，「改到 3 行」）。
+     高度固定在**大表情**那一档（--emote-size-big + 格子上下内边距 + 两道行距），
+     通用组也用同一个高度 —— 换个分组面板不会忽高忽低，也不会把通用组切成一行半。
+     三个量都在**面板这一层**算：格子高 = 图片盒 + 格子上下内边距（--sp-1）。 */
+  --emote-row-h-big: calc(var(--emote-size-big) + var(--sp-1) * 2);
+  --emote-grid-h: calc(var(--emote-row-h-big) * 3 + var(--sp-1) * 2);
+  /* 面板高度与上下内边距同源（窄屏断点只改 --panel-pad-y，高度跟着一起走）：
+     短语与筛选面板因此与表情面板**等高、且不随内容伸缩** ——
+     内容超出在各自的可滚区里滚（短语 .phrasesBody、筛选面板自己的 overflow-y）。 */
+  --panel-pad-y: var(--sp-2);
+  --panel-h: calc(var(--emote-grid-h) + var(--panel-pad-y) * 2);
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--panel-pad-y) var(--sp-3);
   max-height: var(--panel-max-h);
   overflow-y: auto;
+}
+
+/* 短语面板与筛选面板**定高**：与表情面板同高（后者由「三行大表情格 + 内边距」自然得到，
+   见 .emoteGrid）。面板本身不随内容伸缩，高度因此不跳。
+   （例外只有表情面板的「我的表情加载失败」那一行：它出现时表情面板会高出一行 —— 异常态，
+   不参与定高。） */
+.phrases,
+.filterPanel {
+  height: var(--panel-h);
 }
 
 /* 短语面板与表情面板都是**例外**：内部自己分「固定行 + 可滚区」
@@ -1251,18 +1288,6 @@
   syntax: "<length>";
   inherits: true;
   initial-value: 32px;
-}
-
-/* 表情面板的**网格区高度 = 三行大表情格**（用户 2026-09-13：两行嫌矮，「改到 3 行」）。
-   **高度固定**在**大表情**那一档（--emote-size-big + 格子上下内边距 + 两道行距），
-   通用组也用同一个高度 —— 换个分组面板不会忽高忽低，也不会把通用组切成一行半。
-   三个量都在**面板这一层**算：格子高 = 图片盒 + 格子上下内边距（--sp-1），网格高 = 三行 + 两道行距。
-   高度写死（不是 max-height）：内容超出就在网格里滚动。 */
-.picker {
-  --emote-size-sm: calc(var(--fs-6) * 1.5);
-  --emote-size-big: calc(var(--fs-7) * 2.2);
-  --emote-row-h-big: calc(var(--emote-size-big) + var(--sp-1) * 2);
-  --emote-grid-h: calc(var(--emote-row-h-big) * 3 + var(--sp-1) * 2);
 }
 
 .phrasesBody {
@@ -1547,26 +1572,53 @@
   vertical-align: middle;
 }
 
-/* 快捷短语面板（需求 §2.2）。面板分三段：面板头、**固定的「加一条」行**、
-   可滚的芯片区。这样窄屏下芯片再多也顶不掉输入框（用户 #8：加短语时输入框要还在）。 */
+/* 快捷短语面板（需求 §2.2；item 8 / item 11 重排）。面板自上而下两段：
+   **固定的「加一条」行** + 可滚的芯片区，面板高度是定值（--panel-h，见上面的共用块）。
+   短语再多也只让芯片区滚，「加一条」那一行与整个输入区都不动（用户 #8）。 */
 .phrasesRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  /* 等宽列（列数随宽度自适应）：芯片从「参差的贴纸堆」变成一排排对齐的格子 ——
+     竖屏 360px 下是 3 列（面板内容宽 ≈ 336px，列宽下限 7.5em ≈ 105px），宽屏一行铺满。
+     短语长短不一也不影响整齐：同一行里各格等宽，长的那条自己换行（不截断用户写的字）。 */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5em, 1fr));
   gap: var(--sp-1);
+  align-content: start;
 }
 
+/* 空态是**整行**的一句话，不占一个格子 */
+.phrasesRow > .previewLabel {
+  grid-column: 1 / -1;
+}
+
+/* 就地改名那一格占满整行：编辑长短语时不该挤在一个芯片宽的框里 */
+.phrasesRow > .phraseInput {
+  grid-column: 1 / -1;
+}
+
+/* 芯片：一个短语一格，文字左对齐、长短语照常换行 */
 .phraseItem {
   font-size: var(--fs-2);
   padding: var(--sp-1) var(--sp-2);
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 
 /* 「加一条」：输入框吃掉除按钮外的整行宽度，窄屏下也不会被压成小方块 */
 .phraseInput {
   flex: 1;
-  min-width: 8em;
+  min-width: 0;
   font-size: var(--fs-2);
   padding: var(--sp-1) var(--sp-2);
+}
+
+/* 「加一条」的提交按钮：与芯片**不同形**（强调色填充），一眼分得出
+   「新增一条」与「点一下插一条」（后者是 .phraseItem 那些芯片） */
+.phraseAddBtn {
+  flex: none;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+  font-weight: 600;
 }
 
 /* 回复某条弹幕时的引用条（需求 §2.2） */
@@ -2002,6 +2054,22 @@
   .filterPanel,
   .adminPanel {
     max-height: var(--panel-max-h-narrow);
+  }
+
+  /* 三个弹出面板的上下内边距在窄屏提到 --sp-3：定高口径跟着它走
+     （--panel-h = 三行大表情格 + 2 × --panel-pad-y），三个面板因此仍然等高。
+     另外触屏热区下限（下面那条 .picker button{min-height}）会把表情格撑到 --tap-min，
+     三行的算式得用**同一个数**，否则最后一行会被切掉一截、面板高度也对不上。 */
+  .picker,
+  .phrases,
+  .filterPanel {
+    --panel-pad-y: var(--sp-3);
+    --emote-row-h-big: max(var(--emote-size-big) + var(--sp-1) * 2, var(--tap-min));
+    padding: var(--panel-pad-y) var(--sp-3);
+  }
+
+  /* 房管面板不在定高口径内：它仍是内容驱动 + 限高 */
+  .adminPanel {
     padding: var(--sp-3);
   }
 
@@ -2022,10 +2090,7 @@
   }
 
   /* 窄屏的触屏热区下限（下面那条 .picker button{min-height}）把表情格撑到 --tap-min，
-     三行的算式得用**同一个数**，否则最后一行会被切掉一截、面板高度也对不上。 */
-  .picker {
-    --emote-row-h-big: max(var(--emote-size-big) + var(--sp-1) * 2, var(--tap-min));
-  }
+     三行的算式得用**同一个数** —— 这条已在上面三个面板的公共规则里给出（--emote-row-h-big）。 */
 
   /* 触屏热区：sheet / 对话框里的可点元素一律 ≥ --tap-min。
      复选框与滑杆本身不撑高（会变形），改为把它们的 label 撑成热区。 */

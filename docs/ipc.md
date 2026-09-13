@@ -74,7 +74,7 @@
 | `chat_report` | `message: Message, reason: ReportReason` | `void` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕。`message` 取列表里那一条（实现读它的 `upstream_id` / `uid` / `content`；**`upstream_id` 必需**，为空 → `BAD_REQUEST`）；`reason` 来自 `report_reasons`（同时上报文案与 `id`）。前端签名见 `apps/desktop/ui/src/ipc.ts` 的 `chatReport(message, reason)` |
 | `report_reasons` | 无 | `ReportReason[]` | `UPSTREAM_ERROR` `INTERNAL` | 举报理由清单：请求上游 `dMReport/ForReason` 并解析 `data.data[]`，每项 `ReportReason { id, reason }`。**条数由上游决定**，不是本地硬编码清单；不要求登录 |
 | `emotes_list` | `room_id: i64` | `Emote[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 按**真实会话身份**（取自会话缓存）加载表情包库：无牌/有牌/房管/大航海看到的面板不同；无活跃会话时退回零身份。`Emote.locked` 由上游 `perm` 派生，`true` = 当前身份用不了（界面置灰，不隐藏） |
-| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`is_admin` / `my_guard_level` / `my_medal_level` / `my_medal_name` / `my_medal_worn`）。无活跃会话 → 全零身份而**不报错**；界面据此决定房管入口是否亮起（拿不到身份即按无权限渲染，不靠试错）。同步命令 |
+| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`is_admin` / `my_guard_level` / `my_medal_level` / `my_medal_name` / `my_medal_worn` / `danmaku_length`）。无活跃会话 → 全零身份而**不报错**；界面据此决定房管入口是否亮起（拿不到身份即按无权限渲染，不靠试错）与**输入区的字数上限**（`danmaku_length`，实测 40；`0` = 还没取到，界面按缺省 20）。同步命令 |
 | `emotes_owned` | 无 | `Emote[]` | `UPSTREAM_ERROR` `INTERNAL` | 主站「我的表情」：用户**拥有**的表情包（`upower_` 家族）。`package_kind="owned"`、`room_id=0`、唯一键 = `"upower_" + 表情 text`；未登录时上游退化为免费表情包，因此**不报** `NOT_LOGGED_IN` |
 | `admin_mute` | `room_id: i64, uid: i64, hour: i64, msg: Option<String>` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
 | `admin_unmute` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 解除禁言 |
@@ -232,6 +232,8 @@ type RoomSession = {
   my_medal_worn: boolean;      // 我**是否佩戴着**这块牌（上游 data.medal.is_weared）；持有 ≠ 佩戴（contract §5、protocol A43）
   my_guard_level: number;
   is_admin: boolean;
+  danmaku_length: number;      // 本房间的弹幕字数上限（上游 data.property.danmu.length；实测 40、缺省 20，protocol A44）。
+                              // 0 = 尚未取到身份 —— 界面按缺省 20 处理，不当成「一个字都不许发」
 };
 
 type EmotePackage = "common" | "owned" | "room" | "medal" | "guard";
@@ -489,7 +491,7 @@ sequenceDiagram
 | 失败行渲染 | `"rejected"` → 正文划线（`.rejectedText`）+ 行尾写 `send_reason`；`"unconfirmed"` → 行尾「未确认」。**两档都不弱化整行**（要读得清）；其余行（含刚插入的本地行、回播换过字段的那条）**与「别的客户端看到的我」渲染逐项相同**——没有「发送中」这一档 |
 | 草稿 | 只有 `ok` 清空草稿（并收起回复 / @ / 面板）；其余一律保留，便于重试或照着行上划掉的那条改写（`ui.md` §6.5.1） |
 | 本地节流 | 发送前由 core 检查同房间 2s 最小间隔与相同内容 5s 去重（`contract.md` §4），命中则不发请求、直接 reject `RATE_LIMITED` |
-| 生命周期 | 草稿是 `Composer` 的组件本地状态，不进 store、不落盘；本地行随 `messages` 在一次房内会话内生死（离开 / 切房即清空），`echoedLocals` 侧表同时清空 |
+| 生命周期 | 草稿**不在 store 里**：它是 `Composer` 模块级的 `Map`，键为 `${identityKey}:${roomId}`（游客 `guest`、登录为 uid），即**每个「身份 × 房间」各留一份**（正文 + 回复目标 + @ 目标）；退出组件不丢，进程重载即散，不落盘（状态形状见上，`AppStore` 里没有草稿字段）。切房间 / 切号时**先存旧键、再取新键**，面板类状态（面板 / 分组 tab / 右键菜单 / 改短语 / 浮片）一律重置。本地行随 `messages` 在一次房内会话内生死（离开 / 切房即清空），`echoedLocals` 侧表同时清空 |
 | 安全 | 草稿内容不写入 `prefs.json`、不上报；日志只记 `content_len` 与 `outcome`（见 `architecture.md` §9.2） |
 
 两档标记都必须与普通行可区分，且整行保持可读（不弱化）；样式 token 与文案表由 `ui.md` §4.4 / §6.5 定义。

@@ -46,6 +46,12 @@ const EP_ROOM_USER: &str = "https://api.live.bilibili.com/xlive/web-room/v1/inde
 /// 卡住时不能让会话建立停在原地。
 const ROOM_USER_TIMEOUT: Duration = Duration::from_millis(2_000);
 
+/// `property.danmu.length` 缺失时的缺省上限，照官方前端的回落（产物里 `t.danmu_length || 20`）。
+///
+/// 只在**上游没给这一项**时兜底；正常响应里它是按房间下发的真实值（实测 40）。
+/// 界面只消费 `RoomSession.danmaku_length`，不重复写死数字。
+const DEFAULT_DANMAKU_LENGTH: u32 = 20;
+
 /// `getInfoByUser` 响应 → 本人在该房间的身份（纯函数，便于离线覆盖）。
 ///
 /// 实测字段（2026-09-12，见附录 A38）：
@@ -55,9 +61,11 @@ const ROOM_USER_TIMEOUT: Duration = Duration::from_millis(2_000);
 /// | 是否房管 | `data.badge.is_room_admin`（布尔；同层 `admin_level` 亦可，`> 0` 同为房管）|
 /// | 我的粉丝牌等级 / 名 | `data.medal.up_medal.level` / `.medal_name`（无牌时为 `null`）|
 /// | 我的大航海等级 | `data.uinfo.guard.level` |
+/// | 弹幕字数上限 | `data.property.danmu.length`（官方前端读的同一个键，见 `docs/protocol.md` A44）|
 ///
 /// 缺任何一项都按 0 / 空串 / `false` 容错：宁可显示「无牌、非房管」，
-/// 也不编造一个身份出来。
+/// 也不编造一个身份出来。弹幕长度是唯一有**非零**缺省的一项——
+/// 官方前端对缺失回落 `20`，照抄（`DEFAULT_DANMAKU_LENGTH`）。
 pub fn parse_room_identity(room_id: i64, value: &Value) -> RoomSession {
     let is_admin = value
         .pointer("/data/badge/is_room_admin")
@@ -68,6 +76,14 @@ pub fn parse_room_identity(room_id: i64, value: &Value) -> RoomSession {
             .and_then(Value::as_i64)
             .unwrap_or(0)
             > 0;
+    // `0` 与缺失同解：都按官方缺省 20 —— 上限 0 会让输入框一个字都打不进去，
+    // 而上游正常响应里这一项恒为正数（实测 40）。u32 收窄在这里是安全的：
+    // 上游不会下发一个超过 u32 的弹幕字数。
+    let danmaku_length = value
+        .pointer("/data/property/danmu/length")
+        .and_then(Value::as_u64)
+        .filter(|length| *length > 0)
+        .map_or(DEFAULT_DANMAKU_LENGTH, |length| length as u32);
     RoomSession {
         room_id,
         my_medal_level: value
@@ -92,6 +108,7 @@ pub fn parse_room_identity(room_id: i64, value: &Value) -> RoomSession {
             .and_then(Value::as_i64)
             .unwrap_or(0),
         is_admin,
+        danmaku_length,
     }
 }
 
@@ -554,7 +571,10 @@ mod tests {
                     "is_weared": true,
                     "up_medal": {"level": 21, "medal_name": "牌子", "uid": 1}
                 },
-                "uinfo": {"guard": {"level": 3}}
+                "uinfo": {"guard": {"level": 3}},
+                // 实测（2026-09-13，A44）：`property.danmu.length` 就是官方前端读的
+                // danmaku_length 上限，当前账号 × 8 个房间都是 40。
+                "property": {"danmu": {"length": 40}}
             }
         });
         assert_eq!(
@@ -566,7 +586,31 @@ mod tests {
                 my_medal_worn: true,
                 my_guard_level: 3,
                 is_admin: true,
+                danmaku_length: 40,
             }
+        );
+    }
+
+    /// 弹幕上限**缺失**时按官方前端的缺省 20（产物里 `t.danmu_length || 20`），**不是** 0：
+    /// 0 会让输入框一个字都打不进去。上游给 0 / 负数同样走这一档。
+    #[test]
+    fn room_identity_falls_back_to_default_danmaku_length() {
+        let missing = serde_json::json!({
+            "code": 0,
+            "data": {"badge": {"is_room_admin": false}}
+        });
+        assert_eq!(
+            parse_room_identity(7, &missing).danmaku_length,
+            DEFAULT_DANMAKU_LENGTH
+        );
+        let zero = serde_json::json!({
+            "code": 0,
+            "data": {"property": {"danmu": {"length": 0}}}
+        });
+        assert_eq!(
+            parse_room_identity(7, &zero).danmaku_length,
+            DEFAULT_DANMAKU_LENGTH,
+            "0 当成缺省值，不当成「一个字都不许发」"
         );
     }
 
@@ -614,14 +658,17 @@ mod tests {
             parse_room_identity(7, &value),
             RoomSession {
                 room_id: 7,
+                // 唯独弹幕上限不是零：它是官方缺省 20（见上面那条测试）。
+                danmaku_length: DEFAULT_DANMAKU_LENGTH,
                 ..Default::default()
             },
-            "取不到就全零，不编造身份"
+            "取不到就全零（弹幕上限按官方缺省），不编造身份"
         );
         assert_eq!(
             parse_room_identity(7, &serde_json::json!({"code": 0})),
             RoomSession {
                 room_id: 7,
+                danmaku_length: DEFAULT_DANMAKU_LENGTH,
                 ..Default::default()
             }
         );

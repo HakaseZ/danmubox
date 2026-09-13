@@ -185,6 +185,12 @@ export interface RoomSession {
   my_medal_worn: boolean;
   my_guard_level: number;
   is_admin: boolean;
+  /**
+   * **本房间的弹幕字数上限**（契约 §5，上游 `getInfoByUser` 的 `data.property.danmu.length`）：
+   * 实测当前账号 × 8 个房间 = 40，官方前端缺省 20（`docs/protocol.md` A44）。
+   * 输入区据此截断并显示 `已用/上限`；`0` = 还没取到身份，按缺省 20 处理。
+   */
+  danmaku_length: number;
 }
 
 /** 房管列表条目（契约 §5）：禁言名单与黑名单同形。 */

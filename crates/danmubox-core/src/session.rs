@@ -660,6 +660,8 @@ mod tests {
             my_medal_worn: true,
             my_guard_level: 3,
             is_admin: true,
+            // 弹幕上限随身份一起透传（item 12）：它是**房间给的值**，界面据此截断输入。
+            danmaku_length: 40,
         };
         let source: Arc<dyn LiveSource> = Arc::new(FakeSource {
             messages: vec![],

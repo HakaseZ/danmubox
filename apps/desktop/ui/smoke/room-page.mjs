@@ -1753,15 +1753,24 @@ const MOCK = (theme) => `(function () {
     };
     var replyMention = mentionOf(replyRow);
     out.mentionHighlighted = !!replyMention && replyMention.innerText === "@被回复的人";
-    // 颜色 = 身份牌的**字符色**：与身份牌上的文字同一个计算值，也就是 --badge-fg 令牌
-    var badgeFgColor = cssColorOf("--badge-fg");
-    var plainBadgeEl = [].slice.call(document.querySelectorAll('[data-testid="db-msg-badges"] > *'))
-      .filter(function (el) {
-        return (el.getAttribute("style") || "").indexOf("linear-gradient") < 0;
-      })[0];
-    out.mentionColorMatchesBadge = !!replyMention && !!plainBadgeEl &&
-      getComputedStyle(replyMention).color === getComputedStyle(plainBadgeEl).color &&
-      getComputedStyle(replyMention).color === badgeFgColor;
+    // 颜色 = **正文里的醒目可读色**（令牌 --mention），**不是**身份牌的文字色：用户 2026-09-13
+    // 第二次实测「@的颜色之前不是粉色吗，白色看不清啊」—— 身份牌那枚白字是「彩底上的文字色」，
+    // 照抄到正文里在深色下与正文近乎同色、在浅色下白压米色（1.2:1）干脆看不见。
+    // 判据按「这件事在用户眼里成不成立」写，不用硬编码色值：
+    // ① 两套主题下都对**所在面**（画布 --bg / 表面 --bg-elevated）≥ 4.5:1（正文档，深浅各跑一遍
+    //    由 runner 的主题维度保证）；② 与正文色**不同**且**有彩**——「醒目」不能靠加底色或加粗。
+    var mentionTokenColor = cssColorOf("--mention");
+    var mentionColor = replyMention ? getComputedStyle(replyMention).color : "";
+    var replyBodyEl = replyRow ? replyRow.querySelector('[data-testid="db-msg-body"]') : null;
+    var mentionBodyColor = replyBodyEl ? getComputedStyle(replyBodyEl).color : "";
+    out.mentionColor = mentionColor;
+    out.mentionBodyColor = mentionBodyColor;
+    out.mentionContrastOnCanvas = contrastRatio(mentionColor, cssColorOf("--bg"));
+    out.mentionContrastOnSurface = contrastRatio(mentionColor, cssColorOf("--bg-elevated"));
+    out.mentionSaturation = saturationOf(mentionColor);
+    out.mentionColorVisible = mentionColor === mentionTokenColor &&
+      out.mentionContrastOnCanvas >= 4.5 && out.mentionContrastOnSurface >= 4.5 &&
+      mentionColor !== mentionBodyColor && out.mentionSaturation > 0.4;
     // 用户 2026-09-13 的更正：「高亮我要求的是使用字体颜色，不是背景」—— @ 那一格**只许有颜色**：
     // 底色 / 背景图都没有（上一版那层 45° 强调色渐变底已删），内边距与圆角也没加回来。
     var mentionStyle = replyMention ? getComputedStyle(replyMention) : null;
@@ -1778,8 +1787,7 @@ const MOCK = (theme) => `(function () {
     var plainMentionRow = rowWith("没有回复关系也");
     out.mentionWorksWithoutReply = !!mentionOf(plainMentionRow) &&
       mentionOf(plainMentionRow).innerText === "@路人乙";
-    // 切分只加壳、不改字：正文的文字一个不丢
-    var replyBodyEl = replyRow ? replyRow.querySelector('[data-testid="db-msg-body"]') : null;
+    // 切分只加壳、不改字：正文的文字一个不丢（正文元素在上面量过一次，复用同一个）
     out.mentionBodyTextIntact = !!replyBodyEl &&
       replyBodyEl.innerText === "这条是回复 @被回复的人 你好";
     // 另一条回复（上游没给配色）也跟着高亮，且**没有**被上游色染过
@@ -1787,7 +1795,7 @@ const MOCK = (theme) => `(function () {
     var noColorMention = mentionOf(noColorRow);
     out.mentionHighlightedWithoutUpstreamColor = !!noColorMention &&
       noColorMention.innerText === "@另一个被回复的人" &&
-      getComputedStyle(noColorMention).color === badgeFgColor;
+      getComputedStyle(noColorMention).color === mentionTokenColor;
     // 舰长标只认本房间的 guard_level：戴着别的房间舰长牌（medal_guard_level=3）不亮舰长标（issue #12）
     // 判据看**徽标元素本身**的文本（正文里出现「舰长」两字不算）
     var hasGuardBadge = function (row) {

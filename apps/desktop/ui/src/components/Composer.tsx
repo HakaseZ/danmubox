@@ -518,8 +518,9 @@ export function Composer({
     }
   };
 
-  // 与弹幕列表同一口径：em 相对 body 的 --fs-root，字号滑杆改这一处
-  const panelFont = { fontSize: `${prefs["ui.font_scale"]}em` };
+  // 「将发送」预览是**弹幕行长什么样**的预览，所以它跟弹幕区一起缩放；三个面板不跟
+  // （用户 2609140651：字号只控制弹幕区，不改面板区）。
+  const previewFont = { fontSize: `${prefs["ui.font_scale"]}em` };
 
   return (
     <>
@@ -527,7 +528,6 @@ export function Composer({
         <div
           className={styles.picker}
           data-testid="db-panel"
-          style={panelFont}
           ref={panelRef}
         >
           {/* 面板顶上**没有标题、也没有「关闭」**（用户 2026-09-12：「表情包栏顶部的表情和
@@ -632,7 +632,7 @@ export function Composer({
       )}
 
       {panel === "phrases" && (
-        <div className={styles.phrases} data-testid="db-panel" style={panelFont} ref={panelRef}>
+        <div className={styles.phrases} data-testid="db-panel" ref={panelRef}>
           {/* 面板没有标题行、也没有「关闭」按钮（用户 item 8：「展开高度看齐表情界面」）：
               「加一条」就是面板的第一行内容。 */}
           {/* 「加一条」是**固定的一行**（不跟芯片抢换行位、不随芯片区滚走）：
@@ -716,13 +716,12 @@ export function Composer({
         <div
           className={styles.filterPanel}
           data-testid="db-panel"
-          style={panelFont}
           ref={panelRef}
         >
           {/* 同样没有面板头与关闭按钮（用户 item 8）：面板本体就是 FilterBar 的两块
               （消息类型 / 显示），收起靠再点一次「筛选」或点面板外。
-              字号与另两个面板同一处给出（`ui.font_scale`）：面板高度用的是 em 令牌，
-              三者的字号口径不同的话，算出来的定高也就对不上（见 --panel-h）。 */}
+              字号**不跟** `ui.font_scale`（用户 2609140651：字号只控制弹幕区）——三个面板都
+              吃 body 的基准字号，`--panel-h` 那套 em 定高因此也是常数，三者必然同高。 */}
           <FilterBar prefs={prefs} onChange={onPrefs} />
         </div>
       )}
@@ -755,7 +754,7 @@ export function Composer({
       )}
 
       {preview && (
-        <div className={styles.preview} data-testid="db-send-preview" style={panelFont}>
+        <div className={styles.preview} data-testid="db-send-preview" style={previewFont}>
           <span className={styles.previewLabel}>将发送</span>
           {preview.map((part, index) =>
             part.emote ? (

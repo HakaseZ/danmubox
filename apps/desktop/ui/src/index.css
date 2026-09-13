@@ -19,7 +19,7 @@ body {
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  /* em 刻度盘的根：--fs-root 是唯一基准，弹幕区 / 面板再乘 `ui.font_scale`（docs/ui.md §8.2） */
+  /* em 刻度盘的根：--fs-root 是唯一基准；只有弹幕区再乘 `ui.font_scale`（docs/ui.md §8.2） */
   font-size: var(--fs-root);
   line-height: 1.5;
   overflow: hidden;

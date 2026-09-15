@@ -385,6 +385,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 |---|---|---|---|
 | `content` | 礼物名称 + 数量的组合描述 | 面向展示的说明文本 | 待实测校准（A8） |
 | `uid` / `uname` | 送礼用户槽位 | 与 `DANMU_MSG` 用户信息结构不一定同形 | 待实测校准（A8） |
+| `face` | **没有可靠来源 → 留空串** | 社区文档那份字段表只有礼物名 / 价格 / `coin_type`，载荷里也没有可确证的昵称同层头像槽位；实测流量里 `SEND_GIFT` 样本数为零。没有来源就不猜路径（契约 §5 的 `face`） | 待实测校准（A8） |
 | `amount` | 价格槽位（单价 × 数量，单位为金瓜子） | 无价字段时 `0`，不得猜测 | 待实测校准（A8） |
 | 连击标识 | 礼物标识 + 连击数的字段组合 | 供会话内连击聚合（见 §12.3） | 待实测校准（A8） |
 | `medal_level` / `medal_name` / `guard_level` | 送礼用户粉丝牌槽位 | 无则 `0` / `""` / `0` | 待实测校准（A4） |
@@ -402,7 +403,9 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 JSON 里只有 `{dmscore, pb}`。
 
 字段名与 tag **抄自官方前端产物里生成好的 proto 代码**（包名 `bilibili.live.gift.v1`，
-`t.GiftItem=function(){…}` 的声明顺序即 tag 顺序）：
+`t.GiftItem=function(){…}` 的声明顺序即 tag 顺序）。
+
+礼物子消息（官方 `bilibili.live.gift.v1.GiftItem`，对应实现里的 `pb::GiftV2Item`）：
 
 | tag | 字段 | 用途 |
 |---|---|---|
@@ -417,8 +420,19 @@ JSON 里只有 `{dmscore, pb}`。
 | 12 | `batch_combo_id` | 连击标识（`batch:gift:combo_id:…`），供会话内聚合 |
 | 18 | `action` | 动作词，样本为「投喂」 |
 
-顶层的 `uid` / `uname` / `face` / 粉丝牌 / 接收者按真实样本取值核对（顶层另有一个
-`sender_uinfo` 嵌套用户信息，tag 未知，本实现不用）。
+载荷**顶层**（对应实现里的 `pb::GiftV2`）：官方产物里没有这一份的表，字段名与 tag 是**按真实样本的取值形态**逐个核对出来的（10 位数且与用户名同现 → `uid`，依此类推）。顶层另有一个 `sender_uinfo` 嵌套用户信息，tag 未知、本实现不用：
+
+| tag | 字段 | 类型 | 归一化去向 |
+|---|---|---|---|
+| 1 | `uid` | varint | `Message.uid` |
+| 2 | `uname` | string | `Message.uname` |
+| 3 | `face` | string | `Message.face`（头像；与 `uid` / `uname` **同层**，不是礼物子消息里的字段） |
+| 8 | `medal` | message | `Message.medal_level` / `medal_name`（`{5: level, 6: name}`） |
+| 10 | `gift` | message | 礼物子消息（上表） |
+| 29 | `anchor` | message | 受赠主播（`{1: uname, 2: uid}`），本期不消费 |
+
+> **易错点**：礼物子消息的 tag 3 是 `num`，顶层 tag 3 是 `face`——两张表**各自独立编号**，
+> 别把顶层那套套到子消息上（反之亦然）。
 
 > **教训（2026-09-12）**：这份 schema 起初是"按取值反推"的，把 `num` 猜成了 tag 11、
 > 连击标识命名成 `combo_id`。对照官方生成代码后发现两处都错——**能拿到官方产物就别猜**。
@@ -432,6 +446,7 @@ JSON 里只有 `{dmscore, pb}`。
 | `content` | `data.message` | 留言正文 |
 | `amount` | `data.price` | **单位是元**（样本 `30`，正是 B 站 SC 的最低档）|
 | `uid` / `uname` | `data.uid`；`data.uinfo.base.name`，回落 `data.user_info.uname` | 昵称两处同名，实测一致 |
+| `face` | `data.uinfo.base.face` | 与已实测的 `uinfo.base.name` **同层**（同一个用户对象）；该键本身本轮采集未逐项记录，实现按同路径取值，取不到即空串 |
 | `upstream_id` | `data.id` | SC 标识（样本为数字 `18968196`），举报与去重都用得上 |
 | `ts` | `data.ts`，回落 `data.start_time` | **秒级**，×1000 归一化为毫秒 |
 | `medal_level` / `medal_name` | `data.medal_info.medal_level` / `.medal_name` | 样本 `10` / `粉丝团` |
@@ -457,6 +472,7 @@ JSON 里只有 `{dmscore, pb}`。
 | `content` | 互动类型的描述文本 | 由 `msg_type`（或等价枚举）映射为中文描述 | 待实测校准（A10） |
 | `uid` / `uname` | 触发用户槽位 | `INTERACT_WORD_V2` 需经 protobuf 解码后再取 | 待实测校准（A10、A11） |
 | `medal_level` / `medal_name` / `guard_level` | 触发用户粉丝牌槽位 | 无则零值 | 待实测校准（A4） |
+| `face` | pb：`user_info.base.face`（tag 22 → `2: face`）；JSON：`data.uinfo.base.face` | 均与昵称同层；取不到为空串。JSON 侧该键未观测到（`uname` 与 `uinfo.base.name` 是实测过的） | pb 路径已实测（A11、A14） |
 | `ts` | 载荷时间戳槽位 | 归一化为 UTC 毫秒 | 待实测校准（A7） |
 
 #### `INTERACT_WORD_V2` 的 protobuf 载荷
@@ -499,6 +515,7 @@ JSON 里只有 `{dmscore, pb}`。
 |---|---|---|
 | `uid` | `data.uid` | 触发用户 |
 | `uname` | `data.uinfo.base.name` | **没有 `data.uname`**，必须走 `uinfo` |
+| `face` | `data.uinfo.base.face` | 与 `name` 同层（同一个用户对象）；该键本身本轮采集未逐项记录，实现按同路径取值 |
 | `content` | 留空 | 展示文案由 UI 生成（如 `data.copy_writing` 中的 `<%昵称%> 来了`） |
 
 噪声过滤建议：
@@ -526,6 +543,7 @@ JSON 里只有 `{dmscore, pb}`。
 | `content` | 开通播报文本槽位 | 面向展示的描述 | 待实测校准（A13） |
 | `guard_level` | 守护等级槽位 | `1` 总督 / `2` 提督 / `3` 舰长 | 待实测校准（A12） |
 | `uid` / `uname` | 购买用户槽位 | `USER_TOAST_MSG` 可能只带昵称 | 待实测校准（A13） |
+| `face` | **无来源** | 两节字段表里都没有头像字段（实测样本零条，A33）→ `Message.face` 留空串，不猜路径 | 未观测到（A12 / A13） |
 | `amount` | 价格 / 数量槽位（金瓜子） | 无法确证时 `0`，不得推算 | 待实测校准（A12） |
 | `ts` | 载荷时间戳槽位 | 归一化为 UTC 毫秒 | 待实测校准（A7） |
 
@@ -921,8 +939,8 @@ stateDiagram-v2
 | A4 | **部分解决**：粉丝牌在 `info[0][15].user.medal`，等级字段 `level`、名称字段 `name`（样本取值已脱敏）。`guard_level` 的非零分支仍缺样本（见 A12） |
 | A6 | **已解决**：举报标识在 `info[0][15].extra`（JSON 字符串）的 `id_str`，样本形如 36 位十六进制串 |
 | A7 | **已解决**：`info[0][4]` 是毫秒、`info[0][5]` 是秒，两者同帧出现且相差三个数量级 |
-| A11 | **已解决**：V2 载荷在 `data.pb`（非 `data`）；tag 1/2/5/6/7/8/22 与社区 schema 一致，但 tag 15 类型与 `activity_message` 位置被纠正，且 `timestamp_millisecond` 必须按 64 位声明 |
-| A14 | **已解决**：`ENTRY_EFFECT` 是 JSON；`data.uid` 为 UID，昵称在 `data.uinfo.base.name`（**没有** `data.uname`），展示文案在 `data.copy_writing` |
+| A11 | **已解决**：V2 载荷在 `data.pb`（非 `data`）；tag 1/2/5/6/7/8/22 与社区 schema 一致，但 tag 15 类型与 `activity_message` 位置被纠正，且 `timestamp_millisecond` 必须按 64 位声明（tag 22 里的 `user_info.base.face` 现已接进 `Message.face`） |
+| A14 | **已解决**：`ENTRY_EFFECT` 是 JSON；`data.uid` 为 UID，昵称在 `data.uinfo.base.name`（**没有** `data.uname`），展示文案在 `data.copy_writing`；同层的 `face` 按同一路径取用（**该键未单独观测到**，取不到即空串） |
 | A15 | **部分解决**：认证回应与认证包同帧头（`protover=1`）；线上稳定观测到 `code=0` 表示成功。非 0 取值集合仍缺样本 |
 | A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态 | 需一条**已知房管**的发言样本 | **已解决（2026-09-12）**：**`info[2][2]` 就是房管标记**（1 = 房管，0 = 否）。判据是一次天然的跨房间对照——同一个用户在**他担任房管**的那个房间里发布的弹幕 `info[2][2]` 全为 `1`，在另两个**他不是房管**的房间发布的弹幕全为 `0`。另有两条独立来源：SC 载荷自带 `user_info.manager`；历史条目自带顶层 `isadmin`（后者亦经同一次对照证实）。三条来源现在都已落到实现里（`cmd.rs` / `history.rs`） | `cmd.rs`、`history.rs`、§10.1 |
 | A8 / A9 / A12 / A13 | **未解决**：本轮未出现礼物、SC、大航海样本，字段名仍待采集 |
@@ -943,13 +961,13 @@ stateDiagram-v2
 | A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态（布尔 / 等级 / 位标志） | 同上，需一名房管账号发言样本 | 以已知房管与非房管各 3 条对照，确定判定式 | 房管徽标、`is_admin` |
 | A6 | `Message.upstream_id`（举报所需标识） | 举报弹幕所需的上游标识位于哪个槽位（弹幕 id / 消息 id / 组合串） | 同上，抓取一条可被举报的弹幕原文 | 用该标识对目标弹幕发起一次举报并核对是否命中，确认取哪个槽位 | `chat_report`、`upstream_id` |
 | A7 | 时间戳字段 | 各命令载荷中时间戳的字段名与单位（秒 / 毫秒）；缺失时是否可安全回退到本地时间 | 同上 | 与本地收帧时间比对，误差应在秒级以内；写入归一化规则 | `ts` 全命令 |
-| A8 | `SEND_GIFT`（含金额与连击字段） | 礼物名称、数量、单价（金瓜子）字段名；礼物标识与连击数（去重聚合用）字段名；用户 UID / 昵称字段名 | 同上，需真实礼物样本 | **按权威文档核对（2026-09-12），仍未实测**：`data.name`（礼物名）、`data.price`（金瓜子，文档记「该值/1000 的单位为元」）、`data.coin_type`（一般为 `gold`，即电池体系）。实现已按此填 `content` 与 `amount`。**但实测流量里没有 `SEND_GIFT`，只有 `SEND_GIFT_V2`**（后者字段抄自官方 proto，见 §10.2）| `cmd.rs` |
-| A9 | `SUPER_CHAT_MESSAGE` / `_JP`（含金额与去重字段） | SC 标识、金额、正文、时长字段名；`_JP` 与主命令的载荷差异 | 同上，需真实 SC 样本 | **已实测（2026-09-12）**：字段见 §10.3——`message` / `price`（**元**）/ `id` / `ts`（秒）/ `uinfo.base.name` / `user_info.{uname,guard_level,manager}` / `medal_info.{medal_level,medal_name,guard_level}`，另有 `rate = 1000`（1 元 = 1000 金瓜子）。10 分钟采集到 1 条 SC。**`_JP` 仍未见样本** | `cmd.rs`、§10.3 |
+| A8 | `SEND_GIFT`（含金额与连击字段） | 礼物名称、数量、单价（金瓜子）字段名；礼物标识与连击数（去重聚合用）字段名；用户 UID / 昵称字段名 | 同上，需真实礼物样本 | **按权威文档核对（2026-09-12），仍未实测**：`data.name`（礼物名）、`data.price`（金瓜子，文档记「该值/1000 的单位为元」）、`data.coin_type`（一般为 `gold`，即电池体系）。实现已按此填 `content` 与 `amount`。**但实测流量里没有 `SEND_GIFT`，只有 `SEND_GIFT_V2`**（后者字段抄自官方 proto，见 §10.2）。**头像（`Message.face`）无来源**：社区字段表里没有头像字段，载荷里也没有可确证的昵称同层头像槽位——刻意留空，等有样本再回填 | `cmd.rs` |
+| A9 | `SUPER_CHAT_MESSAGE` / `_JP`（含金额与去重字段） | SC 标识、金额、正文、时长字段名；`_JP` 与主命令的载荷差异 | 同上，需真实 SC 样本 | **已实测（2026-09-12）**：字段见 §10.3——`message` / `price`（**元**）/ `id` / `ts`（秒）/ `uinfo.base.name` / `user_info.{uname,guard_level,manager}` / `medal_info.{medal_level,medal_name,guard_level}`，另有 `rate = 1000`（1 元 = 1000 金瓜子）。10 分钟采集到 1 条 SC。**`_JP` 仍未见样本**。头像按同一 `uinfo.base` 层的 `face` 取用（**该键本轮未逐项记录**，实现按同路径取值，取不到即空串） | `cmd.rs`、§10.3 |
 | A10 | `INTERACT_WORD`（V1） | 互动类型枚举的字面值与取值集合（进入 / 关注 / 分享等） | 同上 | 按可触发的类型逐项采集，建立完整映射后再写描述文案 | `content` 文案 |
 | A11 | `INTERACT_WORD_V2` 的 proto 字段名 | 上表 §10.4 所列 8 个字段的真实 tag 号、类型与嵌套结构；`msg_type` 枚举值与文案映射 | 同上，需一条 V2 进场样本与一条 V1 同场景样本 | base64 解码 `data` 后用 `prost` 试解，与 V1 对照确认字段名与语义 | `interact` 解析、`prost` schema |
-| A12 | `GUARD_BUY` | 守护等级字段、数量与价格字段及单位（金瓜子 / 月） | 同上，需一次真实开通样本 | **按权威文档核对（2026-09-12），仍未实测**：`uid` / `username` / `guard_level`（1 总督·2 提督·3 舰长）/ `num` / `price`（原金瓜子标价，CNY×1000）/ `gift_id` / `gift_name` / `start_time`。实现已按此填全（含按等级补名称）。样本仍未出现——10 分钟巨型房间采集里零条（A33）| `cmd.rs`、§10.6 |
-| A13 | `USER_TOAST_MSG` | 播报文本、角色、数量字段；与 `GUARD_BUY` 的时间关系 | 同上 | **按权威文档核对（2026-09-12），仍未实测**：`guard_level` / `num` / `price` / `role_name` / `payflow_id` 等（该命令**没有昵称字段**，实现因此在 `role_name` 缺失时按等级补名字）。与 `GUARD_BUY` 的时间关系仍未知 | `cmd.rs` |
-| A14 | `ENTRY_EFFECT` | 触发用户的 UID / 昵称 / 舰长等级字段位置 | 同上 | 以高价值账号进场触发，记录字段 | `interact` 归一化 |
+| A12 | `GUARD_BUY` | 守护等级字段、数量与价格字段及单位（金瓜子 / 月） | 同上，需一次真实开通样本 | **按权威文档核对（2026-09-12），仍未实测**：`uid` / `username` / `guard_level`（1 总督·2 提督·3 舰长）/ `num` / `price`（原金瓜子标价，CNY×1000）/ `gift_id` / `gift_name` / `start_time`。实现已按此填全（含按等级补名称）。样本仍未出现——10 分钟巨型房间采集里零条（A33）。字段表里**没有头像字段**，`Message.face` 因此留空（见 §10.6）| `cmd.rs`、§10.6 |
+| A13 | `USER_TOAST_MSG` | 播报文本、角色、数量字段；与 `GUARD_BUY` 的时间关系 | 同上 | **按权威文档核对（2026-09-12），仍未实测**：`guard_level` / `num` / `price` / `role_name` / `payflow_id` 等（该命令**没有昵称字段**，实现因此在 `role_name` 缺失时按等级补名字）。与 `GUARD_BUY` 的时间关系仍未知。同样**没有头像字段**（`Message.face` 留空） | `cmd.rs` |
+| A14 | `ENTRY_EFFECT` | 触发用户的 UID / 昵称 / 舰长等级字段位置 | 同上 | 以高价值账号进场触发，记录字段。**昵称与 UID 已实测**（`data.uid` / `data.uinfo.base.name`）；`uinfo.base.face` 按同层取用但**该键本身未观测到** | `interact` 归一化 |
 | A15 | `op=8` 认证回应 | body 字段名、`code` 的实际取值集合与各分类归属 | 同上，另加「未登录 / 登录失效」两种状态各一次 | 记录全部出现过的 `code` 与对应状态，建立粗分类表 | §13.3、§15.2 |
 | A16 | `msg/send` 被吞判定 | `msg` / `message` == `"f"` / `"k"` 的可复现性；`data.mode_info.extra` 的 `content` 回显形态 | 用会触发风控的内容与在关闭公开弹幕的房间各发一条，比对响应与弹幕流 | **部分解决**：`ok` 分支已复核——登录态真实发送后弹幕确实出现在公开弹幕流（含回声 uid 与本人一致）。**一次 `code=0, msg="f"` 的样本已收到，但成因未知**：该样本出现在「发送者已把该主播加进黑名单」的房间，而同一账号在未拉黑主播的房间返回 `Ok`（对照见 §11 与 A17）——因此 `f` 与「发送者黑名单」**存在相关性**，不能据此断定它就等同「平台风控吞掉」；`"k"` 仍零样本。现映射（`f`→`blocked_platform`、`k`→`blocked_room`）来自社区用户脚本，保持不动但存疑 | `send.rs` |
 | A17 | `SendOutcome` 各错误码 | `rate_limited` / `medal_required` / `muted` 等取值分别对应哪些上游 `code`；`code` 与 `msg` 的稳定组合 | 逐码触发一次并记录 `code` + `msg` 原文 | **`code=10023` 已定（2026-09-12，用户实证）**：语义为**发送者自己把该主播加进了黑名单**——上游原话「发送失败，请先移除该用户黑名单」是字面意思，用户解除该黑名单后同一房间立即恢复发送。因此它**不**映射到 `rate_limited` / `muted` 等取值，仍走 `failed`，由 `SendReport.upstream_message` 把原话带到界面（契约 §5）。其余码仍未知 | `send.rs`、`SendOutcome`、`chat_send` |

@@ -190,7 +190,7 @@ sessdata = ""
 | `reply_type_enum` | i64 | 上游回复类型枚举（实时 `extra.reply_type_enum`，历史 `reply.reply_type_enum`）。官方枚举 `{0: NO_REPLY, 1: NORMAL_REPLY, 2: MATCH_REPLY}`，但实测只有 `0`/`1` 出现、且与 `reply_mid` 是否非 0 完全同构——**不得**用它区分「纯 @」与「回复」（`protocol.md` A40） |
 | `show_reply` | bool | 上游 `show_reply`。实测在**所有**样本（含毫无回复关系的）里都是 `true`，不是判别式，仅供渲染与校准 |
 | `reply_uname_color` | string | 被 @ 者名字的颜色（实测 `#FB7299`）；无关系时为空串 |
-| `face` | string | 发言者头像 URL（`info[0][15].user.base.face`，历史条目同层）；取不到为空串，界面自行降级 |
+| `face` | string | 发言者头像 URL：弹幕（含历史条目）取 `info[0][15].user.base.face`；SC 取 `data.uinfo.base.face`；礼物 V2 取 pb 顶层 `face`（`protocol.md` §10.2）；互动/进场取 pb `UserInfo.base.face` 或 JSON `data.uinfo.base.face`（`protocol.md` §10.4）。**没有可靠来源的一律留空串**（V1 礼物与大航海即如此，见 §10.2 / §10.6），界面对空串自行降级 |
 | `medal_color_start` | string | 粉丝牌起始色（上游 `user.medal.v2_medal_color_start`），带 alpha 的 CSS 十六进制串（如 `#3FB4F699`）；无牌/缺失为空串 |
 | `medal_color_end` | string | 同上（`v2_medal_color_end`） |
 | `medal_color_border` | string | 同上（`v2_medal_color_border`） |
@@ -389,7 +389,8 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.theme` | string | `"system"` | `system` / `dark` / `light` |
 | `ui.auto_scroll` | boolean | `true` | 是否自动跟随最新 |
 | `ui.pause_on_hover` | boolean | `true` | 鼠标悬停暂停自动滚动 |
-| `ui.gift_panel_mode` | string | `"merged"` | `merged`（礼物混在弹幕栏）/ `separate`（独立礼物栏） |
+| `ui.gift_in_danmaku` | boolean | `true` | 弹幕流里是否包含礼物 / SC / 大航海（`false` = 它们不出现在弹幕流里） |
+| `ui.gift_panel` | boolean | `true` | 是否显示独立礼物栏（`false` = 不渲染礼物栏） |
 | `ui.interact_auto_hide` | boolean | `true` | 互动/进场消息显示一会儿后自动消失（`false` = 常驻） |
 | `ui.show_timestamp` | boolean | `false` | 弹幕前是否显示时间戳（用户 2026-09-12 反馈：要可开关） |
 | `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
@@ -402,12 +403,18 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 `ui.recent_watched` 由界面在**打开房间**时写入（不是手改的开关），但界面状态一律只落 `prefs.json`，
 不进 `config.toml`（后者只放凭据，§4.1）。
 
-`ui.gift_panel_mode` 对应 REQUIREMENTS.md「可以配置独立一个礼物栏或者礼物混合在弹幕栏中」。
+`ui.gift_in_danmaku` / `ui.gift_panel` 对应 REQUIREMENTS.md「可以配置独立一个礼物栏或者礼物混合在弹幕栏中」：
+两者**互相独立**（旧键 `ui.gift_panel_mode` 的 `merged` / `separate` 是一个二选一的门，表达不了「都显示」或「都不显示」）。
+礼物栏自身的结构与统计口径见 [`ui.md`](ui.md) §5。
 
 读写语义（对 `prefs_get` / `prefs_set` 生效）：读返回全部键的**生效值**（默认值已合并）；写接受部分键值补丁，未知键或非法值报 `BAD_REQUEST`，成功返回合并后的生效值全集。
 
 `filter.kinds` 默认不含 `system`，因此系统类消息（开播 / 下播 / 标题变更 / 公告）**默认不显示**——这是需求 §2.4 的原意，落在白名单的默认值上。原先前端另有一个 `ui.system_notice` 开关，与白名单里的「系统」项盖住的消息集合逐字相同，用户 2026-09-14 裁决删除该键、只留白名单一条门。
 存量 `prefs.json` 里若还写着 `ui.system_notice`，`load` 时按它的值把结果物化进 `filter.kinds`（`false` → 从白名单里去掉 `system`；`true` → 保证含 `system`），旧键本身由此失效。
+
+存量 `prefs.json` 里若还写着 `ui.gift_panel_mode`（旧键已删除，取值为 `merged` / `separate`），`load` 时按它的值把结果物化进上表两枚新键：
+`separate` → `ui.gift_in_danmaku=false` + `ui.gift_panel=true`；`merged` → `ui.gift_in_danmaku=true` + `ui.gift_panel=false`。
+旧键本身当未知键忽略、下次落盘即从文件里消失；**文件里已显式写出新键的那一枚以文件为准**——迁移只补新形态没说的那部分，不覆盖用户已表达的取值。
 
 ## 9. 需求溯源（规范性）
 
@@ -427,7 +434,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | cookie 配置文件 / 默认扫码 / 有则直读 | §4.1（其中「手填 Cookie」的导入入口已于 2026-09-13 按用户裁决从全链路移除，只剩「直接编辑该文件」；`REQUIREMENTS.md` §2.5 已同步为「游客 / 扫码」两种方式） |
 | 房管身份 | §5 `is_admin` |
 | 本房间粉丝牌等级 | §5 `RoomSession.my_medal_level` |
-| 礼物事件 / 独立礼物栏或混合 | §8 `ui.gift_panel_mode` |
+| 礼物事件 / 独立礼物栏或混合 | §8 `ui.gift_in_danmaku` / `ui.gift_panel` |
 | 关注列表 + 直播中置顶 | §5 `FollowedRoom`、§7 `follow_list` |
 | 房间列表 / 标签条用主播昵称或标题标识（不露房间号） | §5 `Room.anchor_uname` / `title`、`ui.md` §2.2 |
 | 发言失败原因（全局/直播间禁言、等级、频率） | §5 `SendOutcome` |

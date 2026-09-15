@@ -182,7 +182,16 @@ sid = ""
 
 ### 1.5 偏好文件 `prefs.json`
 
-界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为契约 §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_panel_mode`、`filter.kinds`、`history.buffer_rows`）。只存被显式改过的键，缺失的键回落到默认值（契约 §4.2）。
+界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为契约 §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_in_danmaku`、`ui.gift_panel`、`filter.kinds`、`history.buffer_rows`）。只存被显式改过的键，缺失的键回落到默认值（契约 §4.2）。
+
+```json
+{
+  "ui.theme": "dark",
+  "ui.gift_in_danmaku": false,
+  "ui.gift_panel": true,
+  "history.buffer_rows": 8000
+}
+```
 
 | 操作 | 方法 |
 |---|---|
@@ -195,7 +204,7 @@ sid = ""
 | 文件缺失 | 按默认值启动 |
 | 单键缺失 | 该键取默认值，其余键照常生效 |
 | 未知键或非法值 | 键清单以契约 §8 为准，清单外或类型/范围不符的键不参与生效值合成；建议只通过界面修改 |
-| 已删除键的残留 | `ui.system_notice` 已删除（开关并进 `filter.kinds` 白名单，契约 §8）：读文件时按它的值把结果物化进 `filter.kinds`（`false` → 去掉 `system`；`true` → 补上），该键本身随即失效，下次写入后从文件里消失。其余已删除键（如 `filter.keywords*`）只是被忽略 |
+| 已删除键的残留 | `ui.system_notice` 已删除（开关并进 `filter.kinds` 白名单，契约 §8）：读文件时按它的值把结果物化进 `filter.kinds`（`false` → 去掉 `system`；`true` → 补上），该键本身随即失效，下次写入后从文件里消失。`ui.gift_panel_mode` 同理已删除、由 `ui.gift_in_danmaku` / `ui.gift_panel` 两枚开关取代：读文件时按旧值物化（`separate` → `false` / `true`；`merged` → `true` / `false`），文件里已显式写了新键的那一枚以文件为准。其余已删除键（如 `filter.keywords*`）只是被忽略 |
 | JSON 解析失败（损坏） | 按默认值启动，并把损坏副本保留为 `prefs.json.bak` |
 | 正常写入 | 原子替换（临时文件 + rename），不会出现写一半的半成品文件 |
 

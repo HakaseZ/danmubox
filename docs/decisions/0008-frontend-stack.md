@@ -22,7 +22,7 @@
 | 自动滚动 / 暂停 / 回到最新 | 用户向上翻阅时必须停止自动跟随，回到底部时恢复 |
 | 过滤 | 关键词、用户、消息类型（六种 `kind`） |
 | 样式调节 | 字号（`ui.font_scale`）、合并相似消息；透明度那条滑杆已于 2026-09-12 删除，重做见 [`../roadmap.md`](../roadmap.md) |
-| 礼物栏双模式 | `ui.gift_panel_mode`：`merged`（礼物混在弹幕栏）/ `separate`（独立礼物栏） |
+| 礼物栏开关 | 两枚独立布尔键（`ui.gift_in_danmaku`：弹幕流里是否包含礼物 / SC / 大航海；`ui.gift_panel`：是否显示独立礼物栏），取代原先二选一的 `ui.gift_panel_mode` |
 | 多房间标签页 | 每个房间一份独立的消息流与滚动位置 |
 | 六类消息渲染 | `danmaku` / `gift` / `superchat` / `interact` / `guard` / `system` 各有独立视觉 |
 | 偏好读写 | 经 `prefs_get` / `prefs_set` 与 `prefs.json` 同步（见 [`../contract.md`](../contract.md) §8） |

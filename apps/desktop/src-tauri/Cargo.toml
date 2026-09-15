@@ -27,3 +27,10 @@ tauri = { version = "2", features = [] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 「用系统浏览器打开链接」（`open_url`，点昵称跳用户主页）。
+# 桌面三端各一条系统命令就够，只有 Android 没有可用的系统命令——必须经平台 Intent，
+# 因此**只在 Android 目标上**声明官方插件，桌面依赖图与产物一字不变。
+# Rust 侧调用不经过 capability 系统，故 `capabilities/default.json` 不需要 `opener:*` 权限。
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-opener = "2"

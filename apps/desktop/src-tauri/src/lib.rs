@@ -411,11 +411,17 @@ async fn chat_send(
 
 /// 用系统默认浏览器打开一个链接（点昵称跳用户主页用）。
 ///
-/// 刻意不引入 `tauri-plugin-opener`：桌面三端各一条系统命令就够，
-/// 少一个依赖、少一份 capability 配置。Android 端目前没有可用路径，
-/// 明确返回不支持而不是静默失败（`docs/roadmap.md` 的交付形态里 Android 尚未开工）。
+/// 桌面三端各一条系统命令就够，不为此引入依赖。Android 没有可用的系统命令
+/// （既没有 `open` 也没有 `xdg-open`），只能经平台 Intent，因此**只在 Android 上**
+/// 挂官方 `tauri-plugin-opener`（`Cargo.toml` 里按 `cfg(target_os = "android")` 声明，
+/// 桌面构建的依赖图与产物一字不变）。这里是 Rust 侧调用，**不经过 capability 系统**，
+/// 所以 `capabilities/default.json` 不需要 `opener:*` 权限。
+/// 入口处的 http(s) 白名单照旧先行，其余平台仍明确返回不支持而不是静默失败。
 #[tauri::command]
-fn open_url(url: String) -> ApiResult<()> {
+fn open_url(app: tauri::AppHandle, url: String) -> ApiResult<()> {
+    // 句柄只有 Android 那一支用得上（桌面三端各是一条系统命令），别处不做标记会被判未使用。
+    #[cfg(not(target_os = "android"))]
+    let _ = &app;
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err(ApiError {
             code: "BAD_REQUEST".into(),
@@ -437,7 +443,19 @@ fn open_url(url: String) -> ApiResult<()> {
         {
             std::process::Command::new("xdg-open").arg(&url).spawn()
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        #[cfg(target_os = "android")]
+        {
+            use tauri_plugin_opener::OpenerExt as _;
+            app.opener()
+                .open_url(url.clone(), None::<&str>)
+                .map_err(|err| std::io::Error::other(err.to_string()))
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "android"
+        )))]
         {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -938,6 +956,33 @@ mod log_bridge {
 
 // ---------------------------------------------------------------- 入口
 
+/// 移动端：把数据目录钉到应用私有目录（`docs/contract.md` §4）。
+///
+/// 必须在**任何**路径被读取之前执行：`ConfigStore::load` 与 `Prefs::load` 都经
+/// `danmubox_core::paths` 解析目录，而那里的非 mac/win 分支落到
+/// `$HOME/.local/share/danmubox`——在 Android 上那不是系统认的应用私有数据位置，
+/// 进程 CWD 还不可写。真正的私有目录只有 Tauri 知道（`app_data_dir()`），
+/// 所以由外壳在启动最早期把 `DANMUBOX_HOME` 注入进去，core 侧保持平台无关。
+///
+/// 回一个路径只为打日志；目录名不是凭据（`AGENT.md` §8 第 1 条禁的是凭据）。
+#[cfg(mobile)]
+fn pin_data_dir(app: &tauri::App) -> std::path::PathBuf {
+    let dir = match app.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            eprintln!("解析应用数据目录失败：{err}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        eprintln!("创建应用数据目录失败：{err}");
+        std::process::exit(1);
+    }
+    std::env::set_var("DANMUBOX_HOME", &dir);
+    dir
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let (log_tx, mut log_rx) = tokio::sync::broadcast::channel::<String>(256);
 
@@ -958,24 +1003,13 @@ pub fn run() {
             .try_init();
     }
 
-    let store = match ConfigStore::load(config_path()) {
-        Ok(store) => Arc::new(store),
-        Err(err) => {
-            eprintln!("读取凭据文件失败：{err}");
-            std::process::exit(1);
-        }
-    };
+    let builder = tauri::Builder::default();
+    // Android 的「用系统浏览器打开链接」没有系统命令可调，只能走平台 Intent，
+    // 因此只在 Android 上挂官方 opener 插件（见 `open_url`）：桌面构建一字不变。
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_opener::init());
 
-    let state = match AppState::new(store) {
-        Ok(state) => state,
-        Err(err) => {
-            eprintln!("初始化鉴权失败：{err}");
-            std::process::exit(1);
-        }
-    };
-
-    tauri::Builder::default()
-        .manage(state)
+    builder
         // 白屏排查的入口：这里没有输出就说明 webview 根本没导航成功。
         .on_page_load(|webview, payload| {
             tracing::debug!(url = %payload.url(), "webview 页面加载");
@@ -984,6 +1018,32 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            // 移动端：数据目录必须在**第一次读路径之前**钉死（桌面端走 core 的平台目录，
+            // 因此这条分支在桌面端不存在，行为与从前完全一致）。
+            #[cfg(mobile)]
+            {
+                let dir = pin_data_dir(app);
+                tracing::debug!(dir = %dir.display(), "数据目录");
+            }
+
+            let store = match ConfigStore::load(config_path()) {
+                Ok(store) => Arc::new(store),
+                Err(err) => {
+                    eprintln!("读取凭据文件失败：{err}");
+                    std::process::exit(1);
+                }
+            };
+
+            let state = match AppState::new(store) {
+                Ok(state) => state,
+                Err(err) => {
+                    eprintln!("初始化鉴权失败：{err}");
+                    std::process::exit(1);
+                }
+            };
+            // 命令在 setup 之后才可能被调用，因此 `State<AppState>` 照旧可用。
+            app.manage(state);
+
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
             spawn_event_forwarder(handle.clone(), state.bus.clone());

@@ -37,7 +37,7 @@ danmubox/
   CHANGELOG.md
 ```
 
-- `apps/desktop/src-tauri/gen/android/` 是 **Tauri 生成的工程，但按「长期维护的源码」入库**（40 个文件；根 `.gitignore` 只忽略每次构建都会重生的 `gen/schemas/`）。本仓库在其中改过两处（`BuildTask.kt` 的 CLI 解析、`app/build.gradle.kts` 的 `signingConfigs`），**重跑 `tauri android init` 会覆盖它们**——细节与原因见 `docs/operations.md` §5.3。`keystore.jks` / `keystore.properties` 由 `gen/android/.gitignore` 忽略，**永不入库**。
+- `apps/desktop/src-tauri/gen/android/` 是 **Tauri 生成的工程，但按「长期维护的源码」入库**（40 个文件；根 `.gitignore` 只忽略每次构建都会重生的 `gen/schemas/`）。本仓库在其中改过三处（`BuildTask.kt` 的 CLI 解析、`app/build.gradle.kts` 的 `signingConfigs`、`MainActivity.kt` 的系统栏 inset 下发），**重跑 `tauri android init` 会覆盖它们**——细节与原因见 `docs/operations.md` §5.3。`keystore.jks` / `keystore.properties` 由 `gen/android/.gitignore` 忽略，**永不入库**。
 - `scripts/android-env.sh` 把 Android 工具链装进仓库内的 `.android-env/`（已忽略，可整包删除）；宿主侧不装任何东西，理由见 `docs/decisions/0009-in-repo-android-toolchain.md`。
 
 依赖方向（单向，不可违反）：

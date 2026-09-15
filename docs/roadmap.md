@@ -34,7 +34,7 @@
 
 | 项 | 说明 | 触发 / 前置 |
 |---|---|---|
-| Android 端 | Tauri 2 移动端产物。**2026-09-15 更新：已开工，出包 / 装机 / 启动这一档完成**——工具链装进仓库（`scripts/android-env.sh`，[`operations.md`](operations.md) §5.4）、`gen/android` 工程入库并接通自用签名、APK 装进模拟器启动、进公开测试房间 `1` 连上 | **剩余**：真机实测、扫码登录 / 发弹幕 / 收弹幕链路、四个分 ABI 包的安装；targetSdk 36 的 edge-to-edge inset 问题已发现并列修（同分支） |
+| Android 端 | Tauri 2 移动端产物。**2026-09-15 更新：已开工，出包 / 装机 / 启动这一档完成**——工具链装进仓库（`scripts/android-env.sh`，[`operations.md`](operations.md) §5.4）、`gen/android` 工程入库并接通自用签名、APK 装进模拟器启动、进公开测试房间 `1` 连上 | **剩余**：真机实测、扫码登录 / 发弹幕 / 收弹幕链路、四个分 ABI 包的安装；targetSdk 36 的 edge-to-edge 遮挡**已修**（提交 `32dcefc`，顶栏与输入区按系统栏 inset 让开，见 [`operations.md`](operations.md) §5.3） |
 | Windows 端 | Tauri 2 Windows 产物 | macOS 无法交叉编译（缺 WebView2 与 MSVC 运行时），需 Windows 机器或 CI |
 
 ### 2.3 更远期

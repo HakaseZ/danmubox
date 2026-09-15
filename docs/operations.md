@@ -452,7 +452,7 @@ CI=true ./ui/node_modules/.bin/tauri android build --apk --ci                  #
 CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  # 按 ABI 分包
 ```
 
-- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，40 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的两处改（见下表）。
+- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，40 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的三处改（见下表）。
 - `CI=true` 与 `--ci` 一起用，让 Tauri CLI 走非交互路径。
 - `tauri android dev -- --device <serial>`（真机热重载）**未实测**，本仓库暂不写具体用法。
 
@@ -465,16 +465,17 @@ CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  #
 - 自用装机只装 APK（不生成 AAB）。
 - 默认构建包含官方支持的四个 ABI；`--split-per-abi` 只改产物粒度，不改编译目标是否已装。
 
-**本仓库对上游模板的两处改**（重跑 `tauri android init` 会覆盖，需照下表重新打）：
+**本仓库对上游模板的三处改**（重跑 `tauri android init` 会覆盖，需照下表重新打）：
 
 | 位置 | 上游模板 | 本仓库 | 为什么 |
 |---|---|---|---|
 | `apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/dev/kksk/danmubox/kotlin/BuildTask.kt` | `node tauri android android-studio-script` | 直接调 `ui/node_modules/@tauri-apps/cli/tauri.js`；找不到 CLI 时显式报错 | 模板那条把 `tauri` 当**相对 workingDir 的路径**交给 node 解析，只有 app 根目录是 npm 工程时才成立。本仓前端工程在 `apps/desktop/ui`、`apps/desktop` 下没有 `package.json`，模板原样必然报 `Cannot find module '<…>/src-tauri/tauri'`（2026-09-15 实测） |
 | `apps/desktop/src-tauri/gen/android/app/build.gradle.kts` | **没有** signingConfig | 自建 `signingConfigs.release`，读 `gen/android/keystore.properties`；文件缺失即退回无签名 | 自用 release 包要能覆盖安装，见 §5.7 |
+| `apps/desktop/src-tauri/gen/android/app/src/main/java/dev/kksk/danmubox/MainActivity.kt` | 只调 `enableEdgeToEdge()` | 从原生收 `WindowInsets`（系统栏含 ime）换算成 CSS 变量 `--safe-top` / `--safe-bottom` 下发给页面 | Tauri 的 Android 外壳是 edge-to-edge，而 **WebView 里拿不到系统栏高度**：`env(safe-area-inset-*)` 只报刘海（实测 top=129 / bottom=0 设备像素，同一次实测状态栏 128、手势栏 63）。不补这一步，顶栏会压进状态栏带、输入区会压进手势栏；见下方「已修」条目的实测数字 |
 
 实测（2026-09-15，模拟器 android-35）：Gradle 8.14.3 / AGP 8.11.0 / Kotlin 1.9.25；`aapt2 dump badging` 读到 package `dev.kksk.danmubox`、versionCode 1000、versionName 0.1.0、minSdk 24、targetSdk / compileSdk 36、`INTERNET` 权限在；带签名包 `apksigner verify` 为 `Verifies`（v2 签名）。
 
-**已知问题（已发现，修复中）**：targetSdk 36 强制 edge-to-edge，而界面尚未处理窗口 inset——顶栏落进状态栏带（StatusBar frame=[0,0][1080,128]、刘海 top inset=128），右上主题按钮与电池图标重叠。本分支正在并行修；截至本文档提交时修复提交尚未落，是否已修以 `git log` 为准（`apps/desktop/ui` 侧的 fix 提交）。
+**已修（2026-09-15，提交 `32dcefc`）**：targetSdk 36 强制 edge-to-edge 带来的遮挡。改前实测：状态栏占 y=0..128、手势栏占 y=2337..2400，顶栏整条落在状态栏带里（标题文本 y=68..116、右上主题按钮 y=74..114，与系统电池图标重叠），房间页输入区压在手势栏下（白底画到 y=2399）。改后（同一 AVD）：顶栏文本 y=196..244、主题按钮 y=202..242、房间页顶栏让到 128、输入区白底止于 2338，`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL。做法与拒绝「给 WebView 设 padding」的理由见上表第三行与 `MainActivity.kt` 的注释。
 
 ### 5.4 工具链前置条件（对照 Tauri 官方 Prerequisites）
 

@@ -57,6 +57,16 @@ const DEFAULT_KINDS: [&str; 5] = ["danmaku", "gift", "superchat", "interact", "g
 /// 旧键本身当未知键忽略；下次 `save` 只落 `overrides`，文件里就只剩新形态。
 const LEGACY_SYSTEM_NOTICE: &str = "ui.system_notice";
 
+/// 已删除的历史偏好键（issue 2609152029 #4）。
+///
+/// 存量 `prefs.json` 里可能还写着它：`load` 时按它的值物化进 `ui.gift_in_danmaku` /
+/// `ui.gift_panel` 两枚新键（`separate` → `false` / `true`；`merged` → `true` / `false`），
+/// 旧键本身当未知键忽略；下次 `save` 只落 `overrides`，文件里就只剩新形态。
+const LEGACY_GIFT_PANEL_MODE: &str = "ui.gift_panel_mode";
+
+/// 已在 `load` 里被接管的历史键：它们不参与白名单匹配，也不算「未知键」。
+const LEGACY_KEYS: [&str; 2] = [LEGACY_SYSTEM_NOTICE, LEGACY_GIFT_PANEL_MODE];
+
 fn spec(
     key: &'static str,
     ty: Ty,
@@ -96,14 +106,11 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         ),
         spec("ui.auto_scroll", Ty::Bool, json!(true), None, None, None),
         spec("ui.pause_on_hover", Ty::Bool, json!(true), None, None, None),
-        spec(
-            "ui.gift_panel_mode",
-            Ty::Str,
-            json!("merged"),
-            None,
-            None,
-            Some(&["merged", "separate"]),
-        ),
+        // 礼物栏两枚独立开关（issue 2609152029 #4）。旧键 `ui.gift_panel_mode`
+        // （`merged` / `separate`）是一个二选一的门，表达不了「都显示」或「都不显示」，
+        // 已删除；存量迁移见 [`LEGACY_GIFT_PANEL_MODE`]。
+        spec("ui.gift_in_danmaku", Ty::Bool, json!(true), None, None, None),
+        spec("ui.gift_panel", Ty::Bool, json!(true), None, None, None),
         // 互动/进场消息：默认「显示一会儿就淡出」，关掉则常驻（需求 §2.4）。
         spec(
             "ui.interact_auto_hide",
@@ -292,8 +299,8 @@ impl Prefs {
         let mut unknown: Vec<&str> = Vec::new();
         if let Some(obj) = parsed.as_object() {
             for (key, value) in obj {
-                if key == LEGACY_SYSTEM_NOTICE {
-                    continue; // 已删除的旧键，交给 migrate_legacy_system_notice 物化
+                if LEGACY_KEYS.contains(&key.as_str()) {
+                    continue; // 已删除的旧键，交给各自的迁移函数物化
                 }
                 match find_spec(key) {
                     Some(spec) if validate(spec, value).is_ok() => {
@@ -308,6 +315,7 @@ impl Prefs {
                 }
             }
             migrate_legacy_system_notice(&mut prefs, obj);
+            migrate_legacy_gift_panel_mode(&mut prefs, obj);
         }
         if !unknown.is_empty() {
             tracing::debug!(keys = ?unknown, "忽略文件里未知或非法的偏好键（下次落盘即清理）");
@@ -376,6 +384,39 @@ fn migrate_legacy_system_notice(prefs: &mut Prefs, file: &Map<String, Value>) {
         .insert("filter.kinds".to_string(), json!(kinds));
 }
 
+/// 把历史键 `ui.gift_panel_mode` 的值物化进两枚新布尔键（见 [`LEGACY_GIFT_PANEL_MODE`]）。
+///
+/// 两枚新键**各自**判断文件里有没有显式生效值：写了就以文件为准，没写才补旧键的迁移结果——
+/// 迁移补的是「用户表达过、但用的是旧形态」的那部分，不该覆盖用户在新形态上的取值。
+/// 值不是 `merged` | `separate`（被手写坏了）时按非法值忽略，两枚新键都不动。
+fn migrate_legacy_gift_panel_mode(prefs: &mut Prefs, file: &Map<String, Value>) {
+    let Some(Value::String(mode)) = file.get(LEGACY_GIFT_PANEL_MODE) else {
+        return;
+    };
+    // `separate` = 礼物只进独立栏（弹幕流里不含）；`merged` = 礼物只在弹幕流里（没有独立栏）。
+    let (in_danmaku, panel) = match mode.as_str() {
+        "separate" => (false, true),
+        "merged" => (true, false),
+        other => {
+            tracing::debug!(mode = other, "偏好键 ui.gift_panel_mode 取值不认识，忽略");
+            return;
+        }
+    };
+
+    tracing::info!(
+        mode = %mode,
+        "偏好键 ui.gift_panel_mode 已删除，按它的值物化进 ui.gift_in_danmaku / ui.gift_panel"
+    );
+    for (key, value) in [
+        ("ui.gift_in_danmaku", in_danmaku),
+        ("ui.gift_panel", panel),
+    ] {
+        if !prefs.overrides.contains_key(key) {
+            prefs.overrides.insert(key.to_string(), json!(value));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,7 +481,8 @@ mod tests {
     fn defaults_are_the_documented_ones() {
         let prefs = Prefs::new();
         assert_eq!(prefs.get("ui.theme").unwrap(), json!("system"));
-        assert_eq!(prefs.get("ui.gift_panel_mode").unwrap(), json!("merged"));
+        assert_eq!(prefs.get("ui.gift_in_danmaku").unwrap(), json!(true));
+        assert_eq!(prefs.get("ui.gift_panel").unwrap(), json!(true));
         assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
         assert_eq!(prefs.get("history.buffer_rows").unwrap(), json!(5000));
         assert_eq!(prefs.buffer_rows(), 5000);
@@ -658,17 +700,65 @@ mod tests {
         );
     }
 
+    /// 存量 `ui.gift_panel_mode` 的迁移（issue 2609152029 #4）：`separate` / `merged` 各自
+    /// 物化成两枚新布尔键的一对取值，旧键本身不再留在 `overrides` 里。
+    #[test]
+    fn legacy_gift_panel_mode_migrates_into_two_booleans() {
+        let separate = load_temp("mig-sep", r#"{"ui.gift_panel_mode":"separate"}"#);
+        assert_eq!(separate.get("ui.gift_in_danmaku").unwrap(), json!(false));
+        assert_eq!(separate.get("ui.gift_panel").unwrap(), json!(true));
+        assert!(
+            separate.overrides().get(LEGACY_GIFT_PANEL_MODE).is_none(),
+            "旧键不得留在 overrides 里（下次落盘即消失）"
+        );
+
+        let merged = load_temp("mig-mrg", r#"{"ui.gift_panel_mode":"merged"}"#);
+        assert_eq!(merged.get("ui.gift_in_danmaku").unwrap(), json!(true));
+        assert_eq!(merged.get("ui.gift_panel").unwrap(), json!(false));
+
+        // 文件里已显式写出新键的那一枚以文件为准，迁移只补另一枚。
+        let half = load_temp(
+            "mig-half",
+            r#"{"ui.gift_panel_mode":"separate","ui.gift_in_danmaku":true}"#,
+        );
+        assert_eq!(half.get("ui.gift_in_danmaku").unwrap(), json!(true));
+        assert_eq!(half.get("ui.gift_panel").unwrap(), json!(true));
+
+        // 取值不认识 / 类型不对：按非法值忽略，两枚新键都回落默认值。
+        for junk in [
+            r#"{"ui.gift_panel_mode":"both"}"#,
+            r#"{"ui.gift_panel_mode":true}"#,
+        ] {
+            let loaded = load_temp("mig-junk-gift", junk);
+            assert_eq!(loaded.get("ui.gift_in_danmaku").unwrap(), json!(true));
+            assert_eq!(loaded.get("ui.gift_panel").unwrap(), json!(true));
+            assert!(loaded.overrides().is_empty(), "坏值不该写进 overrides");
+        }
+
+        // 没有旧键就不凭空多出两枚 overrides（默认值本身就是 true / true）。
+        let absent = load_temp("mig-absent-gift", r#"{"ui.theme":"dark"}"#);
+        assert!(absent.overrides().get("ui.gift_in_danmaku").is_none());
+        assert!(absent.overrides().get("ui.gift_panel").is_none());
+    }
+
     /// 删掉的键不能再被写入：`set_patch` 必须按未知键拒绝（开关已并进 `filter.kinds`）。
     #[test]
     fn deleted_pref_key_is_not_writable() {
         let mut prefs = Prefs::new();
-        assert_eq!(
-            prefs
-                .set_patch(&json!({ "ui.system_notice": false }))
-                .unwrap_err()
-                .code(),
-            "BAD_REQUEST"
-        );
+        for (key, value) in [
+            ("ui.system_notice", json!(false)),
+            // 礼物栏旧键同理：两枚新键才是唯一入口（issue 2609152029 #4）。
+            ("ui.gift_panel_mode", json!("separate")),
+        ] {
+            // 键是变量：`json!` 会把它当成字面 ident，这里显式拼 `Map`（否则测的是 `"key"`）。
+            let mut patch = Map::new();
+            patch.insert(key.to_string(), value);
+            assert_eq!(
+                prefs.set_patch(&Value::Object(patch)).unwrap_err().code(),
+                "BAD_REQUEST",
+                "`{key}` 已删除，必须按未知键拒绝"
+            );
+        }
         assert!(prefs.overrides().is_empty());
     }
 }

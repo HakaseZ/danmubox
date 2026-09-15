@@ -681,6 +681,7 @@ scripts/android-env.sh clean     # 停后台进程 → 打印各目录占用 →
 | `apps/desktop/src-tauri/gen/android/**` 其余部分 | 在 | 是要入库的工程源码，与工具链无关 |
 | 宿主侧 `~/.gradle`、`~/Library/Android`、`~/.rustup`、`~/.cargo` | 不存在 | 脚本从不写这些位置；`clean` 前后都一样 |
 | 宿主 rustup/cargo 的索引元数据 | 几 KB | 唯一的宿主足迹：宿主自身那份 `cargo`（非项目内那份）跑过本 workspace 时留下的索引元数据，与 `clean` 无关，清不清都行 |
+| 宿主侧模拟器 / Java 的小文件 | **本次已清理** | 跑过模拟器与 Gradle 之后，宿主 `$HOME` 下仍会出现几个几 KB 的再生文件（它们不看 `ANDROID_USER_HOME`）：`~/.emulator_console_auth_token`、`~/.hawtjni/`（jansi 解包）、`~/.android/emu-last-feature-flags.protobuf`、`~/.android/emu-update-last-check.ini`、`~/.android/modem-nv-ram-<端口>`。`clean` 不碰它们（不在 `.android-env/` 内），不用模拟器时手工收一下即可：`rm -rf ~/.hawtjni ~/.emulator_console_auth_token ~/.android/emu-* ~/.android/modem-nv-ram-*`。2026-09-15 本轮已按此清干净，`~/.android` 只剩原有的 `adbkey` / `adbkey.pub` |
 | 当前 shell 里已导出的 `JAVA_HOME` / `ANDROID_HOME` / `PATH` | 已失效 | `clean` 会提示：本 shell 之前 source 出来的那份变量指向已删除的目录，要重新 `bootstrap` + `. scripts/android-env.sh` |
 
 **要重装**：一条命令重建（可重复执行，已装好的会跳过），再 source 一次即可继续出包：

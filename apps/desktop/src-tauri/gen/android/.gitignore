@@ -15,6 +15,10 @@ build
 local.properties
 key.properties
 keystore.properties
+# 自用 release 签名材料：绝不入库（见 app/build.gradle.kts 的 signingConfigs 与 docs/operations.md §5.3）。
+# 注意它们不在 .android-env/ 里，所以 `scripts/android-env.sh clean` 删不掉——换机/重装前要单独备份。
+keystore.jks
+*.jks
 
 /.tauri
 /tauri.settings.gradle

@@ -166,6 +166,20 @@
   --panel-max-h-narrow: 45vh; /* 窄屏面板的限高（视口份额）：844px 下 ≈ 380px，超出由面板内部滚动 */
   --sheet-max-h: min(80vh, 640px); /* 窄屏账号对话框（模态）的最大高度 */
 
+  /* 系统栏安全区（状态栏 / 手势栏 / 刘海）：Android 的外壳是 edge-to-edge（窗口与
+     WebView 都铺满整屏），没有这两个值，顶栏会压在状态栏里、输入区会压在手势栏下。
+     默认值走 `env()` —— 桌面窗口没有系统 inset、没有 `viewport-fit=cover` 的浏览器
+     也解析成 0，因此这两个令牌在桌面端恒为 0（index.css 里 `body` 那两条内边距是空操作）。
+     Android 上由**原生** WindowInsets 覆盖：查询在 `gen/android/.../MainActivity.kt`，
+     值写进 documentElement 的内联自定义属性（内联优先于这里），因为 WebView 不实现
+     `env(safe-area-inset-*)` 的系统栏部分（实测 top 只报刘海 129 设备像素、bottom 恒为 0，
+     而状态栏 128、手势栏 63）。
+     只有 --safe-top / --safe-bottom 两个：左右两条系统手势带（模拟器实测各 78px）没有
+     可见的系统栏，不遮挡任何东西，只是会把贴边的横滑判成返回手势；这里不为它们缩宽度，
+     免得在 411px 宽的窄屏上白丢 156px。 */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
   color-scheme: dark;
 }
 
@@ -2030,7 +2044,8 @@
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: var(--sp-5);
+  /* 浮动提示浮在屏幕底部：脱离文档流，拿不到 `.shell` 的内边距，得自己让开手势栏 */
+  bottom: calc(var(--sp-5) + var(--safe-bottom));
   background: var(--danger);
   color: var(--on-danger);
   padding: var(--sp-2) var(--sp-3);
@@ -2237,7 +2252,7 @@
     border-radius: var(--r-4) var(--r-4) 0 0;
     border-bottom: none;
     box-shadow: var(--shadow-sheet);
-    padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+    padding-bottom: calc(var(--sp-3) + var(--safe-bottom));
   }
 
   /* 窄屏的触屏热区下限（下面那条 .picker button{min-height}）把表情格撑到 --tap-min，

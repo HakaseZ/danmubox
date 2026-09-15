@@ -3,7 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      `viewport-fit=cover`：移动端的 `env(safe-area-inset-*)` 只有在 cover 下才给真值，
+      而界面的 `--safe-top` / `--safe-bottom`（app.module.css 的令牌段）默认值正是它。
+      桌面窗口没有系统 inset，这一档永远是 0，加不加都一样（Chromium 桌面本来也不按
+      meta viewport 排版）；加了它，iOS 外壳与「原生 inset 没送到」的兜底路径才有值。
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <!--
       上游的图片 CDN 有防盗链：来源不是 bilibili 就返回 403，而不带 Referer 才放行。
       界面跑在 localhost / tauri.localhost 上，默认会带上这个来源，于是所有表情图

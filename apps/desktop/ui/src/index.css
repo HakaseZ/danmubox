@@ -23,6 +23,16 @@ body {
   font-size: var(--fs-root);
   line-height: 1.5;
   overflow: hidden;
+  /* 让开系统栏（状态栏 / 手势栏 / 刘海）：Android 的外壳是 edge-to-edge，窗口与 WebView
+     都铺满整屏，顶栏会压在状态栏里、输入区会压在手势栏下（`env(safe-area-inset-*)` 在
+     Android WebView 上只报刘海、不报系统栏，实测 top=129 / bottom=0 设备像素）。
+     所以在这里一次性让开：值由**原生** WindowInsets 下发（`gen/android/.../MainActivity.kt`），
+     默认走 `env()`（桌面窗口没有系统 inset，解析成 0，这两条内边距在桌面上是空操作）。
+     放在 `body` 而不是某个外壳上：`body` 是唯一的、所有页面共用的那一层，App 与 RoomView
+     各自都渲染了一个 `.shell`，写在外壳上会被弹幕页套两层。
+     配色不用管：`body` 的背景本来就会传播到画布，仍然铺满整屏 —— 系统栏后面是界面底色。 */
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
 }
 
 button {

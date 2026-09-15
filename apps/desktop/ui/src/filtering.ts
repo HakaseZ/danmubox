@@ -1,7 +1,7 @@
 // 显示层的纯逻辑：过滤、礼物连击折叠、徽标派生、时间格式化。
 // 这些规则来自 docs/ui.md 与 docs/contract.md §8 的偏好键，放这里便于单测。
 
-import type { FollowedRoom, Message, Prefs } from "./types";
+import type { FollowedRoom, Message, MessageKind, Prefs } from "./types";
 
 export interface Badges {
   anchor: boolean;
@@ -230,6 +230,69 @@ export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
     rows.push({ message, count: 1 });
   }
   return rows;
+}
+
+/**
+ * 礼物类三族（docs/ui.md §5）：礼物 / SC / 大航海。
+ *
+ * 它们是**两枚偏好键各自作用的对象**：`ui.gift_in_danmaku` 决定它们要不要留在弹幕流里，
+ * `ui.gift_panel` 决定独立礼物栏存在不存在；`filter.kinds` 白名单是更上一层、对两处都生效
+ * （`toDisplayRows` 已先把白名单外的行滤掉）。
+ */
+export const GIFT_KINDS: readonly MessageKind[] = ["gift", "superchat", "guard"];
+
+/**
+ * 礼物类消息的去向（docs/ui.md §5）：两枚键各管一头，四种组合都有确定行为。
+ *
+ * | `ui.gift_in_danmaku` | `ui.gift_panel` | 结果 |
+ * |---|---|---|
+ * | 真（默认） | 真（默认） | 弹幕流与独立礼物栏**都**渲染这三类 |
+ * | 真 | 假 | 只在弹幕流里 |
+ * | 假 | 真 | 只在独立礼物栏里 |
+ * | 假 | 假 | 两处都不渲染（用户自己的选择；`filter.kinds` 里的礼物芯片与这个结论无关） |
+ */
+export function splitGiftRows(
+  rows: DisplayRow[],
+  prefs: Prefs,
+): { chatRows: DisplayRow[]; giftRows: DisplayRow[] } {
+  const giftRows = prefs["ui.gift_panel"]
+    ? rows.filter((row) => GIFT_KINDS.includes(row.message.kind))
+    : [];
+  const chatRows = prefs["ui.gift_in_danmaku"]
+    ? rows
+    : rows.filter((row) => !GIFT_KINDS.includes(row.message.kind));
+  return { chatRows, giftRows };
+}
+
+/**
+ * 金额的展示文本（含单位）。**不换算**：礼物与大航海是金瓜子、SC 是元（契约 §5 既定口径），
+ * SC 载荷里的 `rate` 语义未经真实样本核验，因此这里不做任何跨单位求和 / 折算。
+ *
+ * `amount <= 0` 表示上游没给价（协议 §10.2 / §10.6：无价字段时 `0`，不得猜测）——
+ * 这时返回**空串**，界面不画金额格，也不拿 0 冒充一个数。
+ */
+export function amountText(amount: number, kind: MessageKind): string {
+  if (!Number.isFinite(amount) || amount <= 0) return "";
+  if (kind === "superchat") return `${amount.toLocaleString()} 元`;
+  return `${amount.toLocaleString()} 瓜子`;
+}
+
+/**
+ * SC 卡片档位（`1`…`5`，对应 `--sc-1 … --sc-5` 五枚令牌）。
+ *
+ * **边界是本地取值，不是官方取色**：B 站 SC 的可购档位是 30 / 50 / 100 / 500 / 1000 / 2000 元，
+ * 这里按其中段切成五档（分界 100 / 500 / 1000 / 2000 元），取值依据写在 docs/ui.md §4.1；
+ * 与网页端卡片配色的逐档比对仍留在 docs/protocol.md 附录 A 的待校准表里
+ * （A.2「SC 卡片配色档位边界」），核验后改边界即改这一处。
+ *
+ * `amount <= 0`（上游没给价）落到**最低档**，不编造高档位。
+ */
+export function superChatTier(amount: number): 1 | 2 | 3 | 4 | 5 {
+  if (amount >= 2000) return 5;
+  if (amount >= 1000) return 4;
+  if (amount >= 500) return 3;
+  if (amount >= 100) return 2;
+  return 1;
 }
 
 export function formatClock(ts: number): string {

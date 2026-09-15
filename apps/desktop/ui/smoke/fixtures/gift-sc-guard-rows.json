@@ -1,0 +1,149 @@
+{
+  "_note": "礼物 / SC / 大航海的冒烟夹具：**按 docs/protocol.md §10.2 / §10.3 / §10.6 的字段表构造**，不是真实抓包派生。本仓库此前没有任何礼物类样本（`danmaku-rows.json` 只有 DANMU_MSG），于是「独立礼物栏一条一行」「金额带单位」「SC 卡片」这些新行为在冒烟里零断言——这份夹具就是为补上它们而写的。构造而非实测的原因写在这里、也写进 docs/testing.md §9：AGENT.md §8 第 16 条禁止为测试发送礼物 / 醒目留言 / 大航海，因此这类事件在本项目里**拿不到授权样本**；字段名与单位仍以协议文档的表为准，逐项标在下面各条 source 的 `fields` 里。**构造的事实只有字段名与语义，具体数值（昵称、数量、金额、头像）都是布局用的假值**，不对上游取值作任何断言。",
+  "sanitized": [
+    "uid / upstream_id / 连击标识 → 自造的固定值或 <redacted>（不出现任何真实账号标识）",
+    "昵称 → 自造的固定假名（「礼物甲」「醒目留言者」「舰长买主」等，不对应任何真实用户）",
+    "face → 域名与路径形状保留的脱敏 CDN 地址（`https://i0.hdslb.com/bfs/face/<redacted>.jpg`）；冒烟侧与弹幕行一样换成本地内联替身（离线跑不到 CDN，真去请求只会挂网）",
+    "房间号 / 分区 / 主播信息 → 不出现（这份夹具不需要房间上下文）"
+  ],
+  "sources": [
+    {
+      "key": "gift-v2",
+      "kind": "SEND_GIFT_V2",
+      "via": "docs/protocol.md §10.2（protobuf，载荷在 `data.pb`）",
+      "fields": {
+        "content": "tag 18 `action`（样本「投喂」）+ tag 2 `gift_name`",
+        "amount": "tag 7 `total_coin`（本次总瓜子数，金额优先用它）",
+        "face": "顶层 `face`（`crates/danmubox-bili/src/pb.rs` 的 `GiftV2` 顶层字段，与 uid / uname 同层）",
+        "combo_id": "tag 12 `batch_combo_id`（会话内聚合用）",
+        "upstream_id": "tag 9 `tid`（订单号）"
+      },
+      "note": "**不在冒烟里解 protobuf**：`data.pb` → 字段的解析是 Rust 侧（`cargo test` 覆盖），冒烟工作在归一化后的 `Message` 这一层（上游载荷 → Message 与 UI 无关）。这条因此直接给 Message 形状。"
+    },
+    {
+      "key": "gift-v1",
+      "kind": "SEND_GIFT",
+      "via": "docs/protocol.md §10.2（V1，JSON；字段名按社区文档核对，**仍未实测**）",
+      "fields": {
+        "content": "`data.giftName` / `data.gift_name` + `data.num`（`cmd.rs::gift` 拼成「投喂 <礼物名> ×<数量>」）",
+        "amount": "`data.price`（金瓜子）× `data.num`",
+        "face": "**无源**：§10.2 的 V1 字段表里没有用户信息结构，`cmd.rs::gift` 也只取 uid / uname / num / giftName / price —— 因此 `Message.face` 留空串，界面不画假图（同 docs/ui.md §4.1「空串不渲染」）"
+      }
+    },
+    {
+      "key": "superchat",
+      "kind": "SUPER_CHAT_MESSAGE",
+      "via": "docs/protocol.md §10.3（**已实测**：10 分钟采集到 1 条）",
+      "fields": {
+        "content": "`data.message`",
+        "amount": "`data.price`，**单位是元**（实测样本 30，正是 B 站 SC 的最低档；同载荷的 `rate = 1000` 未经逐项核验，本实现不做换算）",
+        "face": "`data.uinfo.base.face`（与已消费的 `data.uinfo.base.name` 同层）",
+        "upstream_id": "`data.id`"
+      }
+    },
+    {
+      "key": "guard",
+      "kind": "GUARD_BUY",
+      "via": "docs/protocol.md §10.6（字段名按社区文档核对，**仍未实测**——这类事件在 10 分钟采集里零条，见附录 A33）",
+      "fields": {
+        "content": "`data.gift_name` / `role_name` 缺失时按等级补名（`cmd.rs::guard` 拼成「开通 <名称> ×<数量>」）",
+        "amount": "`data.price`（原金瓜子标价，CNY × 1000）",
+        "guard_level": "1 总督 / 2 提督 / 3 舰长",
+        "face": "**无源**：§10.6 的字段表里没有头像字段，`USER_TOAST_MSG` 甚至可能只带昵称 —— 留空串，界面不画假图"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "key": "gift-v2-a",
+      "source": "gift-v2",
+      "why": "连击的第 1 条（与下一条共享 batch_combo_id）：验证「一条一行」是**折叠后**的一条，且金额是整串连击的总额。",
+      "message": {
+        "kind": "gift",
+        "uid": 7101,
+        "uname": "礼物甲",
+        "content": "投喂 小心心",
+        "amount": 300,
+        "combo_id": "batch:gift:combo_id:<redacted>",
+        "upstream_id": "<redacted>",
+        "face": "https://i0.hdslb.com/bfs/face/<redacted>.jpg"
+      }
+    },
+    {
+      "key": "gift-v2-b",
+      "source": "gift-v2",
+      "why": "连击的第 2 条（同一 combo_id、相邻）：折叠成一行后 count = 2、amount = 600。",
+      "message": {
+        "kind": "gift",
+        "uid": 7101,
+        "uname": "礼物甲",
+        "content": "投喂 小心心",
+        "amount": 300,
+        "combo_id": "batch:gift:combo_id:<redacted>",
+        "upstream_id": "<redacted>",
+        "face": "https://i0.hdslb.com/bfs/face/<redacted>.jpg"
+      }
+    },
+    {
+      "key": "gift-v1",
+      "source": "gift-v1",
+      "why": "单条礼物（金额 100 瓜子），且**没有头像源** —— 这一条同时是「礼物栏里没头像就不画假图」的对照。",
+      "message": {
+        "kind": "gift",
+        "uid": 7102,
+        "uname": "礼物乙",
+        "content": "投喂 辣条 ×1",
+        "amount": 100,
+        "combo_id": "",
+        "upstream_id": "<redacted>",
+        "face": ""
+      }
+    },
+    {
+      "key": "superchat-low",
+      "source": "superchat",
+      "why": "SC 最低档（30 元）：SC 卡片 + 金额行「30 元」+ 第 1 档配色。",
+      "message": {
+        "kind": "superchat",
+        "uid": 7103,
+        "uname": "醒目留言者",
+        "content": "这是脱敏的醒目留言正文",
+        "amount": 30,
+        "combo_id": "",
+        "upstream_id": "<redacted>",
+        "face": "https://i0.hdslb.com/bfs/face/<redacted>.jpg"
+      }
+    },
+    {
+      "key": "superchat-high",
+      "source": "superchat",
+      "why": "高档位 SC（1000 元）：与最低档那张卡片的**边框颜色必须不同**（档位令牌真的被消费了），金额行是「1,000 元」。",
+      "message": {
+        "kind": "superchat",
+        "uid": 7104,
+        "uname": "长留言者",
+        "content": "1000 元档的脱敏留言",
+        "amount": 1000,
+        "combo_id": "",
+        "upstream_id": "<redacted>",
+        "face": "https://i0.hdslb.com/bfs/face/<redacted>.jpg"
+      }
+    },
+    {
+      "key": "guard",
+      "source": "guard",
+      "why": "大航海开通（舰长）：礼物栏里三类各自一组、各自带单位的那第三组；同样没有头像源。",
+      "message": {
+        "kind": "guard",
+        "uid": 7105,
+        "uname": "舰长买主",
+        "content": "开通 舰长 ×1",
+        "amount": 138000,
+        "guard_level": 3,
+        "combo_id": "",
+        "upstream_id": "<redacted>",
+        "face": ""
+      }
+    }
+  ]
+}

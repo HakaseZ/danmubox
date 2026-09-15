@@ -381,7 +381,14 @@ export interface Prefs {
   "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean;
   "ui.pause_on_hover": boolean;
-  "ui.gift_panel_mode": "merged" | "separate";
+  /**
+   * 弹幕流里**是否包含**礼物 / SC / 大航海三类消息（契约 §8 新增的两枚布尔键之一）。
+   * 与 `ui.gift_panel` 各管一头：这枚管弹幕流，那枚管独立礼物栏；两枚都开是默认形态，
+   * 同一批礼物类消息因此两处都渲染（docs/ui.md §5）。
+   */
+  "ui.gift_in_danmaku": boolean;
+  /** 是否显示输入区下方的**独立礼物栏**（契约 §8）。关掉它只是不画那一条，不影响弹幕流。 */
+  "ui.gift_panel": boolean;
   /** 互动/进场消息显示一会儿后自动消失；关掉则常驻。 */
   "ui.interact_auto_hide": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */

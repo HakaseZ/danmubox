@@ -54,8 +54,8 @@ export function FilterBar({ prefs, onChange }: Props) {
 
       <section className={styles.filterSection}>
         <h3>显示</h3>
-        {/* 整行的两格（字号滑杆 / 礼物栏下拉）各自占满一行，其余开关同排换行：
-            竖屏 360 下它们是两行，宽屏下并成一行 —— 同一份 DOM（docs/ui.md §9.1）。 */}
+        {/* 字号滑杆占满一行（需要整行的地方），四枚开关同排换行：竖屏 360 下它们是两行，
+            宽屏下并成一行放得下 —— 同一份 DOM（docs/ui.md §9.1）。 */}
         <div className={styles.filterFields}>
           <label className={styles.filterRange}>
             字号
@@ -90,19 +90,25 @@ export function FilterBar({ prefs, onChange }: Props) {
             />
             互动消息自动消失
           </label>
-          <label className={styles.filterSelect}>
-            礼物栏
-            <select
-              value={prefs["ui.gift_panel_mode"]}
+          <label title="弹幕包含礼物">
+            <input
+              type="checkbox"
+              checked={prefs["ui.gift_in_danmaku"]}
               onChange={(event) =>
-                onChange({
-                  "ui.gift_panel_mode": event.target.value as Prefs["ui.gift_panel_mode"],
-                })
+                onChange({ "ui.gift_in_danmaku": event.target.checked })
               }
-            >
-              <option value="merged">混在弹幕栏</option>
-              <option value="separate">输入框下方独立栏</option>
-            </select>
+            />
+            弹幕包含礼物
+          </label>
+          <label title="独立礼物栏">
+            <input
+              type="checkbox"
+              checked={prefs["ui.gift_panel"]}
+              onChange={(event) =>
+                onChange({ "ui.gift_panel": event.target.checked })
+              }
+            />
+            独立礼物栏
           </label>
         </div>
       </section>

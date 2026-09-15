@@ -475,7 +475,7 @@ CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  #
 
 实测（2026-09-15，模拟器 android-35）：Gradle 8.14.3 / AGP 8.11.0 / Kotlin 1.9.25；`aapt2 dump badging` 读到 package `dev.kksk.danmubox`、versionCode 1000、versionName 0.1.0、minSdk 24、targetSdk / compileSdk 36、`INTERNET` 权限在；带签名包 `apksigner verify` 为 `Verifies`（v2 签名）。
 
-**已修（2026-09-15，提交 `32dcefc`）**：targetSdk 36 强制 edge-to-edge 带来的遮挡。改前实测：状态栏占 y=0..128、手势栏占 y=2337..2400，顶栏整条落在状态栏带里（标题文本 y=68..116、右上主题按钮 y=74..114，与系统电池图标重叠），房间页输入区压在手势栏下（白底画到 y=2399）。改后（同一 AVD）：顶栏文本 y=196..244、主题按钮 y=202..242、房间页顶栏让到 128、输入区白底止于 2338，`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL。做法与拒绝「给 WebView 设 padding」的理由见上表第三行与 `MainActivity.kt` 的注释。
+**已修（2026-09-15，提交 `32dcefc`）**：targetSdk 36 强制 edge-to-edge 带来的遮挡。改前实测：状态栏占 y=0..128、手势栏占 y=2337..2400，顶栏整条落在状态栏带里（标题文本 y=68..116、右上主题按钮 y=74..114，与系统电池图标重叠），房间页输入区压在手势栏下（白底画到 y=2399）。改后（同一 AVD）：顶栏文本 y=196..244、主题按钮 y=202..242、房间页顶栏底 0 → 128、房间页标题 52..88 → 180..216、输入区白底止于 2338，`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL。**动的是页面排版而不是窗口**：应用窗口修复前后都是 `[0,0][1080,2400]`，系统栏本身也没变（状态栏仍是 `[0,0][1080,128]`、手势栏仍是 `[0,2337][1080,2400]`）。做法与拒绝「给 WebView 设 padding」的理由见上表第三行与 `MainActivity.kt` 的注释。inset 里含 ime：**小列表页的键盘已验**（内容止于键盘上沿、无 pan 双位移），**登录态下房间页输入区 + 键盘的组合未验**（房间页输入框未登录时禁用，见 [`testing.md`](testing.md) §10.5）。
 
 ### 5.4 工具链前置条件（对照 Tauri 官方 Prerequisites）
 

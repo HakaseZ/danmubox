@@ -15,7 +15,7 @@
 
 | 项 | 值 |
 |---|---|
-| 仓库/目录 | `/Users/zack/Projects/danmubox` |
+| 仓库/目录 | 仓库根 `danmubox/`（本机克隆路径任意，如 `~/Projects/danmubox`） |
 | 英文名 / crate 前缀 | `danmubox` |
 | 中文名 | 弹幕框 |
 | bundle id | `dev.kksk.danmubox` |

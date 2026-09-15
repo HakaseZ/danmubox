@@ -43,7 +43,14 @@
 //          工具行常显 已用/上限；@昵称 前缀不计入有效上限
 //   theme  主题**按钮**在**房间列表页页头**（点一下前进一档：亮 → 暗 → 自动，三下一轮回到原档；
 //          图标随档变且三档同一套矢量规范、切档真的落到 <html data-theme>、深浅对比度达标）
-//   gift   礼物栏在输入区下方、全宽、可折叠，展开不改变弹幕宽度
+//   gift   礼物类消息的去向与独立礼物栏（issue 2609152029 第 4/5 条）：`ui.gift_in_danmaku`
+//          管弹幕流、`ui.gift_panel` 管独立礼物栏，**四种组合逐个翻一遍**（默认两枚都开）；
+//          礼物栏**每个礼物 / SC / 大航海一条**（头像 + 昵称 + 内容 + 数量 + 金额），连击折叠后
+//          金额是整串的总额；折叠态汇总**按 kind 分组**、各组带各自单位（金瓜子 / 元不合并）；
+//          礼物 / SC / 大航海的**头像只在该有源时画**（V1 礼物与大航海无源 → 不画假图）；
+//          SC 卡片按档位令牌上色、金额行低一档加粗且独占一行。
+//          样本来自 `fixtures/gift-sc-guard-rows.json`（**按协议文档字段表构造**，出处见
+//          docs/testing.md §9.1）—— 本仓此前没有任何礼物类样本，这几条行为原本零断言。
 //   admin  房管权限前置（**有房管身份才有入口**；不是房管时菜单里没有这一项）、写操作二次确认与
 //          请求形状、身份就绪即预载三块名单、面板三块收成三个 tab（roving tabindex + ←→/Home/End，
 //          tab 文案只有名单名、不带计数）、单点动作走行右键菜单、批量一次确认按序执行、
@@ -96,6 +103,20 @@ const FIXTURE_ROOM = {
 /** 真实表情载荷（只读 GET 固化的上游响应），见该文件自己的 `_note`。 */
 const EMOTE_FIXTURE = JSON.parse(
   readFileSync(new URL("./fixtures/emotes.json", import.meta.url), "utf8"),
+);
+
+/**
+ * 礼物 / SC / 大航海的夹具（**按协议文档字段表构造**，不是真实抓包派生；
+ * 依据与脱敏口径见该文件自己的 `_note` 与 docs/testing.md §9.1）。
+ * 构造而非实测的原因：`AGENT.md` §8 第 16 条禁止为测试发送礼物 / 醒目留言 / 大航海，
+ * 这类事件在本项目里拿不到授权样本；而留给它的三类新行为（礼物栏一条一行、金额带单位、
+ * SC 卡片）不能零断言。
+ */
+const GIFT_FIXTURE = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/gift-sc-guard-rows.json", import.meta.url),
+    "utf8",
+  ),
 );
 
 /** 表情替身的底色（`#` 必须写成 `%23`，否则 `#` 会被当成 data URI 的片段起始、图直接坏掉）。 */
@@ -372,6 +393,9 @@ const MOCK = (theme) => `(function () {
   var EMOTES = ${embed(FIXTURE_EMOTES)};
   var ROW_EMOTES = ${embed(ROW_EMOTE_SAMPLES)};
   var ROW_FIXTURES = ${embed(ROW_FIXTURES)};
+  // 礼物 / SC / 大航海的夹具行（按协议文档字段表构造，见 Node 侧 GIFT_FIXTURE 的说明）：
+  // 每一项的 message 字段已经是归一化后的形状，冒烟只做字段搬运（上游载荷 → Message 在 Rust 侧）。
+  var GIFT_ROWS = ${embed(GIFT_FIXTURE.rows)};
   // 无空格的长 ASCII 串（真实载荷里的 CDN 地址，见 Node 侧 ROW_ASCII_TOKEN 的说明）
   var ROW_ASCII = ${embed(ROW_ASCII_TOKEN)};
   var FOLLOW_FIXTURE_ROWS = ${embed(FOLLOW_FIXTURE)};
@@ -398,9 +422,12 @@ const MOCK = (theme) => `(function () {
   var prefs = {
     "ui.font_scale": 1, "ui.theme": "${theme}", "ui.auto_scroll": true,
     "ui.pause_on_hover": false,
-    "ui.gift_panel_mode": "merged", "ui.interact_auto_hide": true,
+    // 礼物类消息的两枚开关（契约 §8，issue 2609152029 第 1 条把旧的
+    // 「ui.gift_panel_mode」这个字符串键拆成了这两枚布尔键）：管弹幕流的那枚与管独立礼物栏的
+    // 那枚各管一头，**默认都是 true**（两处都渲染）。
+    "ui.gift_in_danmaku": true, "ui.gift_panel": true, "ui.interact_auto_hide": true,
     "ui.show_timestamp": false,
-    // 键清单照抄契约 §8（13 键）：ui.system_notice 随「系统类只由 filter.kinds 把关」
+    // 键清单照抄契约 §8：ui.system_notice 随「系统类只由 filter.kinds 把关」
     // 一起删掉（两个门盖的消息集合逐字相同），关键词命中那三键随 item 9 一起删掉了，
     // 房管屏蔽词走 admin_keywords_*（IPC 命令，不是偏好键），不在这一份里。
     "composer.phrases": ["早上好"], "filter.uids": [],
@@ -505,6 +532,27 @@ const MOCK = (theme) => `(function () {
   // 轮询失败开关：验证「失败要能重试」（面板留在原地 + 重新获取按钮）
   window.__qrFail = false;
   window.__mk = msg;
+  /**
+   * 夹具里的一条礼物 / SC / 大航海 → Message 并广播（**归一化层**：夹具给的已经是 Message
+   * 形状，上游载荷 → Message 的解析在 Rust 侧 —— SEND_GIFT_V2 的 protobuf 冒烟不解，见
+   * fixtures/gift-sc-guard-rows.json 的 _note）。
+   *
+   * 头像：夹具里只写脱敏后的 CDN 地址形状（真去请求只会挂网），这里换成本地内联替身 ——
+   * 与弹幕行同一条口径。face 为空串的那两条（V1 礼物 / 大航海）保持空串：上游没有头像源，
+   * 界面就不画假图（这正是要断言的那件事，不能在夹具这一层补上）。
+   */
+  var emitGiftRow = function (key) {
+    var row = GIFT_ROWS.filter(function (r) { return r.key === key; })[0];
+    if (!row) return false;
+    var spec = row.message;
+    var extra = {};
+    for (var field in spec) {
+      if (field !== "kind" && field !== "content") extra[field] = spec[field];
+    }
+    extra.face = spec.face ? FACE_512 : "";
+    window.__emit("danmubox://message", msg(spec.kind, spec.content, false, extra));
+    return true;
+  };
   window.__history = history;
   // 房管身份开关：默认是房管；冒烟中途翻成 false 验证「无权限时置灰 + 说明原因」。
   window.__admin = true;
@@ -716,15 +764,22 @@ const MOCK = (theme) => `(function () {
   var bottomGap = function (el) {
     return Math.round((el.scrollHeight - el.scrollTop - el.clientHeight) * 10) / 10;
   };
-  var pickGiftMode = function () {
+  /**
+   * 显示块里的两枚礼物开关（issue 2609152029 第 1 条：原来那个「礼物栏」下拉已删）：
+   * 按 label 文案点复选框本体 —— 与用户点它走的是同一条路（React 的 onChange）。
+   * 每次都重新取面板节点：面板关掉再开时旧节点会变成游离节点（踩过，见上面发弹幕那段的说明）。
+   * 值已经对了就不点（幂等），返回「找没找到这枚开关」。
+   */
+  var setGiftSwitch = function (label, value) {
     var panel = byTestId("db-panel");
     if (!panel) return false;
-    var pick = [].slice.call(panel.querySelectorAll("select")).filter(function (s) {
-      return s.innerText.indexOf("输入框下方独立栏") >= 0;
+    var picked = [].slice.call(panel.querySelectorAll("label")).filter(function (l) {
+      return l.innerText.trim() === label;
     })[0];
-    if (!pick) return false;
-    pick.value = "separate";
-    pick.dispatchEvent(new Event("change", { bubbles: true }));
+    if (!picked) return false;
+    var input = picked.querySelector('input[type="checkbox"]');
+    if (!input) return false;
+    if (input.checked !== value) input.click();
     return true;
   };
   // 键事件：焦点先落到目标上，再派发 keydown / keyup —— 与「Tab 到它、再按键」同一条路径
@@ -3281,10 +3336,10 @@ const MOCK = (theme) => `(function () {
     out.filterPanelNoThemeSelect = !!filterPanel &&
       !filterPanel.querySelector('[data-testid="db-pref-theme"]');
     // 两块的内容都还在（都按**各自的 section** 数，不拿整块的 label 当分母）：
-    // 「消息类型」6 枚芯片（契约 §8 的 kind 全集）、「显示」= 字号滑杆 + **两枚**开关 + 礼物栏下拉
-    // （第三枚「系统通知」随 item 1 删除：系统类只由「消息类型」里的「系统」芯片把关）。
-    // 开关的**文案**由下面的 step4 / step6 用 clickLabelIn 点到（点得到就说明文案在），
-    // 这里只数控件、不解析 label 的 innerText（select 的 innerText 会把选项文本也算进来）。
+    // 「消息类型」6 枚芯片（契约 §8 的 kind 全集）、「显示」= 字号滑杆 + **四枚**开关
+    // （时间戳 / 互动消息自动消失 / 弹幕包含礼物 / 独立礼物栏）。
+    // 开关的**文案**由下面的 step4 / step6 / gift 三段用 clickLabelIn / setGiftSwitch 点到
+    // （点得到就说明文案在），这里只数控件并列出 label 文案，不解析 select 的 innerText。
     var filterSections = filterPanel ? [].slice.call(filterPanel.querySelectorAll("section")) : [];
     var kindsSection = filterSections[0] || null;
     var displaySection = filterSections[1] || null;
@@ -3300,15 +3355,28 @@ const MOCK = (theme) => `(function () {
     var displayHas = function (selector) {
       return !!displaySection && !!displaySection.querySelector(selector);
     };
+    // 「显示」块的控件清单：**旧的「礼物栏」下拉已随 issue 2609152029 第 1 条删除**
+    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），所以这里数的是四枚复选框，
+    // 并另外钉住「select 一个都不剩」——旧断言里的 giftMode: displayHas("select")
+    // 是**按已删控件写的**，改名不是可选项（那个控件已经不存在了）。
+    out.filterPanelDisplayLabels = displaySection
+      ? [].slice.call(displaySection.querySelectorAll("label")).map(function (l) {
+          return l.innerText.trim();
+        })
+      : [];
     out.filterPanelDisplayControls = {
       fontScale: displayHas('input[type="range"]'),
       switches: displaySection
         ? displaySection.querySelectorAll('input[type="checkbox"]').length : 0,
-      giftMode: displayHas("select"),
+      selects: displaySection ? displaySection.querySelectorAll("select").length : 0,
     };
+    out.filterPanelGiftSwitchesPresent =
+      out.filterPanelDisplayLabels.indexOf("弹幕包含礼物") >= 0 &&
+      out.filterPanelDisplayLabels.indexOf("独立礼物栏") >= 0;
     out.filterPanelDisplayComplete = out.filterPanelDisplayControls.fontScale &&
-      out.filterPanelDisplayControls.switches === 2 &&
-      out.filterPanelDisplayControls.giftMode;
+      out.filterPanelDisplayControls.switches === 4 &&
+      out.filterPanelDisplayControls.selects === 0 &&
+      out.filterPanelGiftSwitchesPresent;
     // ---- item 8：短语与筛选面板同样没有标题与关闭按钮（db-panel-close 钩子整个界面不再提供），
     //      高度与表情面板同源（--panel-h）——逐个数进快照，最后比三者相等。
     out.filterPanelCloseGone = !!filterPanel &&
@@ -3456,10 +3524,17 @@ const MOCK = (theme) => `(function () {
     out.step6_interactPersistsWhenOff = text().indexOf("进入直播间") >= 0;
     snap();
 
-    // ---- gift 礼物栏在输入区下方、可折叠、不抢宽度
-    var chatWidthBefore = rect(byTestId("db-chat-scroll")).width;
-    out.giftModePicked = pickGiftMode();
+    // ---- gift 礼物类消息的去向 + 独立礼物栏 + SC 卡片（issue 2609152029 第 4 / 5 / 2 条）
+    //
+    // 装备：夹具（fixtures/gift-sc-guard-rows.json，**按协议文档字段表构造**）。六条一次注入 ——
+    // 三条礼物 / 两条 SC / 一条大航海，其中前两条礼物共享 combo_id（连击折叠）。
+    for (var gr = 0; gr < GIFT_ROWS.length; gr += 1) emitGiftRow(GIFT_ROWS[gr].key);
     await sleep(500);
+    var chatWidthBefore = rect(byTestId("db-chat-scroll")).width;
+    // 契约默认两枚都开：礼物类消息**两处都在**（弹幕流里有折叠后的礼物行，礼物栏也出现）
+    out.giftPrefsDefault = window.__prefs["ui.gift_in_danmaku"] === true &&
+      window.__prefs["ui.gift_panel"] === true;
+    out.giftInDanmakuByDefault = !!rowWith("投喂 小心心") && !!rowWith("开通 舰长");
     var dock = byTestId("db-gift-dock");
     var composer = document.querySelector("textarea").closest('[class*="composer"]');
     out.giftDockAfterComposer = !!dock && !!composer &&
@@ -3469,10 +3544,141 @@ const MOCK = (theme) => `(function () {
     // 窄屏：折叠条只占一行，弹幕列表不被它挤掉
     put("giftDockCompact", !!dock && rect(dock).height <= 56);
     put("giftListKeptTall", rect(byTestId("db-chat-scroll")).height >= 200);
+    // 折叠态汇总**按 kind 分组**：三组各自带各自的单位，元与金瓜子绝不加到一起。
+    // 金额串一律用页面自己的 toLocaleString 拼（分组位数随浏览器 locale 变，断言不该把它写死）。
+    var num = function (n) { return n.toLocaleString(); };
+    var giftSummary = (byTestId("db-gift-summary") || {}).innerText || "";
+    out.giftDockSummaryText = giftSummary;
+    out.giftDockSummaryGroupedByKind =
+      giftSummary.indexOf("礼物 3 · " + num(700) + " 瓜子") >= 0 &&
+      giftSummary.indexOf("SC 2 · " + num(1030) + " 元") >= 0 &&
+      giftSummary.indexOf("大航海 1 · " + num(138000) + " 瓜子") >= 0;
+    // 跨单位求和是红线：700 + 1030 + 138000 = 139730 这个数**一个写法都不许出现**
+    out.giftDockNoCrossUnitSum = giftSummary.indexOf(num(139730)) < 0 &&
+      giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("140730") < 0;
     buttonWith(dock, "礼物 / SC").click();
     await sleep(300);
     out.giftDockExpands = !!byTestId("db-gift-body");
     out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;
+    // ---- 一条一行：折叠后的行数（连击那两条合成 1 行）就是礼物栏的行数，body 的直接子元素
+    //      也只有这些行 —— 改前那段「金额排行 + 内容详情」的两段式结构已随本批删掉。
+    var giftBody = byTestId("db-gift-body");
+    var giftItems = allByTestId("db-gift-item");
+    out.giftDockItemCount = giftItems.length;
+    out.giftDockOneRowPerEvent = giftItems.length === 5 && !!giftBody &&
+      giftBody.children.length === giftItems.length;
+    out.giftDockItemTexts = giftItems.map(function (item) {
+      // 换行用 String.fromCharCode(10) 拼，**不写字面转义**：这一整段活在模板字符串里，
+      // 反斜杠转义会先被模板吃掉（连注释里写一个都会变成真换行、把注释掰断）。
+      return item.innerText.split(String.fromCharCode(10)).join(" ");
+    });
+    out.giftDockItemSingleLine = giftItems.every(function (item) {
+      return rect(item) !== null && rect(item).height < 40;
+    });
+    // ---- 金额格带单位（礼物 / 大航海 = 瓜子，SC = 元），且连击折叠后是整串的总额
+    out.giftDockAmounts = giftItems.map(function (item) {
+      var el = item.querySelector('[data-testid="db-gift-amount"]');
+      return el ? el.innerText : "";
+    });
+    out.giftDockAmountsCarryUnits =
+      out.giftDockAmounts.indexOf(num(600) + " 瓜子") >= 0 &&
+      out.giftDockAmounts.indexOf(num(100) + " 瓜子") >= 0 &&
+      out.giftDockAmounts.indexOf(num(30) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(num(1000) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(num(138000) + " 瓜子") >= 0;
+    // ---- 数量：礼物行恒有 ×N（折叠后是整串连击的次数），SC / 大航海没有折叠就不画 ×1
+    var giftCounts = giftItems.map(function (item) {
+      var el = item.querySelector('[data-testid="db-gift-count"]');
+      return el ? el.innerText : "";
+    });
+    out.giftDockCounts = giftCounts;
+    out.giftDockComboFolded = giftCounts.indexOf("×2") >= 0 && giftCounts.indexOf("×1") >= 0;
+    out.giftDockNonGiftHasNoCount =
+      giftItems.length === 5 && giftCounts.filter(function (c) { return c === ""; }).length === 3;
+    // ---- 头像（第 2 条）：**有源才画** —— 两条连击礼物（折叠后 1 行）与两条 SC 有 face，
+    //      V1 礼物与大航海在上游没有头像字段（协议 §10.2 / §10.6 的字段表里都没有），
+    //      因此礼物栏里这一个都不许出现（界面不画假图）。
+    var giftAvatars = [].slice.call(giftBody.querySelectorAll('[data-testid="db-msg-avatar"]'));
+    out.giftDockAvatarCount = giftAvatars.length;
+    out.giftDockAvatarsOnlyWhereSourced = giftAvatars.length === 3;
+    out.giftDockAvatarIsImage = giftAvatars.length > 0 && giftAvatars.every(function (el) {
+      return el.tagName === "IMG";
+    });
+    out.giftDockAvatarBox = giftAvatars.length > 0 ? [
+      Math.round(rect(giftAvatars[0]).width), Math.round(rect(giftAvatars[0]).height)
+    ] : null;
+    out.giftDockAvatarSquare = giftAvatars.length > 0 &&
+      Math.abs(rect(giftAvatars[0]).width - rect(giftAvatars[0]).height) < 1;
+    snap();
+
+    // ---- SC 卡片（第 2 条）：卡片背景 / 边框取自档位令牌，金额行低一档加粗、独占一行
+    var scLow = rowWith("这是脱敏的醒目留言正文");
+    var scHigh = rowWith("1000 元档的脱敏留言");
+    out.scCardTiers = [scLow, scHigh].map(function (r) {
+      return r ? r.getAttribute("data-sc-tier") : null;
+    });
+    out.scCardTierByAmount = out.scCardTiers.join(",") === "1,4";
+    // 边框色 = 那一档的令牌值（令牌真的被消费了，不是写死的色值）
+    var scBorderColor = function (r) { return r ? getComputedStyle(r).borderTopColor : null; };
+    out.scCardLowUsesTierToken = scBorderColor(scLow) === cssColorOf("--sc-1");
+    out.scCardHighUsesTierToken = scBorderColor(scHigh) === cssColorOf("--sc-4");
+    out.scCardTierTokensDistinct = cssColorOf("--sc-1") !== cssColorOf("--sc-4");
+    var scLowStyle = scLow ? getComputedStyle(scLow) : null;
+    out.scCardIsACard = !!scLowStyle && parseFloat(scLowStyle.borderTopWidth) >= 1 &&
+      scLowStyle.borderTopStyle === "solid" &&
+      parseFloat(scLowStyle.borderTopLeftRadius) >= 4 &&
+      scLowStyle.backgroundColor !== getComputedStyle(document.body).backgroundColor;
+    var scAmountEl = scLow ? scLow.querySelector('[data-testid="db-msg-sc-amount"]') : null;
+    var scAmountStyle = scAmountEl ? getComputedStyle(scAmountEl) : null;
+    var scBodyStyle = scLow
+      ? getComputedStyle(scLow.querySelector('[data-testid="db-msg-body"]')) : null;
+    out.scCardAmountText = scAmountEl ? scAmountEl.innerText : null;
+    out.scCardAmountUnit = out.scCardAmountText === num(30) + " 元";
+    out.scCardAmountBold = !!scAmountStyle && parseInt(scAmountStyle.fontWeight, 10) >= 700;
+    out.scCardAmountSmallerThanBody = !!scAmountStyle && !!scBodyStyle &&
+      parseFloat(scAmountStyle.fontSize) < parseFloat(scBodyStyle.fontSize);
+    out.scCardAmountOnOwnLine = !!scAmountStyle && scAmountStyle.display === "block";
+    snap();
+
+    // ---- 两枚开关的四种组合（第 4 条）：每一次都顺带验「切开关不丢消息」（同一批数据只换渲染位置）。
+    //      点开关之前必须先把**筛选面板**开回来：上一步展开礼物栏那一下按「五者互斥」把面板收掉了
+    //      （不是 bug，是 §2.3 的口径）。反过来，开面板也会收起礼物栏 —— 两件事分开验，不混在一起。
+    clickTool("筛选");
+    await sleep(300);
+    out.giftSwitchPanelOff = setGiftSwitch("独立礼物栏", false);
+    await sleep(350);
+    out.giftPanelOffHidesDock = !byTestId("db-gift-dock");
+    out.giftPanelOffKeepsStream = !!rowWith("投喂 小心心") &&
+      !!rowWith("这是脱敏的醒目留言正文");
+    out.giftSwitchInDanmakuOff = setGiftSwitch("弹幕包含礼物", false);
+    await sleep(350);
+    out.giftBothOffHidesDock = !byTestId("db-gift-dock");
+    out.giftBothOffHidesStream = !rowWith("投喂 小心心") &&
+      !rowWith("这是脱敏的醒目留言正文") && !rowWith("开通 舰长");
+    // 普通弹幕不受这两枚开关影响（它们只管礼物类三族）。判据现场推一条**新的**弹幕再找它：
+    // 历史那条早已滚出虚拟列表的渲染窗口，拿它当锚会假失败（踩过一次）。
+    window.__emit("danmubox://message", window.__mk("danmaku", "两枚开关都关时的普通弹幕", false, {
+      uid: 77002, uname: "隔壁观众"
+    }));
+    await sleep(350);
+    out.giftSwitchesKeepDanmaku = !!rowWith("两枚开关都关时的普通弹幕");
+    out.giftSwitchPanelOnly = setGiftSwitch("独立礼物栏", true);
+    await sleep(350);
+    out.giftPanelOnlyShowsDock = !!byTestId("db-gift-dock");
+    out.giftPanelOnlyKeepsStreamOff = !rowWith("投喂 小心心");
+    buttonWith(byTestId("db-gift-dock"), "礼物 / SC").click();
+    await sleep(350);
+    out.giftPanelOnlyRendersAllRows = allByTestId("db-gift-item").length === 5;
+    // 回到默认（两枚都开）：同样先开面板再点开关；开面板那一下已经把展开的礼物栏收起来了，
+    // 因此这里不再点多一次（连点会把礼物栏又展开，下一段的「默认形态」就不是折叠态了）。
+    // 后面几段（面板互斥 / 多标签）因此跑在**默认形态**上：筛选面板开着、礼物栏折叠着。
+    clickTool("筛选");
+    await sleep(300);
+    out.giftSwitchBothBackOn = setGiftSwitch("弹幕包含礼物", true);
+    await sleep(350);
+    out.giftRestoredToDefault = !!byTestId("db-gift-dock") && !byTestId("db-gift-body") &&
+      !!rowWith("投喂 小心心") && window.__prefs["ui.gift_in_danmaku"] === true &&
+      window.__prefs["ui.gift_panel"] === true;
     snap();
 
     // ---- panel 层：短语右键增删改、点选插入到光标处、头部 ⋯ 菜单
@@ -3940,7 +4146,8 @@ const MOCK = (theme) => `(function () {
     await sleep(1200);
     // ---- 五面板互斥（issue #4）：房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏**同时最多开一个**。
     //      开一个 → 其余四个同步都关；收起某一个不影响别人（panelSurvivesTabSwitch 那三条照旧成立）。
-    //      礼物栏这一档要先存在它：上面 gift 那段已把 ui.gift_panel_mode 选成 separate。
+    //      礼物栏这一档要先存在它：它由 ui.gift_panel 决定，默认就是开的（上面 gift 那段
+    //      最后把两枚开关都还原成默认值，礼物栏因此折叠着在场）。
     var openPanelCount = function () {
       return (byTestId("db-panel") ? 1 : 0) + (byTestId("db-admin-panel") ? 1 : 0) +
         (byTestId("db-gift-body") ? 1 : 0);

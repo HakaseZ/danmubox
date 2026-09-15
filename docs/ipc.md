@@ -87,7 +87,7 @@
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；交给界面前按 `live_status == 1` 置顶（`contract.md` §5），完整展示排序见 `ui.md` §2.2 |
 | `wallet_balance` | 无 | `number`（Rust `i64`） | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额（整数）：上游 `data.gold`（金瓜子）按 `gold / 100` 换算成电池；`gold` 缺失或不可解析 → `UPSTREAM_ERROR`。没有包裹类型（口径与端点见 `protocol.md` 附录 A29） |
 | `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令。平台实现：macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 各一条系统命令；**Android 走官方 `tauri-plugin-opener`（平台 Intent）**——插件只在 Android 目标声明（`[target.'cfg(target_os = "android")'.dependencies]`，桌面构建依赖图与产物一字不变），由 **Rust 侧**调用、**不进 capability**（`capabilities/default.json` 不需要 `opener:*` 权限）；iOS 等其余平台仍是显式 `Unsupported`（不静默失败） |
-| `prefs_get` | 无 | `PrefsSnapshot`（`contract.md` §8 全部 13 键的**生效值**） | `INTERNAL` | 未写入过的键返回 `contract.md` §8 默认值。同步命令 |
+| `prefs_get` | 无 | `PrefsSnapshot`（`contract.md` §8 全部 14 键的**生效值**） | `INTERNAL` | 未写入过的键返回 `contract.md` §8 默认值。同步命令 |
 | `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令 |
 | `frontend_log` | `level: String, message: String` | `void` | — | **前端 → 后端的内部命令**，不是给业务代码用的：控制台桥把 `console.error` / `console.warn` 与未捕获错误转发过来，写进 `tracing` 日志（`target = "danmubox::ui"`，`level` ∈ `error` / `warn`，其它值降级为 debug）。同步命令，永不失败。详见 §4.1 |
 
@@ -106,7 +106,7 @@ type Message = {
   ts: number;            // UTC 毫秒
   uid: number;           // 游客/未知为 0
   uname: string;
-  face: string;          // 发言者头像 URL；取不到为空串（前端自行降级）
+  face: string;          // 发言者头像 URL；各命令的来源见 contract §5；取不到为空串（前端自行降级）
   content: string;
   color: number;         // 十进制 RGB；界面不吃它做配色
   medal_level: number;   // 发送者粉丝牌等级，0 无
@@ -275,10 +275,11 @@ type RoomStats = {
 
 type ReportReason = { id: number; reason: string };
 
-type PrefsSnapshot = {            // contract.md §8 的 13 键全量，键名即契约字面
+type PrefsSnapshot = {            // contract.md §8 的 14 键全量，键名即契约字面
   "ui.font_scale": number; "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean; "ui.pause_on_hover": boolean;
-  "ui.gift_panel_mode": "merged" | "separate";
+  "ui.gift_in_danmaku": boolean;      // 弹幕流里是否包含礼物 / SC / 大航海（默认 true）
+  "ui.gift_panel": boolean;           // 是否显示独立礼物栏（默认 true）
   "ui.interact_auto_hide": boolean;   // 互动/进场消息显示一会儿后自动消失（默认 true）
   "ui.show_timestamp": boolean;       // 弹幕前显示时间戳（默认 false）
   "composer.phrases": string[];

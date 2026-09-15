@@ -333,6 +333,9 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
 /// V1 礼物（`SEND_GIFT`）。字段名按社区文档核对（`docs/live/gift.md`）：
 /// `name` 礼物名、`price` 单位为金瓜子（文档记「该值/1000 的单位为元」，即 1 元 = 1000 金瓜子）、
 /// `coin_type` 一般为 `gold`（电池体系）。**尚未观测到真实样本**——实测流量里只出现 `SEND_GIFT_V2`。
+///
+/// 头像**故意留空**：社区文档的字段表里没有头像，载荷本身也没有可确证的昵称同层头像槽位，
+/// 实测样本又是零条（`docs/protocol.md` 附录 A8）——没有可靠来源就不填（契约 §5 的 `face`）。
 fn gift(room_id: i64, value: &Value) -> Option<Message> {
     let data = value.get("data")?;
     let mut message = Message::new(room_id, MessageKind::Gift, danmubox_core::now_ms());
@@ -400,6 +403,8 @@ fn gift_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> 
     let mut message = Message::new(room_id, MessageKind::Gift, ts_ms);
     message.uid = decoded.uid as i64;
     message.uname = decoded.uname;
+    // 头像：pb 顶层 tag 3 已解出（`pb::GiftV2::face`，与 uid / uname 同层）。
+    message.face = decoded.face;
     // 正文不带数量：界面按连击聚合后的次数统一显示 ×N，避免出现「×1 ×5」。
     message.content = format!("{} {}", item.action, item.gift_name);
     message.amount = amount;
@@ -445,6 +450,12 @@ fn superchat(room_id: i64, value: &Value) -> Option<Message> {
         .to_string();
     // 元。
     message.amount = data.get("price").and_then(Value::as_i64).unwrap_or(0);
+    // 头像与上面那个昵称同层（`uinfo.base`）：同一个用户对象，取不到即空串。
+    message.face = data
+        .pointer("/uinfo/base/face")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     // SC 标识（样本为数字 id）；举报与去重都用得上。
     message.upstream_id = data
         .get("id")
@@ -482,7 +493,8 @@ fn superchat(room_id: i64, value: &Value) -> Option<Message> {
 /// 互动（进场等，JSON 形态）。`content` 留空：文案属展示层，见 `docs/ui.md`。
 ///
 /// 昵称优先取 `data.uname`；`ENTRY_EFFECT` 没有该字段，回落到
-/// `data.uinfo.base.name`（2026-09-11 实测）。
+/// `data.uinfo.base.name`（2026-09-11 实测）。头像走**同一个** `uinfo.base`：
+/// 这两条 JSON 路径都没有独立的昵称同层头像槽位（`docs/protocol.md` §10.4）。
 fn interact_json(room_id: i64, value: &Value) -> Option<Message> {
     let data = value.get("data")?;
     let mut message = Message::new(room_id, MessageKind::Interact, danmubox_core::now_ms());
@@ -491,6 +503,11 @@ fn interact_json(room_id: i64, value: &Value) -> Option<Message> {
         .get("uname")
         .and_then(Value::as_str)
         .or_else(|| data.pointer("/uinfo/base/name").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string();
+    message.face = data
+        .pointer("/uinfo/base/face")
+        .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
     Some(message)
@@ -537,6 +554,8 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
     let mut message = Message::new(room_id, MessageKind::Interact, danmubox_core::now_ms());
     message.uid = decoded.uid as i64;
     message.uname = decoded.display_name();
+    // 头像与昵称同源（`user_info.base`，tag 22 的 `2: face`）。
+    message.face = decoded.face();
     message.medal_level = medal_level;
     message.medal_name = medal_name;
     if let Some(ts) = decoded.ts_ms() {
@@ -551,6 +570,9 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
 /// 字段名按社区接口文档核对（`docs/live/message_stream.md` 两节都有字段表），
 /// **尚未用真实样本观测**——这类事件在 10 分钟巨型房间采集里零条（见附录 A33）。
 /// 文档给出的取值：`guard_level` 1 总督 / 2 提督 / 3 舰长；`price` 为原金瓜子标价（CNY×1000）。
+///
+/// 头像**留空**：这两节字段表里都没有头像字段，实测样本又是零条——没有来源就不填
+/// （`docs/protocol.md` §10.6 的记录与契约 §5 的 `face`）。
 fn guard(room_id: i64, value: &Value) -> Option<Message> {
     let data = value.get("data")?;
     let ts_ms = data
@@ -987,6 +1009,14 @@ mod tests {
             uname: "路人".into(),
             msg_type: 1,
             timestamp_millisecond: 1_700_000_000_500,
+            user_info: Some(crate::pb::UserInfo {
+                uid: 777,
+                base: Some(crate::pb::UserBase {
+                    uname: "路人".into(),
+                    face: "https://i0.hdslb.com/bfs/face/interact.png".into(),
+                }),
+                medal_info: None,
+            }),
             ..Default::default()
         };
         let payload = json!({
@@ -1000,6 +1030,10 @@ mod tests {
         assert_eq!(message.kind, MessageKind::Interact);
         assert_eq!(message.uid, 777);
         assert_eq!(message.uname, "路人");
+        assert_eq!(
+            message.face, "https://i0.hdslb.com/bfs/face/interact.png",
+            "头像取 pb 的 user_info.base.face"
+        );
         assert_eq!(message.ts, 1_700_000_000_500);
     }
 
@@ -1044,14 +1078,48 @@ mod tests {
     #[test]
     fn entry_effect_takes_name_from_uinfo() {
         // ENTRY_EFFECT 没有 data.uname，昵称在 data.uinfo.base.name（实测）。
+        // 头像走同一个 uinfo.base（`protocol.md` §10.4）。
         let payload = json!({
             "cmd": "ENTRY_EFFECT",
-            "data": {"uid": 7757052, "uinfo": {"base": {"name": "包包子的der一个"}}}
+            "data": {"uid": 7757052, "uinfo": {"base": {
+                "name": "包包子的der一个",
+                "face": "https://i0.hdslb.com/bfs/face/entry.png"
+            }}}
         });
         let message = message(1, &payload, &counters()).unwrap();
         assert_eq!(message.kind, MessageKind::Interact);
         assert_eq!(message.uid, 7757052);
         assert_eq!(message.uname, "包包子的der一个");
+        assert_eq!(message.face, "https://i0.hdslb.com/bfs/face/entry.png");
+    }
+
+    /// V1 礼物与大航海没有可靠的头像来源：这两支必须留空串，不许拿别的字段顶替
+    /// （`docs/protocol.md` §10.2 / §10.6）。
+    #[test]
+    fn gift_v1_and_guard_leave_face_empty() {
+        let gift = message(
+            7,
+            &json!({
+                "cmd": "SEND_GIFT",
+                "data": {"uid": 1, "uname": "送礼的人", "giftName": "辣条", "num": 1, "price": 100}
+            }),
+            &counters(),
+        )
+        .expect("V1 礼物仍要解出来");
+        assert_eq!(gift.uname, "送礼的人");
+        assert!(gift.face.is_empty(), "V1 礼物没有头像字段");
+
+        let guard = message(
+            7,
+            &json!({
+                "cmd": "GUARD_BUY",
+                "data": {"uid": 2, "username": "开舰长的人", "guard_level": 3, "price": 138000}
+            }),
+            &counters(),
+        )
+        .expect("大航海仍要解出来");
+        assert_eq!(guard.uname, "开舰长的人");
+        assert!(guard.face.is_empty(), "大航海没有头像字段");
     }
 
     #[test]
@@ -1083,7 +1151,7 @@ mod tests {
         let original = crate::pb::GiftV2 {
             uid: 1920714644,
             uname: "送礼的人".into(),
-            face: String::new(),
+            face: "https://i2.hdslb.com/bfs/face/x.jpg".into(),
             medal: Some(crate::pb::GiftV2Medal {
                 level: 12,
                 name: "牌子".into(),
@@ -1115,6 +1183,10 @@ mod tests {
         assert_eq!(message.kind, MessageKind::Gift);
         assert_eq!(message.uid, 1920714644);
         assert_eq!(message.uname, "送礼的人");
+        assert_eq!(
+            message.face, "https://i2.hdslb.com/bfs/face/x.jpg",
+            "头像取 pb 顶层 tag 3（与 uid / uname 同层）"
+        );
         assert_eq!(message.content, "投喂 粉丝团灯牌");
         assert_eq!(message.amount, 200, "100 金瓜子 × 2");
         assert_eq!(message.ts, 1_789_177_882_000, "pb 里是秒级时间戳");
@@ -1214,7 +1286,7 @@ mod tests {
                 "id": 18968196,
                 "ts": 1_789_179_382,
                 "uid": 92322643,
-                "uinfo": {"base": {"name": "留言的人"}},
+                "uinfo": {"base": {"name": "留言的人", "face": "https://i1.hdslb.com/bfs/face/sc.png"}},
                 "user_info": {"uname": "留言的人", "guard_level": 0, "manager": 0},
                 "medal_info": {"medal_level": 10, "medal_name": "粉丝团", "guard_level": 3}
             }
@@ -1223,6 +1295,10 @@ mod tests {
         assert_eq!(m.kind, MessageKind::Superchat);
         assert_eq!(m.content, "很好的一段留言");
         assert_eq!(m.uname, "留言的人");
+        assert_eq!(
+            m.face, "https://i1.hdslb.com/bfs/face/sc.png",
+            "头像取 data.uinfo.base.face（与昵称同层）"
+        );
         assert_eq!(m.amount, 30, "SC 的金额单位是元，不是金瓜子");
         assert_eq!(m.ts, 1_789_179_382_000, "ts 是秒级");
         assert_eq!(m.upstream_id, "18968196");

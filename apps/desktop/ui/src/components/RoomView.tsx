@@ -1,14 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AdminPanel } from "./AdminPanel";
+import { Avatar } from "./Avatar";
 import { Composer, type PanelKind } from "./Composer";
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
 import { useApp } from "../store";
-import { formatCount, type DisplayRow } from "../filtering";
+import {
+  amountText,
+  formatCount,
+  GIFT_KINDS,
+  splitGiftRows,
+  type DisplayRow,
+} from "../filtering";
 import {
   ADMIN_CONFIRM_LABEL,
   adminActionText,
+  KIND_LABEL,
   MUTE_HOURS,
   type AdminAction,
   type ConnState,
@@ -158,7 +166,6 @@ export function RoomView({
   const titleCopyRef = useRef<HTMLSpanElement>(null);
   const [titleScrolls, setTitleScrolls] = useState(false);
   const [titlePeriod, setTitlePeriod] = useState(0);
-  const separateGifts = prefs["ui.gift_panel_mode"] === "separate";
 
   // 从 store 直接取 action：它的身份在渲染之间是稳定的，
   // 所以下面的 effect 只会在登录态变化时触发。经 props 传内联闭包会导致每次渲染都重跑（曾因此死循环）。
@@ -320,32 +327,31 @@ export function RoomView({
     // 占的宽度不同、可视宽度因此不同，只拿文字当依赖会留下上一个房间量出的滚动结论。
   }, [titleText, prefs["ui.font_scale"], room.room_id]);
 
-  // 礼物金额统计与排行（需求 §2.7）：只算本次会话；金额口径是金瓜子（协议 §10.2）。
-  const giftStats = useMemo(() => {
-    const byUser = new Map<string, number>();
-    let total = 0;
-    for (const row of rows) {
-      if (row.message.kind !== "gift") continue;
-      total += row.message.amount;
-      const who = row.message.uname.length > 0 ? row.message.uname : `uid ${row.message.uid}`;
-      byUser.set(who, (byUser.get(who) ?? 0) + row.message.amount);
-    }
-    return {
-      total,
-      ranking: [...byUser.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5),
-    };
-  }, [rows]);
+  const { chatRows, giftRows } = splitGiftRows(rows, prefs);
+  // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
+  // 见 splitGiftRows）；折叠态是它自己的本地状态，与偏好无关。
+  const giftPanel = prefs["ui.gift_panel"];
 
-  const giftRows = separateGifts
-    ? rows.filter((row) =>
-        ["gift", "superchat", "guard"].includes(row.message.kind),
-      )
-    : [];
-  const chatRows = separateGifts
-    ? rows.filter(
-        (row) => !["gift", "superchat", "guard"].includes(row.message.kind),
-      )
-    : rows;
+  /**
+   * 独立礼物栏折叠态的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**，
+   * 各自带自己的单位 —— 礼物与大航海是金瓜子、SC 是元，两组**不加到一起**（契约 §5 的口径，
+   * SC 载荷里那个 `rate` 未经真实样本核验，本轮不做任何换算）。
+   *
+   * 条数取连击折叠后的**次数之和**（`DisplayRow.count`），金额取折叠后累加的 `message.amount`
+   * —— 与 `toDisplayRows` 同源，不另立一套口径。空组不出现（没有 SC 就不显示 SC 那一格）。
+   */
+  const giftGroups = GIFT_KINDS.map((kind) => {
+    const group = giftRows.filter((row) => row.message.kind === kind);
+    return {
+      kind,
+      label: KIND_LABEL[kind],
+      count: group.reduce((sum, row) => sum + row.count, 0),
+      amount: amountText(
+        group.reduce((sum, row) => sum + row.message.amount, 0),
+        kind,
+      ),
+    };
+  }).filter((group) => group.count > 0);
 
   const copyText = async (text: string) => {
     try {
@@ -750,41 +756,70 @@ export function RoomView({
         onNotice={onNotice}
       />
 
-      {/* 礼物 / SC 栏在输入区下方（issue #8）：把宽度还给弹幕，可折叠 */}
-      {separateGifts && (
+      {/* 独立礼物栏（issue #8 把它放在输入区下方、全宽、可折叠；issue 2609152029 第 5 条改成
+          **每个礼物 / SC / 大航海一条**：头像 + 昵称 + 内容 + 数量 + 金额，原来那两段
+          「金额排行 + 内容详情」已取消）。是否出现由 `ui.gift_panel` 决定，与弹幕流那一头
+          的 `ui.gift_in_danmaku` 各自独立（两枚都开 = 默认形态，同一批消息两处都渲染）。 */}
+      {giftPanel && (
         <div className={styles.giftDock} data-testid="db-gift-dock">
           <button
             className={styles.giftDockHead}
             aria-expanded={giftOpen}
             onClick={toggleGiftDock}
           >
-            <span className={styles.giftDockTitle}>礼物 / SC（{giftRows.length}）</span>
-            <span className={styles.giftDockSummary}>
-              {giftStats.total > 0
-                ? `本场 ${giftStats.total.toLocaleString()} 瓜子`
-                : "本场暂无礼物"}
+            <span className={styles.giftDockTitle}>
+              礼物 / SC（{giftGroups.reduce((sum, group) => sum + group.count, 0)}）
+            </span>
+            {/* 折叠态汇总**按 kind 分组**：各组带各自的单位，金瓜子与元不加到一起（§5.3） */}
+            <span className={styles.giftDockSummary} data-testid="db-gift-summary">
+              {giftGroups.length === 0
+                ? "本场暂无礼物"
+                : `本场 ${giftGroups
+                    .map((group) =>
+                      group.amount.length > 0
+                        ? `${group.label} ${group.count} · ${group.amount}`
+                        : `${group.label} ${group.count}`,
+                    )
+                    .join(" / ")}`}
             </span>
             <span className={styles.giftDockToggle}>{giftOpen ? "收起" : "展开"}</span>
           </button>
           {giftOpen && (
             <div className={styles.giftDockBody} data-testid="db-gift-body">
-              {giftStats.ranking.length > 0 && (
-                <div className={styles.giftStats}>
-                  {giftStats.ranking.map(([who, amount], index) => (
-                    <div key={who} className={styles.giftRankItem}>
-                      {index + 1}. {who} · {amount.toLocaleString()}
-                    </div>
-                  ))}
-                </div>
-              )}
               {giftRows.length === 0 ? (
                 <div className={styles.empty}>本场还没有礼物</div>
               ) : (
-                giftRows.map((row) => (
-                  <div key={row.message.local_id} className={styles.giftItem}>
-                    {row.message.uname} {row.message.content}
-                  </div>
-                ))
+                giftRows.map((row) => {
+                  const amount = amountText(row.message.amount, row.message.kind);
+                  return (
+                    <div
+                      key={row.message.local_id}
+                      className={styles.giftItem}
+                      data-testid="db-gift-item"
+                    >
+                      <Avatar url={row.message.face} name={row.message.uname} />
+                      <span className={styles.giftWho} data-testid="db-gift-who">
+                        {row.message.uname}
+                      </span>
+                      <span className={styles.giftWhat} data-testid="db-gift-what">
+                        {row.message.content}
+                      </span>
+                      {/* 数量与弹幕行同一个口径：礼物恒显示 ×N（折叠后是整串连击的次数），
+                          其余 kind 只在真折叠过时才有（`count > 1`）。 */}
+                      {(row.count > 1 || row.message.kind === "gift") && (
+                        <span className={styles.giftCount} data-testid="db-gift-count">
+                          ×{row.count}
+                        </span>
+                      )}
+                      {/* 金额格带单位；上游没给价（amount = 0）时**整格不画**，不拿 0 顶替 */}
+                      {amount.length > 0 && (
+                        <span className={styles.giftAmount} data-testid="db-gift-amount">
+                          {amount}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           )}

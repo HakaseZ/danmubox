@@ -82,6 +82,16 @@ impl InteractWordV2 {
             .unwrap_or_default()
     }
 
+    /// 头像：`user_info.base.face`（与昵称同层，`docs/protocol.md` §10.4 的 tag 22）。
+    /// 顶层没有头像字段，取不到即空串——不拿别的层的值顶替。
+    pub fn face(&self) -> String {
+        self.user_info
+            .as_ref()
+            .and_then(|u| u.base.as_ref())
+            .map(|b| b.face.clone())
+            .unwrap_or_default()
+    }
+
     /// 粉丝牌等级与名称。互动事件不携带大航海等级，统一回落为 0。
     pub fn medal(&self) -> (i64, String) {
         match self.user_info.as_ref().and_then(|u| u.medal_info.as_ref()) {

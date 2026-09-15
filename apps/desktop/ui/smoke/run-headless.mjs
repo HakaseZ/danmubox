@@ -38,6 +38,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
   writeSync,
@@ -604,11 +605,12 @@ if (snapshotFlag >= 0) {
   process.exit(0);
 }
 
-/* ------------------------------ 起浏览器之前的**两道闸门**（规则见 AGENT.md §9；理由见文件头）
+/* ------------------------------ 起浏览器之前的**三道闸门**（规则见 AGENT.md §9；理由见文件头）
 
-   ① 语法：`node --check`；② **构造**：每个主题各把 HTML 真的求值一遍。
-   两道都过才往下走；任一道不过就**带精确行号立刻退出** —— 一次浏览器启动都不必浪费。
-   `--precheck [file]` 只跑这两道（默认检查本运行器要跑的那个场景文件）。 */
+   ① 语法：`node --check`；② **构造**：每个主题各把 HTML 真的求值一遍；
+   ③ 构造出来的页面里的**内联 mock 脚本**再编译一次（见 `precheckMockScript` 的说明）。
+   三道都过才往下走；任一道不过就**带精确行号立刻退出** —— 一次浏览器启动都不必浪费。
+   `--precheck [file]` 只跑这三道（默认检查本运行器要跑的那个场景文件）。 */
 
 /** 本运行器要跑的场景文件：断言与 mock 都在这一个文件里。 */
 const SCENARIO_FILE = fileURLToPath(new URL("./room-page.mjs", import.meta.url));
@@ -633,6 +635,13 @@ async function precheckScenario(file) {
     ]);
   }
 
+  // 模板起点：内联脚本里的第 1 行 = 模板的第 1 行 = 场景文件里这一行（用来把③的行号换算回去）
+  const templateStart = (() => {
+    const lines = readFileSync(file, "utf8").split(String.fromCharCode(10));
+    const index = lines.findIndex((line) => line.includes("const MOCK = (theme) =>"));
+    return index < 0 ? null : index + 1;
+  })();
+
   let scenario;
   try {
     scenario = await import(pathToFileURL(file).href);
@@ -648,8 +657,9 @@ async function precheckScenario(file) {
 
   const built = new Map();
   for (const theme of THEMES) {
+    let html;
     try {
-      built.set(theme, scenario.buildSmokeHtml(theme));
+      html = scenario.buildSmokeHtml(theme);
     } catch (error) {
       fatal([
         `[smoke] ✗ ${file} 过了 node --check，但构造 HTML（主题 ${theme}）时炸了 —— 不起浏览器，立刻退出：`,
@@ -658,9 +668,53 @@ async function precheckScenario(file) {
           "产物没构建（npm run build）也会在这里报 ENOENT）",
       ]);
     }
+    precheckMockScript(html, file, theme, templateStart);
+    built.set(theme, html);
   }
-  log(`✓ 预检通过：${file} 语法 OK，${THEMES.length} 个主题的 HTML 都构造出来了（未启浏览器）`);
+  log(
+    `✓ 预检通过：${file} 语法 OK，${THEMES.length} 个主题的 HTML 都构造出来了、` +
+      "里面的内联 mock 脚本也都能编译（未启浏览器）",
+  );
   return built;
+}
+
+/**
+ * 第三道闸：把构造出来的页面里那段**内联 mock 脚本**再单独编译一次。
+ *
+ * 为什么非要它：前两道管不到这一类错 —— 场景代码整段活在模板字符串里，反斜杠转义是在
+ * **求值模板时**才落地的：写一个换行转义会变成**真换行**、把字符串字面量当场掰断；
+ * 而 `node --check` 只看场景文件本身（模板里的内容它一个字符都不看，只看得见「模板有没有提前收尾」）。
+ * 2026-09-15 就是这么漏过去一条：两道闸门全绿，浏览器里却以「场景未跑完（超时）」的形式炸出来
+ * （页面里那段脚本根本没跑起来，`__TAURI_INTERNALS__` 都没装上），白等 5 分钟。
+ *
+ * 只取**不带 `type` 属性**的那个 `<script>`（= mock）；第二个是 `type="module"` 的应用产物，
+ * 模块代码里有 `import.meta` 之类，塞不进 `new Function` 的编译目标。
+ * 编译而不执行：这里要的只是「它还是一段合法 JS」。
+ */
+function precheckMockScript(html, file, theme, templateStart) {
+  const match = /<script>([\s\S]*?)<\/script>/.exec(html);
+  if (!match) {
+    fatal([`[smoke] ✗ ${file} 构造出来的 HTML（主题 ${theme}）里找不到内联 mock 脚本`]);
+  }
+  const dir = mkdtempSync(join(tmpdir(), "danmubox-precheck-"));
+  const target = join(dir, "mock.js");
+  writeFileSync(target, match[1]);
+  try {
+    execFileSync(process.execPath, ["--check", target], { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (error) {
+    const raw = error.stderr?.toString() ?? String(error);
+    const line = /:(\d+)[\s\S]*?SyntaxError/.exec(raw)?.[1];
+    const inScenario =
+      line && templateStart ? `（≈ 场景文件第 ${Number(line) + templateStart - 1} 行）` : "";
+    fatal([
+      `[smoke] ✗ ${file} 构造出来的内联脚本编译不过（主题 ${theme}）${inScenario} —— 不起浏览器，立刻退出：`,
+      raw.trim(),
+      "[smoke] 常见根因：模板字符串里写了**反斜杠转义**（换行、制表、正则里的 \\d 等都会被模板吃掉）",
+      "[smoke] 或未转义的反引号；模板内部别写转义，改用 String.fromCharCode / 拼接。",
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // 闸门必须在起浏览器**之前**：默认检查本运行器要跑的那个文件，`--precheck <file>` 用来在

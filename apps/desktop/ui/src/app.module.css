@@ -221,17 +221,6 @@
   color-scheme: light;
 }
 
-/* 礼物金额统计与排行（需求 §2.7） */
-.giftStats {
-  margin: var(--sp-1) 0 var(--sp-2);
-  font-size: var(--fs-2);
-  color: var(--fg-dim);
-}
-
-.giftRankItem {
-  padding-left: var(--sp-2);
-}
-
 /* 多房间标签页（需求 §2.8） */
 .tabs {
   display: flex;
@@ -1064,6 +1053,48 @@
 .kindSuperchat {
   color: var(--warn);
 }
+
+/* 醒目留言（SC）卡片（docs/ui.md §4.1）：背景与边框取自 SC 档位令牌 `--sc-1 … --sc-5`
+   —— 由 `.scTierN` 把命中的那一枚写进 `--sc-tier`，卡片规则只认这一个变量；金额行加粗。
+   ⚠ 档位边界是**本地**取值（分界 100 / 500 / 1000 / 2000 元，见 `filtering.superChatTier`），
+   五枚色值也是本项目自己的设计令牌：与 B 站网页端 SC 卡片的逐档比对还没做过，
+   那一条仍挂在 `docs/protocol.md` 附录 A 的待校准表里（A.2「SC 卡片配色档位边界」）。
+   卡片自带内边距（`.row` 默认只有上下内边距，卡片贴边会看不出是卡片）。 */
+.scCard {
+  padding: var(--sp-2);
+  border: 1px solid var(--sc-tier);
+  border-radius: var(--r-3);
+  background: color-mix(in srgb, var(--sc-tier) 22%, var(--bg-elevated));
+}
+
+/* 悬停时保住卡片底色（`.row:hover` 那层洗色会把卡片背景整块换掉，看着像卡片没了） */
+.row.scCard:hover {
+  background: color-mix(in srgb, var(--sc-tier) 30%, var(--bg-elevated));
+}
+
+.scTier1 {
+  --sc-tier: var(--sc-1);
+}
+.scTier2 {
+  --sc-tier: var(--sc-2);
+}
+.scTier3 {
+  --sc-tier: var(--sc-3);
+}
+.scTier4 {
+  --sc-tier: var(--sc-4);
+}
+.scTier5 {
+  --sc-tier: var(--sc-5);
+}
+
+/* 卡片里的金额行：**独占一行、低一档加粗**（§4.1 的规格；「低一档」与昵称同一档 = `--fs-3`）。 */
+.scAmount {
+  display: block;
+  font-size: var(--fs-3);
+  font-weight: 700;
+}
+
 .kindSystem {
   color: var(--fg-dim);
   font-style: italic;
@@ -1159,9 +1190,47 @@
   font-size: var(--fs-2);
 }
 
+/* 礼物栏的**一条**（§5.3）：头像 + 昵称 + 内容 + 数量 + 金额在同一行里。
+   头像走行外共用的 `--avatar`（`:root` 的 1.35em），这里把基准调大一档：
+   礼物栏的字号是 `--fs-2`（12px 上下），照 1.35em 算出来只有 16px，太小看不清。
+   昵称与内容都是单行省略：礼物栏窄，宁可截断也不折行（折叠条只有一行高）。 */
 .giftItem {
+  --avatar: 1.8em;
+
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
   padding: var(--sp-1) 0;
   border-bottom: 1px solid var(--border);
+}
+
+.giftWho {
+  flex: none;
+  max-width: 8em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg-dim);
+}
+
+.giftWhat {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.giftCount,
+.giftAmount {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* 金额格（带单位）：等宽数字，逐行右边缘对齐 */
+.giftAmount {
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 「回到最新」（用户 2026-09-13 #2：「指这整个按钮删掉，用一个返回按钮旋转 90° 来代替」）：
@@ -1796,8 +1865,8 @@
   gap: var(--sp-1);
 }
 
-/* 显示块内部：字号滑杆与礼物栏下拉各占一行（需要整行的地方），三枚开关同排换行 ——
-   360 下正好一行放得下，宽屏下也跟着那一行的自然宽度排。 */
+/* 显示块内部：字号滑杆占满一行（需要整行的地方），四枚开关（时间戳 / 互动消息自动消失 /
+   弹幕包含礼物 / 独立礼物栏）同排换行 —— 360 下正好两行放得下，宽屏下也跟着那一行的自然宽度排。 */
 .filterFields {
   display: flex;
   flex-wrap: wrap;
@@ -1805,8 +1874,7 @@
   gap: var(--sp-2) var(--sp-3);
 }
 
-.filterRange,
-.filterSelect {
+.filterRange {
   flex: 1 1 100%;
   justify-content: space-between;
 }

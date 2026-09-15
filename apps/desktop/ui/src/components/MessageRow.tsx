@@ -2,10 +2,12 @@ import { Avatar } from "./Avatar";
 import type { MenuPoint } from "./ContextMenu";
 import type { ReactNode } from "react";
 import {
+  amountText,
   badgesFor,
   formatClock,
   GUARD_TITLE,
   medalColors,
+  superChatTier,
   type DisplayRow,
 } from "../filtering";
 import type { Message, Prefs } from "../types";
@@ -86,9 +88,16 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   // 渲染逐项相同。标记只在**发送没成**时出现（整行不弱化，要读得清）：被拒的那条还要把正文
   // 划掉并写出上游给的原因（用户 2026-09-13：留着便于对照修改）。
   const rejected = message.send_state === "rejected";
+  // 醒目留言按金额取档（`--sc-1 … --sc-5`）：卡片背景与边框都取自那一枚令牌，
+  // 档位边界是**本地**取值（依据见 filtering.superChatTier 与 docs/ui.md §4.1）。
+  // 金额格按 §4.1 的规格：低一档加粗；上游没给价（amount = 0）时**不画**这一格。
+  const scTier = message.kind === "superchat" ? superChatTier(message.amount) : 0;
+  const scAmount = message.kind === "superchat" ? amountText(message.amount, "superchat") : "";
   const variant = [
     kindClass[message.kind] ?? "",
     autoHide ? styles.autoHide : "",
+    scTier > 0 ? styles.scCard : "",
+    scTier > 0 ? styles[`scTier${scTier}`] : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -97,6 +106,7 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
     <div
       className={`${styles.row} ${variant}`}
       data-testid="db-msg-row"
+      data-sc-tier={scTier > 0 ? scTier : undefined}
       style={autoHide ? { animationDuration: `${INTERACT_AUTO_HIDE_MS}ms` } : undefined}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -234,6 +244,13 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             </span>
           )}
         </span>
+        {/* 醒目留言的金额行（§4.1 规格）：卡片内**独占一行**、低一档加粗。
+            单位是元 —— SC 与礼物（金瓜子）口径不同，`amountText` 按 kind 给单位、不做换算。 */}
+        {scAmount.length > 0 && (
+          <span className={styles.scAmount} data-testid="db-msg-sc-amount">
+            {scAmount}
+          </span>
+        )}
       </span>
     </div>
   );

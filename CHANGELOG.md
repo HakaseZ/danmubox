@@ -1395,6 +1395,50 @@
 - **阶段 4 校准表（原 roadmap §6.4，4 项）**：关注列表端点与字段名、`group_name` 来源、`live_status` 口径（0/1/2）、电池余额取值字段——结论回填 `docs/protocol.md` 附录 A。
 - **阶段 5 无校准项**：其验收只有产物与三端冒烟，校准项全部属于阶段 1 / 3 / 4。
 
+### Added
+
+- **礼物与醒目留言有了头像，醒目留言有了卡片**（issue `2609152029` 第 1–2 条）。归一化侧补齐 `Message.face`：
+  `SEND_GIFT_V2` 的顶层 `face`（`crates/danmubox-bili/src/pb.rs` 早就解出、此前没搬到 `Message`）、
+  `SUPER_CHAT_MESSAGE(_JP)` 的 `data.uinfo.base.face`、互动 / 进场的 `user_info` / `base.face`
+  （JSON 与 protobuf 两条路径，顺手补掉同类缺口）。前端无需改判据：弹幕行的头像列对所有非 `system` 行本来就画，
+  喂上 `face` 即显示；独立礼物栏（见下）也补了头像。
+  **礼物 V1（`SEND_GIFT`）与大航海（`GUARD_BUY` / `USER_TOAST_MSG`）没有可用的头像字段**，一律留空、不画占位假图 ——
+  这同时是第 3 条的结论：大航海不是「漏读」，是上游载荷里没有（`docs/protocol.md` §10.2 / §10.6）。
+  醒目留言从「一行彩色文字」变成卡片：`.scCard` + `--sc-1…5` 五档（这五枚令牌此前全仓无人消费）+ 金额独占一行加粗。
+  **档位边界是本地取值**（按 30 / 50 / 100 / 500 / 1000 / 2000 元切成五档，分界 100 / 500 / 1000 / 2000），
+  **未与网页端逐档比对**，核对方法留在 `docs/protocol.md` 附录 A.2；规格见 `docs/ui.md` §4.1 / §9.2。
+- **独立礼物栏改成「每个礼物 / SC / 大航海一条」**（第 5 条）。原来的「金额排行一行 + 内容详情一行」两段式取消，
+  一行内呈现：头像 + 昵称 + 内容 + `×N` + 带单位金额（`filtering.amountText`：礼物 / 大航海按金瓜子、SC 按元）；
+  折叠态的汇总**按 kind 分组**（三组各带自己的单位）。**不做跨单位求和**：SC 是元、礼物与大航海是金瓜子，
+  SC 载荷里的 `rate` 语义未经真实样本核验，本轮不引入任何换算（`docs/contract.md` §5 的既定口径不变）。
+
+### Changed
+
+- **礼物显示方式：一枚枚举键 → 两枚布尔键**（第 4 条，`0.x` 期破坏性变更）。`ui.gift_panel_mode`
+  （`merged` / `separate`）删除，改为 `ui.gift_in_danmaku`（弹幕流里包含礼物 / SC / 大航海）与 `ui.gift_panel`
+  （显示独立礼物栏），**两枚默认都是 `true`**（弹幕里也有、旁边也有一栏，即「2 种都开」）。
+  存量 `prefs.json` 启动时按值迁移并落盘：`separate` → `false` / `true`，`merged` → `true` / `false`；
+  文件里已显式写出某一枚新键时以文件为准。契约：`docs/contract.md` §8（键表）/ §9（溯源）；
+  筛选面板「显示」块的两枚开关与四种组合见 `docs/ui.md` §5 / §8.5。
+
+### Fixed
+
+- **冒烟运行器补第三道闸**（`apps/desktop/ui/smoke/run-headless.mjs`）：把构造出的 HTML 里那段内联 mock 脚本抽出来
+  再 `node --check` 一次。此前两道闸（场景文件语法 + 构造求值）漏过一类错 —— 模板字符串里的反斜杠转义要到求值时
+  才落地，写一个换行转义会把字符串字面量掰断，两道闸全绿、浏览器里只表现为「场景未跑完（超时）」白等五分钟。
+  新闸已用「故意注入一个转义换行」验证能拦住并报出场景文件行号。
+
+> 本批次的验证口径（诚实记录）：`cargo test --workspace` **219 通过 / 0 失败**；
+> `cargo clippy --workspace --all-targets -- -D warnings` 零告警；桌面产物
+> （`tauri build --no-bundle`）实际启动存活 30 秒、无 panic，且启动日志里出现了旧键迁移那行。
+> 前端：`tsc -b` / `npm run build` / `node --check` / `--precheck` 全过；无头冒烟**两个引擎都跑满**
+> （Chromium 与 `--engine webkit`，各 4 个视口 × 主题），本批新增的 48 条断言两遍逐条为真。
+> 两引擎的退出码都是 1，失败项全部是**与本批无关的存量项**（`themeCycleStepsOk`、`panelHeightsMatch`、
+> `tabIsolationPanelOpenInB`、`adminTabKeyboardFollows`，浅色档另有 `themeIconSpecOk`）——已用「把我的改动
+> 全部 stash 掉重建 dist 再跑」做过 A/B，失败集逐字相同，**本批没有新增失败项**。
+> 新增的三个 frontend 夹具 `smoke/fixtures/gift-sc-guard-rows.json` 是**按协议文档字段表构造**的
+> （不是真实抓包派生：`AGENT.md` §8 第 16 条禁止为测试发送礼物 / SC / 大航海），出处与约束记在 `docs/testing.md` §9.1。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

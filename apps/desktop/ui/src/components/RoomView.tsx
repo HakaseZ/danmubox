@@ -5,6 +5,7 @@ import { Avatar } from "./Avatar";
 import { Composer, type PanelKind } from "./Composer";
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
+import { BACK_PRIORITY, registerBackHandler } from "../back";
 import { useApp } from "../store";
 import {
   amountText,
@@ -240,6 +241,53 @@ export function RoomView({
       setAdminConfirm(null);
     }
   };
+
+  /**
+   * 系统返回手势第 2 级：在房间页 → 回房间列表。`onBack` 就是房间头那枚圆形返回键
+   * （`App.tsx` 传给它的正是 store 的 `closeRoom`），两条入口同源。
+   */
+  useEffect(
+    () =>
+      registerBackHandler(BACK_PRIORITY.page, () => {
+        onBack();
+        return true;
+      }),
+    [onBack],
+  );
+
+  /**
+   * 系统返回手势第 1 级：面板先关，顺序与「打开任何一个就把别的收起来」那条互斥规则同一批。
+   *
+   * **常驻注册**（`RoomView` 挂着就注册），认不认领由处理器里的**当下状态**决定，而不是由
+   * 「注册 == 开着」决定：注册 / 注销要等 effect（一次提交之后才跑），面板刚开或刚关的那一帧里
+   * 会剩下一个与界面不符的处理器 —— 该认领的返回被放走、或该放走的被吞掉。
+   * 关的动作复用界面上既有的那三条：`onPanel(null)` 是点面板外 / 再点一次工具按钮走的路，
+   * 两个 `toggle` 是 `⋯` 菜单里那条「收起房管面板」与礼物栏按钮走的路，不另写一套状态变更。
+   * 每次渲染把最新状态与动作写进 ref（与 `MessageList` 的 `stateRef` 同一套写法）。
+   */
+  const backRef = useRef({ panel, adminOpen, giftOpen, onPanel, toggleAdminPanel, toggleGiftDock });
+  backRef.current = { panel, adminOpen, giftOpen, onPanel, toggleAdminPanel, toggleGiftDock };
+
+  useEffect(
+    () =>
+      registerBackHandler(BACK_PRIORITY.panel, () => {
+        const now = backRef.current;
+        if (now.panel !== null) {
+          now.onPanel(null);
+          return true;
+        }
+        if (now.adminOpen) {
+          now.toggleAdminPanel();
+          return true;
+        }
+        if (now.giftOpen) {
+          now.toggleGiftDock();
+          return true;
+        }
+        return false;
+      }),
+    [],
+  );
 
   // 切房间（多标签）时把本页的**临时界面状态**清干净（用户 2026-09-13 第 2 条）：
   // 多标签只是切渲染，`RoomView` 的组件实例被 React 复用，本地状态不显式清就会串台 ——

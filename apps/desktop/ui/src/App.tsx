@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { BACK_PRIORITY, registerBackHandler } from "./back";
 import { AccountManager } from "./components/AccountManager";
 import { RoomList } from "./components/RoomList";
 import { LIVE_DOT_CLASS, LIVE_TEXT, RoomView, liveKindOf } from "./components/RoomView";
@@ -51,6 +52,26 @@ export function App() {
   const updatePrefs = useApp((state) => state.updatePrefs);
   const dismissError = useApp((state) => state.dismissError);
   const setNotice = useApp((state) => state.setNotice);
+
+  /** 关掉账号对话框 = 放弃这次扫码：面板不再留在后台偷偷轮询。**关闭按钮与返回手势共用这一处**。 */
+  const closeAccounts = useCallback(() => {
+    cancelAccountQr();
+    setAccountsOpen(false);
+  }, [cancelAccountQr]);
+
+  // 系统返回手势第 1 级：账号对话框是盖在最上面的模态，先关它（关法与「✕」同源）。
+  // 常驻注册、由**当下状态**决定认不认领（同 RoomView：注册/注销要等 effect，会落后一帧）。
+  const accountsOpenRef = useRef(accountsOpen);
+  accountsOpenRef.current = accountsOpen;
+  useEffect(
+    () =>
+      registerBackHandler(BACK_PRIORITY.panel, () => {
+        if (!accountsOpenRef.current) return false;
+        closeAccounts();
+        return true;
+      }),
+    [closeAccounts],
+  );
 
   useEffect(() => {
     void bootstrap();
@@ -183,11 +204,7 @@ export function App() {
           qr={qr}
           qrState={qrState}
           qrError={qrError}
-          onClose={() => {
-            // 关掉对话框 = 放弃这次扫码：面板不再留在后台偷偷轮询。
-            cancelAccountQr();
-            setAccountsOpen(false);
-          }}
+          onClose={closeAccounts}
           onSwitch={(name) => void switchAccount(name)}
           onLogout={(name) => void logoutAccount(name)}
           onRemove={(name) => void removeAccount(name)}

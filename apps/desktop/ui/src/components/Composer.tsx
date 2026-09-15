@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { FilterBar } from "./FilterBar";
+import { isSystemBackGestureZone } from "../back";
 import {
   EMOTE_PACKAGE_LABEL,
   sendOutcomeText,
@@ -241,6 +242,10 @@ export function Composer({
       // 面板里弹出的右键菜单也归面板：它的「编辑 / 删除」点下去时面板必须还在
       // （`pointerdown` 连右键一起收，菜单项不在面板 DOM 里，不排除就会被关掉）。
       if (target instanceof Element && target.closest('[data-testid="db-context-menu"]')) return;
+      // 屏幕左右边缘那一条是**系统手势区**：从那里起手的返回手势会先把这个 DOWN 发给页面、
+      // 再把整条流 CANCEL 收走。把它当「点在外面」就会在返回到达前先把面板关掉，
+      // 于是面板那一级白设（见 back.ts 的 isSystemBackGestureZone）。
+      if (isSystemBackGestureZone(event.clientX)) return;
       onPanel(null);
     };
     // 捕获阶段：先于被点元素的处理收起面板，避免「点了一下别人、面板还挂在上面」

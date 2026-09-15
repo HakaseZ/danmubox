@@ -104,7 +104,7 @@ DANMUBOX_LOG=debug cargo run -p danmubox-desktop 2>&1 | tee -a target/logs/app.l
 |---|---|---|
 | macOS | `~/Library/Application Support/danmubox/` | `config.toml`、`prefs.json`、`prefs.json.bak` |
 | Windows | `%APPDATA%\danmubox\` | 同上 |
-| Android | 应用私有目录（绝对路径随系统与用户而异，以 `app_info` 返回值为准） | `config.toml`、`prefs.json`、`prefs.json.bak` |
+| Android | 应用私有目录（绝对路径随系统与用户而异，以 `app_info` 返回值为准）；由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`，即应用私有 dataDir 本身、**不是**其下的 `files/` 子目录（实测模拟器 android-35 上为 `/data/user/0/dev.kksk.danmubox`） | `config.toml`、`prefs.json`、`prefs.json.bak` |
 
 - 数据目录本身**不含**弹幕内容：弹幕只在内存环形缓冲中保留（契约 §4.3）。
 - 查看实际数据目录：调用 `app_info`（返回版本、数据目录、构建信息；不含任何凭据值）。
@@ -360,7 +360,7 @@ grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或日
 | 1 | 应用本体 | 长按图标卸载，或 `adb uninstall dev.kksk.danmubox` |
 | 2 | 应用私有数据 | 随卸载自动清除（含 `config.toml`、`prefs.json`）；只想清数据不卸载 → 「设置 → 应用 → danmubox → 存储 → 清除数据」 |
 | 3 | 外部存储残留 | 本项目不写共享存储；若发现相关目录，手工删除 |
-| 4 | 开发机上的签名材料 | **不要删除**（保留以便日后覆盖安装）；它不在手机上，属开发机资产 |
+| 4 | 开发机上的签名材料 | **不要删除**（保留以便日后覆盖安装）；它不在手机上，属开发机资产。位置：`apps/desktop/src-tauri/gen/android/keystore.jks` 与同目录的 `keystore.properties`——两者被 `gen/android/.gitignore` 忽略，且**不在 `.android-env/` 内**，所以 `scripts/android-env.sh clean` 删不到它们；反过来说，清工具链时**别手工把它们一起删掉**，丢了只能靠卸载重装再回到同一签名。详见 §5.7 与 §5.12 |
 | 5 | 设备上的安装包 | 手工删除此前 `adb push` / 传输的 APK |
 
 ### 4.4 卸载检查清单
@@ -387,7 +387,7 @@ grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或日
 | 项 | 约定 |
 |---|---|
 | 分发范围 | **自用，不对外分发**：产物只装自己的设备 |
-| 目标平台 | macOS / Windows / Android（iOS 与折叠屏适配为后期 enhancement） |
+| 目标平台 | macOS / Windows / Android（iOS 与折叠屏适配为后期 enhancement；折叠屏的可行性研究见 [`foldable.md`](foldable.md)，**本次不实现**） |
 | 不做 | 自动更新、后台保活（契约 §2） |
 | 包标识 bundle id | `dev.kksk.danmubox`，三端统一（契约 §1） |
 | 前端产物 | `apps/desktop/ui/` 由 Vite 构建并内嵌进 Tauri 应用（React + TS，见 `architecture.md`） |
@@ -443,21 +443,38 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --target x86_64-pc-windows
 
 #### Android
 
+每个新 shell 先 source 一次项目内工具链（前置条件与体积见 §5.4，清除与重建见 §5.12）：
+
 ```bash
-cd apps/desktop && ./ui/node_modules/.bin/tauri android init     # 首次生成 gen/android 工程，只跑一次
-cd apps/desktop && ./ui/node_modules/.bin/tauri android build --apk
-cd apps/desktop && ./ui/node_modules/.bin/tauri android build --apk --split-per-abi
-cd apps/desktop && ./ui/node_modules/.bin/tauri dev -- --device <serial>   # 真机热重载调试
+. scripts/android-env.sh     # 导出 JAVA_HOME / ANDROID_HOME / NDK_HOME / RUSTUP_HOME / CARGO_HOME / GRADLE_USER_HOME / PATH
+cd apps/desktop
+CI=true ./ui/node_modules/.bin/tauri android build --apk --ci                  # 通用包：一个 APK 含四个 ABI
+CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  # 按 ABI 分包
 ```
+
+- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，40 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的两处改（见下表）。
+- `CI=true` 与 `--ci` 一起用，让 Tauri CLI 走非交互路径。
+- `tauri android dev -- --device <serial>`（真机热重载）**未实测**，本仓库暂不写具体用法。
 
 | 产物 | 路径 |
 |---|---|
-| 通用 APK | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
-| 分 ABI APK | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/app-<abi>-release.apk` |
+| 通用 APK（实测 52 MB，四个 ABI） | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
+| 分 ABI APK | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/app-<abi>-release.apk`，`<abi>` ∈ `arm64` / `arm` / `x86` / `x86_64`（**不是** `armeabi-v7a` 这一族 Rust triple 名） |
 
+- 没有 `keystore.properties` 时走未签名构建，产物名在 `-release` 之后再带一段 `-unsigned`（AGP 命名规则；本轮**未实测**这条路径）。**未签名的包装不进设备**：`adb install` 报 `INSTALL_PARSE_FAILED_NO_CERTIFICATES`。签名材料与由来见 §5.7。
 - 自用装机只装 APK（不生成 AAB）。
-- 默认构建包含官方支持的四个 ABI；自用设备通常只需 `arm64`，可用 `--target aarch64` 缩短构建时间。
-- 最低 Android 版本由 Tauri 决定（官方当前为 Android 7.0 / SDK 24），需要提高时在 `bundle.android.minSdkVersion` 配置。
+- 默认构建包含官方支持的四个 ABI；`--split-per-abi` 只改产物粒度，不改编译目标是否已装。
+
+**本仓库对上游模板的两处改**（重跑 `tauri android init` 会覆盖，需照下表重新打）：
+
+| 位置 | 上游模板 | 本仓库 | 为什么 |
+|---|---|---|---|
+| `apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/dev/kksk/danmubox/kotlin/BuildTask.kt` | `node tauri android android-studio-script` | 直接调 `ui/node_modules/@tauri-apps/cli/tauri.js`；找不到 CLI 时显式报错 | 模板那条把 `tauri` 当**相对 workingDir 的路径**交给 node 解析，只有 app 根目录是 npm 工程时才成立。本仓前端工程在 `apps/desktop/ui`、`apps/desktop` 下没有 `package.json`，模板原样必然报 `Cannot find module '<…>/src-tauri/tauri'`（2026-09-15 实测） |
+| `apps/desktop/src-tauri/gen/android/app/build.gradle.kts` | **没有** signingConfig | 自建 `signingConfigs.release`，读 `gen/android/keystore.properties`；文件缺失即退回无签名 | 自用 release 包要能覆盖安装，见 §5.7 |
+
+实测（2026-09-15，模拟器 android-35）：Gradle 8.14.3 / AGP 8.11.0 / Kotlin 1.9.25；`aapt2 dump badging` 读到 package `dev.kksk.danmubox`、versionCode 1000、versionName 0.1.0、minSdk 24、targetSdk / compileSdk 36、`INTERNET` 权限在；带签名包 `apksigner verify` 为 `Verifies`（v2 签名）。
+
+**已知问题（已发现，修复中）**：targetSdk 36 强制 edge-to-edge，而界面尚未处理窗口 inset——顶栏落进状态栏带（StatusBar frame=[0,0][1080,128]、刘海 top inset=128），右上主题按钮与电池图标重叠。本分支正在并行修；截至本文档提交时修复提交尚未落，是否已修以 `git log` 为准（`apps/desktop/ui` 侧的 fix 提交）。
 
 ### 5.4 工具链前置条件（对照 Tauri 官方 Prerequisites）
 
@@ -471,12 +488,7 @@ Tauri 官方把依赖分为「系统依赖 + Rust + 移动端附加依赖」三�
 | Visual Studio C++ Build Tools | Windows | 安装器勾选「Desktop development with C++」 | 官方列为 Windows 开发必需项 |
 | WebView2 Runtime | Windows（开发机 + 目标机） | Evergreen Bootstrapper | 官方：Tauri 用 Edge WebView2 渲染，开发与运行都需要 |
 | VBSCRIPT 可选功能 | Windows（仅打 MSI 时） | 设置 → 应用 → 可选功能 → 更多 Windows 功能 → 勾选 VBSCRIPT | 官方：缺它时 `light.exe` 报错 |
-| Android Studio | Android | developer.android.com/studio | 官方移动端第一步 |
-| Android SDK 组件 | Android | SDK Manager 安装 Android SDK Platform / Platform-Tools / Build-Tools / Command-line Tools | 官方逐项列出 |
-| NDK (Side by side) | Android | SDK Manager 安装 | 官方逐项列出 |
-| `JAVA_HOME` | Android | 指向 Android Studio 自带 JBR，如 `export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` | 官方要求显式设置 |
-| `ANDROID_HOME` / `NDK_HOME` | Android | `export ANDROID_HOME="$HOME/Library/Android/sdk"`；`NDK_HOME="$ANDROID_HOME/ndk/<版本>"` | 官方要求显式设置 |
-| rustup 四个 Android ABI target | Android | `rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android` | 官方列出的四个目标，缺一则对应 ABI 构建失败 |
+| **Android 工具链（本仓库口径）** | Android | 首次 `scripts/android-env.sh bootstrap`；之后每个新 shell `. scripts/android-env.sh` | **不再需要 Android Studio，也不再需要全局 `ANDROID_HOME` / `JAVA_HOME` / `NDK_HOME`**：官方那套「Android Studio + SDK Manager + 全局环境变量 + `rustup target add`」整体被仓库内的 `.android-env/` 取代（清单见下），宿主侧零安装 |
 | Tauri CLI | 三端 | 前端脚本内 `@tauri-apps/cli`（`./ui/node_modules/.bin/tauri`） | 仓库不额外要求全局安装 `cargo-tauri` |
 
 要点：
@@ -484,15 +496,40 @@ Tauri 官方把依赖分为「系统依赖 + Rust + 移动端附加依赖」三�
 - **macOS 桌面只需 Xcode CLT**（本期不做 iOS 端）。
 - **Windows 目标机需要 WebView2 运行时**。Windows 10/11 较新版本通常已预装；缺失时按 §5.6 处理。
 - **Android 的四个 ABI target 与 NDK 缺一不可**；`--split-per-abi` 只影响打包粒度，不影响编译目标是否已安装。
+- **Android 不再需要 Android Studio，也不需要全局 `ANDROID_HOME` / `JAVA_HOME` / `NDK_HOME`**：工具链全在仓库内，见下。
 
-#### Android 与 Windows 前置条件（当前缺口）
+#### Android：仓库内工具链 `.android-env/`（`scripts/android-env.sh`）
 
-两端都属独立工程，开工前先补齐（2026-09-12 本机核查；缺口登记见 [`../CHANGELOG.md`](../CHANGELOG.md) 阶段 5 与 [`roadmap.md`](roadmap.md) §2.2）：
+```bash
+. scripts/android-env.sh            # 导出环境（必须 source；直接执行无效）
+scripts/android-env.sh bootstrap    # 从零安装，可重复执行（已装好的跳过）
+scripts/android-env.sh clean        # 停 gradle daemon / adb server 后删除整个 .android-env
+scripts/android-env.sh help         # 用法
+```
+
+装进 `.android-env/`（**仓库内**，已由根 `.gitignore` 忽略）的东西（2026-09-15 实测）：
+
+| 目录 / 内容 | 说明 |
+|---|---|
+| `jdk17/`（309 MB） | Temurin JDK **17.0.20.1**，`JAVA_HOME` 默认指它 |
+| `jdk21/`（336 MB） | Temurin JDK **21.0.12.1** 备选；`ANDROID_JDK=21` 切过去 |
+| `sdk/`（8.0 GB） | `build-tools;35.0.0`、`cmdline-tools;latest 23.0.0`、`emulator;37.1.11`、`ndk;27.0.12077973`、`platform-tools;37.0.1`、`platforms;android-35`、`platforms;android-36`、`system-images;android-35;google_apis;arm64-v8a` |
+| `rustup/`（993 MB）+ `cargo/`（269 MB） | 项目内 rustup / cargo：rustc 与 cargo **1.98.1**，含四个 android target（`aarch64-linux-android` / `armv7-linux-androideabi` / `i686-linux-android` / `x86_64-linux-android`） |
+| `gradle-home/`（1.8 GB） | `GRADLE_USER_HOME`，内含 `org.gradle.daemon=false` |
+| `android-user/`（2.0 GB） | `ANDROID_USER_HOME` / `ANDROID_AVD_HOME`（AVD 也建在这里） |
+| `npm-cache/`、`tmp/` | `npm_config_cache` 与 `TMPDIR` |
+
+总计约 **14 GB**。导出的环境变量：`JAVA_HOME`、`ANDROID_HOME`、`ANDROID_SDK_ROOT`、`NDK_HOME`、`ANDROID_NDK_HOME`、`GRADLE_USER_HOME`、`RUSTUP_HOME`、`CARGO_HOME`、`ANDROID_USER_HOME`、`ANDROID_AVD_HOME`、`npm_config_cache`、`TMPDIR`，并把 `.android-env` 下各 `bin` 前置进 `PATH`（重复 source 不叠加）。**宿主侧不装任何东西**：`~/.gradle`、`~/Library/Android` 都不存在也不会被创建；唯一的宿主足迹是宿主 `cargo` 跑过本 workspace 时留下的几 KB 索引元数据（见 §5.12）。
+
+#### Windows 前置条件（当前缺口）
+
+Windows 端属独立工程，开工前先补齐（2026-09-12 本机核查）：
 
 | 端 | 缺 | 已有 |
 |---|---|---|
-| Android | Android SDK（`sdkmanager`，`ANDROID_HOME` 未设置）、Android NDK（`ANDROID_NDK_HOME` 未设置）、Gradle、Rust 的 Android target（`aarch64-linux-android` 等；当前只装了 `aarch64-apple-darwin`） | `adb`、`java`/`javac` |
 | Windows | `x86_64-pc-windows-msvc`（或 `-gnu`）target 与对应的链接器 / 工具链（macOS 无法交叉编译） | — |
+
+Android 端这段缺口已在 2026-09-15 关闭：工具链由 `scripts/android-env.sh bootstrap` 装进仓库，出包、装进模拟器与启动均已实测（§5.3）。
 
 ### 5.5 macOS 本地运行与签名策略
 
@@ -531,6 +568,17 @@ xattr -l /path/danmubox.app                   # 查看隔离属性
 
 签名材料（keystore 与口令）**只存本机**，不进仓库、不进日志、不进文档（安全红线见 §3）。**同一 `dev.kksk.danmubox` 的后续安装必须使用同一签名**，否则无法覆盖安装、只能先卸载（卸载会清数据，且 `config.toml` 凭据一并丢失，见 §4）。
 
+自用 release 签名材料放在 gradle 工程根，**两个文件都在 `apps/desktop/src-tauri/gen/android/`**：
+
+| 文件 | 内容 | 状态 |
+|---|---|---|
+| `keystore.jks` | 自用 keystore | 被 `gen/android/.gitignore`（`*.jks`）忽略，**不入库** |
+| `keystore.properties` | 键 `storeFile` / `storePassword` / `keyAlias` / `keyPassword`（`storeFile` 相对 `gen/android/` 解析） | 同上，**不入库** |
+
+- **这两个文件不在 `.android-env/` 内**，所以 `scripts/android-env.sh clean`（§5.12）删不到它们；反过来说，清工具链时**别手工把它们一起删掉**。
+- **丢了会怎样**：换一份新 keystore 就等于换了签名 → 设备上已装的那个同名应用**装不上**（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），只能先卸载（连带清掉 `config.toml` 凭据，重装后要重新扫码）。两者都在 `.gitignore` 里，**仓库没有任何备份来源**，请自行异地留存。
+- **缺 `keystore.properties` 不阻塞出包**：`app/build.gradle.kts` 的 `signingConfigs.release` 只在文件存在时创建，release 变为无签名（产物名带 `-unsigned`）。这种包装不进设备。
+
 ```bash
 adb devices                                  # 确认设备已授权
 adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
@@ -538,6 +586,7 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 | 情况 | 处置 |
 |---|---|
+| `INSTALL_PARSE_FAILED_NO_CERTIFICATES` | 装的是**未签名**包（没有 `keystore.properties` 的那次构建）→ 按上表确认签名材料在位后重新出包 |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名与已装版本不一致 → 先 `adb uninstall dev.kksk.danmubox`（会清数据）再安装 |
 | `INSTALL_FAILED_OLDER_SDK` | 设备 Android 版本低于最低支持版本 → 提高设备系统或调整 `minSdkVersion` 后重建 |
 | 手机上提示「不允许安装未知应用」 | 在「安装未知应用」权限中允许 USB 安装来源 |
@@ -605,6 +654,43 @@ time <启动命令>                                       # Android 用 adb shel
 | 5 | 本地文件就位 | 数据目录出现 `config.toml`（权限 `0600`）与 `prefs.json`；应用为纯客户端形态，不启动任何本地服务（见 §1） |
 | 6 | 无敏感信息外泄 | 产物目录、日志、崩溃输出中不含 `SESSDATA` / `bili_jct` / `DedeUserID` 明文（见 §3）；仓库中无签名材料、`.p12`、Cookie、`config.toml` |
 | 7 | 卸载可用 | 按 §4 能清干净残留 |
+
+### 5.12 Android 工具链的无痕清除与重建
+
+`.android-env/`（§5.4 那套，约 14 GB）整个在仓库内、且已在根 `.gitignore` 里，因此**删掉它就等于把这台机器上的 Android 工具链卸干净**。不想留了、要给磁盘腾地方、或要换一套干净环境时：
+
+```bash
+scripts/android-env.sh clean     # 停后台进程 → 打印各目录占用 → 删除整个 .android-env
+```
+
+`clean` 逐条做的事：
+
+| # | 动作 | 说明 |
+|---|---|---|
+| 1 | 停 gradle daemon | 若 `apps/desktop/src-tauri/gen/android/gradlew` 可执行，跑 `./gradlew --stop`；失败只告警不中断 |
+| 2 | 停 adb server | 若 `.android-env/sdk/platform-tools/adb` 在，跑 `adb kill-server` |
+| 3 | 打印删除前占用 | `du -sh` 总量 + 每个子目录一行的分解 |
+| 4 | `rm -rf .android-env` | 整包删除，并打印释放量 |
+
+**删完还剩什么**（2026-09-15 实测）：
+
+| 位置 | 是否还在 | 说明 |
+|---|---|---|
+| `apps/desktop/src-tauri/gen/android/keystore.jks`、`keystore.properties` | **在** | 不在 `.android-env/` 内；**别手工连带删掉**（丢了要卸载重装，见 §5.7、§4.3） |
+| `apps/desktop/src-tauri/gen/android/**` 其余部分 | 在 | 是要入库的工程源码，与工具链无关 |
+| 宿主侧 `~/.gradle`、`~/Library/Android`、`~/.rustup`、`~/.cargo` | 不存在 | 脚本从不写这些位置；`clean` 前后都一样 |
+| 宿主 rustup/cargo 的索引元数据 | 几 KB | 唯一的宿主足迹：宿主自身那份 `cargo`（非项目内那份）跑过本 workspace 时留下的索引元数据，与 `clean` 无关，清不清都行 |
+| 当前 shell 里已导出的 `JAVA_HOME` / `ANDROID_HOME` / `PATH` | 已失效 | `clean` 会提示：本 shell 之前 source 出来的那份变量指向已删除的目录，要重新 `bootstrap` + `. scripts/android-env.sh` |
+
+**要重装**：一条命令重建（可重复执行，已装好的会跳过），再 source 一次即可继续出包：
+
+```bash
+scripts/android-env.sh bootstrap   # 重新装 JDK / SDK / NDK / emulator / rustup + 四个 android target
+. scripts/android-env.sh
+cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
+```
+
+代价：`bootstrap` 要重新下载数 GB（JDK、SDK、NDK、system-image、rustup 工具链），耗时以网络为准；**签名材料与 `gen/android` 不受影响**，重装后同一台设备仍可覆盖安装。
 
 ---
 

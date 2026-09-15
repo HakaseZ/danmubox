@@ -27,6 +27,7 @@ ADR（Architecture Decision Record）只回答三个问题：**当时面对什�
 | [0006](0006-room-supervisor-tasks.md) | 每个房间一个 supervisor task，事件经 broadcast 广播 | Accepted | 2026-09-11 |
 | [0007](0007-credential-file.md) | 凭据存明文 `config.toml`（0600），偏好另存 `prefs.json` | Accepted | 2026-09-11 |
 | [0008](0008-frontend-stack.md) | 前端采用 React + TS + Vite + TanStack Virtual + Zustand + CSS Modules | Accepted | 2026-09-11 |
+| [0009](0009-in-repo-android-toolchain.md) | Android 工具链整包装进仓库内 `.android-env/`（`scripts/android-env.sh`），不用 Android Studio + 全局 SDK | Accepted | 2026-09-15 |
 
 编号分配规则：全部决策落在此表，编号连续，不跳号、不复用已删除编号。状态取值只有 `Accepted` / `Superseded by NNNN` / `Deprecated`（本期全部为 `Accepted`）。本目录曾于需求基线确定时整体重整，编号不跳号。
 
@@ -45,6 +46,7 @@ ADR（Architecture Decision Record）只回答三个问题：**当时面对什�
 | IPC 命令与事件 | `contract.md` §7、[`../ipc.md`](../ipc.md) | 0002、0008 |
 | 偏好键 | `contract.md` §8 | 0008 |
 | 前端栈与状态管理 | [`../ui.md`](../ui.md)、[`../ipc.md`](../ipc.md) | 0008 |
+| Android 构建工具链、签名材料的落点 | [`../operations.md`](../operations.md) §5 | 0009 |
 
 依赖方向（规范性）：`danmubox-bili` → `danmubox-core`；`danmubox-cli` → `core` + `bili`；`apps/desktop/src-tauri` → `core` + `bili`。**`core` 不得依赖 `bili`，也不得依赖 `tauri`。**
 

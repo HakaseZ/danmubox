@@ -86,7 +86,7 @@ danmubox/
 | 常量 | 值 |
 |---|---|
 | 日志级别 | 环境变量 `DANMUBOX_LOG`，默认 `info` |
-| 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android 应用私有目录 |
+| 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android 应用私有目录——**实现口径**：由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，不是其下的 `files/` 子目录），`danmubox-core` 保持平台无关、不写死平台路径 |
 | 凭据文件 | `config.toml`，权限 **0600**，见 §4.1 |
 | 偏好文件 | `prefs.json`，见 §4.2 |
 | 弹幕内存缓冲 | 单次房内会话内 5000 条环形缓冲，离开房间即销毁，见 §4.3 |
@@ -365,7 +365,7 @@ Frontend → Rust 命令（`invoke`）。本节是**命令名索引**，与 `app
 | `admin_keywords_del` | 删除屏蔽词 |
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令；取数口径见 §5） |
 | `wallet_balance` | 电池余额 |
-| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)` |
+| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持 |
 | `prefs_get` | 读偏好生效值全集（默认值已合并，见 §8） |
 | `prefs_set` | 写偏好补丁；未知键或非法值 → `BAD_REQUEST`，成功返回合并后的生效值全集 |
 | `frontend_log` | 前端控制台桥上报：`level` 为 `error` / `warn`（其余按 debug），`target = "danmubox::ui"`。页面 `console.error` / `console.warn` 与未捕获错误经它并入 Rust 侧同一份日志；同一告警 1 秒内只上报一次，防「渲染 → 告警 → 日志 → 重渲染」反馈环（`DANMUBOX_LOG` 见 §4） |

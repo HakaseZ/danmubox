@@ -45,24 +45,25 @@
 | AI 原生接口 | 需求置空，本期不实现；只保留「后期接入 MCP」的架构兼容能力（`core` 的端口与事件总线不得假设消费方是 UI） |
 | 词云 | 非核心功能，列入下期 |
 | 视频流解码 | 不拉流、不解码、不播放视频，只消费弹幕协议 |
-| iOS 端、Fold8 / 折叠屏适配 | 后期 enhancement，本期不纳入 |
+| iOS 端、Fold8 / 折叠屏适配 | 后期 enhancement，本期不纳入（折叠屏的可行性研究已完成，见 [`docs/foldable.md`](docs/foldable.md)，**未实现**） |
 | 后台保活 / 推送 | 前台运行即可，不做进程保活 |
 | 应用商店发布 | 自用产物，不签名公证、不上架 |
 | 系统级悬浮弹幕层 | 只做窗口内聊天框 UI，不做桌面悬浮层 |
 
 ## 3. 当前状态
 
-截至 2026-09-13：
+截至 2026-09-15：
 
 | 项 | 状态 |
 |---|---|
-| 技术选型 | 已完成（结论见 `docs/decisions/`，8 篇 ADR） |
+| 技术选型 | 已完成（结论见 `docs/decisions/`，9 篇 ADR） |
 | 文档基线 | 已完成：需求 [`REQUIREMENTS.md`](REQUIREMENTS.md)、契约 [`docs/contract.md`](docs/contract.md)、协议与实测校准 [`docs/protocol.md`](docs/protocol.md)，另有架构 / IPC / UI / 登录 / 运维 / 测试 / 路线图各一篇（索引见 §7） |
 | 代码 | 约 11300 行（Rust + TS/TSX）：`danmubox-core`（领域模型 / 端口 / 总线 / 会话缓冲 / 偏好 / 凭据）、`danmubox-bili`（协议 / WS / 鉴权 / WBI / HTTP）、`danmubox-cli`（采集与校准入口）、`apps/desktop`（Tauri 2 + React 19 + Zustand + 虚拟滚动） |
-| 阶段进度 | **阶段 1–4 已退出**；阶段 5 仅 macOS 完成，Windows / Android 见 [`docs/roadmap.md`](docs/roadmap.md) backlog |
-| 功能面 | 游客态与登录态收弹幕；发弹幕（纯文本 / 表情 / @回复 / 快捷短语）；进场历史回填；礼物（V1+V2、连击聚合、金额统计与排行）；SuperChat；大航海播报；举报（理由清单来自上游）；关注列表与分组；电池余额；多房间标签页；多账号切换与**界面内扫码登录**；房管面板；过滤与 17 项偏好 |
+| 阶段进度 | **阶段 1–4 已退出**；阶段 5 macOS 完成，Android 出包 / 装机 / 启动这一档完成（真机与登录、收发弹幕等链路**未实测**，见 [`docs/operations.md`](docs/operations.md) §5.3），Windows 未完成（见 [`docs/roadmap.md`](docs/roadmap.md) §2.2） |
+| 功能面 | 游客态与登录态收弹幕；发弹幕（纯文本 / 表情 / @回复 / 快捷短语）；进场历史回填；礼物（V1+V2、连击聚合、金额统计与排行）；SuperChat；大航海播报；举报（理由清单来自上游）；关注列表与分组；电池余额；多房间标签页；多账号切换与**界面内扫码登录**；房管面板；过滤与 13 项偏好（唯一权威清单见 [`docs/contract.md`](docs/contract.md) §8） |
 | 构建与测试 | `cargo test --workspace` **153 通过**；`cargo clippy --workspace --all-targets -- -D warnings` **零告警**；前端 `npx tsc -b` 通过 |
 | 桌面端产物 | 可出**独立可执行文件**（前端已内嵌，**不再需要 dev server**）：`cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` → `target/release/danmubox-desktop` |
+| 移动端产物 | 可出 **APK**（工具链全在仓库内，见 §8 与 [`docs/operations.md`](docs/operations.md) §5.3）：`. scripts/android-env.sh` + `cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci` → `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（实测 52 MB / 四个 ABI）。**已验**：装进 Android 模拟器（android-35）启动成功、冷启动 TotalTime 1013ms、进公开测试房间 `1` 连接成功、数据目录与 `prefs.json` 落在应用私有目录；**未验**：真机、扫码登录、发弹幕、收弹幕（3.5 分钟内未观测到弹幕） |
 
 实测校准的进展与仍缺样本的项，统一记在 [`docs/protocol.md`](docs/protocol.md) 附录 A；待办清单见 [`docs/roadmap.md`](docs/roadmap.md) §8。
 
@@ -72,7 +73,7 @@
 |---|---|---|
 | macOS | 是 | 主开发平台，桌面端一等目标 |
 | Windows | 是 | 桌面端目标，依赖 WebView2 运行时 |
-| Android | 是 | 移动端目标，Tauri 2 移动端构建 |
+| Android | 是 | 移动端目标，Tauri 2 移动端构建；工具链全在仓库内（`.android-env/`，[`docs/operations.md`](docs/operations.md) §5.4），已出包并装进模拟器启动（同上 §5.3）——真机与登录 / 收发弹幕链路**未实测** |
 | iOS | 否 | 后期 enhancement |
 | Linux | 否 | 未列入目标 |
 
@@ -89,7 +90,8 @@
 ```text
 danmubox/
   crates/{danmubox-core,danmubox-bili,danmubox-cli}/
-  apps/desktop/               # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
+  apps/desktop/               # Tauri 2 应用：src-tauri/（含入库的 gen/android/ 工程）+ ui/（React + TS + Vite）
+  scripts/                    # 仓库内工具链：android-env.sh（bootstrap / source / clean，见 §8 与 operations.md §5）
   docs/                       # 文档（索引见 §7）
   REQUIREMENTS.md             # 需求基线（用户手写）
   README.md  AGENT.md  CHANGELOG.md
@@ -111,6 +113,7 @@ danmubox/
 | [`docs/testing.md`](docs/testing.md) | 测试金字塔、协议 fixture、回放、端口契约、三端冒烟 | 实现者 |
 | [`docs/operations.md`](docs/operations.md) | 日常操作、故障排查决策树、脱敏规则、卸载与残留清理、**三端构建与分发** | 作者 |
 | [`docs/roadmap.md`](docs/roadmap.md) | 当前阶段状态、下期 backlog（等样本 / 待拍板 / 更远期）、风险 | 作者、agent |
+| [`docs/foldable.md`](docs/foldable.md) | 折叠屏（Galaxy Z Fold8）适配的**可行性研究**：结论「需改造」、要动多少、怎么验；**未实现** | 作者、agent |
 | [`docs/requests.md`](docs/requests.md) | 需求与 issue 归档台账：对话中提出的需求 + 仓库根 `issue` 的逐条对照（状态 / 证据 / 落点） | 作者、agent |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR 索引与模板 | 作者、agent |
 | [`docs/decisions/0001-tauri-over-flutter.md`](docs/decisions/0001-tauri-over-flutter.md) | 选型：范围收敛到三端后 Tauri 胜出 | 作者 |
@@ -121,6 +124,7 @@ danmubox/
 | [`docs/decisions/0006-room-supervisor-tasks.md`](docs/decisions/0006-room-supervisor-tasks.md) | 每房间一个 supervisor task + broadcast | 实现者 |
 | [`docs/decisions/0007-credential-file.md`](docs/decisions/0007-credential-file.md) | 凭据存明文 `config.toml`（0600），不进日志 / 前端 / 仓库 | 实现者 |
 | [`docs/decisions/0008-frontend-stack.md`](docs/decisions/0008-frontend-stack.md) | React + TS + Vite + TanStack Virtual + Zustand + CSS Modules | 前端实现者 |
+| [`docs/decisions/0009-in-repo-android-toolchain.md`](docs/decisions/0009-in-repo-android-toolchain.md) | Android 工具链装进仓库内 `.android-env/`（`scripts/android-env.sh`），不用 Android Studio + 全局 SDK | 作者、agent |
 
 ## 8. 开发命令
 
@@ -132,7 +136,7 @@ danmubox/
 | 全量测试 | `cargo test --workspace` | 单元 + 集成 |
 | core 单 crate 测试 | `cargo test -p danmubox-core` | 领域模型、端口、会话缓冲、偏好 |
 | bili 单 crate 测试 | `cargo test -p danmubox-bili` | 协议解包、WBI、命令归一化、protobuf |
-| 格式检查 | `cargo fmt --all -- --check` | rustfmt |
+| 格式检查 | `cargo fmt --all -- --check` | rustfmt；**存量不通过**（HEAD 上有 59 处 / 14 文件的差异，宿主 rustc 1.88.0 与项目内 1.98.1 结果相同），见 [`AGENT.md`](AGENT.md) §9 备注 |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | warning 视为错误 |
 | 解析房间 | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` | 打印房间元信息 |
 | 看弹幕 | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` | 有凭据走登录态，否则游客态；`--quiet` 只看汇总 |
@@ -146,6 +150,11 @@ danmubox/
 | 全局参数 | `--config <路径>` | 以上任何子命令都接受，用于指定另一份 `config.toml`（调试 / 多环境并存） |
 | 桌面端（独立产物） | `cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` | **推荐**：产出 `target/release/danmubox-desktop`，前端已内嵌，双击即用 |
 | 桌面端（开发热更新） | `npm --prefix apps/desktop/ui run dev` + `cargo run -p danmubox-desktop` | 仅开发时用；须先起 dev server，否则窗口空白（见 `docs/operations.md` §1.1） |
+| Android 环境（导入） | `. scripts/android-env.sh` | **必须 source**（直接执行无效）；导出 `JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME` / `RUSTUP_HOME` / `CARGO_HOME` / `GRADLE_USER_HOME` 等，全部指向仓库内 `.android-env/`（见 `docs/operations.md` §5.4） |
+| Android 工具链安装 / 清除 | `scripts/android-env.sh bootstrap`、`scripts/android-env.sh clean` | `bootstrap` 从零安装（可重复执行，已装好的跳过）；`clean` 停 gradle daemon 与 adb server 后删除整个 `.android-env`（**签名材料不在其中**，见 `docs/operations.md` §5.7、§5.12） |
+| Android 出包（通用 APK） | `. scripts/android-env.sh && cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci` | 产物 `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（实测 52 MB，含四个 ABI） |
+| Android 出包（分 ABI） | 同上再加 `--split-per-abi` | 产物落在同目录的 `apk/<abi>/release/app-<abi>-release.apk`，`<abi>` ∈ `arm64` / `arm` / `x86` / `x86_64` |
+| Android 装机 | `adb install -r <APK>` | 用 `.android-env/sdk/platform-tools/adb`；未签名包装不进设备（见 `docs/operations.md` §5.7） |
 
 数据目录可用环境变量 `DANMUBOX_HOME` 覆盖（调试与多环境并存时用）。
 
@@ -157,7 +166,7 @@ danmubox/
 | 凭据文件 | `config.toml`，**明文 TOML**，权限 **0600**，位于本机数据目录；可直接手工编辑（界面与 CLI 都不提供 Cookie 导入入口） |
 | 偏好文件 | `prefs.json`，只存被显式改过的界面偏好，不含任何凭据 |
 | 弹幕缓冲 | 仅内存环形缓冲，上限 5000 条（`history.buffer_rows`）；生命周期 = 一次房内会话，离开房间即销毁清空，重进是新会话 |
-| 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android 应用私有目录 |
+| 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android **应用私有目录**——由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，**不是**其下的 `files/` 子目录；实测模拟器 android-35 上为 `/data/user/0/dev.kksk.danmubox`），core 侧保持平台无关、不写死平台路径 |
 | 是否落盘 | 除 `config.toml` 与 `prefs.json` 外不落盘；无数据库、无历史文件、无导出 |
 | 遥测 | 无。不上报崩溃、不埋点、不回传任何使用数据 |
 

@@ -25,6 +25,9 @@ danmubox/
     danmubox-cli/           # 调试与校验入口
   apps/
     desktop/                # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
+      src-tauri/gen/android/ # Tauri 生成的 Android 工程：**要入库**（见下）
+  scripts/
+    android-env.sh          # 仓库内 Android 工具链：bootstrap / source / clean（`docs/operations.md` §5）
   docs/
     contract.md
     decisions/
@@ -33,6 +36,9 @@ danmubox/
   AGENT.md
   CHANGELOG.md
 ```
+
+- `apps/desktop/src-tauri/gen/android/` 是 **Tauri 生成的工程，但按「长期维护的源码」入库**（40 个文件；根 `.gitignore` 只忽略每次构建都会重生的 `gen/schemas/`）。本仓库在其中改过两处（`BuildTask.kt` 的 CLI 解析、`app/build.gradle.kts` 的 `signingConfigs`），**重跑 `tauri android init` 会覆盖它们**——细节与原因见 `docs/operations.md` §5.3。`keystore.jks` / `keystore.properties` 由 `gen/android/.gitignore` 忽略，**永不入库**。
+- `scripts/android-env.sh` 把 Android 工具链装进仓库内的 `.android-env/`（已忽略，可整包删除）；宿主侧不装任何东西，理由见 `docs/decisions/0009-in-repo-android-toolchain.md`。
 
 依赖方向（单向，不可违反）：
 
@@ -66,8 +72,8 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 | 全量测试 | `cargo test --workspace` |
 | core 单 crate 测试 | `cargo test -p danmubox-core` |
 | bili 单 crate 测试 | `cargo test -p danmubox-bili` |
-| 格式检查 | `cargo fmt --all -- --check` |
-| 格式修复 | `cargo fmt --all` |
+| 格式检查 | `cargo fmt --all -- --check`（**存量不通过**：见 §9 备注） |
+| 格式修复 | `cargo fmt --all`（**慎用**：会把存量差异一并改掉，属另一票的范围） |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` |
 | 解析房间（CLI） | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` |
 | 看弹幕（CLI） | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` |
@@ -82,6 +88,11 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 | 前端类型检查 + 构建 | `npm --prefix apps/desktop/ui run build`（= `tsc -b && vite build`） |
 | 前端 dev server | `npm --prefix apps/desktop/ui run dev`（仅热重载开发需要；独立产物已内嵌前端，不需要它） |
 | 桌面端运行 | `cargo run -p danmubox-desktop` |
+| Android 环境（导入） | `. scripts/android-env.sh`（**必须 source**，直接执行无效；导出全部指向仓库内 `.android-env/` 的变量） |
+| Android 工具链安装 / 清除 | `scripts/android-env.sh bootstrap`（从零安装，可重复执行）、`scripts/android-env.sh clean`（停 gradle daemon 与 adb server 后删除整个 `.android-env`；**签名材料不在其中**） |
+| Android 出包 | `cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci`（分 ABI 再加 `--split-per-abi`） |
+
+Android 产物：`apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（通用）与同目录 `apk/<arm64|arm|x86|x86_64>/release/app-<abi>-release.apk`（分 ABI）；**未签名包**（缺 `keystore.properties` 的构建）装不进设备。前置条件、签名与清除口径见 [`docs/operations.md`](docs/operations.md) §5.3–§5.7、§5.12。
 
 环境变量：`DANMUBOX_LOG`（默认 `info`；`debug` 会输出每条业务载荷的原文，是字段校准的采集入口）。
 
@@ -133,6 +144,7 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 | 改偏好键 / 默认值 | `docs/contract.md` §8、`docs/ui.md`、`docs/ipc.md` |
 | 改 `config.toml` 字段或权限 | `docs/contract.md` §4.1、`docs/auth.md`、`docs/operations.md` |
 | 改数据目录 / 日志级别 / 缓冲上限等常量 | `docs/contract.md` §4、`README.md` §9、`docs/operations.md` |
+| 改 Android 构建步骤 / 签名 / 工具链脚本 | `docs/operations.md` §5（含 `scripts/android-env.sh` 的用法与产物路径）、`README.md` §8、`AGENT.md` §2/§3 |
 | 改前端栈或状态管理 | `docs/ui.md`、`docs/ipc.md`、`docs/decisions/` 中对应 ADR |
 | 任何对外可见行为变化 | `CHANGELOG.md` 的 Unreleased 段 |
 
@@ -196,7 +208,7 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 
 - [ ] **测试只在用户明确要求时跑**（用户 2026-09-13：「我说要测再测吧，每次测太浪费时间了」；同日更早的口径：「没改动的部分不重测」）。因此本清单里那些**跑全量**的条目（全量冒烟、两引擎四档）**默认不跑**：改动落地后只跑**秒级**的三道 —— `npx tsc -b`、`node smoke/run-headless.mjs --precheck`、必要时 `npm run build` —— 并在交付里**明写「哪一项没跑」**，连同**因此未验证的断言清单**；不许让报告读起来像验过了（虚报禁令见 §8 第 7 条）。用户说要测时，仍按下面两条把 Chromium 与 WebKit 两遍跑满。
 - [ ] 改动范围与任务描述一致，没有顺带重构无关文件。
-- [ ] `cargo fmt --all -- --check` 通过。
+- [ ] `cargo fmt --all -- --check` 通过。**备注（2026-09-15 实测）：本仓库从 HEAD 起就不通过**——差异 **59 处 / 14 文件**（`apps/desktop/src-tauri/src/lib.rs` 11 处、`crates/danmubox-bili/src/cmd.rs` 12 处等），宿主 rustc 1.88.0 / rustfmt 1.8.0 与项目内 rustc 1.98.1 / rustfmt 1.9.0 **两套工具链结果完全相同**，属**存量问题**、不是某一票引入的。因此本条当前**无法当作提交门**（谁也不能在 HEAD 上让它变绿）：提交时只要求「自己改的文件不新增格式差异」，交付里如实写明本条不通过；把全仓一次性格式化属另一票的范围（会动 14 个非本次改动的文件）。
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` 零告警。
 - [ ] `cargo test --workspace` 通过；新增行为有对应验证。
 - [ ] 前端改动通过类型检查，且在 Tauri 应用内目视确认实际界面。**若改动按视口 / 设备分叉**（窄屏、横屏、DPI、移动端），必须确认**该形态在真机上可达**（窗口最小尺寸、断点、设备宽度），并把验证覆盖到**可达面的边界值**——窗口最小宽度是 360 就用 360 验，而不是只验 390。只在无头视口某个宽度里成立的形态，必须在报告里明说「当前入口够不到」。（2026-09-12 教训：窗口 `minWidth` 写死 720 而窄屏断点是 520，冒烟在 390 视口里绿了三次，用户却永远拖不到——断言全绿 ≠ 用户看得见，视口是产品的可达面。）

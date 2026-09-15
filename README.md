@@ -10,6 +10,7 @@
 |---|---|
 | 中文名 | 弹幕框 |
 | 英文名 / crate 前缀 | `danmubox` |
+| 仓库 | <https://github.com/HakaseZ/danmubox>（源码公开；**应用产物**仍自用、不上架 —— 见 §2.2 与 §10） |
 | bundle id | `dev.kksk.danmubox` |
 | 形态 | 桌面 + 移动客户端（Tauri 2 外壳 + Rust 引擎 + React/TS 前端） |
 | 定位 | B 站直播间弹幕客户端，自用不发布 |

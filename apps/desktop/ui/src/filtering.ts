@@ -265,16 +265,30 @@ export function splitGiftRows(
 }
 
 /**
- * 金额的展示文本（含单位）。**不换算**：礼物与大航海是金瓜子、SC 是元（契约 §5 既定口径），
- * SC 载荷里的 `rate` 语义未经真实样本核验，因此这里不做任何跨单位求和 / 折算。
+ * 金瓜子与元的换算（契约 §5「金额单位」）：**1 元 = 1000 金瓜子**。
+ *
+ * 依据三条：① 社区协议文档给的礼物 `price` 口径就是「该值 / 1000 的单位为元」；
+ * ② SC 载荷里的 `rate = 1000`（2026-09-12 实测，`protocol.md` A9）与之一致；
+ * ③ 大航海 `price` 同为 CNY × 1000（A12）——舰长 138000 ↔ 官方标价 138 元。
+ *
+ * **不要把 `price` 当电池数**：金瓜子与电池另有比值（1 电池 = 100 金瓜子 = 0.1 元，
+ * 即 1 元 = 10 电池，见 `protocol.md` A29），当成电池会差 10 倍。
+ */
+const COINS_PER_YUAN = 1000;
+
+/**
+ * 金额的展示文本（含单位）。**单位统一是元**（用户 2026-09-16 口径）：
+ * SC 的 `amount` 上游本来就是元，礼物与大航海是金瓜子，按 `COINS_PER_YUAN` 换算成元再打印。
+ * 整数元不带小数（`138 元`），非整数保留必要小数（`0.1 元`）——金瓜子 ÷ 1000 最多三位小数，
+ * 因此小数位上限就是 3。
  *
  * `amount <= 0` 表示上游没给价（协议 §10.2 / §10.6：无价字段时 `0`，不得猜测）——
  * 这时返回**空串**，界面不画金额格，也不拿 0 冒充一个数。
  */
 export function amountText(amount: number, kind: MessageKind): string {
   if (!Number.isFinite(amount) || amount <= 0) return "";
-  if (kind === "superchat") return `${amount.toLocaleString()} 元`;
-  return `${amount.toLocaleString()} 瓜子`;
+  const yuan = kind === "superchat" ? amount : amount / COINS_PER_YUAN;
+  return `${yuan.toLocaleString(undefined, { maximumFractionDigits: 3 })} 元`;
 }
 
 /**

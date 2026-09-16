@@ -245,7 +245,8 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
           )}
         </span>
         {/* 醒目留言的金额行（§4.1 规格）：卡片内**独占一行**、低一档加粗。
-            单位是元 —— SC 与礼物（金瓜子）口径不同，`amountText` 按 kind 给单位、不做换算。 */}
+            单位是元 —— 与礼物栏同一口径（2026-09-16 统一）：`amountText` 对 SC 用原值、
+            对礼物 / 大航海按契约 §5 的 `元 = 金瓜子 / 1000` 换算，两处印的都是元。 */}
         {scAmount.length > 0 && (
           <span className={styles.scAmount} data-testid="db-msg-sc-amount">
             {scAmount}

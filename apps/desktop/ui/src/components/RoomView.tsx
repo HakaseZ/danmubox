@@ -526,9 +526,12 @@ export function RoomView({
   const giftPaneOnTop = prefs["ui.gift_pane_on_top"];
 
   /**
-   * 独立礼物栏折叠态的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**，
-   * 各自带自己的单位 —— 礼物与大航海是金瓜子、SC 是元，两组**不加到一起**（契约 §5 的口径，
-   * SC 载荷里那个 `rate` 未经真实样本核验，本轮不做任何换算）。
+   * 独立礼物栏折叠态的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**。
+   *
+   * **单位已统一为元**（2026-09-16，契约 §5「金额单位」）：`amountText` 把礼物 / 大航海的
+   * 金瓜子按 `÷1000` 换算，SC 的原值本来就是元 —— 三组因此**同单位**，先前那条
+   * 「金瓜子与元不加到一起」的红线随之失效。**分组结构本身保留**：是否合并成一条合计
+   * 由用户拍板，本轮不改结构（docs/ui.md §5.3）。
    *
    * 条数取连击折叠后的**次数之和**（`DisplayRow.count`），金额取折叠后累加的 `message.amount`
    * —— 与 `toDisplayRows` 同源，不另立一套口径。空组不出现（没有 SC 就不显示 SC 那一格）。
@@ -859,7 +862,7 @@ export function RoomView({
                 <span className={styles.giftDockTitle}>
                   礼物 / SC（{giftGroups.reduce((sum, group) => sum + group.count, 0)}）
                 </span>
-                {/* 折叠态汇总**按 kind 分组**：各组带各自的单位，金瓜子与元不加到一起（§5.3） */}
+                {/* 折叠态汇总**按 kind 分组**：三组单位已统一为元（契约 §5）—— 分组结构保留，是否合并成一条合计待用户拍板（§5.3） */}
                 <span className={styles.giftDockSummary} data-testid="db-gift-summary">
                   {giftGroups.length === 0
                     ? "本场暂无礼物"

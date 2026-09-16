@@ -49,7 +49,7 @@
 //   gift   礼物类消息的去向与独立礼物栏（issue 2609152029 第 4/5 条）：`ui.gift_in_danmaku`
 //          管弹幕流、`ui.gift_panel` 管独立礼物栏，**四种组合逐个翻一遍**（默认两枚都开）；
 //          礼物栏**每个礼物 / SC / 大航海一条**（头像 + 昵称 + 内容 + 数量 + 金额），连击折叠后
-//          金额是整串的总额；折叠态汇总**按 kind 分组**、各组带各自单位（金瓜子 / 元不合并）；
+//          金额是整串的总额；折叠态汇总**按 kind 分组**、三组各报各的合计（单位统一是元）；
 //          礼物 / SC / 大航海的**头像只在该有源时画**（V1 礼物与大航海无源 → 不画假图）；
 //          SC 卡片按档位令牌上色、金额行低一档加粗且独占一行。
 //          样本来自 `fixtures/gift-sc-guard-rows.json`（**按协议文档字段表构造**，出处见
@@ -3701,17 +3701,23 @@ const MOCK = (theme) => `(function () {
     // 窄屏：折叠条只占一行，弹幕列表不被它挤掉
     put("giftDockCompact", !!dock && rect(dock).height <= 56);
     put("giftListKeptTall", rect(byTestId("db-chat-scroll")).height >= 200);
-    // 折叠态汇总**按 kind 分组**：三组各自带各自的单位，元与金瓜子绝不加到一起。
+    // 折叠态汇总**按 kind 分组**：三组各报各的合计，单位统一是元（金瓜子 ÷1000）。
     // 金额串一律用页面自己的 toLocaleString 拼（分组位数随浏览器 locale 变，断言不该把它写死）。
     var num = function (n) { return n.toLocaleString(); };
+    // amountText 的格式化是 toLocaleString(undefined, { maximumFractionDigits: 3 })：
+    // 整数元不带小数（138 元），非整数保留必要小数（0.1 元）。断言跟着它走。
+    var yuan = function (n) { return n.toLocaleString(undefined, { maximumFractionDigits: 3 }); };
     var giftSummary = (byTestId("db-gift-summary") || {}).innerText || "";
     out.giftDockSummaryText = giftSummary;
     out.giftDockSummaryGroupedByKind =
-      giftSummary.indexOf("礼物 3 · " + num(700) + " 瓜子") >= 0 &&
-      giftSummary.indexOf("SC 2 · " + num(1030) + " 元") >= 0 &&
-      giftSummary.indexOf("大航海 1 · " + num(138000) + " 瓜子") >= 0;
-    // 跨单位求和是红线：700 + 1030 + 138000 = 139730 这个数**一个写法都不许出现**
-    out.giftDockNoCrossUnitSum = giftSummary.indexOf(num(139730)) < 0 &&
+      giftSummary.indexOf("礼物 3 · " + yuan(0.7) + " 元") >= 0 &&
+      giftSummary.indexOf("SC 2 · " + yuan(1030) + " 元") >= 0 &&
+      giftSummary.indexOf("大航海 1 · " + yuan(138) + " 元") >= 0;
+    // 汇总不许自己另算一个总数：按 kind 分组的明细之外没有第二条合计。
+    // 两个「不是分组明细」的候选值都不许出现——① 三组元值相加 0.7 + 1030 + 138 = 1168.7；
+    // ② 把 SC 的元当金瓜子与另两组直接相加（139730 金瓜子）或换算后（139.73 元）。
+    out.giftDockNoCrossUnitSum = giftSummary.indexOf(yuan(1168.7)) < 0 &&
+      giftSummary.indexOf("1168.7") < 0 && giftSummary.indexOf("139.73") < 0 &&
       giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("140730") < 0;
     // db-gift-dock 现在**就是**那枚折叠头按钮（issue #8），不再是「容器里装着一枚按钮」
     dock.click();
@@ -3733,17 +3739,22 @@ const MOCK = (theme) => `(function () {
     out.giftDockItemSingleLine = giftItems.every(function (item) {
       return rect(item) !== null && rect(item).height < 40;
     });
-    // ---- 金额格带单位（礼物 / 大航海 = 瓜子，SC = 元），且连击折叠后是整串的总额
+    // ---- 金额格带单位（三类都是元，金瓜子按 ÷1000 换算），且连击折叠后是整串的总额
     out.giftDockAmounts = giftItems.map(function (item) {
       var el = item.querySelector('[data-testid="db-gift-amount"]');
       return el ? el.innerText : "";
     });
     out.giftDockAmountsCarryUnits =
-      out.giftDockAmounts.indexOf(num(600) + " 瓜子") >= 0 &&
-      out.giftDockAmounts.indexOf(num(100) + " 瓜子") >= 0 &&
-      out.giftDockAmounts.indexOf(num(30) + " 元") >= 0 &&
-      out.giftDockAmounts.indexOf(num(1000) + " 元") >= 0 &&
-      out.giftDockAmounts.indexOf(num(138000) + " 瓜子") >= 0;
+      out.giftDockAmounts.indexOf(yuan(0.6) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(yuan(0.1) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(yuan(30) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(yuan(1000) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(yuan(138) + " 元") >= 0;
+    // **差 1000 倍的红线**：金瓜子原值不许直接贴上「元」（600 / 100 / 138000 三档一个都不许出现）。
+    out.giftDockNoRawCoinDisplay = out.giftDockAmounts.every(function (t) {
+      return t.indexOf(yuan(600) + " 元") < 0 && t.indexOf(yuan(100) + " 元") < 0 &&
+        t.indexOf(yuan(138000) + " 元") < 0;
+    });
     // ---- 数量：礼物行恒有 ×N（折叠后是整串连击的次数），SC / 大航海没有折叠就不画 ×1
     var giftCounts = giftItems.map(function (item) {
       var el = item.querySelector('[data-testid="db-gift-count"]');

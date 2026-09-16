@@ -284,10 +284,12 @@ graph TD
 | A-2 | 观察布局 | 无横向溢出、无控件被裁切；竖屏与横屏各看一遍。**系统栏避让**：顶栏（标题 / 主题按钮 / 房间页返回键）不与状态栏或刘海重叠，底部输入区与那排工具键不被手势栏遮挡（edge-to-edge 的 inset 由原生下发 `--safe-top` / `--safe-bottom`，实测数字见 [`operations.md`](operations.md) §5.3） |
 | A-3 | 完成 C-1 ~ C-13 | 全部通过 |
 | A-4 | 前台连续运行 30 分钟 | 期间持续收弹幕；无崩溃、无明显内存增长 |
-| A-5 | 切到后台再回前台 | 连接按重连策略恢复并继续收弹幕（本期不做后台保活） |
+| A-5 | 切到后台再回前台 | 连接按重连策略恢复并继续收弹幕；保活那一步单列在 A-9 / A-10（见 [`operations.md`](operations.md) §2.8） |
 | A-6 | **登录验证（本项目不用相机）**：从账号入口发起扫码，界面在**本机显示二维码**，用**另一台设备**（另一台手机 / 平板 / 相机 App）扫它，确认后回到应用 | 二维码正常显示、轮询期间状态可见；确认后登录态变为已登录并收到 `danmubox://session`；失败给出可操作提示。**全程不出现相机权限申请**——扫码是「显示二维码给别人扫」，前端不调用 `getUserMedia`，也不声明相机权限 |
-| A-7 | 反向确认没有多余权限 | 系统「设置 → 应用 → danmubox → 权限」里看不到相机项；`aapt2 dump badging` 的 `uses-permission` 只有 `INTERNET`（实测） |
+| A-7 | 反向确认没有多余权限 | 系统「设置 → 应用 → danmubox → 权限」里**看不到相机、位置、通讯录、存储**这类项；`aapt2 dump badging` 的 `uses-permission` 只应有四枚：`INTERNET`、`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_DATA_SYNC`（后台保活的三枚，见 A-9；**声明即得，没有弹窗**）与 `POST_NOTIFICATIONS`（Android 13+ 唯一的运行时权限，冷启动问一次） |
 | A-8 | **系统返回手势**：房间页里从屏幕左边缘侧滑（`adb shell input swipe 0 <y> 600 <y>`，`y` 取屏中），再换右边缘（`1080 <y>` → `480 <y>`）；然后先开一个面板（如「筛选」）再侧滑；最后回到**根页面**（房间列表页、无面板）按返回 | 侧滑 → 回房间列表（**不**退出应用）；面板开着时侧滑 → 面板关掉、**不**跳页；根页面按返回 → 应用退出（`pidof dev.kksk.danmubox` 为空）。**左右边缘都要试**：返回手势归系统管，两侧是否都能返回由系统设置决定，界面只负责消费它。三级顺序见 [`ui.md`](ui.md) §2.6 |
+| A-9 | **后台保活（有连接那一档）**：装好包后先给通知权限（`adb shell pm grant dev.kksk.danmubox android.permission.POST_NOTIFICATIONS`，等价于首启点「允许」）；进房间（如公开测试房间 `1`）等连接成功；按 HOME 退到后台，**等 ≥3 分钟**；期间查四项 —— ① 进程还在：`adb shell pidof dev.kksk.danmubox`；② 到 443 的长连还在：`/proc/<pid>/fd` 的 socket inode → `/proc/net/tcp{,6}` 里状态 `01`（ESTABLISHED）、远端端口 `01BB`；③ 通知在：`adb shell dumpsys notification --noredact` 里能看到渠道 `danmubox-keepalive` 与那条通知；④ `adb logcat` 无 `FATAL`、无反复重连刷屏。最后点通知回前台 | 四项都在；点通知回到应用后（= 走到 `onStart`）再查一遍：`dumpsys activity services` 里 `KeepAliveService` 消失、`dumpsys notification` 里那条通知消失、进程与连接**不受影响**（服务本身不碰网络）。行为与平台限制见 [`operations.md`](operations.md) §2.8 |
+| A-10 | **后台保活（不该起的那两档）**：① 不打开任何房间（停在房间列表页）→ 按 HOME；② 开着房间，但在**根页面按返回**退出应用（A-8 的最后一档） | 两档都**不该**出现 `KeepAliveService`，通知抽屉里也不该有那条常驻通知（① 没连接；② `isFinishing`，用户是主动退出）。检查方式同 A-9 的 ③ |
 
 ### 10.5 Android：无真机时的验证边界
 
@@ -307,6 +309,7 @@ graph TD
 | 软键盘（列表页输入框） | 键盘弹起时页面内容止于键盘上沿、无「pan + inset 双位移」——**只在小列表页的输入框上验过**；房间页那一档见下表 |
 | 系统返回手势（A-8） | 手势导航的 AVD 上逐档实测：**左右边缘侧滑都回房间列表**，进程全程不退（`pidof` 3660 → 3660 / 4198 → 4198）；**面板开着时侧滑只关面板、仍停在房间页**（筛选面板，左右两边各一次；DOM 断言 `db-room-header` 真、`db-list-page` 假、`db-panel` 假）；根页面 `input keyevent 4` 后 `pidof` 为空、`dumpsys activity activities` 里 danmubox 的 `ActivityRecord` 8 → 0（焦点回 launcher）；`logcat` 无 `FATAL` / panic。**边缘那一条是系统手势区**（原生下发的 `--gesture-left` / `--gesture-right`，实测两侧各 29.7 CSS px）：从边缘起手的返回会先把 DOWN 发给页面（实测 `down(0,457)` → `cancel(31,457)`），页面的「点面板外关面板」因此要放过这一条，否则一次侧滑会变成「关面板 + 又退一级」两件事（见 [`ui.md`](ui.md) §2.6）。截图与 logcat 落在 `.android-env/verify/back-0*.png` / `back-logcat.txt` |
 | 界面目视 | 启动页 / 账号面板 / 房间页截图落在 `.android-env/verify/`（**该目录随 `clean` 一起删**，需要留存先拷出去） |
+| **后台保活（A-9 / A-10）** | AVD 上逐档实测（`ka-*` 前缀的原始输出与截图在 `.android-env/verify/`；口径与结论见 [`operations.md`](operations.md) §2.8）：退到后台 200 秒后进程在、`KeepAliveService` 是 `isForeground=true foregroundId=1 types=0x00000001`、常驻通知在 `dumpsys notification` 里、到 443 的 ESTABLISHED 还有 2 条、logcat 全程只有成对的「前台服务已启动/已停止」且 0 条 `FATAL EXCEPTION`；拉长到 7.2 分钟时进程与服务仍在、通知仍在；点通知回前台后服务与通知都消失、pid 不变；**A-10 两档都为空**（没房间、根页面按返回退出）；通知权限的冷启动弹窗与 Android 15 `onTimeout`（把 6 小时额度缩成 60 秒）也各实测一次 |
 
 **必须真机（或目前根本验不了）**：
 
@@ -320,6 +323,7 @@ graph TD
 | 真机差异 | 厂商 ROM / 系统 WebView 版本、折叠与展开、真实触摸与输入法、I/O 与内存表现——模拟器都不等价（按 [`../AGENT.md`](../AGENT.md) §9，「可达面」包含真机形态） |
 | 系统栏避让的真机形态 | 只在一台 AVD 上验过（手势导航、无挖孔）；**三键导航栏更高**、挖孔 / 刘海位置各机型不同，只有真机能覆盖这些形态 |
 | A-4 / A-5 的完整口径 | 需要「有弹幕的直播间 + 真实前后台切换」，在模拟器上只能验「不崩」，验不了「切后台回来还能持续收」 |
+| **后台保活的收益（A-9 的 A/B）** | 模拟器上能证到「前台服务真的起着 + 进程没被冻结到不动」（旧包 200 秒后连接归零、新包还有连接且能在后台新建一条），但**证不到真机上的收益**：省电策略、内存压力下的回收、Cached Apps Freezer 的时机、以及**厂商 ROM 的后台管理**（MIUI / EMUI / ColorOS 等可能忽略前台服务、锁屏清理、要求单独开自启动白名单）都只有真机能覆盖。**不得把模拟器上的绿当成真机上的绿** |
 
 工具链本身也可无痕清除后再重建（`scripts/android-env.sh clean` / `bootstrap`，见 [`operations.md`](operations.md) §5.12），因此「换一台开发机重来一遍」这件事不需要真机即可走完到 A-1。
 

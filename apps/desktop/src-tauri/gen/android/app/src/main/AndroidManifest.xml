@@ -2,6 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+      后台保活（见 docs/operations.md §2.8）。三枚都是**声明即得**，没有运行时弹窗：
+      * FOREGROUND_SERVICE（API 28 起，起前台服务的总门槛）
+      * FOREGROUND_SERVICE_DATA_SYNC（API 34 起，与下面的 foregroundServiceType="dataSync" 配套；
+        targetSdk 34+ 少这一枚会在创建服务时抛 SecurityException）
+      POST_NOTIFICATIONS 是**运行时**权限（API 33 起，见 MainActivity 里的申请），
+      拒绝只影响「通知抽屉里看不看得到那枚常驻通知」：前台服务照跑，
+      用户还能在系统的「正在运行的应用」（Task Manager）里看到并停掉它。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
@@ -23,6 +36,15 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          只有 MainActivity 会起它，别的应用起不到（exported="false"）；也不给任何
+          intent-filter。类型见 KeepAliveService 的文件头。
+        -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <provider
           android:name="androidx.core.content.FileProvider"

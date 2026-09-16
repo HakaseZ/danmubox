@@ -1,10 +1,16 @@
 package dev.kksk.danmubox
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.webkit.ValueCallback
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.ScriptHandler
@@ -42,6 +48,19 @@ class MainActivity : TauriActivity() {
   private var lastScript: String? = null
 
   /**
+   * Android 13（API 33）起，**前台服务那枚常驻通知**也要 `POST_NOTIFICATIONS`，而它是
+   * **运行时**权限（与保活要的三枚声明即得的权限不同，见 `AndroidManifest.xml`）。
+   *
+   * 拒了不致命但会让功能「看不见」：前台服务照起、进程照被顶到前台档，只是通知抽屉里没有那条
+   * 通知（用户只能在系统的「正在运行的应用」里看到并停掉它）—— 于是**通知在哪都看不到**就成了
+   * 「保活到底有没有生效」的假象来源。所以冷启动问一次。
+   */
+  private val notificationPermission =
+    registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      Log.i(TAG, if (granted) "已获得通知权限" else "通知权限被拒：保活照做，只是通知抽屉里看不到那条常驻通知")
+    }
+
+  /**
    * 接手 webview 的返回语义，因此关掉 Wry 外壳自带的那条（见下面的 `handleBackNavigation`）。
    */
   private val backCallback = object : OnBackPressedCallback(true) {
@@ -70,6 +89,63 @@ class MainActivity : TauriActivity() {
       insets
     }
     onBackPressedDispatcher.addCallback(this, backCallback)
+    requestNotificationPermission()
+  }
+
+  /**
+   * 回到前台：保活不再需要 —— 收掉前台服务与那枚常驻通知。
+   *
+   * 无条件调（没在跑时 `stopService` 是空操作）：判「服务在不在」要跨进程查，而这里
+   * 需要的语义恰好就是「回到前台之后它不该再在」。
+   */
+  override fun onStart() {
+    super.onStart()
+    KeepAliveService.stop(this)
+  }
+
+  /**
+   * 退到后台（HOME / 切到别的应用）：**页面还有活跃连接**才起保活服务（`KeepAliveService`）。
+   *
+   * 两种「看起来也走了 onStop」的情形不算退到后台，别在这里起服务：
+   * * `isFinishing`：根页面按返回 → `askPageBeforeLeaving` 里 `finish()`，那是用户**退出**应用；
+   * * `isChangingConfigurations`：活动被重建（本 Activity 已在 manifest 里接管了旋转等常见配置变化，
+   *   这一档是兜底）——重建后马上会走 `onStart`，起了也只会闪过一枚通知。
+   */
+  override fun onStop() {
+    super.onStop()
+    if (isFinishing || isChangingConfigurations) return
+    askPageForActiveConnection()
+  }
+
+  /**
+   * 问页面一句「还有没有活跃的房间连接」，为真才起保活服务。
+   *
+   * 与 `askPageBeforeLeaving` 是**同一套**约定（同步求值 + 返回值即答案，见那一处「为什么用返回值」），
+   * 而且**必须**是同一个约定：`evaluateJavascript` 的回调是异步的，这里不能等 —— 起不起服务这件事
+   * 没有「先挂起再决定」这一档。
+   */
+  private fun askPageForActiveConnection() {
+    val view = webView ?: return
+    view.evaluateJavascript(CONNECTION_SCRIPT, ValueCallback { result ->
+      if (result != "true") return@ValueCallback
+      KeepAliveService.start(this)
+    })
+  }
+
+  /**
+   * 冷启动时补问一次通知权限（只在还没决定过的时候弹）。
+   *
+   * * 已经给过 → 直接返回；
+   * * 用户拒过一次（`shouldShowRequestPermissionRationale` 为真）→ **不再自动弹**，
+   *   免得每次冷启动都拿一个系统弹窗堵着界面；想开的话去系统设置里开。
+   * * 这个权限对**保活本身**不是必需的（见 `KeepAliveService` 的文件头），所以拿不到也照跑。
+   */
+  private fun requestNotificationPermission() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val permission = Manifest.permission.POST_NOTIFICATIONS
+    if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) return
+    if (shouldShowRequestPermissionRationale(permission)) return
+    notificationPermission.launch(permission)
   }
 
   @Suppress("OVERRIDE_DEPRECATION")
@@ -109,12 +185,21 @@ class MainActivity : TauriActivity() {
   }
 
   private companion object {
+    const val TAG = "danmubox-main"
+
     /**
      * 与 `ui/src/back.ts` 的 `installBackBridge()` 成对：在页面里求值成布尔值
      * （页面没挂上桥时短路成 `undefined`，同样当「没认领」）。
      */
     const val BACK_SCRIPT =
       "(window.__danmuboxHandleBack && window.__danmuboxHandleBack()) === true"
+
+    /**
+     * 与 `ui/src/keepalive.ts` 的 `installKeepAliveBridge()` 成对，协议同 `BACK_SCRIPT`：
+     * 页面答 `true` = 还有活跃的房间连接（口径见 `hasActiveConnection()`）。
+     */
+    const val CONNECTION_SCRIPT =
+      "(window.__danmuboxHasActiveConnection && window.__danmuboxHasActiveConnection()) === true"
   }
 
   override fun onWebViewCreate(webView: WebView) {

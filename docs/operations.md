@@ -230,7 +230,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 
 ### 2.1 总览
 
-排障顺序固定为：**登录状态 → 连接状态 → 业务行为**。先确认界面上的登录态与房间连接状态，再进对应小节（认证与扫码见 2.2 / 2.7，连接见 2.3 / 2.5，发送见 2.4，Android 白屏见 2.6）；需要细节时开启 `DANMUBOX_LOG=debug` 复现一次，读日志与 `danmubox://log` 事件。
+排障顺序固定为：**登录状态 → 连接状态 → 业务行为**。先确认界面上的登录态与房间连接状态，再进对应小节（认证与扫码见 2.2 / 2.7，连接见 2.3 / 2.5，发送见 2.4，Android 白屏见 2.6）；需要细节时开启 `DANMUBOX_LOG=debug` 复现一次，读日志与 `danmubox://log` 事件。Android 上「退到后台之后」的行为（前台服务保活、那枚常驻通知、电池优化白名单）单独一篇：见 2.8。
 
 ### 2.2 认证失败
 
@@ -309,6 +309,88 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 | 4 | `data.code` 语义 | 已知状态按 `auth.md` 的状态机处理；**未知码归入「其他 → 按未确认处理」**，继续轮询，不要猜含义 |
 | 5 | 扫码成功后会话是否刷新 | 成功后登录态应变为已登录，界面应收到 `danmubox://session` 事件 |
 | 6 | 手机与电脑的端 | 在 Android 端扫码是「同机扫屏」，请用另一台设备显示二维码或截图后扫码 |
+
+### 2.8 Android 退到后台就不再收弹幕 / 那枚「正在接收弹幕」通知
+
+**先把两件事分开**——它们经常被当成一件事：
+
+| 环节 | 谁会把它掐掉 | 本项目的对策 |
+|---|---|---|
+| 进程被系统回收 / 冻结 | 内存压力下的 low-memory killer、App Standby | **前台服务**（本节） |
+| 网络被掐 | Doze（屏幕关、设备静止、未充电） | **只能靠电池优化白名单**（见下），前台服务管不了 |
+
+**是什么**：`gen/android/app/src/main/java/dev/kksk/danmubox/KeepAliveService.kt` —— 一个**只做一件事**的前台服务：挂一枚常驻通知，把本进程的优先级顶到「前台服务」档，让系统在后台/内存紧张时优先回收别的进程。它**不轮询、不上报、不持唤醒锁、不碰网络**：弹幕连接本来就跑在**本进程的 Rust 侧**（tokio），被系统限流的只有 WebView 的定时器与渲染，所以这里没有任何需要替 Rust 侧做的事。
+
+**什么时候起、什么时候停**（全在 `MainActivity`）：
+
+| 时机 | 动作 |
+|---|---|
+| 退到后台（`onStop`，HOME / 切到别的应用）**且页面答「还有活跃连接」** | 起 |
+| 回到前台（`onStart`，点通知 / 点图标 / 从最近任务切回） | 停，通知同时消失 |
+| 应用内退出（根页面按返回 → `finish()`），`isFinishing` | **不起** |
+| 把任务从最近任务里划掉，`onTaskRemoved` | **停**，不留通知 |
+
+「有没有活跃连接」是问页面（`window.__danmuboxHasActiveConnection()`，与返回手势同一套 JS 桥，见 `ui/src/keepalive.ts`）——判据复用界面已有连接状态，外壳不自己造状态。**没开过房间就不会有通知**。
+
+**怎么关掉它**（三条路，任选）：
+
+1. 点通知回到应用 —— 回到前台即停；
+2. 通知抽屉下拉到底的「正在运行的应用」（Task Manager，Android 13+）→ 对应的 Stop 按钮 —— 这条路会停掉**整个应用**；
+3. 系统设置 → 应用 → danmubox → 强行停止。
+
+通知本身是 `ongoing`（划不掉）——但 Android 14 起系统允许用户直接划掉**前台服务**的通知（划掉只是通知消失，服务照跑），这一档由系统决定、不由应用决定。
+
+**会不会耗电**：前台服务本身几乎不额外耗电——它不做事、不唤醒 CPU；真正的开销是那条本来就存在的 WS 长连与心跳（回到前台也一样耗）。它的作用只是「让系统别把这进程回收掉」。
+
+**要不要开电池优化白名单**（设置 → 电池 → 电池优化 → 找到 danmubox → 不优化）：
+
+- **前台服务并不豁免 Doze**。屏幕关掉、设备静止、未充电进入 Doze 后，系统暂停应用的网络访问，长连接会断；断开后靠已有重连退避（5/10/20/40/60s 退避，见 §2.3）恢复，能接上的窗口很窄。
+- 把应用加进白名单（官方叫「部分豁免」）之后，Doze 与 App Standby 期间**仍可用网络、可持 partial wake lock**——这才是「关屏也要一直收」真正的开关。
+- 所以：只在「切出去一会儿再回来」用，可以不开；要**关屏持续收**，就得开。
+- 本应用**不会**弹窗要这个权限（官方那张「可接受用途」表里即时通讯类明确不推荐用 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` 直接要）——需要时自己去设置里加。
+
+**通知权限（Android 13 / API 33 起）**：常驻通知要 `POST_NOTIFICATIONS`，它是**运行时**权限，冷启动时问一次（拒过一次就不再自动弹，免得每次启动都被弹窗堵住）。**拒绝不影响保活**：前台服务照起、进程照顶前台档，只是**通知抽屉里看不到那条通知**（系统行为：这类通知会退回「正在运行的应用」里显示），用户照样能在那里停掉它。
+
+**6 小时额度（Android 15 / API 35 起，且 targetSdk ≥ 35）**：`dataSync` 这个前台服务类型每 24 小时只有 **6 小时**总额度（本项目 `targetSdk 36`，落在这一档）。到点系统回调 `Service.onTimeout()`，代码里立刻 `stopSelf()`——**不这么做进程会被系统以 `RemoteServiceException` 崩掉**。额度用尽后**再起**服务会被拒（`ForegroundServiceStartNotAllowedException`；代码里接住、只记一条 logcat，表现为「这次不保活」，不崩）；用户把应用带回前台会重置计时。自用场景下一次蹲播够用。
+
+**厂商 ROM**：以上都是 AOSP 行为。国产 ROM（MIUI / EMUI / ColorOS / OriginOS 等）另有自己的后台管理，可能忽略前台服务、锁屏后清理、或要求单独开「自启动 / 后台运行」白名单——**真机待确认**，见 §9 的卸载检查清单与 [`testing.md`](testing.md) §10.5。
+
+**实测（2026-09-16，本地 AVD `danmubox_verify`：android-35 / API 35 / arm64-v8a，包 `dev.kksk.danmubox`，targetSdk 36，**带签名的 release 包**）**：命令与原始输出全部落在 `.android-env/verify/ka-*.txt|png`（`ka-old-*` = 保活前的包，`ka-new-*` = 本提交的包；**该目录随 `scripts/android-env.sh clean` 一起删**）。
+
+A/B —— 同一个房间（公开测试房间 `1`）、同一台 AVD，都取「按 HOME 之后 ≈200 秒」这一档：
+
+| 检查 | 旧包（保活前） | 新包（本次） |
+|---|---|---|
+| `pidof dev.kksk.danmubox` | HOME 前 3455 → 200 s 后 **3455（进程活着）** | HOME 前 3898 → 200 s 后 **3898** |
+| 到 443 的 ESTABLISHED | HOME 前 3 条 → 200 s 后 **0 条** | HOME 前 4 条 → 200 s 后 **2 条**（其中一条是后台期间新建的，见下） |
+| 前台服务 | 无（这个包里没有） | `ServiceRecord{…dev.kksk.danmubox/.KeepAliveService}`、`isForeground=true foregroundId=1 types=0x00000001`、`uidState: FGS` |
+| 常驻通知 | 无 | `NotificationRecord(… pkg=dev.kksk.danmubox id=1 … channel=danmubox-keepalive … flags=ONGOING_EVENT\|NO_CLEAR\|FOREGROUND_SERVICE)`；`android.title=正在接收弹幕` / `android.text=点按回到应用`；通知抽屉的「静默」组里可见（截图 `ka-new-13-shade.png`） |
+| logcat | —— | 全程只有 2 行：`danmubox-keepalive: 前台服务已启动` / `…已停止`，`FATAL EXCEPTION` 0 |
+
+**这条 A/B 说明了什么、没说明什么（不要过度解读）**：旧包 200 秒后一条连接都不剩，而同一时刻设备上**别的应用**仍持有到 443 的 ESTABLISHED（`ka-old-21-all-device-conn.txt`），所以不是设备断网 —— 旧包那边的进程虽然还在，但已经**不再做事**（冻结/被丢弃）。新包同一档仍有 2 条连接、且那条 WS 在后台期间换过端口（`A038/A028` 消失、`D518 → CA5C0D70` 出现在 12:45）说明**进程确实在跑**（还能发起新连接）。但把窗口拉长到 7.2 分钟（`ka-new-22-after-7min.txt`）后，WS 那条已经掉了、只剩一条 HTTPS 长连 —— **前台服务保住的是「进程不被冻结到连重连都做不了」，不是「连接永远不断」**。模拟器上区分不出真机省电/内存压力下的收益，见 [`testing.md`](testing.md) §10.5。
+
+**起停与两档不该起（同一台 AVD）**：
+
+| 场景 | 结果 |
+|---|---|
+| 点常驻通知回前台（真点了通知，`input tap` 到 `正在接收弹幕` 上） | 回 `MainActivity`、**pid 不变**（3898）、`KeepAliveService` 消失、通知记录 0 条、logcat 多一行「前台服务已停止」 |
+| 连续两轮「HOME → 回前台」 | 每轮都是「HOME 后：服务 1 个 + 通知 1 条 → 回前台后：0 + 0」，pid 始终 4472，**没有累积、没有重复启动**（`ka-new-70-cycle.txt`） |
+| **没有任何房间**时按 HOME | **不起服务**、无通知、logcat 无 keepalive 行（`ka-new-61-A10-noroom.txt`；截图确认当时确实是空态） |
+| 开着房间但在**根页面按返回**退出应用 | 应用退出（`pidof` 空）、**无服务、无通知**、logcat 无 keepalive 行（`ka-new-50-A10-backexit.txt`） |
+
+**通知权限的冷启动路径也实测过**：`pm revoke` + 清 `user-set`/`user-fixed`（等价于全新安装）后冷启动，系统弹窗「Allow danmubox to send you notifications?」出现（`ka-new-80-perm-dialog.xml`），点 Allow 后 `granted=true`，logcat `danmubox-main: 已获得通知权限`。
+
+**Android 15 的 6 小时额度也实测过**（用官方给的测试开关，见 [`about/versions/15/behavior-changes-15`](https://developer.android.com/about/versions/15/behavior-changes-15#datasync-timeout)）：`am compat enable FGS_INTRODUCE_TIME_LIMITS dev.kksk.danmubox` + `device_config put activity_manager data_sync_fgs_timeout_duration 60000`（把 6 小时缩成 60 秒），退到后台后 —— 服务 12:52:58 起、12:53:58 系统回调 `Service.onTimeout()`，代码里那条自停日志与「前台服务已停止」紧接着打出（相隔 8 ms），服务与通知都收干净、进程仍在；**`RemoteServiceException` / `did not stop within` 0 次、`FATAL EXCEPTION` 0 次**（`ka-new-90-ontimeout.txt`）。即：额度耗尽这一刻是**优雅收工**，不是崩溃。（测完已 `device_config delete` + `am compat disable` 复位。）
+
+**排查**：
+
+| 判定顺序 | 观察点 | 结论与动作 |
+|---|---|---|
+| 1 | 通知抽屉里有没有「正在接收弹幕」 | 没有 → 先看 2、3；有 → 保活已在工作 |
+| 2 | `adb shell dumpsys activity services dev.kksk.danmubox` | 没有 `KeepAliveService` → 退到后台那一刻**是否真有活跃连接**（没房间、刚断线都不会起），以及 `adb logcat -s danmubox-keepalive` 里有没有「系统不允许在此时启动前台服务」（= 后台起前台服务被拒 / 6 小时额度用尽） |
+| 3 | `adb shell dumpsys notification --noredact \| grep -i danmubox` | 渠道 `danmubox-keepalive` 在、通知不在 → 十有八九是 `POST_NOTIFICATIONS` 没给（见上） |
+| 4 | 通知在、但长连接断了 | 不是保活的问题，是 Doze 掐了网络 → 加电池优化白名单（见上） |
+| 5 | 连接反复重连 | 见 2.3 与 [`protocol.md`](protocol.md)：退避属预期，持续不成功查网络与上游 |
 
 ---
 
@@ -461,8 +543,9 @@ CI=true ./ui/node_modules/.bin/tauri android build --apk --ci                  #
 CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  # 按 ABI 分包
 ```
 
-- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，40 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的三处改（见下表）。
+- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，41 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的四处改（见下表）。
 - `CI=true` 与 `--ci` 一起用，让 Tauri CLI 走非交互路径。
+- **干净克隆 / 新 worktree 上第一次构建会失败，先补两个文件**（2026-09-16 实测）：`tauri android build` 只会（重新）生成 `app/src/main/java/…/generated/` 里 **wry** 那几个文件（`WryActivity.kt` 等）与 `app/tauri.properties` / `app/tauri.build.gradle.kts`；**`TauriActivity.kt` 与 `app/proguard-tauri.pro` 只在 `tauri android init` 时从 `tauri` crate 的 `mobile/android-codegen/` 拷进来**，而 `app/.gitignore` 又把 `generated/` 整个忽略了 —— 于是新 worktree 里 Gradle 会以 `e: …MainActivity.kt: Unresolved reference: TauriActivity`（连带一串「overrides nothing」）失败（本仓实测连续两轮，`apps/desktop/src-tauri/gen/android` 的 `generated/` 里只有 8 个 wry 文件、没有 `TauriActivity.kt`）。**修法**：从一个已经建过的 `gen/android` 工程把这两个文件拷过来（同版本 tauri 下内容稳定），或临时跑一次 `tauri android init` 生成后把那几处模板改动回退回去（见下表）。
 - `tauri android dev -- --device <serial>`（真机热重载）**未实测**，本仓库暂不写具体用法。
 
 | 产物 | 路径 |
@@ -474,13 +557,14 @@ CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  #
 - 自用装机只装 APK（不生成 AAB）。
 - 默认构建包含官方支持的四个 ABI；`--split-per-abi` 只改产物粒度，不改编译目标是否已装。
 
-**本仓库对上游模板的三处改**（重跑 `tauri android init` 会覆盖，需照下表重新打）：
+**本仓库对上游模板的四处改**（重跑 `tauri android init` 会覆盖，需照下表重新打）：
 
 | 位置 | 上游模板 | 本仓库 | 为什么 |
 |---|---|---|---|
 | `apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/dev/kksk/danmubox/kotlin/BuildTask.kt` | `node tauri android android-studio-script` | 直接调 `ui/node_modules/@tauri-apps/cli/tauri.js`；找不到 CLI 时显式报错 | 模板那条把 `tauri` 当**相对 workingDir 的路径**交给 node 解析，只有 app 根目录是 npm 工程时才成立。本仓前端工程在 `apps/desktop/ui`、`apps/desktop` 下没有 `package.json`，模板原样必然报 `Cannot find module '<…>/src-tauri/tauri'`（2026-09-15 实测） |
 | `apps/desktop/src-tauri/gen/android/app/build.gradle.kts` | **没有** signingConfig | 自建 `signingConfigs.release`，读 `gen/android/keystore.properties`；文件缺失即退回无签名 | 自用 release 包要能覆盖安装，见 §5.7 |
 | `apps/desktop/src-tauri/gen/android/app/src/main/java/dev/kksk/danmubox/MainActivity.kt` | 只调 `enableEdgeToEdge()` | 从原生收 `WindowInsets`（系统栏含 ime）换算成 CSS 变量 `--safe-top` / `--safe-bottom` 下发给页面 | Tauri 的 Android 外壳是 edge-to-edge，而 **WebView 里拿不到系统栏高度**：`env(safe-area-inset-*)` 只报刘海（实测 top=129 / bottom=0 设备像素，同一次实测状态栏 128、手势栏 63）。不补这一步，顶栏会压进状态栏带、输入区会压进手势栏；见下方「已修」条目的实测数字 |
+| `apps/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml` + 新增的 `…/dev/kksk/danmubox/KeepAliveService.kt`（`MainActivity` 里配套的 `onStart` / `onStop` 钩子也属这一组） | 权限只有 `INTERNET`，没有任何 `<service>` | 加 `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` / `POST_NOTIFICATIONS` 三枚权限与 `<service android:name=".KeepAliveService" android:foregroundServiceType="dataSync" android:exported="false" />`；退到后台且有活跃连接时起、回到前台即停 | 后台保活：进程不被系统回收这一环。完整行为（怎么关、耗电、电池优化白名单、Android 15 的 6 小时额度）见 §2.8 |
 
 实测（2026-09-15，模拟器 android-35）：Gradle 8.14.3 / AGP 8.11.0 / Kotlin 1.9.25；`aapt2 dump badging` 读到 package `dev.kksk.danmubox`、versionCode 1000、versionName 0.1.0、minSdk 24、targetSdk / compileSdk 36、`INTERNET` 权限在；带签名包 `apksigner verify` 为 `Verifies`（v2 签名）。
 

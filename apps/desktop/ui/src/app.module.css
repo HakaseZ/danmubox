@@ -170,6 +170,13 @@
   --panel-max-h: 260px; /* 宽屏面板在文档流里展开的最大高度 */
   --panel-max-h-narrow: 45vh; /* 窄屏面板的限高（视口份额）：844px 下 ≈ 380px，超出由面板内部滚动 */
   --sheet-max-h: min(80vh, 640px); /* 窄屏账号对话框（模态）的最大高度 */
+  /* 弹幕区与礼物栏共享的那块上下分区（issue #8，见 docs/ui.md §5.4）。
+     `--splitter-hit` 是分割条的**热区**（需求：≥ 8px；看得见的那条线画在热区正中，1px）。
+     弹幕区的最小高度 = **3 行**（单行 = 两个行盒 + 上下 `--sp-2`，见「挤了怎么办」那条：
+     行盒 1.5em × 2 + 8px × 2）：写在下一条规则里，行盒那一半跟着 `ui.font_scale` 缩、
+     内边距那一半不缩 —— 字号拉到 2 倍时「3 行」仍然是 3 行。
+     礼物栏的最小高度不在这里：它是**实测**的折叠头高度（JS 写进 `--gift-min-h`）。 */
+  --splitter-hit: 8px;
 
   /* 系统栏安全区（状态栏 / 手势栏 / 刘海）：Android 的外壳是 edge-to-edge（窗口与
      WebView 都铺满整屏），没有这两个值，顶栏会压在状态栏里、输入区会压在手势栏下。
@@ -190,7 +197,7 @@
 
 /* 浅色不是新主题，只是把同一套语义槽换一组值：组件规则一行都不用改。
    ⚠ 长度令牌（--row-line / --avatar / --badge-h / --emote / --time-col / --tap-min /
-   --panel-max-h* / --sheet-max-h）**不许**出现在这里：@property 注册的 --row-line 若在
+   --panel-max-h* / --sheet-max-h / --splitter-hit）**不许**出现在这里：@property 注册的 --row-line 若在
    :root 被显式赋值，1.5em 会按根字号（16px）算成 24px 并向下继承，行内三个尺度就此脱钩
    （用户 #3 的老 bug）；--avatar 的 :root 默认值也必须永远能解析出值，否则行外共用的头像
    会按原图 512 渲染、把主页顶爆。这一块**只放颜色与阴影**。 */
@@ -725,8 +732,118 @@
   }
 }
 
+/* 上下分区（issue #8）：弹幕区与礼物栏共享这一块高度，中间一条可拖动的分割条。
+   两栏都 `flex-basis: 0` + `flex-grow: <份额>`：份额就是高度占比，容器高度怎么变都成立；
+   两栏各自的**最小高度**（礼物栏 ≥ 它的折叠头、弹幕区 ≥ 3 行）由下面两条规则兜住，
+   拖到极限 / 窗口从宽缩到 360px 都由浏览器就地夹住，不会溢出、更不会压到 0。
+   房管面板 / 日志条 / 输入区排在它后面（`.shell` 的 flex 列），展开时挤的正是这一块。 */
+.panes {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* 两栏的最小高度是**下限**：真挤到装不下时裁掉，不许把输入区顶出可视区、也不给页面
+     生出新的滚动条（两栏各自的内容都在自己的滚动区里） */
+  overflow: hidden;
+  /* 两个份额由 React 写在 inline style 上；拖动中由 JS 直接改这两个自定义属性
+     （每帧走一趟 setState 会让整棵房间页跟着重渲染），见 SplitPanes 的文件头。
+     `--chat-scale` = ui.font_scale，只给弹幕栏的最小高度用。 */
+  --gift-share: 1;
+  --danmaku-share: 1;
+  --chat-scale: 1;
+  --gift-min-h: 2em;
+}
+
+/* 礼物栏在上：只翻**视觉顺序**，DOM 顺序恒为「弹幕 → 分割条 → 礼物栏」。
+   换位因此不搬节点 —— 弹幕列表的滚动位置与虚拟列表状态原样保留，读屏 / tab 顺序
+   也稳定地按主次走（见 SplitPanes 文件头的第 2 条）。 */
+.panes[data-on-top="true"] {
+  flex-direction: column-reverse;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 0;
+  min-height: 0;
+  position: relative;
+}
+
+/* 弹幕栏：最小高度 = 3 行（单行 = 2 × 行盒 + 2 × --sp-2，见上面「挤了怎么办」那条口径）。
+   9em = 6 × 1.5em（行盒部分）在**这一层**按基准字号算（14px → 126px），跟着 --chat-scale 缩；
+   内边距那一半不缩。 */
+.paneDanmaku {
+  flex-grow: var(--danmaku-share);
+  min-height: calc(9em * var(--chat-scale) + 3 * var(--sp-4));
+}
+
+.paneGift {
+  flex-grow: var(--gift-share);
+  /* 礼物栏不可被压到比它的**折叠头**更矮（契约 §8）：--gift-min-h 是 JS 实测的折叠头高度 */
+  min-height: var(--gift-min-h);
+  background: var(--bg-elevated);
+}
+
+/* 折叠态：礼物栏 = 它的折叠头（折叠优先于份额），弹幕区拿走剩下的全部；
+   分割条仍在、仍可拖 —— 拖动会把这一栏拖开（SplitPanes 的 onExpand）。 */
+.paneGiftCollapsed {
+  flex: none;
+}
+
+/* 分割条：热区 8px（需求：拖动热区 ≥ 8px），看得见的那条线绝对定位在热区正中，
+   所以悬停 / 拖动时把它加粗到 2px 也不改布局。`touch-action: none` 让触摸拖动
+   不被页面滚动抢走；`cursor: row-resize` 是「上下拖」的常规光标。 */
+.splitter {
+  position: relative;
+  flex: none;
+  height: var(--splitter-hit);
+  cursor: row-resize;
+  touch-action: none;
+  background: var(--bg);
+}
+
+.splitter::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--border);
+}
+
+.splitter:hover::before,
+.splitter:focus-visible::before,
+.splitter[data-dragging="true"]::before {
+  height: 2px;
+  background: var(--accent);
+}
+
+.splitter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 长按换位拖拽态：被拖的那一栏半透明、跟着指针走（transform 由 JS 写，见 SplitPanes）；
+   落点那一栏描一圈强调色，说清松手会换到哪儿。 */
+.pane[data-swap-drag="true"] {
+  opacity: 0.6;
+  z-index: 1;
+  user-select: none;
+}
+
+.pane[data-swap-over="true"] {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.panes[data-dragging="true"] {
+  user-select: none;
+}
+
 /* 聊天区：房间页里唯一会生长/滚动的区域（面板与礼物栏展开只会挤它）、
    **双击进 / 出沉浸模式的落点**（issue #1）。 */
+>>>>>> feat/2609160959-splitter
 .chatArea {
   flex: 1;
   min-height: 0;
@@ -1205,14 +1322,11 @@
   color: var(--danger);
 }
 
-/* 礼物 / SC 栏：在输入区下方、全宽、可折叠（issue #8），不再抢弹幕宽度 */
-.giftDock {
-  border-top: 1px solid var(--border);
-  background: var(--bg-elevated);
-}
-
+/* 礼物 / SC 栏：**与弹幕区上下分区的一栏**（issue #8），高度由份额驱动（不再按内容、也不再固定），
+   背景与分隔线交给 `.paneGift` / `.splitter`，这里只管栏内的排布。 */
 .giftDockHead {
   display: flex;
+  flex: none; /* 折叠头永远按自己的高度占位，不被展开区挤压 */
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
@@ -1249,8 +1363,10 @@
   color: var(--fg-dim);
 }
 
+/* 展开区：吃掉折叠头之外的全部高度（栏高由份额定），自己在里面滚 —— 与弹幕列表各自滚动 */
 .giftDockBody {
-  max-height: 140px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 0 var(--sp-3) var(--sp-2);
   font-size: var(--fs-2);

@@ -391,6 +391,8 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.pause_on_hover` | boolean | `true` | 鼠标悬停暂停自动滚动 |
 | `ui.gift_in_danmaku` | boolean | `true` | 弹幕流里是否包含礼物 / SC / 大航海（`false` = 它们不出现在弹幕流里） |
 | `ui.gift_panel` | boolean | `true` | 是否显示独立礼物栏（`false` = 不渲染礼物栏） |
+| `ui.gift_pane_on_top` | boolean | `false` | 礼物栏与弹幕区**上下分区**的顺序：`false` = 弹幕在上、礼物在下（默认，与改前一致）；`true` = 礼物在上。分区、分割条与长按换位见 [`ui.md`](ui.md) §5.4 |
+| `ui.gift_pane_ratio` | number | `0.35` | 礼物栏占**共享分区**高度的份额，范围 0.10–0.90；与它在上面还是下面**无关**（换位不改比例）。落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 它的折叠头、弹幕区 ≥ 3 行），因此存的是**指针意图**——同一窗口尺寸下重开必然得到同一画面 |
 | `ui.interact_auto_hide` | boolean | `true` | 互动/进场消息显示一会儿后自动消失（`false` = 常驻） |
 | `ui.show_timestamp` | boolean | `false` | 弹幕前是否显示时间戳（用户 2026-09-12 反馈：要可开关） |
 | `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
@@ -406,6 +408,10 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 `ui.gift_in_danmaku` / `ui.gift_panel` 对应 REQUIREMENTS.md「可以配置独立一个礼物栏或者礼物混合在弹幕栏中」：
 两者**互相独立**（旧键 `ui.gift_panel_mode` 的 `merged` / `separate` 是一个二选一的门，表达不了「都显示」或「都不显示」）。
 礼物栏自身的结构与统计口径见 [`ui.md`](ui.md) §5。
+
+`ui.gift_pane_on_top` / `ui.gift_pane_ratio` 是**礼物栏与弹幕区共享一块上下分区**时的两枚键（issue #8，用户 2026-09-16）：
+顺序与份额**持久化**，重开应用保持；两者都只在 `ui.gift_panel` 为真时有意义（关掉那一枚时共享区域退化为弹幕区全高，
+分割条不渲染）。取值域与非法值口径与其他键一致：写入非法值 `BAD_REQUEST`、文件里的非法值按未知键忽略并回落默认值（§4.2）。
 
 读写语义（对 `prefs_get` / `prefs_set` 生效）：读返回全部键的**生效值**（默认值已合并）；写接受部分键值补丁，未知键或非法值报 `BAD_REQUEST`，成功返回合并后的生效值全集。
 
@@ -435,6 +441,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 房管身份 | §5 `is_admin` |
 | 本房间粉丝牌等级 | §5 `RoomSession.my_medal_level` |
 | 礼物事件 / 独立礼物栏或混合 | §8 `ui.gift_in_danmaku` / `ui.gift_panel` |
+| 礼物栏与弹幕区共享上下分区、可拖动分割条、长按拖拽换位（issue #8，用户 2026-09-16） | §8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`、`ui.md` §5.4 |
 | 关注列表 + 直播中置顶 | §5 `FollowedRoom`、§7 `follow_list` |
 | 房间列表 / 标签条用主播昵称或标题标识（不露房间号） | §5 `Room.anchor_uname` / `title`、`ui.md` §2.2 |
 | 发言失败原因（全局/直播间禁言、等级、频率） | §5 `SendOutcome` |

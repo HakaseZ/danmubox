@@ -5,6 +5,7 @@ import { Avatar } from "./Avatar";
 import { Composer, type PanelKind } from "./Composer";
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
+import { SplitPanes } from "./SplitPanes";
 import { BACK_PRIORITY, registerBackHandler } from "../back";
 import { useApp } from "../store";
 import {
@@ -121,13 +122,15 @@ const TAP_IGNORE = "button, a, input, textarea, select, [role='button'], [conten
  *
  * ```
  * [头部：◀返回 · ●直播状态 · 直播间标题（放不下就循环滚动） ······ 在线 · 看过 · ⋯菜单]
- * [弹幕列表  ← 唯一的 flex-1 生长/滚动区]
- * [弹出面板（表情 / 短语 / 筛选）← 向上展开，列表自动上弹]
+ * [共享分区 ← 唯一的 flex-1 生长区，由 SplitPanes 管（issue #8）：
+ *    默认 [弹幕列表 ← 内部滚动] / [分割条 8px 热区] / [礼物 / SC 栏 ← 内部滚动]
+ *    `ui.gift_pane_on_top` 换上下，拖动分割条改比例，长按任一栏 0.5s 拖拽换位]
+ * [弹出面板（表情 / 短语 / 筛选 / 房管）← 向上展开，共享分区随之变矮并重新贴底]
  * [输入区：输入框 + 工具行 + 发送]
- * [礼物 / SC 栏 ← 在输入区下方，可折叠]
  * ```
  *
- * 面板与礼物栏都在正常文档流里（不是浮层），所以展开时只会挤压弹幕列表，不会盖住最新弹幕。
+ * 面板在正常文档流里（不是浮层），所以展开时只会挤压共享分区，不会盖住最新弹幕；
+ * 两栏的高度比例与上下顺序都落在 `prefs.json`（契约 §8），重开应用保持。
  *
  * **房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏五者互斥**（用户 2026-09-13 第 4 条）：
  * 同时最多开一个 —— 五个面板状态都在这里（输入区那三个是受控的），打开一个就收起另外四个。
@@ -339,6 +342,18 @@ export function RoomView({
   }, [immersive]);
 
   /**
+   * 展开礼物栏（**只开、不关**）：点折叠头那条路走 `toggleGiftDock`（它能收），
+   * 这里给拖动分割条用 —— 礼物栏折叠着时它只有折叠头那么高，份额驱动不了它，
+   * 所以「拖开」这一下与点「展开」同源：同一套互斥（五者最多开一个）也照旧。
+   */
+  const openGiftDock = useCallback(() => {
+    setGiftOpen(true);
+    setPanel(null);
+    setAdminOpen(false);
+    setAdminConfirm(null);
+  }, []);
+
+  /**
    * 系统返回手势第 2 级：在房间页 → 回房间列表。`onBack` 就是房间头那枚圆形返回键
    * （`App.tsx` 传给它的正是 store 的 `closeRoom`），两条入口同源。
    */
@@ -507,6 +522,8 @@ export function RoomView({
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
   // 见 splitGiftRows）；折叠态是它自己的本地状态，与偏好无关。
   const giftPanel = prefs["ui.gift_panel"];
+  // 共享分区的顺序与份额（契约 §8）：两枚都是**持久化**的偏好，重开应用保持。
+  const giftPaneOnTop = prefs["ui.gift_pane_on_top"];
 
   /**
    * 独立礼物栏折叠态的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**，
@@ -792,29 +809,114 @@ export function RoomView({
         </div>
       )}
 
-      {/* 唯一的生长区：面板与礼物栏展开时只有它会变矮。
-          `key` 绑房间号：换房即重建这个组件，滚动位置 / 是否跟随 / 悬停暂停随之回到初始
-          （`MessageList` 是本轮 C 票的文件，这里只给 key，不改它）。
-
-          外面这层 `.chatWrap` 是**双击的落点**（issue #1）：进 / 出沉浸模式只认弹幕区这一块
-          ——礼物栏、输入区的双击与它无关。它是纯粹的 flex 传递层（与 `.chatArea` 同一套口径），
-          布局与没有它时逐像素一致；`MessageList` 里那枚「回到最新」是按钮，
-          落在按钮上的双击按判据被排除（见 `TAP_IGNORE`）。 */}
-      <div
-        className={styles.chatWrap}
-        data-testid="db-chat-wrap"
-        onPointerDown={onChatPointerDown}
-        onPointerUp={onChatPointerUp}
-        onPointerCancel={onChatPointerCancel}
-      >
-        <MessageList
-          key={room.room_id}
-          rows={chatRows}
-          anchorUid={room.anchor_uid}
-          prefs={prefs}
-          onMenu={(message, at) => setMessageMenu({ at, message })}
-        />
-      </div>
+      {/* 弹幕区与礼物栏**共享一块上下分区**（issue #8，契约 §8）：默认弹幕在上、礼物在下，
+          中间一条可拖动的分割条（热区 ≥ 8px）；长按任一栏 0.5s 拖拽换位。
+          两栏的高度比例与上下顺序都落 prefs，重开应用保持；`ui.gift_panel` 关掉时
+          共享区域退化为弹幕区全高、分割条不渲染（见 SplitPanes）。
+          唯一的生长区从「弹幕列表」变成「这一块」：面板 / 房管面板 / 输入区展开时挤的是它。
+          **沉浸模式（issue #1）只收标题栏、房间标签条与输入区**，所以这一块在沉浸态里照旧在场；
+          双击落点仍是弹幕那一栏（`.chatWrap`，见下），礼物栏上的双击与它无关。 */}
+      <SplitPanes
+        giftOnTop={giftPaneOnTop}
+        ratio={prefs["ui.gift_pane_ratio"]}
+        fontScale={prefs["ui.font_scale"]}
+        giftCollapsed={!giftOpen}
+        onRatio={(value) => onPrefs({ "ui.gift_pane_ratio": value })}
+        onSwap={() => onPrefs({ "ui.gift_pane_on_top": !giftPaneOnTop })}
+        onExpand={openGiftDock}
+        danmaku={
+          <div
+            className={styles.chatWrap}
+            data-testid="db-chat-wrap"
+            onPointerDown={onChatPointerDown}
+            onPointerUp={onChatPointerUp}
+            onPointerCancel={onChatPointerCancel}
+          >
+            <MessageList
+              key={room.room_id}
+              rows={chatRows}
+              anchorUid={room.anchor_uid}
+              prefs={prefs}
+              onMenu={(message, at) => setMessageMenu({ at, message })}
+            />
+          </div>
+        }
+        /* 独立礼物栏（issue 2609152029 第 5 条改成**每个礼物 / SC / 大航海一条**：
+           头像 + 昵称 + 内容 + 数量 + 金额，原来那两段「金额排行 + 内容详情」已取消）。
+           是否出现由 `ui.gift_panel` 决定（管弹幕流那一头的是 `ui.gift_in_danmaku`，
+           两枚各自独立：都开 = 默认形态，同一批消息两处都渲染）。
+           折叠头带 `data-pane-head`：它是**这一栏的最小高度**（SplitPanes 实测）。 */
+        gift={
+          giftPanel ? (
+            <>
+              <button
+                className={styles.giftDockHead}
+                data-testid="db-gift-dock"
+                data-pane-head
+                aria-expanded={giftOpen}
+                onClick={toggleGiftDock}
+              >
+                <span className={styles.giftDockTitle}>
+                  礼物 / SC（{giftGroups.reduce((sum, group) => sum + group.count, 0)}）
+                </span>
+                {/* 折叠态汇总**按 kind 分组**：各组带各自的单位，金瓜子与元不加到一起（§5.3） */}
+                <span className={styles.giftDockSummary} data-testid="db-gift-summary">
+                  {giftGroups.length === 0
+                    ? "本场暂无礼物"
+                    : `本场 ${giftGroups
+                        .map((group) =>
+                          group.amount.length > 0
+                            ? `${group.label} ${group.count} · ${group.amount}`
+                            : `${group.label} ${group.count}`,
+                        )
+                        .join(" / ")}`}
+                </span>
+                <span className={styles.giftDockToggle}>{giftOpen ? "收起" : "展开"}</span>
+              </button>
+              {giftOpen && (
+                <div className={styles.giftDockBody} data-testid="db-gift-body">
+                  {giftRows.length === 0 ? (
+                    <div className={styles.empty}>本场还没有礼物</div>
+                  ) : (
+                    giftRows.map((row) => {
+                      const amount = amountText(row.message.amount, row.message.kind);
+                      return (
+                        <div
+                          key={row.message.local_id}
+                          className={styles.giftItem}
+                          data-testid="db-gift-item"
+                        >
+                          <Avatar url={row.message.face} name={row.message.uname} />
+                          <span className={styles.giftWho} data-testid="db-gift-who">
+                            {row.message.uname}
+                          </span>
+                          <span className={styles.giftWhat} data-testid="db-gift-what">
+                            {row.message.content}
+                          </span>
+                          {/* 数量与弹幕行同一个口径：礼物恒显示 ×N（折叠后是整串连击的次数），
+                              其余 kind 只在真折叠过时才有（`count > 1`）。 */}
+                          {(row.count > 1 || row.message.kind === "gift") && (
+                            <span className={styles.giftCount} data-testid="db-gift-count">
+                              ×{row.count}
+                            </span>
+                          )}
+                          {/* 金额格带单位；上游没给价（amount = 0）时**整格不画**，不拿 0 顶替 */}
+                          {amount.length > 0 && (
+                            <span className={styles.giftAmount} data-testid="db-gift-amount">
+                              {amount}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </>
+          ) : null
+        }
+      />
+>>>>>> feat/2609160959-splitter
 
       {messageMenu && (
         <ContextMenu
@@ -962,79 +1064,10 @@ export function RoomView({
         />
       )}
 
-      {/* 独立礼物栏（issue #8 把它放在输入区下方、全宽、可折叠；issue 2609152029 第 5 条改成
-          **每个礼物 / SC / 大航海一条**：头像 + 昵称 + 内容 + 数量 + 金额，原来那两段
-          「金额排行 + 内容详情」已取消）。是否出现由 `ui.gift_panel` 决定，与弹幕流那一头
-          的 `ui.gift_in_danmaku` 各自独立（两枚都开 = 默认形态，同一批消息两处都渲染）。 */}
-      {giftPanel && (
-        <div className={styles.giftDock} data-testid="db-gift-dock">
-          <button
-            className={styles.giftDockHead}
-            aria-expanded={giftOpen}
-            onClick={toggleGiftDock}
-          >
-            <span className={styles.giftDockTitle}>
-              礼物 / SC（{giftGroups.reduce((sum, group) => sum + group.count, 0)}）
-            </span>
-            {/* 折叠态汇总**按 kind 分组**：各组带各自的单位，金瓜子与元不加到一起（§5.3） */}
-            <span className={styles.giftDockSummary} data-testid="db-gift-summary">
-              {giftGroups.length === 0
-                ? "本场暂无礼物"
-                : `本场 ${giftGroups
-                    .map((group) =>
-                      group.amount.length > 0
-                        ? `${group.label} ${group.count} · ${group.amount}`
-                        : `${group.label} ${group.count}`,
-                    )
-                    .join(" / ")}`}
-            </span>
-            <span className={styles.giftDockToggle}>{giftOpen ? "收起" : "展开"}</span>
-          </button>
-          {giftOpen && (
-            <div className={styles.giftDockBody} data-testid="db-gift-body">
-              {giftRows.length === 0 ? (
-                <div className={styles.empty}>本场还没有礼物</div>
-              ) : (
-                giftRows.map((row) => {
-                  const amount = amountText(row.message.amount, row.message.kind);
-                  return (
-                    <div
-                      key={row.message.local_id}
-                      className={styles.giftItem}
-                      data-testid="db-gift-item"
-                    >
-                      <Avatar url={row.message.face} name={row.message.uname} />
-                      <span className={styles.giftWho} data-testid="db-gift-who">
-                        {row.message.uname}
-                      </span>
-                      <span className={styles.giftWhat} data-testid="db-gift-what">
-                        {row.message.content}
-                      </span>
-                      {/* 数量与弹幕行同一个口径：礼物恒显示 ×N（折叠后是整串连击的次数），
-                          其余 kind 只在真折叠过时才有（`count > 1`）。 */}
-                      {(row.count > 1 || row.message.kind === "gift") && (
-                        <span className={styles.giftCount} data-testid="db-gift-count">
-                          ×{row.count}
-                        </span>
-                      )}
-                      {/* 金额格带单位；上游没给价（amount = 0）时**整格不画**，不拿 0 顶替 */}
-                      {amount.length > 0 && (
-                        <span className={styles.giftAmount} data-testid="db-gift-amount">
-                          {amount}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* 房间头 ⋯ 的菜单：它的触发钮在收起的房间里，沉浸态里也没有理由浮着
-          （行右键菜单不在此列：它属于弹幕行，那一块在沉浸态里照旧在场上）。 */}
+          （行右键菜单不在此列：它属于弹幕行，那一块在沉浸态里照旧在场上）。 */
       {!immersive && headerMenu && (
+>>>>>> feat/2609160959-splitter
         <ContextMenu
           at={headerMenu}
           items={headerMenuItems}

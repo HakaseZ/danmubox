@@ -3571,7 +3571,8 @@ const MOCK = (theme) => `(function () {
     // 跨单位求和是红线：700 + 1030 + 138000 = 139730 这个数**一个写法都不许出现**
     out.giftDockNoCrossUnitSum = giftSummary.indexOf(num(139730)) < 0 &&
       giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("140730") < 0;
-    buttonWith(dock, "礼物 / SC").click();
+    // db-gift-dock 现在**就是**那枚折叠头按钮（issue #8），不再是「容器里装着一枚按钮」
+    dock.click();
     await sleep(300);
     out.giftDockExpands = !!byTestId("db-gift-body");
     out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;
@@ -4826,7 +4827,7 @@ const MOCK = (theme) => `(function () {
     out.splitterCollapsedGiftIsHeadHeight = !byTestId("db-gift-body") &&
       Math.abs(giftBox0.height - headBox0.height) <= 1;
     out.splitterDefaultRatioPref = ratioAtEntry;
-    out.splitterDefaultOnTopPref = window.__prefs["ui.gift_pane_on_top"];
+    out.splitterDefaultOnTopPref = window.__prefs["ui.gift_pane_on_top"] === false;
 
     // ---- 拖动分割条（鼠标指针这一路）：实时改比例、折叠态下「拖开就展开」、松手才落盘 ----
     firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid(), "mouse");
@@ -4846,7 +4847,11 @@ const MOCK = (theme) => `(function () {
     out.splitterDraggedRatioShown = draggedRatio;
     out.splitterDragPersistsRatio = !!draggedRatio &&
       Math.abs(window.__prefs["ui.gift_pane_ratio"] - draggedRatio) < 0.02;
-    out.splitterDragRatioGrew = window.__prefs["ui.gift_pane_ratio"] > ratioAtEntry + 0.05;
+    // 「涨了」要比**当时屏幕上的那一份**：折叠态下这一栏只有折叠头那么高（份额约 0.04），
+    // 而 ratioAtEntry 是「上次拖到哪儿」的意图、折叠时并没有落到屏幕上（0.35 那个数在
+    // 折叠态下看不见），拿它当基准会把「确实长大了」判成没长。
+    var shownAtEntry = giftBox0.height / (panesBox0.height - splitBox0.height);
+    out.splitterDragGrewOnScreen = !!draggedRatio && draggedRatio > shownAtEntry + 0.05;
     snap();
 
     // ---- 重新挂载后保持：切到另一个房间标签再切回来（RoomView 重挂，本地状态回到初始）----
@@ -4973,16 +4978,33 @@ const MOCK = (theme) => `(function () {
     snap();
 
     // ---- 关掉独立礼物栏：分区退化为弹幕区全高、分割条与礼物栏一起消失、换位随之停用 ----
-    var giftSwitchTouched = setGiftSwitch("独立礼物栏", false);
-    if (!giftSwitchTouched) {
+    var giftSwitchOff = setGiftSwitch("独立礼物栏", false);
+    if (!giftSwitchOff) {
+      // 面板可能关着、也可能开着别的那个：先点面板外收干净，再明确开筛选面板重来一次
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      await sleep(300);
       clickTool("筛选");
       await sleep(350);
-      giftSwitchTouched = setGiftSwitch("独立礼物栏", false);
+      giftSwitchOff = setGiftSwitch("独立礼物栏", false);
+    }
+    if (!giftSwitchOff) {
+      // 还是没摸到那枚开关：把现场留下来（值字段，不是断言），免得只剩一个 false 无从判断
+      var panelNow = byTestId("db-panel");
+      var toolsNow = byTestId("db-composer-tools");
+      out.splitterGiftSwitchDiag = {
+        panel: !!panelNow,
+        labels: panelNow
+          ? [].slice.call(panelNow.querySelectorAll("label")).map(function (l) { return l.innerText.trim(); })
+          : [],
+        tools: toolsNow
+          ? [].slice.call(toolsNow.querySelectorAll("button")).map(function (b) { return b.innerText.trim(); })
+          : [],
+      };
     }
     await sleep(450);
     var offPanes = rect(byTestId("db-panes"));
     var offDanmaku = rect(byTestId("db-pane-danmaku"));
-    out.splitterGiftSwitchOffTouched = giftSwitchTouched;
+    out.splitterGiftSwitchOffTouched = giftSwitchOff;
     out.splitterGoneWhenGiftPanelOff = !byTestId("db-pane-splitter") && !byTestId("db-pane-gift");
     out.splitterRegionGivesAllToDanmaku = !!offPanes && !!offDanmaku &&
       Math.abs(offDanmaku.height - offPanes.height) <= 1;
@@ -5000,7 +5022,15 @@ const MOCK = (theme) => `(function () {
       clickTool("筛选");
       await sleep(350);
     }
-    out.splitterGiftSwitchBackOn = setGiftSwitch("独立礼物栏", true);
+    var giftSwitchBackOn = setGiftSwitch("独立礼物栏", true);
+    if (!giftSwitchBackOn) {
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      await sleep(250);
+      clickTool("筛选");
+      await sleep(350);
+      giftSwitchBackOn = setGiftSwitch("独立礼物栏", true);
+    }
+    out.splitterGiftSwitchBackOn = giftSwitchBackOn;
     await sleep(450);
     out.splitterRestoredPane = !!byTestId("db-pane-splitter") && !!byTestId("db-pane-gift") &&
       window.__prefs["ui.gift_panel"] === true;

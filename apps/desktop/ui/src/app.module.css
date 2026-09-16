@@ -277,7 +277,12 @@
   display: none;
 }
 
-/* 拖拽态：整个手势归拖动，容器不再滚（触摸的 pan 与惯性都由 `none` 收回自己手里）。 */
+/* 拖拽态：整场手势归拖动（被拖项半透明、插入位指示条、光标 grabbing）。
+   ⚠ `touch-action` 是**在 touchstart 那一刻**就被浏览器快照下去的：这条规则写在拿起来之后，
+   对**正在进行**的那场手势无效（实测：`.tabsDragging { touch-action: none }` 加上之后
+   第一次 `pointermove` 照样收到 `pointercancel`）。真正把触摸滚动拦住的是 App.tsx 里
+   那条**挂载时就挂上**的非 passive `touchmove`。这里留着 `none` 只为「拖拽态期间**新**落下
+   的手指也不滚」这一件事。 */
 .tabsDragging {
   touch-action: none;
   cursor: grabbing;
@@ -828,6 +833,22 @@
   cursor: row-resize;
   touch-action: none;
   background: var(--bg);
+}
+
+/* 触摸设备上把热区撑到 24px（= 24dp ≈ 3.8mm）。
+   依据（2026-09-21，模拟器 android-35 / 1080×2400@420dpi、Android WebView Chrome/124、
+   视口 412 CSS px：1 CSS px = 1 dp = 2.625 物理 px）：命中带实测只有
+   **中线上下 4px**（逐 2px 扫 `elementFromPoint`：dy ∈ [-4, +2] 打到分割条，±10 就落进
+   弹幕列表 / 礼物折叠头），也就是 1.2 mm —— 手指接触面直径约 7–9 mm，实测十次里能中几次
+   全看运气；打不中就等于按进了某一栏，于是触发的是「长按换位」或滚动。
+   8px 是需求给桌面鼠标写的下限（`--splitter-hit`），触摸上照搬就是「拖不动」。
+   24px 而不是平台建议的 48dp：分割条是精调控件，热区每加宽 1px 就从两栏各吃掉 0.5px
+   的点击面（弹幕行高约 40px，吃掉太多会让贴着边界的行点不开）。
+   只改热区不改那条线：`::before` 依旧绝对定位在热区正中，视觉一寸不动。 */
+@media (pointer: coarse) {
+  .splitter {
+    height: 24px;
+  }
 }
 
 .splitter::before {

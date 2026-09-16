@@ -36,6 +36,12 @@ interface TabPress {
   timer: number | null;
   /** 已「拿起来」= 进入拖拽态（低于阈值时全程为 false，松手仍是点击）。 */
   lifted: boolean;
+  /**
+   * 拿起来之后**真的挪过**（收到过 `pointermove`）。
+   * 触摸下「按住 `TAB_HOLD_MS` 再原地松手」是常见的慢点：它已经进了拖拽态却没换过位，
+   * 那一下 `click` 就不该吞 —— 吞了就是「点了标签什么都没发生」（见 `up` 的落位分支）。
+   */
+  moved: boolean;
   /** 当前插入位：**DOM 序**的下标（0 = 插到最前，标签条长度 = 插到最后）。 */
   index: number;
   stop: () => void;
@@ -64,7 +70,18 @@ interface RoomTabsProps {
  * ① 位移没到 `TAB_DRAG_THRESHOLD_PX` 就松手 = **点击**（切房间）；
  * ② 鼠标横着越过阈值 = **拖动排序**（被拖项半透明 + 插入位指示条）；
  * ③ 触摸横着滑动 = **滚标签条**（`touch-action: pan-x` 让浏览器接管，并回一个 `pointercancel`
- *    把这次按压作废）；触摸要排序得先按住 `TAB_HOLD_MS`。
+ *    把这次按压作废）；触摸要排序得先按住 `TAB_HOLD_MS` 再拖。
+ *
+ * **触摸排序为什么要挂一条原生 `touchmove`（而不是只靠 CSS / `pointermove`）**：
+ * 浏览器在 **touchstart 那一刻**就把 touch-action 快照下来交给自己手势识别器了 ——
+ * 之后 JS 再把 `touch-action` 改成 `none`（`.tabsDragging`）对**正在进行**的这场手势无效，
+ * `pointermove` 上 `preventDefault()` 也拦不住滚动（它压根不是滚动的默认动作）。
+ * 实测（2026-09-21，Chromium 124 / 桌面 Chrome 153，CDP 注入真实触摸）：
+ * 按住 400ms 进入拖拽态后第一次 `pointermove` 就收到 `pointercancel`，排序一次都没成过。
+ * 唯一有效的写法是**挂载时就挂一条非 passive 的 `touchmove`**：非 passive 让浏览器在这块
+ * 区域上把滚动交给主线程裁决，于是「拿起来之后」那一下 `preventDefault()` 真的拦得住
+ * （同一实验：`pointercancel` 0 次、拖得动；未拿起来时不 preventDefault，横划的滚动量与
+ * 什么都不做的基线逐像素相同 —— 见 `docs/ui.md` §2.3 的「拖动排序」行）。
  */
 function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsProps) {
   const stripRef = useRef<HTMLDivElement>(null);
@@ -72,7 +89,8 @@ function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsPr
   // 渲染用的拖拽态（被拖项 + 插入位）。真正的手势判据是 `pressRef`，这里只决定画什么。
   const [drag, setDrag] = useState<{ roomId: number; index: number } | null>(null);
   // 拖动之后浏览器照发一次 `click`（按下与松开落在同一枚标签上时）：那一下必须吞掉，
-  // 否则「拖完顺手切了房间」——拖的是顺序，不是切换。下一次按下即复位。
+  // 否则「拖完顺手切了房间」——拖的是顺序，不是切换。**只有真的拖动了才举它**（见 `up`），
+  // 且下一次按下即复位（每一下落在标签上的 `click` 前面一定有它自己的 `pointerdown`）。
   const swallowClick = useRef(false);
   // 松手那一刻要按**最新**的房间列表换算下标（拖动期间列表可能被上游快照改过）。
   const roomsRef = useRef(rooms);
@@ -99,6 +117,7 @@ function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsPr
       holdOnly: event.pointerType === "touch",
       timer: null,
       lifted: false,
+      moved: false,
       index: 0,
       stop: () => {},
     };
@@ -109,7 +128,6 @@ function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsPr
       press.lifted = true;
       press.index = dropIndexAt(event.clientX);
       setDrag({ roomId: press.roomId, index: press.index });
-      swallowClick.current = true;
     };
 
     /** 当前插入位 → 数组下标：自己要从列表里摘掉再插，落在自己右边时要减一。 */
@@ -143,6 +161,7 @@ function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsPr
         }
         lift();
       }
+      press.moved = true;
       const index = dropIndexAt(event_.clientX);
       if (index !== press.index) {
         press.index = index;
@@ -153,7 +172,12 @@ function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsPr
     const up = (event_: PointerEvent) => {
       if (event_.pointerId !== press.pointerId) return;
       // 落位用**最后一次算出的插入位**，不用松手位置：松手时指针常已飘出标签条。
-      if (press.lifted) commit();
+      // 只有「拿起来并且真的挪过」才算一次拖拽：原地长按后松手是慢点（要让它照旧切房间），
+      // 所以那一下 `click` 也不能吞 —— 吞掉的后果就是「点了标签、什么都没发生」。
+      if (press.lifted && press.moved) {
+        commit();
+        swallowClick.current = true;
+      }
       press.stop();
     };
 
@@ -193,6 +217,30 @@ function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsPr
     if (rooms.some((room) => room.room_id === draggedRoomId)) return;
     pressRef.current?.stop();
   }, [rooms, draggedRoomId]);
+
+  /**
+   * 触摸排序的那条命脉（原理见本组件文件头）：**挂载时就挂**一条非 passive 的 `touchmove`，
+   * 只在「已经拿起来」时 `preventDefault()`。
+   *
+   * 三条都是实测出来的，少一条都不成立：
+   * · 必须**原生**注册：React 的 `onTouchMove` 走的是根容器上的 passive 监听，
+   *   passive 上 `preventDefault()` 是空操作（控制台还会报一条 ignored 警告）；
+   * · 必须**挂载时**就注册：等到拿起来（400ms 后）再挂，浏览器早已按「这块没人在意手势」
+   *   走了快路径 —— 实测那条路（`dragfix-gesture-variants` 的 5 个变体里，唯一「在按下时
+   *   才注册」的 P3）连普通横划的滚动都一起弄死了（滚动量 0），排序也照样进不去；
+   * · 只能在拿起来之后 preventDefault：否则标签条就再也滑不动了（横划是「看更多标签」的正路）。
+   *
+   * 读的是 `pressRef` 而不是 state：这里一次都不该因为重渲染而重挂监听。
+   */
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const onTouchMove = (event: TouchEvent) => {
+      if (pressRef.current?.lifted) event.preventDefault();
+    };
+    strip.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => strip.removeEventListener("touchmove", onTouchMove);
+  }, []);
 
   useEffect(
     // 卸载（返回列表页 / 关掉当前房间）时把窗口级监听摘掉：留着的话下一次松手

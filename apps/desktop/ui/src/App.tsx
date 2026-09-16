@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BACK_PRIORITY, registerBackHandler } from "./back";
 import { AccountManager } from "./components/AccountManager";
@@ -7,6 +7,261 @@ import { LIVE_DOT_CLASS, LIVE_TEXT, RoomView, liveKindOf } from "./components/Ro
 import { roomTabName, toDisplayRows } from "./filtering";
 import { useApp } from "./store";
 import styles from "./app.module.css";
+// 房间载荷类型：`RoomView` 这个名字在本文件已经是上面那个组件，类型只好另起一个别名。
+import type { ConnState, RoomView as RoomViewState } from "./types";
+
+/**
+ * 越过这个位移（px）才算「拖」而不是「点」。
+ * 取 5：一档触摸抖动实测在 2–3px 内，4 的倍数又正好是标签之间的间距（`--sp-1`），
+ * 阈值再大就会出现「想让位却还在原位」的死区。
+ */
+const TAB_DRAG_THRESHOLD_PX = 5;
+
+/**
+ * 触摸下先**按住**这么久（期间位移不超过阈值）才算把标签「拿起来」。
+ * 触摸的横向滑动要留给「看更多标签」（`touch-action: pan-x` 把它交给了浏览器），
+ * 于是排序只能从「按住」这件事上分出来 —— 与手机桌面上挪图标是同一套手势（400ms）。
+ */
+const TAB_HOLD_MS = 400;
+
+/** 一次按压 / 拖动（`pointerdown` 那一刻建，松手 / 取消 / 卸载时拆）。 */
+interface TabPress {
+  pointerId: number;
+  roomId: number;
+  /** 起点（视口坐标）。 */
+  x: number;
+  y: number;
+  /** 触摸要等按住计时器；鼠标 / 触控笔一动就算。 */
+  holdOnly: boolean;
+  timer: number | null;
+  /** 已「拿起来」= 进入拖拽态（低于阈值时全程为 false，松手仍是点击）。 */
+  lifted: boolean;
+  /** 当前插入位：**DOM 序**的下标（0 = 插到最前，标签条长度 = 插到最后）。 */
+  index: number;
+  stop: () => void;
+}
+
+interface RoomTabsProps {
+  rooms: RoomViewState[];
+  status: Record<number, { state: ConnState; detail: string }>;
+  activeRoomId?: number;
+  onOpen: (roomId: number) => void;
+  /**
+   * 落位（`toIndex` = 摘掉被拖那一枚之后的**数组下标**，由本组件换算）。
+   * 拖动中房间被关掉时**不会**调用它（整次拖动作废）。
+   */
+  onReorder: (roomId: number, toIndex: number) => void;
+}
+
+/**
+ * 房间标签条（需求 §2.8，交互口径见 `docs/ui.md` §2.3）：
+ * 横向滚动（开再多也不压缩单枚标签的可读宽度）+ 指针拖动排序。
+ *
+ * **为什么不用 HTML5 拖放**：`draggable` / `dragstart` 在触摸下根本不发（桌面与移动会分叉成
+ * 两套代码），而指针事件鼠标与触摸同一条流，还能与「点一下切房间」共用同一个按下序列。
+ *
+ * 三种手势的判定：
+ * ① 位移没到 `TAB_DRAG_THRESHOLD_PX` 就松手 = **点击**（切房间）；
+ * ② 鼠标横着越过阈值 = **拖动排序**（被拖项半透明 + 插入位指示条）；
+ * ③ 触摸横着滑动 = **滚标签条**（`touch-action: pan-x` 让浏览器接管，并回一个 `pointercancel`
+ *    把这次按压作废）；触摸要排序得先按住 `TAB_HOLD_MS`。
+ */
+function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsProps) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  const pressRef = useRef<TabPress | null>(null);
+  // 渲染用的拖拽态（被拖项 + 插入位）。真正的手势判据是 `pressRef`，这里只决定画什么。
+  const [drag, setDrag] = useState<{ roomId: number; index: number } | null>(null);
+  // 拖动之后浏览器照发一次 `click`（按下与松开落在同一枚标签上时）：那一下必须吞掉，
+  // 否则「拖完顺手切了房间」——拖的是顺序，不是切换。下一次按下即复位。
+  const swallowClick = useRef(false);
+  // 松手那一刻要按**最新**的房间列表换算下标（拖动期间列表可能被上游快照改过）。
+  const roomsRef = useRef(rooms);
+  roomsRef.current = rooms;
+
+  /** 指针落在第几个插入位（按每枚标签的中点判）：0 = 最前，标签数 = 最后。 */
+  const dropIndexAt = (clientX: number) => {
+    const strip = stripRef.current;
+    if (!strip) return 0;
+    return Array.from(strip.querySelectorAll('[data-testid="db-room-tab"]')).filter((tab) => {
+      const box = tab.getBoundingClientRect();
+      return box.left + box.width / 2 < clientX;
+    }).length;
+  };
+
+  const beginPress = (event: React.PointerEvent<HTMLButtonElement>, roomId: number) => {
+    // 只认主键 / 单指；已经有一次按着就不叠加（多指按下不该开第二场）。
+    if (event.button !== 0 || pressRef.current) return;
+    const press: TabPress = {
+      pointerId: event.pointerId,
+      roomId,
+      x: event.clientX,
+      y: event.clientY,
+      holdOnly: event.pointerType === "touch",
+      timer: null,
+      lifted: false,
+      index: 0,
+      stop: () => {},
+    };
+    swallowClick.current = false;
+
+    const lift = () => {
+      if (press.lifted) return;
+      press.lifted = true;
+      press.index = dropIndexAt(event.clientX);
+      setDrag({ roomId: press.roomId, index: press.index });
+      swallowClick.current = true;
+    };
+
+    /** 当前插入位 → 数组下标：自己要从列表里摘掉再插，落在自己右边时要减一。 */
+    const commit = () => {
+      const list = roomsRef.current;
+      const from = list.findIndex((room) => room.room_id === press.roomId);
+      // 拖动中房间被关掉（另一条路径移除 / 上游快照不再包含它）：这次拖动整场作废。
+      if (from < 0) return;
+      const to = press.index - (press.index > from ? 1 : 0);
+      if (to !== from) onReorder(press.roomId, to);
+    };
+
+    const move = (event_: PointerEvent) => {
+      if (event_.pointerId !== press.pointerId) return;
+      const dx = event_.clientX - press.x;
+      const dy = event_.clientY - press.y;
+      if (!press.lifted) {
+        // 还没越过阈值：可能仍是「点一下」，什么都不做。
+        if (
+          Math.abs(dx) < TAB_DRAG_THRESHOLD_PX &&
+          Math.abs(dy) < TAB_DRAG_THRESHOLD_PX
+        ) {
+          return;
+        }
+        // 越过了阈值：触摸（`holdOnly`）这条路上「先动了」= 用户在滑动看更多标签，
+        // 整次按压作废，横向滑动交给容器自己的 `touch-action: pan-x`；
+        // 竖向位移也不算拖（标签条只横着排）。
+        if (press.holdOnly || Math.abs(dy) >= Math.abs(dx)) {
+          press.stop();
+          return;
+        }
+        lift();
+      }
+      const index = dropIndexAt(event_.clientX);
+      if (index !== press.index) {
+        press.index = index;
+        setDrag({ roomId: press.roomId, index });
+      }
+    };
+
+    const up = (event_: PointerEvent) => {
+      if (event_.pointerId !== press.pointerId) return;
+      // 落位用**最后一次算出的插入位**，不用松手位置：松手时指针常已飘出标签条。
+      if (press.lifted) commit();
+      press.stop();
+    };
+
+    const cancel = (event_: PointerEvent) => {
+      if (event_.pointerId !== press.pointerId) return;
+      // `pointercancel` = 浏览器把这条手势收走了（触摸下开始滚动就是这么来的）：
+      // 整次拖动作废，不落顺序。
+      press.stop();
+    };
+
+    press.stop = () => {
+      if (press.timer !== null) window.clearTimeout(press.timer);
+      press.timer = null;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      if (pressRef.current === press) pressRef.current = null;
+      setDrag(null);
+    };
+
+    pressRef.current = press;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    if (press.holdOnly) {
+      press.timer = window.setTimeout(() => {
+        press.timer = null;
+        lift();
+      }, TAB_HOLD_MS);
+    }
+  };
+
+  const draggedRoomId = drag?.roomId;
+  useEffect(() => {
+    if (draggedRoomId === undefined) return;
+    // 拖动中被拖的那个房间没了：收掉指示条、不留悬挂的按压会话。
+    if (rooms.some((room) => room.room_id === draggedRoomId)) return;
+    pressRef.current?.stop();
+  }, [rooms, draggedRoomId]);
+
+  useEffect(
+    // 卸载（返回列表页 / 关掉当前房间）时把窗口级监听摘掉：留着的话下一次松手
+    // 还会对一份已经过期的列表落顺序。
+    () => () => pressRef.current?.stop(),
+    [],
+  );
+
+  return (
+    <div
+      ref={stripRef}
+      className={drag === null ? styles.tabs : `${styles.tabs} ${styles.tabsDragging}`}
+      data-testid="db-room-tabs"
+      data-dragging={drag === null ? "false" : "true"}
+    >
+      {rooms.map((room, index) => {
+        // 标签页上那颗点**与房间头那颗是同一个东西**（用户 2026-09-13：「橙色的需求改成灰色，
+        // 但是下面的标题栏左边还是之前的样子」）：同一个 `liveKindOf` 判据、同一套 `--live-*`
+        // 令牌、同一条 `.liveDot` 规则，所以同一状态下必然是同一个色。
+        const kind = liveKindOf(
+          status[room.room_id]?.state,
+          room.connected,
+          room.live_status,
+        );
+        // 标签条报主播名，不报房间号（用户 #18）；拿不到主播名才退回直播间标题。
+        const name = roomTabName(room);
+        const active = room.room_id === activeRoomId;
+        const dragged = draggedRoomId === room.room_id;
+        return (
+          <Fragment key={room.room_id}>
+            {/* 目标位插空指示：插在「第 index 枚之前」（index = 标签数时插在末尾那一段）。 */}
+            {drag !== null && drag.index === index && (
+              <span className={styles.tabDrop} data-testid="db-tab-drop" />
+            )}
+            <button
+              className={
+                `${active ? styles.tabActive : styles.tab}${dragged ? ` ${styles.tabDragging}` : ""}`
+              }
+              data-testid="db-room-tab"
+              data-room-id={room.room_id}
+              data-active={active ? "true" : "false"}
+              data-dragging={dragged ? "true" : "false"}
+              title={`${name} · ${LIVE_TEXT[kind]}`}
+              onPointerDown={(event) => beginPress(event, room.room_id)}
+              onClick={() => {
+                if (swallowClick.current) {
+                  swallowClick.current = false;
+                  return;
+                }
+                onOpen(room.room_id);
+              }}
+            >
+              <span
+                className={`${styles.liveDot} ${LIVE_DOT_CLASS[kind]}`}
+                data-testid="db-tab-dot"
+                data-state={kind}
+              />
+              {name}
+            </button>
+          </Fragment>
+        );
+      })}
+      {drag !== null && drag.index >= rooms.length && (
+        <span className={styles.tabDrop} data-testid="db-tab-drop" />
+      )}
+    </div>
+  );
+}
+
 
 export function App() {
   const info = useApp((state) => state.info);
@@ -44,6 +299,7 @@ export function App() {
   const removeRoom = useApp((state) => state.removeRoom);
   const openRoom = useApp((state) => state.openRoom);
   const closeRoom = useApp((state) => state.closeRoom);
+  const moveRoom = useApp((state) => state.moveRoom);
   const disconnect = useApp((state) => state.disconnect);
   const refresh = useApp((state) => state.refresh);
   const send = useApp((state) => state.send);
@@ -110,45 +366,21 @@ export function App() {
 
   // 多房间标签页（需求 §2.8）：房间本来就能同时连接，这里只是给一个切换入口。
   // **只在房间页里渲染**（用户 2026-09-12）：列表页已经有「已连接房间」卡片列表，
-  // 两者做的是同一件事，主页再挂一条标签条是重复。房间页内部照旧。
-  const roomTabs = (
-    <div className={styles.tabs} data-testid="db-room-tabs">
-      {rooms.map((room) => {
-        // 标签页上那颗点**与房间头那颗是同一个东西**（用户 2026-09-13：「橙色的需求改成灰色，
-        // 但是下面的标题栏左边还是之前的样子」）：同一个 `liveKindOf` 判据、同一套 `--live-*`
-        // 令牌、同一条 `.liveDot` 规则，所以同一状态下必然是同一个色。
-        const kind = liveKindOf(
-          status[room.room_id]?.state,
-          room.connected,
-          room.live_status,
-        );
-        // 标签条报主播名，不报房间号（用户 #18）；拿不到主播名才退回直播间标题。
-        const name = roomTabName(room);
-        return (
-          <button
-            key={room.room_id}
-            className={room.room_id === activeRoomId ? styles.tabActive : styles.tab}
-            data-testid="db-room-tab"
-            title={`${name} · ${LIVE_TEXT[kind]}`}
-            onClick={() => void openRoom(room.room_id)}
-          >
-            <span
-              className={`${styles.liveDot} ${LIVE_DOT_CLASS[kind]}`}
-              data-testid="db-tab-dot"
-              data-state={kind}
-            />
-            {name}
-          </button>
-        );
-      })}
-    </div>
-  );
+  // 两者做的是同一件事，主页再挂一条标签条是重复。房间页内部照旧（`RoomTabs`）。
 
   return (
     <div className={styles.shell}>
       {activeRoom && prefs ? (
         <>
-          {rooms.length > 1 && roomTabs}
+          {rooms.length > 1 && (
+            <RoomTabs
+              rooms={rooms}
+              status={status}
+              activeRoomId={activeRoomId}
+              onOpen={(roomId) => void openRoom(roomId)}
+              onReorder={moveRoom}
+            />
+          )}
           <RoomView
             room={activeRoom}
             rows={rows}

@@ -149,6 +149,11 @@
   /* 触屏与弹出层 */
   --tap-min: 40px; /* 窄屏 sheet / 对话框里的热区下限（触屏） */
   --live-dot: 8px; /* 状态点的**视觉**直径（房间头 / 标签页两处同档；外壳仍是 --sp-3，热区不跟着缩） */
+  /* 房间标签（`.tab` / `.tabActive`）的**可读下限**：开再多房间也不许把单枚标签压到
+     看不全主播名。组成 = 状态点 8 + 间距 4 + 左右内边距 16 + 边框 2 = 30px 的「壳」，
+     余下 66px 在 --fs-2（0.86em）下大约放得下 4–5 个汉字（主播名短于一屏能认出来的量
+     就该换成标签条滚动，而不是继续压窄）。 */
+  --tab-min-w: 96px;
   --title-gap: 2.5em; /* 循环滚动的标题：两份拷贝之间的间隙（跟着标题字号走） */
   /* 房间头顶栏：**半透明**的一层 + 自上而下的一道高光（参考截图的层次做法）。
      值只从本主题已有的槽里混出来 —— 深色下就是「半透明深色」，浅色下自动是半透明白面，
@@ -221,13 +226,28 @@
   color-scheme: light;
 }
 
-/* 多房间标签页（需求 §2.8） */
+/* 多房间标签页（需求 §2.8）。标签条自己横向滚动：开再多也不压缩单枚标签的可读宽度
+   （`flex: 0 0 auto` 关掉收缩 + `--tab-min-w` 给出下限，见 `.tab` / `.tabActive`）。 */
 .tabs {
   display: flex;
   gap: var(--sp-1);
   padding: var(--sp-1) var(--sp-2) 0;
   overflow-x: auto;
+  /* 与 .listPage 同一口径：出滚动条时整条标签条不许跳一下（覆盖式滚动条下它是 0，
+     不占位也不改观感）。 */
+  scrollbar-gutter: stable;
+  /* 横向滑到两端后不再把滚动链甩给外层（拖动 / 惯性滚动的越界链会先落到父级），就地截断。 */
+  overscroll-behavior-x: contain;
+  /* 触摸的横向滑动 = **滚标签条**（原生 pan），不是拖拽排序：浏览器一旦接管手势就回一个
+     `pointercancel`，那次按压随之作废。触摸要排序得先**按住**（App.tsx 的 `TAB_HOLD_MS`）。 */
+  touch-action: pan-x;
   border-bottom: 1px solid var(--border);
+}
+
+/* 拖拽态：整个手势归拖动，容器不再滚（触摸的 pan 与惯性都由 `none` 收回自己手里）。 */
+.tabsDragging {
+  touch-action: none;
+  cursor: grabbing;
 }
 
 .tab,
@@ -235,17 +255,37 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+  /* **不挤压**：flex 项默认会收缩，标签一多就被压成一条条看不清名字的窄片；这里关掉收缩、
+     给出可读下限，超出的部分交给 `.tabs` 的横向滚动。 */
+  flex: 0 0 auto;
+  min-width: var(--tab-min-w);
   max-width: 180px;
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--fs-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* 标签是标签，不是可选文本：拖动时不许顺带拖出一片选区。 */
+  user-select: none;
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: var(--r-2) var(--r-2) 0 0;
   background: transparent;
   color: var(--fg-dim);
+}
+
+/* 被拖的那一枚：留在原位、半透明（位置由插入指示条说，不另画跟随浮层 —— 拖动中容器
+   不会自动滚，浮层脱离列表反而看不出落点）。 */
+.tabDragging {
+  opacity: 0.45;
+}
+
+/* 目标位插空指示：插在哪两枚之间就画在哪两枚之间（宽 2px 的强调色竖条，跟着标签同高）。 */
+.tabDrop {
+  flex: 0 0 auto;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
 }
 
 .tabActive {

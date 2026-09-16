@@ -62,6 +62,9 @@
 //          第 1 排 = 输入框 + 主操作 + 批量图标钮，批量模式下第 2 排紧贴它下方（全选 / 已选 N 项 / 动作）
 //   panels 五面板互斥：房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏同时最多开一个
 //   tabs   多标签隔离：切房间把面板 / 菜单 / 滚动跟随重置，草稿按「身份 × 房间」各留一份
+//          标签条本身：拖动排序（真实指针事件：越过 5px 阈值才进入拖拽态、拖完不切房间、
+//          阈值以下仍是点击）、横滑是滚动而**按住**才是拖、开 20 个房间后横向滚动且每枚
+//          标签不被压缩到最小宽度以下、拖动中被拖的房间被关掉则整次作废
 //   follow 未开播也列出（**真实取样夹具**：未开播项第 1 页可见且翻页到底一条不少）、按最后开播时间排序、>30 条分页
 //   account 账号区只留一行身份、**整行即入口**（独立的「账号」按钮已删；游客态同样可点，
 //          键盘 Enter / Space 等价）；对话框里一行一个账号（昵称 + uid + 状态 + 操作），
@@ -475,6 +478,24 @@ const MOCK = (theme) => `(function () {
       room_id: 5555, short_id: 0, anchor_uid: 0, anchor_uname: "",
       title: "", live_status: 0, connected: false, buffered: 0
     });
+  };
+  // 标签条那一段要「开一堆房间」：__addRooms(n) 追加 n 个**上游没给名字**的房间
+  // （与 5555 同款：标签只能报房间号），标签条因此一定横向溢出 ——
+  // 「开多了不挤在一起」才有可观察面。幂等：同一号不会重复登记。
+  window.__addRooms = function (count) {
+    for (var added = 1; added <= count; added += 1) {
+      var id = 6000 + added;
+      if (rooms.some(function (r) { return r.room_id === id; })) continue;
+      rooms.push({
+        room_id: id, short_id: 0, anchor_uid: 0, anchor_uname: "",
+        title: "", live_status: 0, connected: false, buffered: 0
+      });
+    }
+  };
+  // 反向：把某个房间从替身的 rooms_list 里删掉（下一次重拉就不再返回它）——
+  // 用来验「拖动中被拖的那个房间被关掉」。
+  window.__dropRoom = function (roomId) {
+    rooms = rooms.filter(function (r) { return r.room_id !== roomId; });
   };
   // 关注列表（用户 2026-09-13：「关注但未开播的也一直没加载到主界面」）：
   // **70 条真实取样**直接来自夹具（fixtures/follow-list.json ← follow-status-raw.json，
@@ -1273,6 +1294,9 @@ const MOCK = (theme) => `(function () {
     out.step2_roomPage = text().indexOf("发送") >= 0;
     out.step2_historyVisible = !!rowWith("这是进场回填的历史弹幕");
     out.chatScroll = !!byTestId("db-chat-scroll");
+    // 只有**一个**房间时标签条不渲染（没有可切的目标，也没有可拖的次序）——
+    // 此刻正是那一次的状态：第二个房间要到多标签隔离那一段才登记进替身。
+    out.singleRoomNoTabStrip = !byTestId("db-room-tabs") && allByTestId("db-room-tab").length === 0;
     snap();
 
     // 铺 2 条实时弹幕 + 互动 + 系统（step3 需要历史行与实时行同时在场）
@@ -4868,6 +4892,250 @@ const MOCK = (theme) => `(function () {
     out.tabDotSizeUnchanged = !!firstTabDot &&
       Math.abs(rect(firstTabDot).width - cssLengthOf("--live-dot")) < 0.6 &&
       Math.abs(rect(firstTabDot).width - 8) < 0.6;
+    // ---- issue #1（本批追加第 6 条）：标签条**拖动排序 + 横向滚动**（docs/ui.md §2.3）。
+    //      用**真实指针事件**驱动（pointerdown → 越过阈值的 pointermove → pointerup），
+    //      判的全是对外可观察的东西：DOM 顺序、data-active / data-dragging、房间头标题、
+    //      rooms_connect 调用次数、计算样式、scrollWidth / clientWidth。
+    //      边界逐条落到断言上：阈值以下的位移仍是点击、触摸横滑是滚动而按住才是拖、
+    //      拖动中被拖的房间被关掉则整次作废、只有一个房间时根本没有标签条（另见 step2）。
+    // 整块包一层（同上面几段的手法）：出岔子时让断言红（tabDragBlockRan），不把场景卡到超时。
+    var tabDragBlockRan = false;
+    try {
+      var stripEl = byTestId("db-room-tabs");
+      // 这一段接在别的切片后面跑：标签条得**真的在画面上**（别的切片可能把房间页留在
+      // 沉浸模式 / 列表页里）—— 那样的话这里整段作废，但要说清原因，不能给一堆假几何。
+      if (!stripEl || getComputedStyle(stripEl).display === "none" || rect(stripEl).width < 1) {
+        throw new Error("标签条不可见（房间页没停在可见状态：沉浸模式没退出？）");
+      }
+      var pe = function (type, target, x, y, pointerType) {
+        var init = {
+          bubbles: true, cancelable: true, pointerId: 7, isPrimary: true,
+          pointerType: pointerType || "mouse", clientX: x, clientY: y,
+        };
+        if (type === "pointerdown") { init.button = 0; init.buttons = 1; }
+        if (type === "pointerup") { init.button = 0; init.buttons = 0; }
+        target.dispatchEvent(new PointerEvent(type, init));
+      };
+      var tabNames = function () {
+        return allByTestId("db-room-tab").map(function (t) { return t.innerText.trim(); });
+      };
+      var roomIds = function () {
+        return allByTestId("db-room-tab").map(function (t) { return t.getAttribute("data-room-id"); });
+      };
+      /** 当前激活那一枚的房间号（标签上只有一个 data-active=true，取不到就是 null）。 */
+      var activeRoomId = function () {
+        var on = allByTestId("db-room-tab").filter(function (t) {
+          return t.getAttribute("data-active") === "true";
+        });
+        return on.length === 1 ? on[0].getAttribute("data-room-id") : null;
+      };
+      var connectCalls = function () {
+        return callsWithArgs.filter(function (c) { return c.cmd === "rooms_connect"; }).length;
+      };
+      var lastConnectRoom = function () {
+        var all = callsWithArgs.filter(function (c) { return c.cmd === "rooms_connect"; });
+        return all.length > 0 ? all[all.length - 1].args.roomId : null;
+      };
+      /** 点房间头 ⋯ 菜单里的某一项（菜单按文案找，与用户在菜单里点同一条路）。 */
+      var menuPick = async function (label) {
+        byTestId("db-header-more").click();
+        await sleep(250);
+        var item = buttonWith(byTestId("db-context-menu"), label);
+        if (item) item.click();
+        await sleep(1000);
+        return !!item;
+      };
+      /**
+       * 按住第 index 枚标签拖到 x，返回**拖拽中途**量到的那几个数（拖拽态 / 被拖项 /
+       * 插入指示条 / 容器计算样式）。
+       * holdMs 有值 = 触摸那条路：先按住这么久再动（触摸的横滑归容器滚动）。
+       */
+      var dragTab = async function (index, toX, pointerType, holdMs) {
+        var tab = allByTestId("db-room-tab")[index];
+        var box = rect(tab);
+        var y = box.top + box.height / 2;
+        pe("pointerdown", tab, box.left + 10, y, pointerType);
+        if (holdMs) await sleep(holdMs);
+        else {
+          pe("pointermove", window, box.left + 50, y, pointerType);
+          await sleep(90);
+        }
+        var mid = {
+          dragging: stripEl.getAttribute("data-dragging"),
+          dragged: allByTestId("db-room-tab").filter(function (t) {
+            return t.getAttribute("data-dragging") === "true";
+          }).length,
+          markers: allByTestId("db-tab-drop").length,
+          touchAction: getComputedStyle(stripEl).touchAction,
+          overscroll: getComputedStyle(stripEl).overscrollBehaviorX,
+        };
+        pe("pointermove", window, toX, y, pointerType);
+        await sleep(90);
+        pe("pointerup", window, toX, y, pointerType);
+        await sleep(150);
+        return mid;
+      };
+      var farRight = function () {
+        var tabs = allByTestId("db-room-tab");
+        return rect(tabs[tabs.length - 1]).right + 40;
+      };
+
+      var restTouchAction = getComputedStyle(stripEl).touchAction;
+      var orderBefore = roomIds();
+      var activeBefore = activeRoomId();
+      var headerBefore = byTestId("db-room-title").getAttribute("title");
+      var connectsBefore = connectCalls();
+
+      // ---- ① 拖动排序：把**当前激活的那一枚**（第 0 枚）拖到最右
+      var dragMid = await dragTab(0, farRight());
+      // 拖拽中的视觉反馈：被拖项自己半透明（data-dragging）、目标位有一枚插入指示条
+      out.tabDragStateShown = dragMid.dragging === "true" && dragMid.dragged === 1 &&
+        dragMid.markers === 1;
+      // 拖拽态下容器不再滚（touch-action 收到自己手里、越界链就地截断）；
+      // 静止时是 pan-x：触摸的横滑 = 滚标签条
+      out.tabDragSuppressesScroll = dragMid.touchAction === "none" &&
+        dragMid.overscroll === "contain" && restTouchAction === "pan-x";
+      // 「第 0 枚挪到末尾」= 整体左移一位（与前面几段留下的顺序无关，任何长度都成立）
+      var orderAfterDrag = roomIds();
+      out.tabDragReorders = orderBefore.length >= 2 &&
+        orderAfterDrag.length === orderBefore.length &&
+        orderAfterDrag.every(function (id, index) {
+          return id === orderBefore[(index + 1) % orderBefore.length];
+        }) && orderAfterDrag.join("|") !== orderBefore.join("|");
+      // 拖动**只改顺序**：激活项没换（还是同一枚房间号）、房间头报的还是同一个房间、
+      // 一次 rooms_connect 都没发（没顺手切房间）
+      out.tabDragKeepsActive = !!activeBefore && activeRoomId() === activeBefore &&
+        byTestId("db-room-title").getAttribute("title") === headerBefore &&
+        connectCalls() === connectsBefore;
+      // 拖完指示条收掉（不留一根挂在那儿的竖条）
+      out.tabDragClearedAfterDrop = stripEl.getAttribute("data-dragging") === "false" &&
+        allByTestId("db-tab-drop").length === 0;
+
+      // ---- ② 拖完之后重拉一次 rooms_list（⋯ → 刷新连接）：**顺序必须留住**
+      //      （本票的口径是「会话内有效」，而切房间本身就会重拉一次 rooms_list）
+      await menuPick("刷新连接");
+      out.tabOrderKeepsAcrossReload = roomIds().join("|") === orderAfterDrag.join("|");
+
+      // ---- ③ 反向拖回来：最后一枚拖到最前，顺序恢复原样
+      var backMid = await dragTab(allByTestId("db-room-tab").length - 1,
+        rect(allByTestId("db-room-tab")[0]).left - 20);
+      out.tabDragBackRestores = backMid.markers === 1 &&
+        roomIds().join("|") === orderBefore.join("|");
+
+      // ---- ④ 阈值以下 = 点击：3px 的位移不进入拖拽态，松手后的那一下照旧切房间。
+      //      目标挑**不是当前激活的那一枚**：切没切房间从 data-active 与 rooms_connect
+      //      的参数上直接看得出来（与前面几段留下的状态无关）。
+      var clickTarget = allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") !== activeBefore;
+      })[0];
+      var clickRoomId = clickTarget.getAttribute("data-room-id");
+      var clickBox = rect(clickTarget);
+      pe("pointerdown", clickTarget, clickBox.left + 10, clickBox.top + clickBox.height / 2);
+      pe("pointermove", window, clickBox.left + 13, clickBox.top + clickBox.height / 2);
+      await sleep(90);
+      out.tabPressUnderThresholdNoDrag =
+        stripEl.getAttribute("data-dragging") === "false" &&
+        allByTestId("db-tab-drop").length === 0;
+      pe("pointerup", window, clickBox.left + 13, clickBox.top + clickBox.height / 2);
+      await sleep(60);
+      // 同一枚元素上「按下并松开」之后浏览器自己会发的那一下 click
+      clickTarget.click();
+      await sleep(1000);
+      out.tabClickStillSwitches = activeRoomId() === clickRoomId &&
+        lastConnectRoom() === Number(clickRoomId);
+      // 切回来（后面几段按「激活项仍是原来那一枚」继续）
+      allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === activeBefore;
+      })[0].click();
+      await sleep(1000);
+      out.tabClickSwitchesBackOnMouse = activeRoomId() === activeBefore &&
+        lastConnectRoom() === Number(activeBefore);
+
+      // ---- ⑤ 触摸：横滑 = 滚标签条（不排序）；**按住**再动才是拖动排序
+      var orderBeforeTouch = roomIds();
+      var swipeMid = await dragTab(0, farRight(), "touch");
+      out.tabTouchSwipeNotDrag = swipeMid.dragging === "false" && swipeMid.markers === 0 &&
+        roomIds().join("|") === orderBeforeTouch.join("|");
+      var holdMid = await dragTab(0, farRight(), "touch", 500);
+      out.tabTouchHoldDrags = holdMid.dragging === "true" && holdMid.markers === 1;
+      // 按住之后的那一次是**真的拖动了**（同样左移一位）
+      var orderAfterHold = roomIds();
+      out.tabTouchHoldReorders = orderAfterHold.join("|") !== orderBeforeTouch.join("|") &&
+        orderAfterHold.every(function (id, index) {
+          return id === orderBeforeTouch[(index + 1) % orderBeforeTouch.length];
+        });
+
+      // ---- ⑥ 开 20 个房间：标签条**横向滚动**，每枚标签**不被压缩**（各保自己的最小宽度）
+      window.__addRooms(20);
+      await menuPick("刷新连接");
+      var tabsNow = allByTestId("db-room-tab");
+      var widths = tabsNow.map(function (t) { return rect(t).width; });
+      var minTabW = cssLengthOf("--tab-min-w");
+      out.tabMinWidthPx = Math.round(minTabW * 10) / 10;
+      out.tabStripScrolls = tabsNow.length >= 20 &&
+        getComputedStyle(stripEl).overflowX === "auto" && minTabW > 0 &&
+        stripEl.scrollWidth > stripEl.clientWidth + 1;
+      out.tabWidthsNotSqueezed = widths.length === tabsNow.length && minTabW > 0 &&
+        Math.min.apply(null, widths) >= minTabW - 0.6;
+      // 「没挤在一起」的另一半：它们是真的溢出去了，而不是被压回容器宽度里
+      out.tabWidthsSumOverflowsStrip =
+        widths.reduce(function (sum, w) { return sum + w; }, 0) > stripEl.clientWidth;
+      // 滚到末尾：最后一枚完整可见（开再多也拿得到）
+      stripEl.scrollLeft = stripEl.scrollWidth;
+      await sleep(250);
+      var lastTabNow = allByTestId("db-room-tab").slice(-1)[0];
+      out.tabStripScrollsToEnd = stripEl.scrollLeft > 0 &&
+        rect(lastTabNow).right <= rect(stripEl).right + 1 &&
+        rect(lastTabNow).left >= rect(stripEl).left - 1;
+
+      // ---- ⑦ 拖动中被拖的那个房间被**关掉**（上游快照不再包含它）：整次拖动作废 ——
+      //      指示条收掉、顺序不动，松手也不落位。
+      stripEl.scrollLeft = 0;
+      await sleep(250);
+      var orderBeforeKill = tabNames();
+      var victimName = "房间 6004";
+      var victimIndex = orderBeforeKill.indexOf(victimName);
+      var victim = allByTestId("db-room-tab")[victimIndex];
+      if (!victim) throw new Error("找不到被关掉的样本标签 " + victimName + "（__addRooms 没生效？）");
+      var victimBox = rect(victim);
+      pe("pointerdown", victim, victimBox.left + 10, victimBox.top + victimBox.height / 2);
+      pe("pointermove", window, victimBox.left + 60, victimBox.top + victimBox.height / 2);
+      await sleep(150);
+      out.tabKillDragLifted = victimIndex >= 0 &&
+        stripEl.getAttribute("data-dragging") === "true";
+      window.__dropRoom(6004);
+      await menuPick("刷新连接");
+      out.tabDragAbortsWhenRoomClosed = victimIndex >= 0 &&
+        stripEl.getAttribute("data-dragging") === "false" &&
+        allByTestId("db-tab-drop").length === 0 &&
+        tabNames().indexOf(victimName) < 0 &&
+        tabNames().join("|") === orderBeforeKill.filter(function (n) {
+          return n !== victimName;
+        }).join("|");
+      pe("pointerup", window, victimBox.left + 60, victimBox.top + victimBox.height / 2);
+      await sleep(200);
+      out.tabDragAbortKeepsOrder = tabNames().join("|") === orderBeforeKill.filter(function (n) {
+        return n !== victimName;
+      }).join("|");
+
+      // 收尾仍停在**未连接（灰）**那一档（同上一条尾注）：这一段点过标签、刷过连接，
+      // 连接态会被替身推成 connected，这里显式复位，最后那张截图仍然看得到灰点。
+      // （当前激活那个房间号从 data-active 上取 —— 不假设是哪一间。）
+      [Number(activeRoomId()), fixtureRoom.room_id, 5555].forEach(function (id) {
+        if (!id) return;
+        window.__emit("danmubox://status", { room_id: id, state: "disconnected", detail: "" });
+        window.__emit("danmubox://room", {
+          room_id: id, live_status: fixtureRoom.live_status, connected: false,
+        });
+      });
+      await sleep(300);
+      snap();
+      tabDragBlockRan = true;
+    } catch (e) {
+      out.tabDragBlockError = String((e && e.stack) || e);
+    }
+    out.tabDragBlockRan = tabDragBlockRan;
+
     // 收尾就停在**未连接（灰）**那一档：最后那张截图因此看得到灰点（两处都是灰的）。
     snap();
 

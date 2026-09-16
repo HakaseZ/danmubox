@@ -1208,6 +1208,33 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 **关于「挤了怎么办」的一条规矩**（用户 2026-09-12 定案，2026-09-13 按两行布局更新数字）：弹幕行的行高是 **内容 + `--sp-2`（8px）上下内边距 ≈ 58px**（两行：身份行 21px + 正文行 21px + 16px；改前是单行 29px），这是为了让行与行在触屏上分得开、也贴合参考图里明显的行间距；代价是同样高度少看几行——面板展开时弹幕列表约剩一半（360×844 下约 390px ≈ 6 行 @58px），面板内容超出则走面板**内部滚动**，不靠遮挡换空间。如果将来真觉得挤，**正确的做法是新增一档「紧凑」令牌**（例如 `--sp-0: 2px`，并在令牌表里写清它只用于哪一类场景），**不是**就地把某个 `--sp-2` 改成 `4px`：间距阶的价值就在于「以后不用微调」，破一次例就等于给下一个人留了口子。
 
+### 9.3 视口、系统栏与软键盘（谁负责避让）
+
+**键盘避让只有一条机制：界面自己补内边距。** 分工只有三层，各管各的，不许有第二个人再避让一次：
+
+| 层 | 文件 | 负责 |
+|---|---|---|
+| 外壳（原生） | `gen/android/.../MainActivity.kt` | `enableEdgeToEdge()` 之后从 `WindowInsets` 取「系统栏（状态栏 / 手势栏 / 刘海）」**并上** `ime()`，换算成 CSS 变量下发 `--safe-top` / `--safe-bottom`（另有不参与排版的 `--gesture-left` / `--gesture-right`，见 §2.6）。**窗口与 WebView 保持铺满整屏** |
+| 页面 | `index.css` | `body` 用 `padding-top: var(--safe-top)` / `padding-bottom: var(--safe-bottom)` 让开这两条；`html` / `body` / `#root` 三层高度锁在**动态视口**上、`overflow: hidden`，因此**文档自己永不滚动**，滚动只属于内部容器（`.listPage` / 弹幕 `.scroller` / 面板内部） |
+| 系统 | `gen/android/.../AndroidManifest.xml` | `android:windowSoftInputMode="adjustNothing"` —— 不许系统再替我们 resize 视口或平移窗口 |
+
+实测（2026-09-16，模拟器 android-35，1080×2400@420dpi，WebView Chrome/124，房间页弹幕列表有内容）：
+
+| 状态 | `--safe-bottom` | `window.innerHeight` | 输入区底边 vs 键盘上沿 |
+|---|---|---|---|
+| 键盘收起 | 24px（手势栏 63 设备 px） | 915 CSS px | —（贴屏幕底） |
+| 键盘弹出 | **336.38px**（= 883 设备 px = 键盘高） | **915 CSS px（没变）** | **正好落在键盘上沿，gap = 0** |
+
+**为什么选「自补内边距」而不是「让系统 resize」**：键盘高度只有原生拿得到，而它本来就已经把 `ime()` 算进 `--safe-bottom`（不然输入区会压在键盘下面）；窗口再 resize 一次就是双重避让 —— 视口少一截、内边距又少一截，内容比视口高，**`document.scrollingElement` 就变成一个可滚容器**。用户 2026-09-16 报的就是它的终点：手指在弹幕列表上滑，列表滚到底之后**滚动接力**到文档，整个界面（含房间顶栏）被顶上去，底边露出一条画布色。两张报障截图的行带分析：输入区底边距键盘上沿 351 / 501 设备 px，房间头完全滑出屏幕（顶栏那一条变成了弹幕行）。所以 `adjustNothing` 不是可选优化，是把「只有一条机制」钉死的那颗钉子：默认的 `adjustUnspecified` 在别的系统版本上可能解析成 `adjustResize`（同上）或 `adjustPan`（整窗平移，顶栏直接滑出屏幕）。
+
+**内核那一半：WebView 版本会自己动视口（M139 起）。** 键盘避让的另一半不归系统管，归内核：按官方文档 [`Understand window insets in WebView`](https://developer.android.com/develop/ui/views/layout/webapps/understand-window-insets)，**WebView M139 起 `ime()` 会直接缩「视觉视口」（只缩底部）**，而 M139 之前内核**什么都不做**（只把 inset 交给页面）。这条差异在模拟器上是可测的：WebView 113 / 133（android-34/35/36 镜像）上，键盘弹出前后 `window.visualViewport.height` 恒为 915 CSS px、`offsetTop` 恒为 0（内核没动过视口，全靠 `--safe-bottom` 那条内边距）；M139 起视觉视口会缩到「键盘上沿」，官方口径是**页面因此在键盘下方变得可滚**、手指一滑就能把内容顶上去 —— 也就是报障里「整个界面被顶走、底边露出画布」的那条路。
+本轮没有能在设备上跑 M139 的镜像（仓库内 Android 工具链自带的是 android-35 镜像，WebView 113；临时装的 android-34/36 镜像分别是 113 / 133，都 < M139），所以这一段是**官方文档 + 机制推导**，设备级复现只是把「文档/根滚动容器在每一档状态下都不可滚」钉住（下面的断言与 A/B 数字）。**若后续在真机（Android 16/17 的 WebView ≥ 139）上仍能复现**，那就不是 CSS 这一层的事了：内核既然自己缩视觉视口，就该在 `MainActivity` 里按官方那套 **zeroing**（把已经下发给页面的 `systemBars() or ime()` 在传给 WebView 之前置成 `Insets.NONE`）把内核那一半关掉 —— 那属于外壳的改动，本轮不在受理范围内。
+
+**「文档不可滚」是硬约束**（用户 2026-09-16 报障的正面口径）。实现就三行：`html` / `body` 高度用 `100dvh`（不支持的引擎落回 `100%`），三层 `overflow: hidden`，根上 `overscroll-behavior: none`。冒烟按三条断言钉住它（都是**结构**断言，不依赖 CSS-module 类名）：`docNeverScrollable`（三种状态下 `scrollHeight - clientHeight <= 1` 且 `scrollTop === 0`）、`docHeightsMatchViewport`（`body` / `#root` 高度 = `window.innerHeight`）、`docComposerVisibleWithKeyboardInset`（把 `--safe-bottom` 换成 336px 这一档时输入框仍在视口内）。三种状态取「常态 / 面板展开（固定高度的兄弟最多的一档）/ 键盘内边距」。
+**无头冒烟里没有 IME**，它覆盖的是这条链子的**布局那一半**（内边距换掉之后文档还不可不可滚）；**IME 那一半（系统/内核会不会额外 resize 视口）只能在设备上看**，也就是上面两张表。
+
+同一条链子上另外三档一起成立（都已实测）：输入框在键盘弹出时**始终可见**；弹幕区高度跟着正确缩短（`--safe-bottom` 从 24 变 336.38 时，弹幕列表可视高从 655 → 312 CSS px，顶栏与工具行位置不变）；**状态栏与手势栏避让不回归** —— 那两条走的是 `--safe-top` / `--safe-bottom` 的同一个变量，桌面端仍是 `env(safe-area-inset-*)`（解析成 0，空操作）。旋转 / 进出房间 / 深浅色切换都不需要页面自己监听 `resize`：insets 一变原生就重发同一支脚本（`document-start` 脚本 + 立即求值一次），页面只消费变量。
+
 ---
 
 ## 11. 空态与错误态

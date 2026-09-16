@@ -162,7 +162,26 @@
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+
+### 2.3.1 沉浸模式（issue #1）
+
+**进 / 出都是「在弹幕区双击」**：把一屏交给弹幕本身 —— 收起标题栏与输入区，只留弹幕区与
+礼物 / SC 栏。**它是会话内的瞬态，不是偏好**：不进契约 §8 的键表、不写 `prefs.json`、
+不跨重启；状态本体是 store 的 `immersive`（**唯一一份**，组件不各持一份），
+切标签 / 关房间一律回到非沉浸态（口径同上一张表的「多标签共存」那一行）。
+
+| 项 | 规则 |
+|---|---|
+| 触发判据 | **指针事件**（`pointerdown` + `pointerup`）：鼠标双击、触屏点两下、手写笔点两下走**同一条路** —— 不押在「触摸会不会合成 `dblclick`」上（WKWebView 里双击本来就是缩放手势）。一次「点」= 按下到抬起之间没挪动超过 **24px**（拖动 / 滚动 / 拖选不算点）；两次点之间不超过 **400ms**、落点相距不超过 **24px**；只认主指针的主键（`isPrimary` + `button === 0`，右键弹行菜单、多指的副指针都不算）。三下连点只切一次 |
+| 落点 | **弹幕区**（`db-chat-wrap`，它包着滚动容器 `db-chat-scroll`）—— 礼物栏与输入区的双击与它无关。落在**可交互元素**上（`button` / `a` / `input` / `textarea` / `select` / `role=button` / `contenteditable`）的双击**不切**：那些元素有自己的双击语义（例如双击输入框选词）。「回到最新」是按钮，所以双击它不切 |
+| 与双击选词的关系 | 这条判据**不** `preventDefault`、也不改 `user-select`：浏览器原生的双击（三击）选词照旧发生，切换与选中可以同时发生。沉浸态只收起标题栏与输入区，**弹幕区原样在场** —— 选中的文字仍然看得见、仍然复制得到。冒烟 `immersiveKeepsTextSelection` 钉住「选中不丢 + 正文仍可选」。**没有任何别的高危动作挂在「双击一条弹幕」上**：行上的动作依旧只在右键菜单里（§4.5） |
+| 收起 | 房间头（返回键 / 状态点 / 标题 / 在线·看过 / ⋯ 菜单）、**房间标签条**、输入区（输入框 + 工具行 + 字数提示，含表情 / 短语 / 筛选三个面板与引用条 / 预览 / 浮片）、举报条、房管面板与它的确认条、日志块、房间头 ⋯ 弹出的菜单。除标签条外全部是**条件渲染**（收起 = 不在 DOM 里） |
+| 保留 | **弹幕区**（唯一的生长区：滚动、跟随贴底、「回到最新」、虚拟列表一切照旧）、**礼物 / SC 栏**（`ui.gift_panel` 为真时；高度不因沉浸态而变，收起腾出的空间**全归弹幕区**）、**「回到最新」那枚悬浮钮**（沉浸态里输入区不在，它是回到最新的唯一控件，故留下）、**行右键菜单**（复制 / 屏蔽 / 举报 / 房管 / 主页 —— 它们属于弹幕行，那一块仍在场上） |
+| 标签条怎么收 | 它渲染在 `App.tsx` 里、是房间页的**兄弟节点**（组件树里够不着），所以由 `RoomView` 在 `<html>` 上打一枚 `data-immersive="true"`（与主题落 `data-theme` 同一处口径），`app.module.css` 的一条规则把它 `display: none`（不占位、不进 Tab 序）；离开沉浸态即删掉这枚属性（从 App 走的实现见 `RoomView` 顶部那一段注释） |
+| 退出条件 | ① 在弹幕区再双击一次；② **系统返回手势**（沉浸态排在这一级的**最前**：先退出沉浸，再轮到面板 → 返回列表 —— 沉浸态里房间头与标签条都不在，一次返回就退回列表会连房间一起丢，见 §2.6）；③ 切标签 / 关房间（回到非沉浸态） |
+| 布局与重新量高 | 收起 = 弹幕区自己长高，长高的那部分**正好**是被收起来的那几块之和（冒烟 `immersiveChatGrewByRemovedBlocks` 按这个等式验）。虚拟列表因此不用改代码：`MessageList` 的 `ResizeObserver` 盯着滚动容器与内容块，跟随中重新贴底、**不跟随则原地不动** —— 沉浸态里滚到中段再展开，当前阅读位置不被弹回（冒烟 `immersiveExitKeepsReadingPosition`） |
+| 主题 / 宽窄屏 | 与主题、宽窄屏无关：沉浸态只是「少渲染几块」。360 竖屏与宽屏同一条规则，两个视口都跑（冒烟 `immersive*` 那一族断言） |
 
 ### 2.4 会话缓冲生命周期（契约 §4.3）
 
@@ -208,9 +227,13 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 | 级 | 条件 | 动作 | 等价于手点哪一下 |
 |---|---|---|---|
-| 1 | 有打开的面板（账号对话框 / 表情 / 短语 / 筛选 / 房管 / 独立礼物栏） | 关掉它，**不换页** | 点面板外 / 再次点那个工具按钮 / `⋯` 菜单里的「收起」 |
+| 1 | **沉浸态**（§2.3.1）／有打开的面板（账号对话框 / 表情 / 短语 / 筛选 / 房管 / 独立礼物栏） | 沉浸态先**退出沉浸**；否则关掉那个面板，**不换页** | 弹幕区再双击一次 ／ 点面板外 / 再次点那个工具按钮 / `⋯` 菜单里的「收起」 |
 | 2 | 在房间页（`activeRoomId` 非空） | 回房间列表 | 房间头那枚**圆形返回键**（§3.1；同一个 `closeRoom`） |
 | 3 | 已是根页面（房间列表页 + 无面板） | 返回 `false` | 原生退出应用（等同系统默认返回） |
+
+- **沉浸态排在第 1 级的最前**（issue #1，§2.3.1）：沉浸态里房间头与房间标签条都不在场上（返回键、标签都够不着），
+  一次返回如果直接回列表会**连房间一起丢** —— 它不是用户按一次返回的意图。所以第 1 级先退出沉浸，同一个手势再按一次才轮到面板 → 回列表。
+  实现上就是 `RoomView` 那一个常驻的第 1 级处理器里**最前面的那一档**（认不认领由当下状态决定，见下面那条），不新增优先级。
 
 - **实现只有一处**：`ui/src/back.ts` 的登记表 + 两级优先级（面板 2 / 房间页 1）；`main.tsx` 在渲染前把
   `handleBack` 挂成 `window.__danmuboxHandleBack`。房间页与账号对话框各自在「这一层开着」时登记、关掉即注销，
@@ -905,7 +928,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 粉丝牌 | 最多 6 字符，超出截断；等级数字最多 3 位 |
 | `rowScale` | 即 `ui.font_scale` 当前值（§8.2） |
 | 图片 / 表情 | 消息正文不加载远程图片（表情图片只在表情面板按需加载，见 §6.3） |
-| `ResizeObserver` | 容器宽度变化（抽屉开合、窗口缩放）触发重新测量，并在同一帧内恢复锚点 |
+| `ResizeObserver` | 容器宽度变化（抽屉开合、窗口缩放、进退沉浸模式 §2.3.1）触发重新测量，并在同一帧内恢复锚点 |
 | 字体 | 只用系统字体栈，避免字体加载完成后行高跳变 |
 
 ### 7.2 自动滚动与暂停
@@ -924,7 +947,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 3. 独立礼物栏（`ui.gift_panel` 为真时）各自维护跟随状态，互不影响。
 4. 「回到最新」使用平滑滚动。
 5. `visibilitychange` 为 hidden 时不依赖 rAF（后台会被节流），改为 1s 定时批量写入 store，恢复可见时立即 flush 并对齐滚动。
-6. **可视高度变化要重新贴底**：弹出面板展开/收起、窗口缩放、礼物栏开合都会改聊天区高度（`ResizeObserver` 监听滚动容器）。跟随模式下重新定位到末尾，否则最新弹幕会被挤出视口（`docs/ui.md` §2.3 的「不遮挡最新弹幕」）；暂停状态下不动视口。
+6. **可视高度变化要重新贴底**：弹出面板展开/收起、窗口缩放、礼物栏开合、**进退沉浸模式（§2.3.1）**都会改聊天区高度（`ResizeObserver` 监听滚动容器）。跟随模式下重新定位到末尾，否则最新弹幕会被挤出视口（`docs/ui.md` §2.3 的「不遮挡最新弹幕」）；暂停状态下不动视口（进出沉浸模式都不把当前阅读位置弹走）。
 7. **内容不足视口高度时整体贴底**：直播弹幕自下往上读，最新一条应紧贴输入区上方（官方聊天栏同样贴底），因此富余空间留在**顶部**、不留底部。实现是滚动容器 `display: flex; flex-direction: column`、内层虚拟高度块 `margin-top: auto`——**不用** `justify-content: flex-end`：在滚动容器上用 flex-end，内容一旦超过视口高度，顶部会被顶出可滚动区间（滚不回去，flex + overflow 的经典坑）。虚拟行是 `position: absolute` + `translateY` 定位，不受这层对齐影响。
 
 ### 7.3 滚动锚定

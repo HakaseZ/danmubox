@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { AdminPanel } from "./AdminPanel";
 import { Avatar } from "./Avatar";
@@ -93,6 +93,30 @@ export const LIVE_TEXT: Record<LiveKind, string> = {
 };
 
 /**
+ * 沉浸模式（issue #1）的**双击判据**（唯一一处，`docs/ui.md` §2.3「沉浸模式」）。
+ *
+ * 用**指针事件**（`pointerdown` + `pointerup`）而不是 `dblclick`：鼠标双击、触屏点两下、
+ * 手写笔点两下走的是同一条路，不依赖各引擎「触摸是否合成 dblclick」这件不可靠的事
+ * （WKWebView 上双击本来就是缩放手势）。判据是「两次**点**」：
+ *
+ * - 每次「点」= 指针按下到抬起之间没挪动超过 {@link TAP_SLOP_PX}（拖动 / 滚动 / 选词都不算点）；
+ * - 两次点之间不超过 {@link TAP_MS}、且落点相距不超过 {@link TAP_SLOP_PX}（间隔用
+ *   `performance.now()` 量：同一只钟，不押在引擎对 `event.timeStamp` 的实现上）。
+ *   400ms 是**两边都够用**的那一档：鼠标双击的系统阈值通常在 500ms 上下（手慢的人也点得进来），
+ *   而 Android 的双击超时是 300ms（触屏更快，400ms 一样进得来）；比这更长就会把「两次独立的轻点」误收成一次。
+ * - 只认主指针的主键（`isPrimary` + `button === 0`）：右键弹行菜单、多指手势的副指针都不算。
+ *
+ * **与选中文本 / 双击选词的关系**：这条判据不 `preventDefault`、也不改 `user-select`，
+ * 浏览器原生的双击选词照旧发生；沉浸态只收起标题栏与输入区，弹幕区原样在场，
+ * 选中的文字仍然看得见、仍然复制得到（冒烟 `immersiveKeepsTextSelection` 钉住这一点）。
+ * 落在 {@link TAP_IGNORE} 上的双击**不切**——那些元素有自己的双击语义。
+ */
+const TAP_MS = 400;
+const TAP_SLOP_PX = 24;
+/** 自带双击语义的元素：落在这上面的双击不切沉浸模式。 */
+const TAP_IGNORE = "button, a, input, textarea, select, [role='button'], [contenteditable='true']";
+
+/**
  * 房间页。从左到右、从上到下只有一条生长轴（issue #8 的重排）：
  *
  * ```
@@ -107,6 +131,13 @@ export const LIVE_TEXT: Record<LiveKind, string> = {
  *
  * **房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏五者互斥**（用户 2026-09-13 第 4 条）：
  * 同时最多开一个 —— 五个面板状态都在这里（输入区那三个是受控的），打开一个就收起另外四个。
+ *
+ * **沉浸模式**（issue #1）是这条生长轴上的一次「收起」：弹幕区双击进 / 出（判据见
+ * {@link TAP_MS} 那一段），收起房间头、输入区（含三个弹出面板）与举报 / 房管 / 日志那几块，
+ * 只留**弹幕区**与**礼物 / SC 栏**（`ui.gift_panel` 为真时）——弹幕区因此长高，
+ * 虚拟列表靠 `MessageList` 自己的 `ResizeObserver` 重新量高（跟随中会重新贴底，不跟随则原地不动）。
+ * 房间标签条不在本组件里（它在 `App` 里、是本页的兄弟），由 `<html data-immersive>` +
+ * 一条 CSS 规则收起（见下面的 effect）。状态本体是 store 的 `immersive`（会话内瞬态）。
  */
 export function RoomView({
   room,
@@ -160,6 +191,10 @@ export function RoomView({
   const connState = useApp((store) => store.status[room.room_id]?.state);
   const liveKind = liveKindOf(connState, room.connected, room.live_status);
   const liveText = LIVE_TEXT[liveKind];
+  // 沉浸模式（issue #1）：状态在 store 里（会话内瞬态，见 `store.immersive`），
+  // 这里只读出来渲染。**只有**这一处状态，多个组件不各持一份。
+  const immersive = useApp((store) => store.immersive);
+  const setImmersive = useApp((store) => store.setImmersive);
   // 标题放不下就循环滚动（用户 2026-09-13 第 3 条）：量「一份文字」的宽度与可视宽度比，
   // 放不下才启动动画 —— 短标题因此一动不动（不是「一律滚」）。
   const titleText = room.title.length > 0 ? room.title : `房间 ${room.room_id}`;
@@ -242,6 +277,67 @@ export function RoomView({
     }
   };
 
+  // 上一次「点」与本次按下的落点（双击判据的**全部**状态，见文件顶部的 `TAP_MS` 一段）。
+  const lastTapRef = useRef<{ at: number; x: number; y: number } | null>(null);
+  const tapDownRef = useRef<{ x: number; y: number } | null>(null);
+
+  /**
+   * 弹幕区的双击（issue #1）——判据见文件顶部 {@link TAP_MS} 那一段，进 / 出是**同一个动作**。
+   *
+   * 落点用 `event.target` 而不是 `currentTarget`：包裹层里有弹幕行（不是可交互元素，
+   * 双击它就是要切）与「回到最新」那枚按钮（可交互，双击它不切）。事件不 `preventDefault`
+   * —— 双击选词是浏览器的原生行为，这条判据不跟它抢。
+   */
+  const onChatPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // 只认主指针的主键：右键（弹行菜单）、多指手势的副指针都不算「点」。
+    tapDownRef.current =
+      event.isPrimary && event.button === 0
+        ? { x: event.clientX, y: event.clientY }
+        : null;
+    // 按下就把上一次的「点」作废：中间插了一次别的按下（右键 / 副指）之后，
+    // 抬起时不该跟更早的那次凑成「双击」。
+    if (tapDownRef.current === null) lastTapRef.current = null;
+  };
+
+  const onChatPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const down = tapDownRef.current;
+    tapDownRef.current = null;
+    if (down === null || !event.isPrimary || event.button !== 0) return;
+    // 拖动（滚动 / 拖选文字）不是「点」：按下到抬起之间挪动过就不算。
+    if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > TAP_SLOP_PX) return;
+    // 自带双击语义的控件不参与（按钮 / 输入框 / 链接 / 可编辑区），见 `TAP_IGNORE`。
+    if (event.target instanceof Element && event.target.closest(TAP_IGNORE) !== null) return;
+    const now = { at: performance.now(), x: event.clientX, y: event.clientY };
+    const prev = lastTapRef.current;
+    lastTapRef.current = now;
+    if (prev === null) return;
+    if (now.at - prev.at > TAP_MS) return;
+    if (Math.hypot(now.x - prev.x, now.y - prev.y) > TAP_SLOP_PX) return;
+    // 三次连点只切一次：用掉这一对就清空，第三下重新算「第一下」。
+    lastTapRef.current = null;
+    setImmersive(!immersive);
+  };
+
+  /** 触摸滚动会把这一串指针事件 CANCEL 掉：清掉按下记录，免得它跟后面某一下凑成「双击」。 */
+  const onChatPointerCancel = () => {
+    tapDownRef.current = null;
+    lastTapRef.current = null;
+  };
+
+  /**
+   * 沉浸态落到 `<html data-immersive>` 的那一枚属性：**房间标签条**在 `App.tsx` 里
+   * （与本页是兄弟节点，组件树里够不着），由 `app.module.css` 的一条规则按这枚属性收起它。
+   * 与主题落 `data-theme` 是同一处口径（文档根上的属性 + 一条 CSS 规则）。
+   * 只在沉浸时写、离开即删：这枚属性不该影响清单页或别的页面。
+   */
+  useEffect(() => {
+    if (!immersive) return;
+    document.documentElement.dataset.immersive = "true";
+    return () => {
+      delete document.documentElement.dataset.immersive;
+    };
+  }, [immersive]);
+
   /**
    * 系统返回手势第 2 级：在房间页 → 回房间列表。`onBack` 就是房间头那枚圆形返回键
    * （`App.tsx` 传给它的正是 store 的 `closeRoom`），两条入口同源。
@@ -264,14 +360,40 @@ export function RoomView({
    * 关的动作复用界面上既有的那三条：`onPanel(null)` 是点面板外 / 再点一次工具按钮走的路，
    * 两个 `toggle` 是 `⋯` 菜单里那条「收起房管面板」与礼物栏按钮走的路，不另写一套状态变更。
    * 每次渲染把最新状态与动作写进 ref（与 `MessageList` 的 `stateRef` 同一套写法）。
+   *
+   * **沉浸态排在最前**（issue #1）：沉浸态里房间头与标签条都不在场上（返回键、标签都没了），
+   * 返回手势该做的第一件事是**退出沉浸**，而不是把整个房间页关掉 —— 后者会连房间一起丢，
+   * 从沉浸态里「一步退回列表页」不是用户按一次返回的意图。
    */
-  const backRef = useRef({ panel, adminOpen, giftOpen, onPanel, toggleAdminPanel, toggleGiftDock });
-  backRef.current = { panel, adminOpen, giftOpen, onPanel, toggleAdminPanel, toggleGiftDock };
+  const backRef = useRef({
+    immersive,
+    panel,
+    adminOpen,
+    giftOpen,
+    onPanel,
+    toggleAdminPanel,
+    toggleGiftDock,
+    setImmersive,
+  });
+  backRef.current = {
+    immersive,
+    panel,
+    adminOpen,
+    giftOpen,
+    onPanel,
+    toggleAdminPanel,
+    toggleGiftDock,
+    setImmersive,
+  };
 
   useEffect(
     () =>
       registerBackHandler(BACK_PRIORITY.panel, () => {
         const now = backRef.current;
+        if (now.immersive) {
+          now.setImmersive(false);
+          return true;
+        }
         if (now.panel !== null) {
           now.onPanel(null);
           return true;
@@ -307,7 +429,10 @@ export function RoomView({
     setAdminOpen(false);
     setAdminConfirm(null);
     setPendingAction(null);
-  }, [room.room_id]);
+    // 沉浸态同样是**本页的临时界面状态**：切标签（多标签只是切渲染，组件实例被复用）
+    // 必须回到非沉浸态 —— 上一个房间收起的那些区块不该跟着新房间一起消失。
+    setImmersive(false);
+  }, [room.room_id, setImmersive]);
 
   // 房管入口按身份出现（第 3 条，契约 C6）：面板打开期间身份被撤销（事件更新 / 会话重建）
   // 就收起面板与确认条 —— 不能让「非房管还开着房管面板」这一档留下来。
@@ -373,7 +498,10 @@ export function RoomView({
     return () => observer.disconnect();
     // `room.room_id` 也在依赖里：两个房间的标题文字可能一样，但「在线 / 看过」两个数值
     // 占的宽度不同、可视宽度因此不同，只拿文字当依赖会留下上一个房间量出的滚动结论。
-  }, [titleText, prefs["ui.font_scale"], room.room_id]);
+    // `immersive` 同理：沉浸态里房间头整块不在场上（两个 ref 都是 null），退出时它才重新挂上，
+    // 这一趟必须重新量一次 —— 否则短标题会带着上一轮的结论回来（ResizeObserver 绑在新节点上，
+    // 但 `measure()` 得有人叫第一声）。
+  }, [titleText, prefs["ui.font_scale"], room.room_id, immersive]);
 
   const { chatRows, giftRows } = splitGiftRows(rows, prefs);
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
@@ -548,126 +676,145 @@ export function RoomView({
   ];
 
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-immersive={String(immersive)}>
+      {/* 沉浸模式（issue #1）：房间头整块**不渲染**（标题 / 返回 / 状态点 / ⋯ 一起收起）。
+          这里是条件渲染而不是 CSS 藏起来：收起 = 这一段不在场上（下面输入区 / 举报条 /
+          房管面板 / 日志块同理），于是弹幕区自己长高，虚拟列表按 `MessageList` 的
+          `ResizeObserver` 重新量高。 */}
       {/* 房间头（用户 2026-09-13 的纠正）：**一排**——
           ◀返回 · ●状态点 · 直播间标题（放不下就循环滚动） ······ 在线 · 看过 · ⋯。
           标题不再另起一排；电池也不在这排（挪到输入区的发送按钮左侧），这排腾给
           「当前在线」与「看过」两个数值。连接状态仍可在房间标签页的圆点上看到（见 DOT）。 */}
-      <div className={styles.roomHeader} data-testid="db-room-header">
-        <div className={styles.headerBar} data-testid="db-room-header-bar">
-          <button
-            className={styles.ctlRound}
-            data-testid="db-header-back"
-            title="返回房间列表"
-            aria-label="返回房间列表"
-            onClick={onBack}
-          >
-            {/* 图标规范（返回与 ⋯ **共用同一套**，用户 2026-09-13：「可能他们本就不一致，
-                只调 size 没用？」——上一版只把两枚的墨迹粗细都调成 1.5，形状与光学尺寸仍各走各的）：
-                `viewBox="0 0 24 24"` + `.ctlIcon`（24 × 24 盒，缩放系数正好 1）+ `stroke-width 1.75`
-                + `stroke-linecap/linejoin="round"`；**墨迹居中于 (12,12)**，主轴尺寸都是 16 单位
-                （箭头的高 = ⋯ 的宽）。改前箭头是 `M15 4.5 7.5 12l7.5 7.5`（墨迹 9 × 16.5、
-                居中点偏左 0.75）。 */}
-            <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M15 4.875 9 12l6 7.125"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.75"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-          {/* 状态点 = **外壳 12px（热区 / 悬停面，与改前同尺寸）+ 里面一颗 10px 的圆点**。
-              两件事分开写：外壳承 `title` / `aria-label` / `data-*`，圆点承颜色 ——
-              这样「缩短到 10px」只是看得见的那颗点变小，热区一点没动。 */}
-          <span
-            className={styles.liveDotBox}
-            data-testid="db-live-dot-box"
-            data-live={String(room.live_status)}
-            data-state={liveKind}
-            role="img"
-            title={liveText}
-            aria-label={liveText}
-          >
-            <span
-              className={`${styles.liveDot} ${LIVE_DOT_CLASS[liveKind]}`}
-              data-testid="db-live-dot"
-            />
-          </span>
-          {/* 标题紧跟状态点：**同一排**、左边缘在状态点右侧。放不下时轨道循环滚动，
-              两份拷贝首尾相接（动画走 -50% 正好一份），文字区之外一律裁掉 */}
-          <span
-            className={styles.title}
-            data-testid="db-room-title"
-            title={titleText}
-            ref={titleViewportRef}
-          >
-            <span
-              className={styles.titleTrack}
-              data-testid="db-title-track"
-              data-scroll={String(titleScrolls)}
-              style={titlePeriod > 0 ? { animationDuration: `${titlePeriod}s` } : undefined}
+      {!immersive && (
+        <div className={styles.roomHeader} data-testid="db-room-header">
+          <div className={styles.headerBar} data-testid="db-room-header-bar">
+            <button
+              className={styles.ctlRound}
+              data-testid="db-header-back"
+              title="返回房间列表"
+              aria-label="返回房间列表"
+              onClick={onBack}
             >
-              <span className={styles.titleItem}>
-                <span className={styles.titleText} data-testid="db-title-copy" ref={titleCopyRef}>
-                  {titleText}
+              {/* 图标规范（返回与 ⋯ **共用同一套**，用户 2026-09-13：「可能他们本就不一致，
+                  只调 size 没用？」——上一版只把两枚的墨迹粗细都调成 1.5，形状与光学尺寸仍各走各的）：
+                  `viewBox="0 0 24 24"` + `.ctlIcon`（24 × 24 盒，缩放系数正好 1）+ `stroke-width 1.75`
+                  + `stroke-linecap/linejoin="round"`；**墨迹居中于 (12,12)**，主轴尺寸都是 16 单位
+                  （箭头的高 = ⋯ 的宽）。改前箭头是 `M15 4.5 7.5 12l7.5 7.5`（墨迹 9 × 16.5、
+                  居中点偏左 0.75）。 */}
+              <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M15 4.875 9 12l6 7.125"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            {/* 状态点 = **外壳 12px（热区 / 悬停面，与改前同尺寸）+ 里面一颗 10px 的圆点**。
+                两件事分开写：外壳承 `title` / `aria-label` / `data-*`，圆点承颜色 ——
+                这样「缩短到 10px」只是看得见的那颗点变小，热区一点没动。 */}
+            <span
+              className={styles.liveDotBox}
+              data-testid="db-live-dot-box"
+              data-live={String(room.live_status)}
+              data-state={liveKind}
+              role="img"
+              title={liveText}
+              aria-label={liveText}
+            >
+              <span
+                className={`${styles.liveDot} ${LIVE_DOT_CLASS[liveKind]}`}
+                data-testid="db-live-dot"
+              />
+            </span>
+            {/* 标题紧跟状态点：**同一排**、左边缘在状态点右侧。放不下时轨道循环滚动，
+                两份拷贝首尾相接（动画走 -50% 正好一份），文字区之外一律裁掉 */}
+            <span
+              className={styles.title}
+              data-testid="db-room-title"
+              title={titleText}
+              ref={titleViewportRef}
+            >
+              <span
+                className={styles.titleTrack}
+                data-testid="db-title-track"
+                data-scroll={String(titleScrolls)}
+                style={titlePeriod > 0 ? { animationDuration: `${titlePeriod}s` } : undefined}
+              >
+                <span className={styles.titleItem}>
+                  <span className={styles.titleText} data-testid="db-title-copy" ref={titleCopyRef}>
+                    {titleText}
+                  </span>
                 </span>
+                {titleScrolls && (
+                  <span className={styles.titleItem} aria-hidden="true">
+                    <span className={styles.titleText}>{titleText}</span>
+                  </span>
+                )}
               </span>
-              {titleScrolls && (
-                <span className={styles.titleItem} aria-hidden="true">
-                  <span className={styles.titleText}>{titleText}</span>
-                </span>
-              )}
             </span>
-          </span>
-          {roomStats?.online !== undefined && (
-            <span className={styles.balance} title="当前在线">
-              在线 {formatCount(roomStats.online)}
-            </span>
-          )}
-          {roomStats?.watched !== undefined && (
-            <span className={styles.balance} title="累计看过">
-              看过 {formatCount(roomStats.watched)}
-            </span>
-          )}
-          <button
-            className={styles.ctlRound}
-            data-testid="db-header-more"
-            title="刷新 / 断开 / 日志"
-            aria-label="更多"
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              setHeaderMenu({ x: rect.left - 120, y: rect.bottom + 2 });
-            }}
-          >
-            {/* ⋯ 画成**矢量**（三个圆点）而不是文字字形：文字字形的墨迹厚度由字体决定
-                （实测 Chromium 下 14px 的 U+22EF 墨迹只有 1px，WebKit 又是另一套字体）。
-                与返回**同一套规范**：圆点直径 = **2 × 描边宽**（= 3.5。Material 同款比例 ——
-                一个圆点就是一个零长度描边段的圆头，所以「粗细」与描边同一件事），
-                相邻圆点中心距 6.25（缝 2.75），行宽 16 = 返回箭头的高，整体居中于 (12,12)。
-                改前是 r = 0.75（直径 1.5）、跨度 11.5、居中但明显偏轻。
-                盒子仍是 `.ctlIcon`（24 × 24），控件尺寸一点没动。 */}
-            <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="5.75" cy="12" r="1.75" fill="currentColor" />
-              <circle cx="12" cy="12" r="1.75" fill="currentColor" />
-              <circle cx="18.25" cy="12" r="1.75" fill="currentColor" />
-            </svg>
-          </button>
+            {roomStats?.online !== undefined && (
+              <span className={styles.balance} title="当前在线">
+                在线 {formatCount(roomStats.online)}
+              </span>
+            )}
+            {roomStats?.watched !== undefined && (
+              <span className={styles.balance} title="累计看过">
+                看过 {formatCount(roomStats.watched)}
+              </span>
+            )}
+            <button
+              className={styles.ctlRound}
+              data-testid="db-header-more"
+              title="刷新 / 断开 / 日志"
+              aria-label="更多"
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setHeaderMenu({ x: rect.left - 120, y: rect.bottom + 2 });
+              }}
+            >
+              {/* ⋯ 画成**矢量**（三个圆点）而不是文字字形：文字字形的墨迹厚度由字体决定
+                  （实测 Chromium 下 14px 的 U+22EF 墨迹只有 1px，WebKit 又是另一套字体）。
+                  与返回**同一套规范**：圆点直径 = **2 × 描边宽**（= 3.5。Material 同款比例 ——
+                  一个圆点就是一个零长度描边段的圆头，所以「粗细」与描边同一件事），
+                  相邻圆点中心距 6.25（缝 2.75），行宽 16 = 返回箭头的高，整体居中于 (12,12)。
+                  改前是 r = 0.75（直径 1.5）、跨度 11.5、居中但明显偏轻。
+                  盒子仍是 `.ctlIcon`（24 × 24），控件尺寸一点没动。 */}
+              <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="5.75" cy="12" r="1.75" fill="currentColor" />
+                <circle cx="12" cy="12" r="1.75" fill="currentColor" />
+                <circle cx="18.25" cy="12" r="1.75" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 唯一的生长区：面板与礼物栏展开时只有它会变矮。
           `key` 绑房间号：换房即重建这个组件，滚动位置 / 是否跟随 / 悬停暂停随之回到初始
-          （`MessageList` 是本轮 C 票的文件，这里只给 key，不改它）。 */}
-      <MessageList
-        key={room.room_id}
-        rows={chatRows}
-        anchorUid={room.anchor_uid}
-        prefs={prefs}
-        onMenu={(message, at) => setMessageMenu({ at, message })}
-      />
+          （`MessageList` 是本轮 C 票的文件，这里只给 key，不改它）。
+
+          外面这层 `.chatWrap` 是**双击的落点**（issue #1）：进 / 出沉浸模式只认弹幕区这一块
+          ——礼物栏、输入区的双击与它无关。它是纯粹的 flex 传递层（与 `.chatArea` 同一套口径），
+          布局与没有它时逐像素一致；`MessageList` 里那枚「回到最新」是按钮，
+          落在按钮上的双击按判据被排除（见 `TAP_IGNORE`）。 */}
+      <div
+        className={styles.chatWrap}
+        data-testid="db-chat-wrap"
+        onPointerDown={onChatPointerDown}
+        onPointerUp={onChatPointerUp}
+        onPointerCancel={onChatPointerCancel}
+      >
+        <MessageList
+          key={room.room_id}
+          rows={chatRows}
+          anchorUid={room.anchor_uid}
+          prefs={prefs}
+          onMenu={(message, at) => setMessageMenu({ at, message })}
+        />
+      </div>
 
       {messageMenu && (
         <ContextMenu
@@ -677,7 +824,9 @@ export function RoomView({
         />
       )}
 
-      {showLogs && (
+      {/* 日志块与举报条都不是「弹幕区」也不是「礼物区」：沉浸态里一并收起
+          （入口在房间头 ⋯ 菜单里，那块本来就收起来了）。 */}
+      {!immersive && showLogs && (
         <div className={styles.logs}>
           {logs.length === 0
             ? "（暂无日志）"
@@ -685,7 +834,7 @@ export function RoomView({
         </div>
       )}
 
-      {reportTarget && (
+      {!immersive && reportTarget && (
         <div className={styles.reportBar}>
           <span className={styles.roomMeta}>
             举报「{reportTarget.content.slice(0, 24)}」
@@ -734,8 +883,9 @@ export function RoomView({
           面板里不再有身份提示；打开即静默刷新（第 5 条），所以读取失败的**错误条必须留在面板里**
           （没有手动刷新按钮，错误是唯一的反馈）。
           它是文档流里的一块（不是浮层），与输入区的面板一样只挤压弹幕列表；
-          与输入区面板 / 独立礼物栏**互斥**（第 4 条）：开它就关那四个（见上面的三个入口） */}
-      {adminOpen && (
+          与输入区面板 / 独立礼物栏**互斥**（第 4 条）：开它就关那四个（见上面的三个入口）。
+          沉浸态里不渲染（它是输入区上方的一块，入口在房间头 ⋯ 菜单里）。 */}
+      {!immersive && adminOpen && (
         <AdminPanel
           silent={adminSilent}
           blacklist={adminBlacklist}
@@ -750,8 +900,9 @@ export function RoomView({
         />
       )}
 
-      {/* 二次确认条：所有房管写操作都先经过它，文案说清对象与时长（不可逆） */}
-      {adminConfirm && (
+      {/* 二次确认条：所有房管写操作都先经过它，文案说清对象与时长（不可逆）。
+          它跟着房管面板走，沉浸态里同样不渲染。 */}
+      {!immersive && adminConfirm && (
         <div className={styles.adminConfirm} data-testid="db-admin-confirm">
           <span className={styles.roomMeta}>{adminActionText(adminConfirm)}</span>
           {adminConfirm.kind === "mute" && (
@@ -779,30 +930,37 @@ export function RoomView({
         </div>
       )}
 
-      <Composer
-        roomId={room.room_id}
-        // 草稿的分键是 `${identityKey}:${roomId}`（契约 C1 修订）：换房、换号都各留一份，
-        // 所以这里既不去清草稿、也不给 `Composer` 加 `key`（重挂会连草稿一起丢）。
-        identityKey={session?.logged_in ? String(session.uid ?? 0) : "guest"}
-        danmakuLength={danmakuLength}
-        disabled={!room.connected}
-        loggedIn={loggedIn}
-        lastOutcome={lastOutcome}
-        lastDetail={lastDetail}
-        emotes={emotes}
-        ownedEmotes={ownedEmotes}
-        ownedError={ownedError}
-        balance={balance}
-        onRefreshBalance={() => void loadBalance()}
-        pendingAction={pendingAction}
-        panel={panel}
-        onPanel={onPanel}
-        prefs={prefs}
-        onPrefs={onPrefs}
-        onSend={onSend}
-        onRetryOwned={() => void loadOwnedEmotes(true)}
-        onNotice={onNotice}
-      />
+      {/* 输入区（弹幕输入框 + 工具行 + 字数提示）与它上方那三个弹出面板（表情 / 短语 / 筛选）
+          整块不渲染 —— 收起清单里的「输入区」就是把 `Composer` 这一棵子树摘掉，
+          面板 / 引用条 / 预览 / 浮片都跟着走，不必逐个列。
+          草稿不会丢：它按 `身份:房间` 存在 `Composer` 模块级的 Map 里（契约 C1），
+          再挂回来时原样取回。 */}
+      {!immersive && (
+        <Composer
+          roomId={room.room_id}
+          // 草稿的分键是 `${identityKey}:${roomId}`（契约 C1 修订）：换房、换号都各留一份，
+          // 所以这里既不去清草稿、也不给 `Composer` 加 `key`（重挂会连草稿一起丢）。
+          identityKey={session?.logged_in ? String(session.uid ?? 0) : "guest"}
+          danmakuLength={danmakuLength}
+          disabled={!room.connected}
+          loggedIn={loggedIn}
+          lastOutcome={lastOutcome}
+          lastDetail={lastDetail}
+          emotes={emotes}
+          ownedEmotes={ownedEmotes}
+          ownedError={ownedError}
+          balance={balance}
+          onRefreshBalance={() => void loadBalance()}
+          pendingAction={pendingAction}
+          panel={panel}
+          onPanel={onPanel}
+          prefs={prefs}
+          onPrefs={onPrefs}
+          onSend={onSend}
+          onRetryOwned={() => void loadOwnedEmotes(true)}
+          onNotice={onNotice}
+        />
+      )}
 
       {/* 独立礼物栏（issue #8 把它放在输入区下方、全宽、可折叠；issue 2609152029 第 5 条改成
           **每个礼物 / SC / 大航海一条**：头像 + 昵称 + 内容 + 数量 + 金额，原来那两段
@@ -874,7 +1032,9 @@ export function RoomView({
         </div>
       )}
 
-      {headerMenu && (
+      {/* 房间头 ⋯ 的菜单：它的触发钮在收起的房间里，沉浸态里也没有理由浮着
+          （行右键菜单不在此列：它属于弹幕行，那一块在沉浸态里照旧在场上）。 */}
+      {!immersive && headerMenu && (
         <ContextMenu
           at={headerMenu}
           items={headerMenuItems}

@@ -1,4 +1,12 @@
 <resources>
     <string name="app_name">"danmubox"</string>
     <string name="main_activity_title">"danmubox"</string>
+    <!--
+      后台保活那枚常驻通知（见 KeepAliveService 与 docs/operations.md §5.7）。
+      **文案是静态的**：不进房间号 / 主播昵称 / 账号 / 弹幕内容，通知栏是锁屏可见面。
+    -->
+    <string name="keepalive_channel_name">"后台接收弹幕"</string>
+    <string name="keepalive_channel_description">"退到后台后继续接收弹幕时显示的常驻通知；点按可回到应用。"</string>
+    <string name="keepalive_notification_title">"正在接收弹幕"</string>
+    <string name="keepalive_notification_text">"点按回到应用"</string>
 </resources>

@@ -236,21 +236,45 @@
 }
 
 /* 多房间标签页（需求 §2.8）。标签条自己横向滚动：开再多也不压缩单枚标签的可读宽度
-   （`flex: 0 0 auto` 关掉收缩 + `--tab-min-w` 给出下限，见 `.tab` / `.tabActive`）。 */
+   （`flex: 0 0 auto` 关掉收缩 + `--tab-min-w` 给出下限，见 `.tab` / `.tabActive`）。
+   横向滚动**不配滚动条**，见下面 `scrollbar-width` 那一行。 */
 .tabs {
   display: flex;
   gap: var(--sp-1);
   padding: var(--sp-1) var(--sp-2) 0;
   overflow-x: auto;
-  /* 与 .listPage 同一口径：出滚动条时整条标签条不许跳一下（覆盖式滚动条下它是 0，
-     不占位也不改观感）。 */
-  scrollbar-gutter: stable;
+  /* **这条标签条一个滚动条 / 滑块都不画**（用户 2026-09-16 第 1 条：「顶部 tab 滚动的时候
+     不要有滑块，会挡住，能隐藏掉吗」）：macOS 用的是**覆盖式**滚动条，它不占位、浮在内容
+     **之上** —— 标签条横滚时那条滑块正好压在标签文字上。
+     滚动能力一项不减：滚轮 / 触控盘 / 触摸 pan（`touch-action: pan-x`，见下）/ 拖动排序照旧；
+     能滚的容器不靠滚动条自证可滚，这里靠标签被切掉一半与拖动。
+     两套写法都要，缺一不可（现网 Android WebView 是 Chromium 113–133，正好跨过新 API 的线）：
+       · `scrollbar-width: none` —— Chromium ≥121 / Safari ≥18.2 的路径；
+       · `.tabs::-webkit-scrollbar { display: none }` —— 更老的 WebKit / Blink（见下面那条规则）。
+     后一条正面撞上 index.css 里「不许给 ::-webkit-scrollbar 写样式」的硬规矩（2026-09-12 的
+     「内容右侧回缩」「窗口右边缘拖不动」两个 bug 都出自定制滚动条）。这条窄例外成立的三条理由
+     写在 index.css 那段注释里：`display: none` 之后它**宽高都是 0、一个像素都不画**，
+     既挤不动内容，也不在窗口右缘站着 —— 那两条 bug 的前提（占位 + 常驻可见）都不成立。 */
+  scrollbar-width: none;
+  /* 原来这里有一条 `scrollbar-gutter: stable`（与 `.listPage` 同一口径，为的是「出滚动条时
+     整条标签条不跳一下」）。它随之删掉：本条滚动条**永不绘制**，槽恒为 0（WebKit 与 Chromium
+     实测：`display: none` 之后横向槽 0px，有 / 无这条 gutter 没有任何差别），
+     留着只是噪音；而没有滚动条也就没有可跳的那一下。 */
   /* 横向滑到两端后不再把滚动链甩给外层（拖动 / 惯性滚动的越界链会先落到父级），就地截断。 */
   overscroll-behavior-x: contain;
   /* 触摸的横向滑动 = **滚标签条**（原生 pan），不是拖拽排序：浏览器一旦接管手势就回一个
      `pointercancel`，那次按压随之作废。触摸要排序得先**按住**（App.tsx 的 `TAB_HOLD_MS`）。 */
   touch-action: pan-x;
   border-bottom: 1px solid var(--border);
+}
+
+/* 上面那条 `scrollbar-width` 的兜底路径（老 WebKit / Blink 不认 `scrollbar-width`）。
+   `display: none` 在 Blink / WebKit 里就是「这个容器不画滚动条」：槽宽按 0 算，
+   滑块与轨道一个像素都不画。**只许写 display: none** —— 一旦在这里写宽度 / 圆角 / 颜色，
+   就会真的把 macOS 的覆盖式滚动条换成占位的经典条，正好踩中 index.css 记的那两个 bug。
+   本仓先例：`.adminRail`（房管面板的横向 tab 轨道）一直就是这一条。 */
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 
 /* 拖拽态：整个手势归拖动，容器不再滚（触摸的 pan 与惯性都由 `none` 收回自己手里）。 */

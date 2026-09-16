@@ -74,7 +74,10 @@
 //   tabs   多标签隔离：切房间把面板 / 菜单 / 滚动跟随重置，草稿按「身份 × 房间」各留一份
 //          标签条本身：拖动排序（真实指针事件：越过 5px 阈值才进入拖拽态、拖完不切房间、
 //          阈值以下仍是点击）、横滑是滚动而**按住**才是拖、开 20 个房间后横向滚动且每枚
-//          标签不被压缩到最小宽度以下、拖动中被拖的房间被关掉则整次作废
+//          标签不被压缩到最小宽度以下、拖动中被拖的房间被关掉则整次作废；
+//          **标签条不画滚动条但仍能横滚**（用户 2026-09-16 第 1 条）：溢出时「标签底边 →
+//          容器内底边」那一段为 0（滚动条一旦被画出来就会占掉一条，覆盖式下则是飘在标签上）、
+//          引擎算出来的 `scrollbar-width` 是 `none`、且把 `scrollLeft` 归零再滚仍然能变
 //   follow 未开播也列出（**真实取样夹具**：未开播项第 1 页可见且翻页到底一条不少）、按最后开播时间排序、>30 条分页
 //   account 账号区只留一行身份、**整行即入口**（独立的「账号」按钮已删；游客态同样可点，
 //          键盘 Enter / Space 等价）；对话框里一行一个账号（昵称 + uid + 状态 + 操作），
@@ -5392,6 +5395,34 @@ const MOCK = (theme) => `(function () {
       out.tabStripScrollsToEnd = stripEl.scrollLeft > 0 &&
         rect(lastTabNow).right <= rect(stripEl).right + 1 &&
         rect(lastTabNow).left >= rect(stripEl).left - 1;
+
+      // ---- ⑥b 标签条**不画滚动条**（用户 2026-09-16 第 1 条：「顶部 tab 滚动的时候不要有滑块，
+      //      会挡住，能隐藏掉吗」），但横向照旧能滚。
+      //      判「滚动条有没有占位」不能用 clientHeight === offsetHeight：这个容器的高度是**由标签
+      //      撑开**的（没有固定高度 + 只横向滚），占位式滚动条会把容器一并撑高，两者的差始终只剩
+      //      那 1px 底边框。真正的判据是「标签底边 → 容器内底边」那一段：不画滚动条时恒为 0，
+      //      画了占位式横向滚动条时正好是一条滚动条的厚度。
+      var stripStyle = getComputedStyle(stripEl);
+      var stripBorderBottom = parseFloat(stripStyle.borderBottomWidth) || 0;
+      var tabsBottomEdge = Math.max.apply(null, allByTestId("db-room-tab").map(function (t) {
+        return rect(t).bottom;
+      }));
+      out.tabStripScrollbarThicknessPx =
+        Math.round((rect(stripEl).bottom - stripBorderBottom - tabsBottomEdge) * 10) / 10;
+      out.tabStripNoScrollbarSpace = out.tabStripScrollbarThicknessPx <= 0.5 &&
+        stripStyle.getPropertyValue("scrollbar-width").trim() === "none";
+      // （scrollbar-width 取的是**引擎算出来的**值（走 getPropertyValue，不看 JS 侧有没有这个
+      //   属性名）：覆盖式滚动条的引擎本来就不占位，只靠几何量不出「滑块还会不会飘到标签上」，
+      //   这条是它唯一的可观察面。）
+      stripEl.scrollLeft = 0;
+      await sleep(150);
+      out.tabStripScrollsWithHiddenScrollbar = stripEl.scrollLeft === 0 &&
+        (function () {
+          stripEl.scrollLeft = Math.round((stripEl.scrollWidth - stripEl.clientWidth) / 2);
+          return stripEl.scrollLeft > 0;
+        })();
+      stripEl.scrollLeft = 0;
+      await sleep(150);
 
       // ---- ⑦ 拖动中被拖的那个房间被**关掉**（上游快照不再包含它）：整次拖动作废 ——
       //      指示条收掉、顺序不动，松手也不落位。

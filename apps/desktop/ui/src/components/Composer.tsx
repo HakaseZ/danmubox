@@ -724,7 +724,7 @@ export function Composer({
           ref={panelRef}
         >
           {/* 同样没有面板头与关闭按钮（用户 item 8）：面板本体就是 FilterBar 的两块
-              （消息类型 / 显示），收起靠再点一次「筛选」或点面板外。
+              （消息类型 / 辅助功能），收起靠再点一次「筛选」或点面板外。
               字号**不跟** `ui.font_scale`（用户 2609140651：字号只控制弹幕区）——三个面板都
               吃 body 的基准字号，`--panel-h` 那套 em 定高因此也是常数，三者必然同高。 */}
           <FilterBar prefs={prefs} onChange={onPrefs} />

@@ -73,6 +73,9 @@ pub fn swallowed_content(value: &Value) -> Option<String> {
 }
 
 /// 原始响应里的 code 与 message，供日志使用（不含任何凭据）。
+///
+/// 上游偶有把请求原样回显进 `message` 的情况，所以文案成形时会过一遍 crate 内部的脱敏规则
+/// （`redact` 模块，见 `docs/operations.md` §3）。
 pub fn failure_detail(value: &Value) -> String {
     let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
     let message = value
@@ -80,7 +83,7 @@ pub fn failure_detail(value: &Value) -> String {
         .or_else(|| value.get("msg"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    format!("code={code} message={message}")
+    crate::redact::redact(&format!("code={code} message={message}"))
 }
 
 /// 单房间节流状态。时间由调用方注入，便于离线测试。

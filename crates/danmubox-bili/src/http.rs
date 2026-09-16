@@ -10,6 +10,7 @@ use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, USE
 use reqwest::StatusCode;
 use serde_json::Value;
 
+use crate::redact;
 use crate::wbi;
 
 pub(crate) const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
@@ -261,8 +262,8 @@ impl BiliHttp {
         cookie: Option<&str>,
         buvid3: Option<&str>,
     ) -> reqwest::RequestBuilder {
-        // 只记 URL，不记请求头与 body：凭据从不进日志。
-        tracing::debug!(target: "danmubox_bili::http", method = "GET", url, "上游请求");
+        // 只记 URL，不记请求头与 body：凭据从不进日志；URL 本身要先过 `log_request` 脱敏。
+        log_request("GET", url, None);
         let mut req = self.client.get(url);
         if let Some(cookie) = merge_cookie(cookie, buvid3) {
             req = req.header(COOKIE, cookie);
@@ -290,23 +291,18 @@ impl BiliHttp {
                 .get(url)
                 .send()
                 .await
-                .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
+                .map_err(|e| upstream("请求失败", e))?;
             let status = response.status();
             let content_type = header_text(response.headers(), CONTENT_TYPE);
             let cookies = collect_set_cookies(response.headers());
             let body = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Upstream(format!("读取响应失败: {e}")))?;
+                .map_err(|e| upstream("读取响应失败", e))?;
             match serde_json::from_slice::<Value>(&body) {
                 Ok(value) => return Ok((value, cookies)),
                 Err(_) if attempt == 1 && !status.is_client_error() => {
-                    tracing::debug!(
-                        target: "danmubox_bili::http",
-                        url,
-                        status = status.as_u16(),
-                        "上游返回的不是 JSON，按瞬时故障重试一次"
-                    );
+                    log_request("GET", url, Some(status.as_u16()));
                 }
                 Err(_) => {
                     return Err(Error::Upstream(decode_failure(
@@ -327,10 +323,10 @@ impl BiliHttp {
             .get(EP_FINGER_SPI)
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("finger/spi: {e}")))?
+            .map_err(|e| upstream("finger/spi", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("finger/spi decode: {e}")))?;
+            .map_err(|e| upstream("finger/spi decode", e))?;
         require_ok(&value, "finger/spi")?;
         let data = value.get("data").unwrap_or(&Value::Null);
         let buvid3 = data.get("b_3").and_then(Value::as_str).unwrap_or_default();
@@ -350,14 +346,15 @@ impl BiliHttp {
             .get(&format!("{EP_ROOM_PLAY_INFO}?{query}"))
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("getRoomPlayInfo: {e}")))?
+            .map_err(|e| upstream("getRoomPlayInfo", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("getRoomPlayInfo decode: {e}")))?;
+            .map_err(|e| upstream("getRoomPlayInfo decode", e))?;
 
         if value.get("code").and_then(Value::as_i64) != Some(0) {
             return Err(Error::RoomNotFound(format!(
-                "输入 `{input}` 未解析出房间（上游 code={}）",
+                "输入 `{}` 未解析出房间（上游 code={}）",
+                redact::redact(input),
                 value.get("code").and_then(Value::as_i64).unwrap_or(-1)
             )));
         }
@@ -391,10 +388,10 @@ impl BiliHttp {
             .get(&format!("{EP_ROOM_H5_INFO}?room_id={room_id}"))
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("getH5InfoByRoom: {e}")))?
+            .map_err(|e| upstream("getH5InfoByRoom", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("getH5InfoByRoom decode: {e}")))?;
+            .map_err(|e| upstream("getH5InfoByRoom decode", e))?;
         require_ok(&value, "getH5InfoByRoom")?;
         Ok(value)
     }
@@ -420,10 +417,10 @@ impl BiliHttp {
             .get_with_buvid3(&format!("{}?{query}", self.danmu_info_url), buvid3)
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("getDanmuInfo: {e}")))?
+            .map_err(|e| upstream("getDanmuInfo", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("getDanmuInfo decode: {e}")))?;
+            .map_err(|e| upstream("getDanmuInfo decode", e))?;
 
         let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
         if code != 0 {
@@ -476,7 +473,7 @@ impl BiliHttp {
             Err(first) => {
                 tracing::debug!(%first, "HTTP 心跳首次失败，重试一次");
                 self.heartbeat_once(&url).await.map_err(|second| {
-                    Error::Upstream(format!("webHeartBeat 重试后仍失败: {second}"))
+                    upstream("webHeartBeat 重试后仍失败", second)
                 })
             }
         }
@@ -487,10 +484,10 @@ impl BiliHttp {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("webHeartBeat: {e}")))?
+            .map_err(|e| upstream("webHeartBeat", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("webHeartBeat decode: {e}")))?;
+            .map_err(|e| upstream("webHeartBeat decode", e))?;
         require_ok(&value, "webHeartBeat")
     }
 
@@ -507,10 +504,10 @@ impl BiliHttp {
             .get_with_cookie(EP_NAV, cookie.map(str::to_string))
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("nav: {e}")))?
+            .map_err(|e| upstream("nav", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("nav decode: {e}")))?;
+            .map_err(|e| upstream("nav decode", e))?;
         if value.get("code").and_then(Value::as_i64) != Some(0) {
             return Ok(None);
         }
@@ -540,8 +537,8 @@ impl BiliHttp {
     /// 但 **POST 一律不重试**：请求可能已经生效——上游回了页面而不是 JSON，并不能证明它没写进去，
     /// 重试就可能把同一条弹幕发两遍、或把同一个用户禁言两次。
     pub async fn post_form(&self, url: &str, body: &str) -> Result<Value> {
-        // body 里含 csrf 与弹幕原文，一律不记；只记目标地址。
-        tracing::debug!(target: "danmubox_bili::http", method = "POST", url, "上游请求");
+        // body 里含 csrf 与弹幕原文，一律不记；只记目标地址，且地址先过脱敏。
+        log_request("POST", url, None);
         let mut request = self.client.post(url).header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
@@ -555,13 +552,13 @@ impl BiliHttp {
             .body(body.to_string())
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
+            .map_err(|e| upstream("请求失败", e))?;
         let status = response.status();
         let content_type = header_text(response.headers(), CONTENT_TYPE);
         let raw = response
             .bytes()
             .await
-            .map_err(|e| Error::Upstream(format!("读取响应失败: {e}")))?;
+            .map_err(|e| upstream("读取响应失败", e))?;
         serde_json::from_slice::<Value>(&raw)
             .map_err(|_| Error::Upstream(decode_failure("POST", url, status, &content_type, &raw)))
     }
@@ -601,10 +598,10 @@ impl BiliHttp {
             .get(&self.nav_url)
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("nav: {e}")))?
+            .map_err(|e| upstream("nav", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("nav decode: {e}")))?;
+            .map_err(|e| upstream("nav decode", e))?;
 
         // 未登录时 nav 的 code 是 -101，但 wbi_img 仍然下发。
         let img = value
@@ -654,93 +651,29 @@ fn default_headers() -> HeaderMap {
     headers
 }
 
-/// 疑似凭据的键名：凭据文件的字段，加上上游下发过的会话令牌。
+/// 上游请求日志的**唯一**出口：URL 里的账号 / 用户 / 设备标识在这里被换掉（规则见
+/// [`crate::redact`]）。新增请求路径只要走这个函数，就不会漏。
 ///
-/// 错误信息里只放响应体的开头，但「上游把请求原样回显」在风控页上并非不可能，
-/// 所以这些键的值必须在出门之前被抹掉（`AGENT.md` §8）。
-const SECRET_KEYS: [&str; 7] = [
-    "dedeuserid__ckmd5",
-    "dedeuserid",
-    "sessdata",
-    "bili_jct",
-    "csrf_token",
-    "qrcode_key",
-    "csrf",
-];
-
-/// 值的结束符（属于值之外的第一个字符就能收尾）。
-fn is_value_end(ch: char) -> bool {
-    matches!(
-        ch,
-        '&' | ';' | ',' | '"' | '\'' | '}' | ')' | '<' | ' ' | '\t' | '\r' | '\n'
-    )
-}
-
-/// 在**小写副本** `lowered` 里找 `from` 之后最靠前的一个凭据键名 → （位置, 键名）。
-///
-/// 同一位置命中多个键名时取**最长**的那个：`dedeuserid__ckmd5` 与 `csrf_token` 分别把
-/// `dedeuserid` 与 `csrf` 包在里面，先匹配短的会把键名截成两段。
-fn next_secret_key(lowered: &str, from: usize) -> Option<(usize, &'static str)> {
-    SECRET_KEYS
-        .iter()
-        .filter_map(|key| {
-            lowered[from..]
-                .find(key)
-                .map(|offset| (from + offset, *key))
-        })
-        .min_by_key(|(at, key)| (*at, std::cmp::Reverse(key.len())))
-}
-
-/// 把 `key=value` / `"key":"value"` 里的值抹成 `***`，其余文本原样保留。
-///
-/// 只认「键名 + 分隔符 + 值」三种成分齐全的位置：上游原话 `CSRF 校验失败` 里的键名之后
-/// 没有分隔符，不能被改写——错误信息里保留上游原话才有诊断价值。
-fn redact_secrets(text: &str) -> String {
-    let lowered = text.to_ascii_lowercase();
-    let mut out = String::with_capacity(text.len());
-    let mut copied = 0;
-    let mut search = 0;
-    while let Some((at, key)) = next_secret_key(&lowered, search) {
-        let after_key = at + key.len();
-        match secret_value(&text[after_key..]) {
-            Some((value_at, value_len)) => {
-                let value_start = after_key + value_at;
-                let value_end = value_start + value_len;
-                out.push_str(&text[copied..value_start]);
-                out.push_str("***");
-                copied = value_end;
-                search = value_end;
-            }
-            // 只是键名本身（例如上游原话里出现 `csrf` 一词）：原样保留，从键名之后继续找。
-            None => search = after_key,
-        }
+/// `status` 只有「非 JSON 重试」那条用得上：它要说明上一次的 HTTP 状态。
+fn log_request(method: &str, url: &str, status: Option<u16>) {
+    let url = redact::redact(url);
+    match status {
+        Some(status) => tracing::debug!(
+            target: "danmubox_bili::http",
+            method,
+            %url,
+            status,
+            "上游返回的不是 JSON，按瞬时故障重试一次"
+        ),
+        None => tracing::debug!(target: "danmubox_bili::http", method, %url, "上游请求"),
     }
-    out.push_str(&text[copied..]);
-    out
 }
 
-/// 键名之后若跟着「分隔符 + 值」→ 返回（分隔符长度, 值长度）。
-///
-/// 分隔符是 `=` / `:` / 引号，允许中间夹空格（`"csrf": "值"`）；值到下一个 `is_value_end`
-/// 字符为止。只有键名而没有值 → `None`。
-fn secret_value(rest: &str) -> Option<(usize, usize)> {
-    let mut delimited = false;
-    for (index, ch) in rest.char_indices() {
-        match ch {
-            '=' | ':' | '"' | '\'' => delimited = true,
-            ' ' | '\t' if delimited => {}
-            _ => {
-                if !delimited || is_value_end(ch) {
-                    return None;
-                }
-                let length = rest[index..]
-                    .find(is_value_end)
-                    .unwrap_or(rest.len() - index);
-                return Some((index, length));
-            }
-        }
-    }
-    None
+/// 上游错误文案的**唯一**出口：`reqwest::Error` 的 `Display` 会附上完整 URL
+/// （`… for url (…?vmid=…)`），上游回显的 `message` 也可能把请求原样吐回来，
+/// 所以文案在成形时就要过 [`crate::redact`]。
+fn upstream(what: &str, detail: impl std::fmt::Display) -> Error {
+    Error::Upstream(redact::redact_display(format_args!("{what}: {detail}")))
 }
 
 /// 响应体开头至多 `limit` 字节的可读文本：丢控制字符、抹疑似凭据，截断时以 `…` 收尾。
@@ -753,7 +686,7 @@ fn body_head(body: &[u8], limit: usize) -> String {
     // 切口可能落在多字节字符中间，末尾那个替换符是切出来的，不代表上游内容。
     let text = lossy.trim_end_matches(char::REPLACEMENT_CHARACTER);
     let visible: String = text.chars().filter(|ch| !ch.is_control()).collect();
-    let visible = redact_secrets(&visible);
+    let visible = redact::redact(&visible);
     if visible.is_empty() {
         return "（空）".to_string();
     }
@@ -777,11 +710,12 @@ fn decode_failure(
     let path = url::Url::parse(url)
         .map(|parsed| parsed.path().to_string())
         .unwrap_or_else(|_| "<无法解析的地址>".into());
-    format!(
+    // 路径与响应体开头都不会带查询串，但文案出口只此一处：整段再过一次脱敏，成本可忽略。
+    redact::redact(&format!(
         "{method} {path} 响应不是 JSON：HTTP {status}，content-type={content_type}，响应体前 {} 字节：{}",
         DECODE_BODY_HEAD_BYTES,
         body_head(body, DECODE_BODY_HEAD_BYTES)
-    )
+    ))
 }
 
 /// 解码失败文案里回显的响应体长度上限。够看清是 HTML 错误页、验证页还是空体，
@@ -826,7 +760,10 @@ pub fn normalize_room_input(input: &str) -> Result<String> {
         .map(str::to_string)
         .unwrap_or_default();
     if digits.is_empty() {
-        return Err(Error::BadRequest(format!("无法从 `{input}` 解析房间号")));
+        return Err(Error::BadRequest(format!(
+            "无法从 `{}` 解析房间号",
+            redact::redact(input)
+        )));
     }
     Ok(digits)
 }
@@ -845,7 +782,10 @@ pub fn normalize_room_input(input: &str) -> Result<String> {
 fn map_room_play_info(play: &Value, h5: &Value, input: &str) -> Result<Room> {
     let room_id = play.get("room_id").and_then(Value::as_i64).unwrap_or(0);
     if room_id == 0 {
-        return Err(Error::RoomNotFound(format!("输入 `{input}` 未解析出房间")));
+        return Err(Error::RoomNotFound(format!(
+            "输入 `{}` 未解析出房间",
+            redact::redact(input)
+        )));
     }
     Ok(Room {
         room_id,
@@ -1419,6 +1359,34 @@ mod tests {
         }
     }
 
+    /// 传输层失败的文案也带着 URL：`reqwest::Error` 的 `Display` 会附上完整地址
+    /// （`… for url (…)`，见 reqwest 0.12 `error.rs` 的 `Display`），而 B 站的查询串里
+    /// 写着「谁」——`vmid` 就是 `DedeUserID`。这条护栏钉住「UID 不从这条路进错误信息」。
+    #[tokio::test]
+    async fn transport_error_text_hides_uid_taken_from_the_url() {
+        // 先占一个端口再放掉：连过去必然 connection refused（比连不可路由地址更快、更确定）。
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑本地端口");
+            listener.local_addr().expect("端口").port()
+        };
+        let error = BiliHttp::new()
+            .unwrap()
+            .get_with_cookies(&format!(
+                "http://127.0.0.1:{port}/x/relation/followings?vmid=7654321&ps=50&pn=1"
+            ))
+            .await
+            .expect_err("端口已放掉，连不上");
+
+        assert_eq!(error.code(), "UPSTREAM_ERROR");
+        let text = error.to_string();
+        assert!(text.contains("vmid=***"), "URL 里的 uid 必须被抹掉：{text}");
+        assert!(!text.contains("7654321"), "uid 不许出现在错误信息里：{text}");
+        assert!(
+            text.contains("/x/relation/followings") && text.contains("ps=50"),
+            "接口与分页要留下，否则没法排障：{text}"
+        );
+    }
+
     /// 错误信息里的响应体开头：128 字节封顶、控制字符清掉（错误信息是单行日志）、
     /// 空体写明「（空）」——「上游回了空体」与「上游回了别的页面」是两种故障。
     #[test]
@@ -1430,27 +1398,5 @@ mod tests {
         let head = body_head(long.as_bytes(), 128);
         assert!(head.ends_with('…'), "截断了就要有标记：{head}");
         assert_eq!(head.trim_end_matches('…').len(), 128, "超出部分不许带上");
-    }
-
-    /// 凭据抹除只认「键名 + 分隔符 + 值」三种成分齐全的位置：上游原话 `CSRF 校验失败`
-    /// 不许被改写（错误信息里保留上游原话才有诊断价值），而 `key=value` / `"key": "value"`
-    /// / 长短键名并存这几种形态都必须抹干净。
-    #[test]
-    fn redaction_covers_cookie_and_token_shapes_without_touching_prose() {
-        assert_eq!(
-            redact_secrets("SESSDATA=abc; bili_jct=def&z=1"),
-            "SESSDATA=***; bili_jct=***&z=1"
-        );
-        assert_eq!(
-            redact_secrets(r#"{"csrf_token":"tok","k":"v"}"#),
-            r#"{"csrf_token":"***","k":"v"}"#
-        );
-        assert_eq!(redact_secrets(r#"{"csrf": "tok"}"#), r#"{"csrf": "***"}"#);
-        assert_eq!(redact_secrets("CSRF 校验失败"), "CSRF 校验失败");
-        assert_eq!(
-            redact_secrets("dedeuserid__ckmd5=zz"),
-            "dedeuserid__ckmd5=***",
-            "长键名不许被短键名截断"
-        );
     }
 }

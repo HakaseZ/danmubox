@@ -128,10 +128,10 @@ impl BiliAdmin {
 fn ensure_ok(value: &Value, what: &str) -> Result<()> {
     match value.get("code").and_then(Value::as_i64) {
         Some(0) => Ok(()),
-        other => Err(Error::Upstream(format!(
+        other => Err(Error::Upstream(crate::redact::redact(&format!(
             "{what} code={other:?} message={}",
             value.get("message").and_then(Value::as_str).unwrap_or("")
-        ))),
+        )))),
     }
 }
 

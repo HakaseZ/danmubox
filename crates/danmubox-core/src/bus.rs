@@ -216,9 +216,9 @@ impl MessageSink {
             let fingerprint = danmaku_fingerprint(&message);
             let mut seen = self.seen_danmaku.lock().expect("seen poisoned");
             if seen.contains(&fingerprint) {
+                // 发言人的 uid 不进日志（`AGENT.md` §8 第 1 条）：房间 + 指纹足以定位重复推送。
                 tracing::debug!(
                     room_id = message.room_id,
-                    uid = message.uid,
                     "同一条弹幕又来了（回填/实时两条路），丢弃第二份"
                 );
                 return;

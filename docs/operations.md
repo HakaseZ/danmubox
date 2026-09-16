@@ -324,16 +324,29 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 |---|---|
 | `SESSDATA` / `bili_jct` | 永不打印明文；日志里只允许出现「已设置 / 未设置」这类布尔事实 |
 | `DedeUserID` | 属可识别标识，日志中以掩码或长度描述代替 |
+| 用户标识（`vmid` / `uid` / `uids[]` / `mid` / `reply_mid` / `anchor_id` / `tuid`） | 与 `DedeUserID` 同口径：日志、错误文案里一律以 `***` 代替。`vmid` **就是**自身的 `DedeUserID`，`uids[]` 是关注的人——实测二者会随请求 URL 一起进 `debug` 日志（`x/relation/followings?vmid=…`、`Room/get_status_info_by_uids?uids[]=…`）。脱敏后仍看得出「哪个接口、哪个房间、第几页、这一批几个值」 |
+| 昵称 / 用户名（`uname` / `nickname`） | 与 uid 同口径：以 `***` 代替（上游把请求原样回显时才有值可抹） |
+| 房间号 / 短号 | **不**脱敏：公开信息，且是排障主键；但要意识到「房间 ↔ 主播」本身是公开可查的关联 |
 | `config.toml` | 整文件视同凭据，不截图、不外发、不进仓库 |
 | `Cookie` 请求头 | 打印请求时必须整体省略该头，不允许「截断显示前 6 位」这种折衷 |
 | 二维码 key | 短时有效但视同凭据：分享日志前先替换 |
 | `buvid3` / `buvid4` | 设备标识，与账号凭据同时出现可被关联；日志中以掩码或长度描述代替 |
 | 弹幕内容 | 属用户数据，默认不进 `debug` 日志；需要时临时开启更高级别并按脱敏后外发 |
 
+实现方式（改规则只改这一处）：键名表与替换逻辑在 `crates/danmubox-bili/src/redact.rs`，只改写「键名 + 分隔符 + 值」三种成分齐全的地方（上游原话 `CSRF 校验失败` 这类不带分隔符的文本保持原样）。出口只有两个，都在 `crates/danmubox-bili/src/http.rs`：`log_request`（所有 `GET` / `POST` 的 URL 日志）与 `upstream`（上游错误文案——`reqwest::Error` 的 `Display` 会把完整 URL 拼进去）。回显上游 `message` 的几处（`admin` / `send` / `report`）调的是同一个函数。占位符固定 `***`，不用短哈希：uid 只有 10 位数，短哈希能被离线暴力反推，「看起来脱敏」挡不住人。
+
+> `danmubox::raw`（`docs/protocol.md` 附录 B.1）是唯一的例外：它按设计打印**原始业务载荷**，供协议字段校准用，里面自然带得到发言人的 uid 与昵称。核对字段时用它，分享日志前必须先按上表处理；只想看普通调试信息时别把这个 target 打开。
+
 分享日志前的自查命令：
 
 ```bash
-grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3' <日志文件或日志目录>   # 命中即先替换再外发
+grep -niE 'sessdata|bili_jct|dede_user_id|dedeuserid|buvid3|vmid=|uids%5[Bb]%5[Dd]|anchor_id|tuid=' <日志文件或日志目录>   # 命中即先替换再外发
+```
+
+脱敏是否生效（**空输出 = 没有明文标识**）：
+
+```bash
+grep -nE '(vmid|uid|anchor_id|tuid)=[0-9]' <日志文件>   # 值为 *** 的行不会命中
 ```
 
 提交仓库前：确认无 `config.toml`、无 keystore、无 `.p12`、无导出的 Cookie 文本。

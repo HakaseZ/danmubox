@@ -6642,8 +6642,10 @@ const MOCK = (theme) => `(function () {
       out.cheapGiftSummaryAfterExclude !== out.cheapGiftSummaryBeforeFold;
 
     // ---- ④ 边界：0 元（上游没给价）不是低价、SC 与大航海两边都不进这枚键的口径。
-    //        剔除仍开着：礼物组只剩「没给价」那一条、它的金额格本来就不画 —— 若把 0 当低价，
-    //        这一组会整组消失（连「礼物 1」都不会有），因此这一条断言正好钉住那个边界。
+    //        剔除仍开着：礼物组里 0.11 元那条**不低价、留着**，再加上没给价的那一条 —— 两条都在
+    //        统计里，金额只算 0.11 元（0 元那条本来就不画金额格）。判据落在**条数 = 2** 上：
+    //        若把 0 当低价，它会被一并剔掉、这一组只剩 1 条（「礼物 1 · 0.11 元」），所以这条
+    //        断言正好钉住「0 不是低价」这个边界（实测值见本轮报告，两引擎四个视口逐字相同）。
     cheapPush("gift", "投喂 尺子", 0);
     cheapPush("superchat", "脱敏的边界样本留言", 30);
     cheapPush("guard", "开通 舰长 ×1", 138000, { guard_level: 3 });
@@ -6651,7 +6653,7 @@ const MOCK = (theme) => `(function () {
     await cheapSetPane(true);
     out.cheapGiftSummaryBoundary = cheapSummary();
     out.cheapGiftZeroPriceNotCheap =
-      out.cheapGiftSummaryBoundary === "本场 礼物 1 / SC 1 · 30 元 / 大航海 1 · 138 元";
+      out.cheapGiftSummaryBoundary === "本场 礼物 2 · 0.11 元 / SC 1 · 30 元 / 大航海 1 · 138 元";
     var cheapScGuardTail = function (txt) {
       var at = txt ? txt.indexOf("SC ") : -1;
       return at >= 0 ? txt.slice(at) : null;

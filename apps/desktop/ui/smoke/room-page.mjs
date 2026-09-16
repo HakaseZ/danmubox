@@ -3261,18 +3261,7 @@ const MOCK = (theme) => `(function () {
     out.ownedEmoteSentOnClick = out.ownedEmoteSendUnique && out.ownedEmoteSendContent;
     out.ownedEmoteNoSecondStep = document.querySelector("textarea").value === "" &&
       !!byTestId("db-panel");
-    // 预览（「将发送」条）是**草稿**那一侧的功能：把表情名打进草稿仍会显示成图片
-    // （面板点选不再往草稿里插名字，这条路径与面板无关）。
-    typeIntoArea(document.querySelector("textarea"), ownedSample.text);
-    await sleep(250);
-    var sendPreview = byTestId("db-send-preview");
-    out.ownedEmotePreviewImage = !!sendPreview &&
-      [].slice.call(sendPreview.querySelectorAll("img")).some(function (img) {
-        return img.alt === ownedSample.text;
-      });
-    typeIntoArea(document.querySelector("textarea"), "");
-    await sleep(200);
-    // 面板**点选后不关**（上面那条断言），但后面几步要用满屏的列表，这里把它收起来。
+    // 面板点选**不关**（上面那条断言），但后面几步要用满屏的列表，这里把它收起来。
     clickTool("表情");
     await sleep(250);
     // 发送成功不再占一行说「上次发送：已发出」（用户 #4：没意义且不协调）——弹幕已经出现在列表里

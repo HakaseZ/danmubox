@@ -1933,25 +1933,9 @@
   opacity: 0.45;
 }
 
-/* 输入区上方的「将发送」预览：草稿里对得上的表情名在这里显示成图片（docs/ui.md §6.3）。 */
-.preview {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-1);
-  padding: var(--sp-1) var(--sp-3);
-  font-size: var(--fs-2);
-  color: var(--fg-dim);
-  border-top: 1px solid var(--border);
-}
-
+/* 行内的一句说明文字（回复条 / @ 提示 / 面板空态 / 房管面板的计数）：只占内容宽度，不参与伸缩。 */
 .previewLabel {
   flex: none;
-}
-
-.previewEmote {
-  height: 1.5em;
-  vertical-align: middle;
 }
 
 /* 快捷短语面板（需求 §2.2；item 8 / item 11 重排）。面板自上而下两段：
@@ -2450,8 +2434,7 @@
   /* 确认条 / 举报条 / 回复条：窄屏下同样会换行 */
   .adminConfirm,
   .reportBar,
-  .replyBar,
-  .preview {
+  .replyBar {
     flex-wrap: wrap;
     row-gap: var(--sp-1);
   }

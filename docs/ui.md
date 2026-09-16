@@ -162,7 +162,7 @@
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
 
 ### 2.3.1 沉浸模式（issue #1）
 
@@ -176,7 +176,7 @@
 | 触发判据 | **指针事件**（`pointerdown` + `pointerup`）：鼠标双击、触屏点两下、手写笔点两下走**同一条路** —— 不押在「触摸会不会合成 `dblclick`」上（WKWebView 里双击本来就是缩放手势）。一次「点」= 按下到抬起之间没挪动超过 **24px**（拖动 / 滚动 / 拖选不算点）；两次点之间不超过 **400ms**、落点相距不超过 **24px**；只认主指针的主键（`isPrimary` + `button === 0`，右键弹行菜单、多指的副指针都不算）。三下连点只切一次 |
 | 落点 | **弹幕区**（`db-chat-wrap`，它包着滚动容器 `db-chat-scroll`）—— 礼物栏与输入区的双击与它无关。落在**可交互元素**上（`button` / `a` / `input` / `textarea` / `select` / `role=button` / `contenteditable`）的双击**不切**：那些元素有自己的双击语义（例如双击输入框选词）。「回到最新」是按钮，所以双击它不切 |
 | 与双击选词的关系 | 这条判据**不** `preventDefault`、也不改 `user-select`：浏览器原生的双击（三击）选词照旧发生，切换与选中可以同时发生。沉浸态只收起标题栏与输入区，**弹幕区原样在场** —— 选中的文字仍然看得见、仍然复制得到。冒烟 `immersiveKeepsTextSelection` 钉住「选中不丢 + 正文仍可选」。**没有任何别的高危动作挂在「双击一条弹幕」上**：行上的动作依旧只在右键菜单里（§4.5） |
-| 收起 | 房间头（返回键 / 状态点 / 标题 / 在线·看过 / ⋯ 菜单）、**房间标签条**、输入区（输入框 + 工具行 + 字数提示，含表情 / 短语 / 筛选三个面板与引用条 / 预览 / 浮片）、举报条、房管面板与它的确认条、日志块、房间头 ⋯ 弹出的菜单。除标签条外全部是**条件渲染**（收起 = 不在 DOM 里） |
+| 收起 | 房间头（返回键 / 状态点 / 标题 / 在线·看过 / ⋯ 菜单）、**房间标签条**、输入区（输入框 + 工具行 + 字数提示，含表情 / 短语 / 筛选三个面板与引用条 / 浮片）、举报条、房管面板与它的确认条、日志块、房间头 ⋯ 弹出的菜单。除标签条外全部是**条件渲染**（收起 = 不在 DOM 里） |
 | 保留 | **弹幕区**（唯一的生长区：滚动、跟随贴底、「回到最新」、虚拟列表一切照旧）、**礼物 / SC 栏**（`ui.gift_panel` 为真时；高度不因沉浸态而变，收起腾出的空间**全归弹幕区**）、**「回到最新」那枚悬浮钮**（沉浸态里输入区不在，它是回到最新的唯一控件，故留下）、**行右键菜单**（复制 / 屏蔽 / 举报 / 房管 / 主页 —— 它们属于弹幕行，那一块仍在场上） |
 | 标签条怎么收 | 它渲染在 `App.tsx` 里、是房间页的**兄弟节点**（组件树里够不着），所以由 `RoomView` 在 `<html>` 上打一枚 `data-immersive="true"`（与主题落 `data-theme` 同一处口径），`app.module.css` 的一条规则把它 `display: none`（不占位、不进 Tab 序）；离开沉浸态即删掉这枚属性（从 App 走的实现见 `RoomView` 顶部那一段注释） |
 | 退出条件 | ① 在弹幕区再双击一次；② **系统返回手势**（沉浸态排在这一级的**最前**：先退出沉浸，再轮到面板 → 返回列表 —— 沉浸态里房间头与标签条都不在，一次返回就退回列表会连房间一起丢，见 §2.6）；③ 切标签 / 关房间（回到非沉浸态） |
@@ -210,7 +210,7 @@
 | `SplitPanes.tsx` | 弹幕区与礼物栏共享的**上下分区**：两栏高度份额（`ui.gift_pane_ratio`）、可拖动分割条（热区 ≥ 8px、↑↓ 微调）、长按 0.5s 拖拽换位（`ui.gift_pane_on_top`）、两栏最小高度（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头）；拖动中的份额只写 DOM、松手才回写偏好（§5.4） |
 | `MessageList.tsx` | 虚拟列表 + 自动跟随 + 悬停暂停（§7） |
 | `MessageRow.tsx` | 单行渲染：时间戳（受 `ui.show_timestamp` 门控，位置在身份行右端；无身份行的行在正文块首行）、头像列、身份行（昵称 + 徽标）、正文（含 `@` 高亮）、失败 / 未确认标记、行右键入口（§4.1 / §4.2 / §4.4 / §4.5） |
-| `Composer.tsx` | 输入区与三个面板（表情 / 短语 / 筛选）、回复条、@ 提示、发送预览、浮动提示、工具行、发送簇（含电池，§6） |
+| `Composer.tsx` | 输入区与三个面板（表情 / 短语 / 筛选）、回复条、@ 提示、浮动提示、工具行、发送簇（含电池，§6） |
 | `FilterBar.tsx` | 筛选与显示偏好面板：kind 全集、字号、时间戳、互动自动消失、礼物类两枚开关；两块都是**两列勾选清单**（键清单与排布见 §8.5）。主题控件不在这里（§8.3） |
 | `AdminPanel.tsx` | 房管三块列表（禁言 / 黑名单 / 屏蔽词）与禁言派发（§4.9） |
 | `AccountManager.tsx` | 账号对话框：账号列表（非当前行整行可点即切换）、状态、重登 / 登出 / 删除、确认条、扫码（§2.2.1） |
@@ -554,9 +554,9 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 （沿革与实测理由见 [`CHANGELOG.md`](../CHANGELOG.md) 的 Removed 段）；弹幕里的表情渲染消费的是
 后端给的 `Message.emote`（§4.1），与面板内容无关。
 
-「我的表情」并进这一路不只是分组好看：输入区的**发送预览**只认这一份合并结果，
-若它加载太晚，草稿里的 `[表情名]` 会**静默地**显示成纯文字（预览失效）。因此加载时机固定为
-「进房间且会话就绪后拉一次」，失败不阻塞输入框，只在面板里给原因与重试（§6.3）。
+「我的表情」并进这一路是为了分组完整：它不在直播表情接口里，只能从 `emotes_owned` 取
+（§6.3 的「我的表情」组，`upower_` 家族）。加载时机固定为「进房间且会话就绪后拉一次」，
+失败不阻塞输入框，只在面板里给原因与重试（§6.3）。
 
 ### 4.5 行右键菜单
 
@@ -797,7 +797,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 ### 6.1 布局与草稿
 
-输入区自上而下：弹出面板（若打开，见 §6.3）→ 引用条（有回复上下文时出现，带「取消」）→ 「将发送」预览（草稿里有表情时）→ 文本输入框 → 工具行（左：表情 / 短语 / 筛选 三个面板入口；右：字数计数 `已用/上限` + 发送）→ 发送结果行（**只在需要用户做点什么时**才渲染，见 §6.5）。
+输入区自上而下：弹出面板（若打开，见 §6.3）→ 引用条（有回复上下文时出现，带「取消」）→ 文本输入框 → 工具行（左：表情 / 短语 / 筛选 三个面板入口；右：字数计数 `已用/上限` + 发送）→ 发送结果行（**只在需要用户做点什么时**才渲染，见 §6.5）。
 
 **三个弹出面板共用同一副骨架**（用户 item 8：「短语和筛选顶部的提示和关闭也删掉，展开高度看齐表情界面」）：都**不带标题、不带关闭按钮**，收起只有两条路（再点一次那个工具按钮 / 点面板与输入区之外，见 §6.3「关面板」）；高度一律 = `--panel-h`（**三行大表情格 + 面板上下内边距**，与表情面板同高），**不随内容伸缩** —— 短语面板的超额内容在芯片区滚（§6.2），筛选面板在面板内部滚（§8.5）。三个面板的字号口径也统一（都吃 body 的基准字号，**不跟** `ui.font_scale`——用户 2609140651；面板高度用 em 令牌算，因此是常数）。
 
@@ -876,7 +876,6 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 无权限的表情 | `Emote.locked == true` 的格子**照常列出**但置灰：`filter: grayscale(1)` + `opacity: .45`——灰的是颜色不是尺寸，仍能认出是哪一个；**不隐藏、不禁用**（`title` 说明「点一下直接发送；当前身份用不了，置灰只是提示，能不能发由上游判定」）。**字段缺失（老后端）= 可用**，不许整面板变灰（契约 §5：置灰是提示，真正的闸门在上游发送侧；缺 `perm` 的映射由 `crates/danmubox-bili/src/emote.rs` 的单测覆盖，界面只消费 `locked` 这个布尔值）。冒烟按 `panelLockedEmoteListed` / `panelLockedEmoteDimmed` / `panelLockedEmoteSameSize` / `panelLockedEmoteSelectable` / `panelUnlockedEmoteNotDimmed` 断言 |
 | 尺寸 | 通用 `1.5em`、**非通用（我的表情 / 本房间 / 粉丝牌 / 大航海）`2.2 × --fs-7`**（= `--emote-size-big`，在面板那一层算成 px），全部相对面板字号（= body 的基准字号，**不跟** `ui.font_scale`；用户 2609140651 之后面板字号是常数，用户 2026-09-12 那条「字号同步调整表情尺寸」只对**弹幕行内**的表情成立） |
 | 点选 = 直接发送 | **点一下就把这个表情发出去**（用户 2026-09-12：「发送表情包的时候有一个二次确认的过程，其实没有必要，点选某个表情直接发送出去就行」）：`chat_send` 立刻带上 `emote.emoticon_unique`（上游最终收到的 `msg` 就是它，见 `protocol.md` §11.4），**不往草稿里插名字、不需要再点「发送」**。必须记住「点的是哪一个」——表情名会重名（实测「贴贴」同时在通用包与房间包里）。草稿与 @ 目标原样留着（它们属于文字那一侧），已选「回复」时这一条表情就发成回复（发成功即清掉回复条）。面板**不关**：连发几个不必反复开面板。冒烟按 `ownedEmoteSentOnClick` / `ownedEmoteNoSecondStep` / `panelLockedEmoteSelectable` 断言 |
-| 预览 | 草稿里能对上表情名的片段换成图片（§6.1 的「将发送」）；它是**草稿**那一侧的显示，与面板点选无关（点选不再经过草稿），对得上才显示 |
 | 房间专属 | `Emote.room_id != 0` 的表情只在对应房间展示（`room_id` 与当前房间一致）；「我的表情」`room_id = 0`，任何房间可见 |
 | `key` | 仅用于列表 key 与去重，不展示 |
 | 空态 | 分组返回空列表时显示「没有可用表情（或尚未加载）」 |
@@ -1040,7 +1039,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 舒适 | 1.14 |
 | 大 | 1.29 |
 
-所有字号 = 标准档基准（body 的 `--fs-root`，14px）× `ui.font_scale`，但**只有弹幕区吃这个滑杆**（用户 2609140651：字号仅控制弹幕区，不改变面板区的字号）。实现上**不给每处写 px**：弹幕区（`MessageList` 的 `.scroller`）把 `ui.font_scale` 写成 `em` 落在容器上，**三个弹出面板与房管面板不乘它**——它们吃 body 的 `--fs-root`，其余字号一律走 `--fs-1 … --fs-8` 的 em 令牌（§9.2）。因此滑杆一路作用到时间戳、昵称、徽标与行内表情尺寸（用户 2026-09-12：字号要同步调整表情尺寸），而面板的字号与定高（`--panel-h`）保持常数。「将发送」预览是弹幕行的预览，跟弹幕区一起缩放。滑杆取非预设值时不吸附到预设。变更后清空高度缓存并按 §7.3 重建锚点。
+所有字号 = 标准档基准（body 的 `--fs-root`，14px）× `ui.font_scale`，但**只有弹幕区吃这个滑杆**（用户 2609140651：字号仅控制弹幕区，不改变面板区的字号）。实现上**不给每处写 px**：弹幕区（`MessageList` 的 `.scroller`）把 `ui.font_scale` 写成 `em` 落在容器上，**三个弹出面板与房管面板不乘它**——它们吃 body 的 `--fs-root`，其余字号一律走 `--fs-1 … --fs-8` 的 em 令牌（§9.2）。因此滑杆一路作用到时间戳、昵称、徽标与行内表情尺寸（用户 2026-09-12：字号要同步调整表情尺寸），而面板的字号与定高（`--panel-h`）保持常数。滑杆取非预设值时不吸附到预设。变更后清空高度缓存并按 §7.3 重建锚点。
 
 ### 8.3 消息弱化与主题
 

@@ -427,6 +427,16 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
                         );
                     }
                 }
+                // 开播状态：`LIVE` / `PREPARING` 的侧路（`docs/protocol.md` §10.7）——
+                // 与那两条 `system` 消息各走各的，这里单独打一行，方便命令行核对状态迁移。
+                Ok(Event::LiveStatus(status)) => {
+                    if !quiet {
+                        println!(
+                            "# 开播状态 room_id={} live_status={}",
+                            status.room_id, status.live_status
+                        );
+                    }
+                }
                 Ok(Event::Room(_)) => {}
                 Ok(Event::RoomClosed(id)) => {
                     println!("# 房间 {id} 会话关闭");

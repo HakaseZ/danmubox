@@ -141,8 +141,16 @@ interface AppStore {
    * （表情面板打开时用），避免每次开面板都打一次上游。
    */
   loadOwnedEmotes: (retryFailedOnly?: boolean) => Promise<void>;
-  loadFollowed: () => Promise<void>;
+  /** 重拉关注列表；返回这一份有没有拿到（列表页轮询按它判退避，契约 §4）。 */
+  loadFollowed: () => Promise<boolean>;
   loadBalance: () => Promise<void>;
+  /**
+   * 列表页的**开播状态轮询**（契约 §4）：停在列表页时让状态自己跟上上游。
+   *
+   * **返回停止函数** —— 进房间页 / 组件卸载就调它停掉；重复调用先停上一轮（幂等）。
+   * 进入列表页立即拍一拍，之后每 30 秒一拍；不可见跳过、不重叠、失败退避，口径见 `docs/ui.md` §2.2。
+   */
+  startListStatusPolling: () => () => void;
   /** 读该房间的本人身份（进房时一次；之后靠事件更新）。 */
   loadRoomIdentity: (roomId: number) => Promise<void>;
   /** 读房管三块列表：只读，无权限也放行，错误原样展示。 */
@@ -489,11 +497,17 @@ function beginIdentityChange(): number {
 let roomsSeq = 0;
 let roomsAppliedSeq = 0;
 
-/** 重拉 `rooms_list`；这次请求已被更新的快照越过时返回 undefined（= 这一份丢掉不落）。 */
-async function reloadRooms(): Promise<RoomView[] | undefined> {
+/**
+ * 取一份房间**全量快照**并过护栏（审计 P66）。`source` 缺省是 `rooms_list`（登记表快照），
+ * 列表页那一拍传 `rooms_refresh_status`（真的去问上游，契约 §4）—— 两者返回同形，
+ * 落地口径因此也必须同一条。这次请求已被更新的快照越过时返回 undefined（= 这一份丢掉不落）。
+ */
+async function reloadRooms(
+  source: () => Promise<RoomView[]> = () => api.roomsList(),
+): Promise<RoomView[] | undefined> {
   roomsSeq += 1;
   const seq = roomsSeq;
-  const rooms = await api.roomsList();
+  const rooms = await source();
   if (seq < roomsAppliedSeq) return undefined;
   roomsAppliedSeq = seq;
   return rooms;
@@ -519,6 +533,105 @@ function mergeRoomOrder(previous: RoomView[], incoming: RoomView[]): RoomView[] 
         (rank.get(a.room_id) ?? Number.MAX_SAFE_INTEGER) -
         (rank.get(b.room_id) ?? Number.MAX_SAFE_INTEGER),
     );
+}
+
+/**
+ * 列表页开播状态刷新周期（契约 §4）。用户 2026-09-16：「列表应该定期查询状态」——
+ * 打开着的房间靠长连接的 `LIVE` / `PREPARING` 实时变（`danmubox://room`），
+ * 列表上的那些房间没人替它们问上游，所以由列表页按这个周期自己问。
+ */
+const LIST_STATUS_REFRESH_MS = 30_000;
+
+/** 失败退避的封顶：`30 → 60 → 120 → 240` 秒（契约 §4）。再久就等于这一页不再刷新了。 */
+const LIST_STATUS_REFRESH_MAX_MS = LIST_STATUS_REFRESH_MS * 8;
+
+/** 在跑的那一拍（`undefined` = 没在跑）。链条式调度：**这一拍落地才排下一拍**。 */
+let listStatusTimer: number | undefined;
+/** 连续失败次数：只用来算退避，成功即复位。 */
+let listStatusFailures = 0;
+
+/**
+ * 停掉列表页轮询（进房间页 / 组件卸载 / 重新 start 时都走它）。幂等。
+ */
+function stopListStatusPolling() {
+  if (listStatusTimer !== undefined) window.clearTimeout(listStatusTimer);
+  listStatusTimer = undefined;
+  listStatusFailures = 0;
+}
+
+/**
+ * 排下一拍。**链条式**（下一拍只在上一拍落地后才有）而不是 `setInterval`：这样
+ * 「不重叠」是结构上成立的 —— 上游慢只会把下一拍推后，不会把请求叠起来，
+ * 也不需要「上一拍还没回来就跳过这一拍」那种会白丢一拍的写法。
+ */
+function scheduleListStatusPoll(store: StoreApi<AppStore>, delayMs: number) {
+  listStatusTimer = window.setTimeout(() => {
+    listStatusTimer = undefined;
+    void runListStatusPoll(store);
+  }, delayMs);
+}
+
+/**
+ * 一拍：先看**可见性**，不可见就整拍跳过（一个请求都不发 —— 契约 §4 的第一道闸门），
+ * 可见则拉两份状态，最后按这一拍的成败排下一拍（失败退避，成功复位）。
+ *
+ * 定时器在不可见时**留着**（只是空转）：它的代价为零，而浏览器在后台本来就会把定时器节流；
+ * 真正的纪律是「不可见就不打上游」，由这里的提前返回保证。
+ */
+async function runListStatusPoll(store: StoreApi<AppStore>) {
+  if (document.visibilityState !== "visible") {
+    scheduleListStatusPoll(store, LIST_STATUS_REFRESH_MS);
+    return;
+  }
+
+  if (await refreshListStatuses(store)) {
+    listStatusFailures = 0;
+  } else {
+    listStatusFailures += 1;
+  }
+
+  const delay = Math.min(
+    LIST_STATUS_REFRESH_MS * 2 ** listStatusFailures,
+    LIST_STATUS_REFRESH_MAX_MS,
+  );
+  scheduleListStatusPoll(store, delay);
+}
+
+/**
+ * 这一拍要拉的两份状态：**「我的房间」**走 `rooms_refresh_status`（逐个房间只读上游一次，
+ * 游客同样成立），**「关注」**走 `follow_list`（它同时是关注行「最后开播时间」的唯一来源，
+ * 没有别的接口能替代这一份）。两份**并发**发；**两份都成**才算这一拍成功。
+ *
+ * 关注那份只在登录时发：游客态没有关注列表可刷（后端会以 `NOT_LOGGED_IN` 回绝）。
+ */
+async function refreshListStatuses(store: StoreApi<AppStore>): Promise<boolean> {
+  const [roomsOk, followedOk] = await Promise.all([
+    refreshRoomStatuses(store),
+    store.getState().session?.logged_in === true
+      ? store.getState().loadFollowed()
+      : Promise.resolve(true),
+  ]);
+  return roomsOk && followedOk;
+}
+
+/**
+ * 「我的房间」那一份：`rooms_refresh_status` 返回的是**与 `rooms_list` 同形**的全量快照，
+ * 因此走同一条落地口径 —— 同一个快照序号护栏（晚到的旧快照不许把连接态指回旧值）+
+ * `mergeRoomOrder`（用户拖过的顺序不许被上游顺序顶掉）。
+ *
+ * 失败进错误条（与其它命令同一条纪律：不静默），并把 `false` 交回给调用方去退避。
+ */
+async function refreshRoomStatuses(store: StoreApi<AppStore>): Promise<boolean> {
+  try {
+    const rooms = await reloadRooms(() => api.roomsRefreshStatus());
+    if (rooms !== undefined) {
+      store.setState((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
+    }
+    return true;
+  } catch (error) {
+    store.setState({ error: describeError(error) });
+    return false;
+  }
 }
 
 /**
@@ -710,11 +823,28 @@ export const useApp = create<AppStore>((set, get, store) => ({
               [status.room_id]: { state: status.state, detail: status.detail },
             },
           })),
+        // 房间元信息变化（`danmubox://room`）：当前发布点是长连接里的 `LIVE` / `PREPARING`
+        // （契约 §6/§7），因此这条实际承载的是**开播状态**。
+        //
+        // 两处都要跟着变，否则用户会在同一个界面上看到两个自相矛盾的状态：
+        // ① `rooms` 里那一条 —— 房间标签条圆点 / 房间头状态点 / 列表卡片都读它；
+        // ② `followed` 里同号的那一条 —— 关注行的状态标签读它（`live_status == 1` 还决定置顶，
+        //    排序是渲染时按 `followed` 现算的，改了这一条排序自然跟着动）。
+        // 只有在载荷真的带了 `live_status` 时才动关注行：载荷按契约是整条 `Room`，但**不许**
+        // 把「这一份没带」当成「状态是 undefined」写进去（那会把关注行的状态标签打空）。
         onRoom: (room) =>
           set((state) => ({
             rooms: state.rooms.map((item) =>
               item.room_id === room.room_id ? { ...item, ...room } : item,
             ),
+            followed:
+              typeof room.live_status === "number"
+                ? state.followed.map((item) =>
+                    item.room_id === room.room_id
+                      ? { ...item, live_status: room.live_status }
+                      : item,
+                  )
+                : state.followed,
           })),
         // 登录态变了（扫码确认 / Cookie 失效 / 后端切号）就顺手重拉账号列表，
         // 否则对话框会一直显示过期的「已登录」标记；不递归：只重拉列表，不碰 session。
@@ -1157,11 +1287,18 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
-  async loadFollowed() {
+  /**
+   * 重拉关注列表。返回**这一份有没有拿到**：列表页的轮询按它判退避（契约 §4），
+   * 因此失败除了进错误条，还要把「这一拍没成」这句话交回给调用方。
+   * 现有调用方（启动 / 换号 / 「刷新」按钮）照旧 `void` 掉它，行为不变。
+   */
+  async loadFollowed(): Promise<boolean> {
     try {
       set({ followed: await api.followList() });
+      return true;
     } catch (error) {
       set({ error: describeError(error) });
+      return false;
     }
   },
 
@@ -1171,6 +1308,15 @@ export const useApp = create<AppStore>((set, get, store) => ({
     } catch (error) {
       set({ error: describeError(error) });
     }
+  },
+
+  startListStatusPolling() {
+    // 幂等：重复 start 先停掉上一轮（React 严格模式下 effect 会跑两遍，卸载/重挂也走这里）。
+    stopListStatusPolling();
+    // **进列表页立即一拍**（延迟 0，不是等满一个周期）：用户刚看这一页时的那一眼必须是
+    // 当下的状态 —— 否则「刚开播的房间」要等 30 秒才在列表上亮起来。之后由链条自己按周期走。
+    scheduleListStatusPoll(store, 0);
+    return stopListStatusPolling;
   },
 
   async loadRoomIdentity(roomId) {

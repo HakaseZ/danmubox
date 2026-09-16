@@ -598,6 +598,17 @@ impl BiliLive {
                                                 online,
                                                 watched,
                                             }) => sink.publish_room_stats(room_id, online, watched),
+                                            // `LIVE` / `PREPARING`：先照旧投那条 `system` 消息
+                                            // （缓冲里的先后顺序与从前一致），再把开播状态冒泡给
+                                            // 界面 —— 用户 2026-09-16 报的「开播下播时状态不会自动
+                                            // 更新」就靠这第二条（`docs/protocol.md` §10.7 的侧路）。
+                                            Some(cmd::Dispatch::LiveStatus {
+                                                message,
+                                                live_status,
+                                            }) => {
+                                                sink.publish_message(message);
+                                                sink.publish_live_status(room_id, live_status);
+                                            }
                                             None => {}
                                         }
                                         if let Some((name, before)) = unknown_probe {
@@ -856,6 +867,11 @@ impl LiveSource for BiliLive {
 
     async fn resolve_room(&self, input: &str) -> Result<Room> {
         self.http.room_play_info(input).await
+    }
+
+    /// 列表页定期刷新用（`docs/contract.md` §4）：只读一次 `getRoomPlayInfo`，不做昵称标题那一跳。
+    async fn live_status(&self, room_id: i64) -> Result<i32> {
+        self.http.room_live_status(room_id).await
     }
 
     async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {

@@ -491,6 +491,11 @@ mod tests {
             Ok(Room::default())
         }
 
+        // 会话测试与开播状态无关（那条通路在 `cmd.rs` / `http.rs` 各自有用例）：给未开播。
+        async fn live_status(&self, _room_id: i64) -> Result<i32> {
+            Ok(0)
+        }
+
         async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {
             if self.identity_fails {
                 return Err(crate::Error::Upstream("假适配器的身份失败".into()));
@@ -747,6 +752,11 @@ mod tests {
             Ok(Room::default())
         }
 
+        // 会话测试与开播状态无关（那条通路在 `cmd.rs` / `http.rs` 各自有用例）：给未开播。
+        async fn live_status(&self, _room_id: i64) -> Result<i32> {
+            Ok(0)
+        }
+
         async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {
             Ok(RoomSession {
                 room_id,
@@ -832,6 +842,11 @@ mod tests {
 
         async fn resolve_room(&self, _input: &str) -> Result<Room> {
             Ok(Room::default())
+        }
+
+        // 会话测试与开播状态无关（那条通路在 `cmd.rs` / `http.rs` 各自有用例）：给未开播。
+        async fn live_status(&self, _room_id: i64) -> Result<i32> {
+            Ok(0)
         }
 
         async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {

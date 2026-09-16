@@ -170,6 +170,9 @@ pub struct BiliHttp {
     nav_url: String,
     /// `getDanmuInfo` 端点。生产恒为 `EP_DANMU_INFO`；测试指到本地桩服务器以断言请求头。
     danmu_info_url: String,
+    /// `getRoomPlayInfo` 端点。生产恒为 `EP_ROOM_PLAY_INFO`；测试指到本地桩服务器以**计数请求**
+    /// （列表页的定期刷新靠它对每个房间只打一次，见 `room_live_status`）。
+    play_info_url: String,
 }
 
 impl BiliHttp {
@@ -204,6 +207,7 @@ impl BiliHttp {
             cookie,
             nav_url: EP_NAV.to_string(),
             danmu_info_url: EP_DANMU_INFO.to_string(),
+            play_info_url: EP_ROOM_PLAY_INFO.to_string(),
         })
     }
 
@@ -218,6 +222,13 @@ impl BiliHttp {
     #[cfg(test)]
     fn with_danmu_url(mut self, url: String) -> Self {
         self.danmu_info_url = url;
+        self
+    }
+
+    /// 仅测试：把 `getRoomPlayInfo` 指到本地桩服务器（生产恒为 `EP_ROOM_PLAY_INFO`）。
+    #[cfg(test)]
+    fn with_play_info_url(mut self, url: String) -> Self {
+        self.play_info_url = url;
         self
     }
 
@@ -339,25 +350,7 @@ impl BiliHttp {
 
     /// 房间号 / 短号 → 房间元信息（`docs/contract.md` §6）。
     pub async fn room_play_info(&self, input: &str) -> Result<Room> {
-        let query = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("room_id", &normalize_room_input(input)?)
-            .finish();
-        let value = self
-            .get(&format!("{EP_ROOM_PLAY_INFO}?{query}"))
-            .send()
-            .await
-            .map_err(|e| upstream("getRoomPlayInfo", e))?
-            .json::<Value>()
-            .await
-            .map_err(|e| upstream("getRoomPlayInfo decode", e))?;
-
-        if value.get("code").and_then(Value::as_i64) != Some(0) {
-            return Err(Error::RoomNotFound(format!(
-                "输入 `{}` 未解析出房间（上游 code={}）",
-                redact::redact(input),
-                value.get("code").and_then(Value::as_i64).unwrap_or(-1)
-            )));
-        }
+        let value = self.room_play_response(input).await?;
 
         let data = value.get("data").unwrap_or(&Value::Null);
         // 名字与标题不在上面这个响应里，得再问一次 `getH5InfoByRoom`（见 `map_room_play_info`）。
@@ -380,6 +373,47 @@ impl BiliHttp {
             }
         };
         map_room_play_info(data, h5.get("data").unwrap_or(&Value::Null), input)
+    }
+
+    /// 只读一次某房间的**开播状态**（`0` 未开播 / `1` 直播中 / `2` 轮播）。
+    ///
+    /// 列表页的定期刷新逐房间调它（`docs/contract.md` §4 的 30 秒那一拍），因此**只发一次请求**：
+    /// 昵称与标题那一跳（`getH5InfoByRoom`）是「登记房间」才要的，不在这一条路上。
+    /// 房间号必须是真实 `room_id`（短号先经 `room_play_info` 解析）。
+    ///
+    /// `live_status` 缺失或不是 JSON 整数时按 `0` 容错（口径与 `map_room_play_info` 一致）——
+    /// 不猜、不编造，界面那一拍的下一次会再问一遍。
+    pub async fn room_live_status(&self, room_id: i64) -> Result<i32> {
+        let value = self.room_play_response(&room_id.to_string()).await?;
+        Ok(map_live_status(&value))
+    }
+
+    /// `getRoomPlayInfo` 的原始响应（短号 / URL / 真实房间号都能当 `input`）。
+    ///
+    /// 两个调用者共用这一次请求：`room_play_info`（登记房间：还要 `room_id` / `uid`）与
+    /// `room_live_status`（定期刷新：只要 `live_status`）。上游非 0 code 一律按
+    /// 「解析不出房间」处理 —— 这个端点的调用者都只关心「有没有这个房间」。
+    async fn room_play_response(&self, input: &str) -> Result<Value> {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("room_id", &normalize_room_input(input)?)
+            .finish();
+        let value = self
+            .get(&format!("{}?{query}", self.play_info_url))
+            .send()
+            .await
+            .map_err(|e| upstream("getRoomPlayInfo", e))?
+            .json::<Value>()
+            .await
+            .map_err(|e| upstream("getRoomPlayInfo decode", e))?;
+
+        if value.get("code").and_then(Value::as_i64) != Some(0) {
+            return Err(Error::RoomNotFound(format!(
+                "输入 `{}` 未解析出房间（上游 code={}）",
+                redact::redact(input),
+                value.get("code").and_then(Value::as_i64).unwrap_or(-1)
+            )));
+        }
+        Ok(value)
     }
 
     /// 房间名与主播昵称：`getH5InfoByRoom` 的原始响应（`map_room_play_info` 只读它的 `data`）。
@@ -791,6 +825,17 @@ pub fn normalize_room_input(input: &str) -> Result<String> {
     Ok(digits)
 }
 
+/// `getRoomPlayInfo` 响应 → 开播状态（列表页定期刷新用，`docs/contract.md` §4）。
+///
+/// 只按 JSON 整数取 `/data/live_status`（`0` 未开播 / `1` 直播中 / `2` 轮播，契约 §5）；
+/// 缺失或非整数一律按 `0` 容错 —— 与 `map_room_play_info` 同口径，不猜、不编造语义。
+fn map_live_status(value: &Value) -> i32 {
+    value
+        .pointer("/data/live_status")
+        .and_then(Value::as_i64)
+        .unwrap_or(0) as i32
+}
+
 /// `getRoomPlayInfo` + `getH5InfoByRoom` 的 `data` → `Room`（上游字段名只允许出现在这个函数里）。
 ///
 /// **取证（2026-09-12，只读实测，夹具见 `smoke/fixtures/`）**：主播昵称与直播间标题
@@ -904,6 +949,66 @@ mod tests {
         let err =
             map_room_play_info(&serde_json::json!({ "title": "x" }), &Value::Null, "9").unwrap_err();
         assert_eq!(err.code(), "ROOM_NOT_FOUND");
+    }
+
+    #[test]
+    fn live_status_reads_the_integer_or_falls_back_to_zero() {
+        // ① 真实夹具（轮播房间）：状态就是 `data.live_status`。
+        assert_eq!(map_live_status(&fixture(ROOM_PLAY_INFO)), 2);
+        // ② 退化形态（从真实夹具派生，不是另编一份）：缺字段 / 非整数一律按 0 容错 ——
+        //    与 `map_room_play_info` 同口径，不猜也不编造语义。
+        let mut missing = fixture(ROOM_PLAY_INFO);
+        missing["data"]
+            .as_object_mut()
+            .expect("夹具 data 是对象")
+            .remove("live_status");
+        assert_eq!(map_live_status(&missing), 0);
+        let mut text = fixture(ROOM_PLAY_INFO);
+        text["data"]["live_status"] = serde_json::json!("1");
+        assert_eq!(map_live_status(&text), 0, "字符串不算整数");
+        // ③ 连 `data` 都没有（上游换了信封形态）：仍是 0，不 panic。
+        assert_eq!(map_live_status(&serde_json::json!({"code": 0})), 0);
+    }
+
+    /// 列表页的定期刷新**每个房间只打一次上游**（`docs/contract.md` §4）：
+    /// `room_live_status` 不跟在 `room_play_info` 后面再问一次 `getH5InfoByRoom`。
+    #[tokio::test]
+    async fn live_status_asks_upstream_exactly_once_and_skips_the_h5_hop() {
+        let body = include_str!("../../../apps/desktop/ui/smoke/fixtures/room-play-info.json");
+        let stub = spawn_stub(&[(200, "application/json", body)], Duration::ZERO);
+        let http = BiliHttp::new()
+            .unwrap()
+            .with_play_info_url(stub.base.clone());
+
+        assert_eq!(http.room_live_status(5440).await.expect("桩应答可解析"), 2);
+        assert_eq!(
+            stub.hits.load(Ordering::SeqCst),
+            1,
+            "这一拍只该有一次请求（昵称 / 标题那一跳不在这一条路上）"
+        );
+        let raw = stub.headers.lock().expect("桩请求头").join("\n");
+        assert!(
+            raw.contains("room_id=5440"),
+            "请求要带真实房间号：{raw}"
+        );
+    }
+
+    /// 这个端点非 0 code 的语义是「解析不出房间」，定期刷新那条路同样按它报错
+    /// （`rooms_refresh_status` 靠它判断这一拍是否失败）。
+    #[tokio::test]
+    async fn live_status_reports_not_found_on_non_zero_code() {
+        let stub = spawn_stub(
+            &[(200, "application/json", r#"{"code":-400,"message":"no"}"#)],
+            Duration::ZERO,
+        );
+        let http = BiliHttp::new()
+            .unwrap()
+            .with_play_info_url(stub.base.clone());
+        let error = http
+            .room_live_status(5440)
+            .await
+            .expect_err("非 0 code 必须报错");
+        assert_eq!(error.code(), "ROOM_NOT_FOUND");
     }
 
     #[test]

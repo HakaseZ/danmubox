@@ -133,7 +133,7 @@ graph LR
 | 端口（契约 §3） | 职责（契约原文） | 输入 → 输出领域模型 | 实现落点 |
 |---|---|---|---|
 | `AuthProvider` | 登录态、账号清单与切换、扫码流程、凭据读写 | 无输入 → `SessionState`；`accounts` → `Account[]`；`begin_qr` / `poll_qr` → `QrChallenge` / `QrPoll`；`switch_account` / `logout` / `remove_account` → `SessionState` | `bili::auth` |
-| `LiveSource` | 房间解析、建立 / 断开连接、事件流、进场回填、本人房内身份 | 房间号 / 短号 / URL → `Room`；`room_id` → `Message[]`（回填）或 `RoomSession`；`room_id` + `MessageSink` + `Cancel` → 连接期间持续产出 `Message` 与状态变化 | `bili::ws`（房间解析经 `bili::http`，回填经 `bili::history`） |
+| `LiveSource` | 房间解析、建立 / 断开连接、事件流、进场回填、本人房内身份、单房间开播状态 | 房间号 / 短号 / URL → `Room`；`room_id` → `Message[]`（回填）或 `RoomSession`，或只读一次的开播状态（`live_status`，列表页定期刷新用）；`room_id` + `MessageSink` + `Cancel` → 连接期间持续产出 `Message` 与状态变化 | `bili::ws`（房间解析与状态经 `bili::http`，回填经 `bili::history`） |
 | `DanmakuSender` | 发送弹幕（含表情弹幕与被吞状态归一化） | `room_id` + 内容 / 颜色 / 模式 + 可选 `EmoteToken` / `ReplyTarget` → `SendReport`（`SendOutcome` + 上游原始 code / message） | `bili::send` |
 | `DanmakuReporter` | 举报弹幕 | 无输入 → `ReportReason[]`；`Message` + 理由 → 成功 / 失败 | `bili::report` |
 | `EmoteProvider` | 按身份加载表情包库 | `room_id` + `RoomSession`（我在该房间的粉丝牌与大航海等级、是否房管）→ `Emote[]`；`owned` → 主站表情 `Emote[]` | `bili::emote` |

@@ -131,6 +131,15 @@ pub trait LiveSource: Send + Sync {
     /// 房间号 / 短号 / URL → 房间元信息。
     async fn resolve_room(&self, input: &str) -> Result<Room>;
 
+    /// 只读一次某房间的**开播状态**（`0` 未开播 / `1` 直播中 / `2` 轮播）。
+    ///
+    /// 与 [`LiveSource::resolve_room`] 的区别：**不做**昵称与标题那一跳（那一跳是
+    /// 「登记房间」才要的锦上添花，`docs/contract.md` §6），只问状态本身。列表页的定期刷新
+    /// （`contract.md` §4 的 30 秒那一拍）逐房间调它，因此这一条要尽量便宜：一次只读 GET。
+    ///
+    /// 房间号必须是**真实 `room_id`**（短号由 `resolve_room` 解析过）。
+    async fn live_status(&self, room_id: i64) -> Result<i32>;
+
     /// 本人**在该房间**的身份（粉丝牌 / 大航海 / 房管；`RoomSession`）。
     ///
     /// 只有拿到它，界面才知道「我在这房间是不是房管」——房管菜单的可见性与禁用

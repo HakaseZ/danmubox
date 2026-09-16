@@ -578,6 +578,13 @@ const MOCK = (theme) => `(function () {
   window.__callsWithArgs = callsWithArgs;
   window.__prefs = prefs;
   window.__followCalls = 0;
+  // 列表页那一拍（rooms_refresh_status）的调用次数与失败开关：定期刷新 / 不可见不拉 / 退避
+  // 三条断言都数它。__statusFlip 让替身在每次刷新时把 live_status 翻过去，用来证明
+  // 「界面真的按上游那份重画了」，而不是只证明「命令被调用了」。
+  window.__statusRefreshes = 0;
+  window.__statusFail = false;
+  window.__statusFlip = false;
+  window.__statusNext = null;
   window.__qrPolls = 0;
   window.__qrTarget = null;
   // 轮询失败开关：验证「失败要能重试」（面板留在原地 + 重新获取按钮）
@@ -681,6 +688,24 @@ const MOCK = (theme) => `(function () {
           return Promise.resolve(syncSession());
         }
         case "rooms_list": return Promise.resolve(rooms.map(function (r) { return Object.assign({}, r); }));
+        // 列表页的定期刷新（契约 §4）：替身按调用次数把状态翻过去 —— 界面「到点自己重拉」
+        // 与「不可见不拉」两条都靠 __statusRefreshes 数出来（见 roomStatus* 断言）。
+        case "rooms_refresh_status": {
+          window.__statusRefreshes += 1;
+          if (window.__statusFail) {
+            return Promise.reject({ code: "UPSTREAM_ERROR", message: "刷新房间状态失败（冒烟替身）" });
+          }
+          if (window.__statusFlip) {
+            rooms.forEach(function (r) { r.live_status = r.live_status === 1 ? 0 : 1; });
+          }
+          // **一次性**覆盖：只对下一次刷新生效，用来证明「拉回来的那个值真的落到了卡片上」
+          // （而不是只证明了「命令被调用过」）。用完即清，后续各拍照旧。
+          if (window.__statusNext !== null) {
+            rooms.forEach(function (r) { r.live_status = window.__statusNext; });
+            window.__statusNext = null;
+          }
+          return Promise.resolve(rooms.map(function (r) { return Object.assign({}, r); }));
+        }
         case "prefs_get": return Promise.resolve(Object.assign({}, prefs));
         case "prefs_set": Object.assign(prefs, args.patch); return Promise.resolve(Object.assign({}, prefs));
         case "follow_list": window.__followCalls += 1; return Promise.resolve(followed.slice());
@@ -6638,6 +6663,100 @@ const MOCK = (theme) => `(function () {
       await sleep(800);
     }
     out.cheapGiftHomeRoomRestored = !!cheapHomeId && cheapActiveRoomId() === cheapHomeId;
+
+    /* ---- 开播 / 下播的状态自动更新（用户 2026-09-16：「在开播下播时，状态不会自动更新，
+       打开的房间应该实时更新状态，列表应该定期查询状态」）。
+
+       ① **实时那条**：长连接里的 LIVE / PREPARING 到达时，后端把房间的 live_status 改掉并推
+          一条 danmubox://room（契约 §6/§7）。界面这一侧要证明的是「一个事件 → 看得见的地方
+          **全都**跟着变」：房间头那颗状态点、房间标签页那颗圆点（同一个 liveKindOf，两处必然
+          同色）。这一块**只推事件** —— 不重连、不点任何刷新、不重开房间。
+       ② **列表那条**：停在列表页时界面自己按周期问上游（周期 / 不可见不拉 / 失败退避的数值
+          由探针实测，本场景不引入 30 秒级等待 —— 那会把每次冒烟都拖长一分钟以上）。这里钉的是
+          机制：进列表页会立即拍一拍、进房间就停、拉回来的值真的落到卡片与关注行上。
+
+       前提：账号那一段最后**退成了游客态**（那是有意为之，见 accountBackToGuest），而这两条
+       都要在登录态下才完整（关注那一份要登录）。所以先走一次真实的新增账号流程 --
+       替身会在第 2 次轮询（2 秒一次）时确认，和用户自己扫出来的那条路完全一样。 */
+    byTestId("db-account").click();
+    await sleep(400);
+    byTestId("db-account-add").click();
+    await sleep(5200);
+    out.roomStatusReloggedIn = !!byTestId("db-list-page") &&
+      (byTestId("db-account-name") || { innerText: "" }).innerText.indexOf("扫码新用户") >= 0;
+
+    // ---- 进房间：房间头那颗点与标签页那颗点**同一个事件一起变**。
+    byTestId("db-room-card").click();
+    await sleep(900);
+    var statusDotState = function () {
+      var box = byTestId("db-live-dot-box");
+      return box ? box.getAttribute("data-state") : null;
+    };
+    var tabDotState = function (roomId) {
+      var btn = allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === String(roomId);
+      })[0];
+      var dot = btn ? btn.querySelector('[data-testid="db-tab-dot"]') : null;
+      return dot ? dot.getAttribute("data-state") : null;
+    };
+    // 先置成「已连接 + 未开播」（红），再只推一条开播事件。
+    window.__emit("danmubox://status", { room_id: fixtureRoom.room_id, state: "connected", detail: "" });
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: 0 });
+    await sleep(400);
+    var dotsBeforeLive = statusDotState() === "off" && tabDotState(fixtureRoom.room_id) === "off";
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: 1 });
+    await sleep(400);
+    out.roomStatusLiveHeaderDot = statusDotState() === "on";
+    out.roomStatusLiveTabDot = tabDotState(fixtureRoom.room_id) === "on";
+    // 下播（PREPARING 在 Rust 侧归一成 0，界面收到的就是这一条载荷）：两处一起回红。
+    window.__emit("danmubox://room", { room_id: fixtureRoom.room_id, live_status: 0 });
+    await sleep(400);
+    out.roomStatusOfflineBothDots =
+      statusDotState() === "off" && tabDotState(fixtureRoom.room_id) === "off";
+    out.roomStatusLiveEventUpdatesBothDots = dotsBeforeLive && out.roomStatusLiveHeaderDot &&
+      out.roomStatusLiveTabDot && out.roomStatusOfflineBothDots;
+
+    // ---- 房间页里**不该**有列表那一拍（进房就停）：先等一拍可能在途的落地，再观察一段窗口。
+    await sleep(1200);
+    var refreshesInRoom = window.__statusRefreshes;
+    await sleep(3000);
+    out.roomStatusStopsPollingInRoom = window.__statusRefreshes === refreshesInRoom;
+
+    // ---- 回列表页：**没有人点刷新**，界面自己拍一拍；一次性的替身覆盖（把房间报成「直播中」）
+    //      用来证明拉回来的值**真的落到了卡片上**（只证明「命令被调用过」是不够的）。
+    window.__statusNext = 1;
+    var refreshesBeforeBack = window.__statusRefreshes;
+    var followCallsBeforeBack = window.__followCalls;
+    byTestId("db-header-back").click();
+    await sleep(1200);
+    out.roomStatusListRefreshAutomatic = window.__statusRefreshes > refreshesBeforeBack;
+    out.roomStatusListRefreshFetchesFollowed = window.__followCalls > followCallsBeforeBack;
+    var homeCard = allByTestId("db-room-card").filter(function (c) {
+      return c.innerText.indexOf(fixtureRoom.anchor_uname) >= 0;
+    })[0];
+    out.roomStatusListCardFollowsUpstream = !!homeCard &&
+      homeCard.innerText.indexOf("直播中") >= 0;
+
+    // ---- 同一份状态也要落到**关注行**上（同号的那一条）：推一条下播事件，「在播主播」那一行
+    //      从「直播中」变「未开播」—— 列表页两处状态不再自相矛盾。
+    var followRowNamed = function () {
+      return allByTestId("db-follow-item").filter(function (r) {
+        return r.innerText.indexOf("在播主播") >= 0;
+      })[0];
+    };
+    var followStatusOf = function (row) {
+      var span = row ? row.querySelector('[data-testid="db-follow-status"]') : null;
+      return span ? span.innerText : null;
+    };
+    var followStatusBefore = followStatusOf(followRowNamed());
+    window.__emit("danmubox://room", { room_id: 100, live_status: 0 });
+    await sleep(400);
+    out.roomStatusFollowRowFollowsEvent = followStatusBefore === "直播中" &&
+      followStatusOf(followRowNamed()) === "未开播";
+
+    out.roomStatusListAutorefresh = out.roomStatusListRefreshAutomatic &&
+      out.roomStatusListRefreshFetchesFollowed && out.roomStatusListCardFollowsUpstream &&
+      out.roomStatusFollowRowFollowsEvent;
 
     out.done = true;
     snap();

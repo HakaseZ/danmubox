@@ -858,17 +858,33 @@ const MOCK = (theme) => `(function () {
     var box = rect(svg);
     if (!box || !(vb[2] > 0)) return null;
     var scale = box.width / vb[2];
-    // 墨迹厚度：描边 = stroke-width，圆点 = 直径（一个圆点就是一个零长度描边段的圆头）。
+    // 墨迹厚度：描边 = stroke-width，**实心**圆点 = 直径（一个圆点就是一个零长度描边段的圆头）。
     // ⚠ 两者对**外接盒**的贡献不同：描边的几何包围盒是**路径中心线**，四周各要外扩半个笔画；
     //    实心圆的包围盒**本身就是墨迹**，一点都不用外扩（第一版两边都外扩，于是 ⋯ 的墨迹范围
     //    被算成 19.5 × 7，与箭头那 16 对不上 —— 冒烟当场把这条抓住了）。
-    var thicknessOf = function (s) {
-      if (s.tagName.toLowerCase() === "circle") return parseFloat(s.getAttribute("r")) * 2;
+    // ⚠ circle 这个标签名**本身不说明**它是实心还是描边：⋯ 那三枚圆点是 fill 实心
+    //    （厚度 = 直径 3.5 = 2 × 描边规范里的 1.75），而主题按钮的「亮」（太阳的圆心）与
+    //    「自动」（半亮的圆环）都是 fill="none" + stroke-width: 1.75 的**描边环** ——
+    //    它们的厚度就是 1.75、包围盒要外扩半个笔画。旧写法对任何 <circle> 一律按「实心圆点」
+    //    算，于是太阳的圆心被算成厚度 6、自动档的圆环被算成 14.25，两档都撞不过下面这条
+    //    「墨迹粗度 = 1.75」的规范（实测：浅色那一档 themeIconSpecOk=false）。
+    //    判据因此落在**画法**上：fill 缺席或为 none = 描边环，否则 = 实心圆点。
+    var isFilled = function (s) {
+      var fill = s.getAttribute("fill");
+      return fill !== null && fill !== "none";
+    };
+    var strokeWidthOf = function (s) {
       var w = s.getAttribute("stroke-width");
       return w === null ? 0 : parseFloat(w);
     };
+    var thicknessOf = function (s) {
+      if (s.tagName.toLowerCase() === "circle") {
+        return isFilled(s) ? parseFloat(s.getAttribute("r")) * 2 : strokeWidthOf(s);
+      }
+      return strokeWidthOf(s);
+    };
     var padOf = function (s) {
-      return s.tagName.toLowerCase() === "circle" ? 0 : thicknessOf(s) / 2;
+      return s.tagName.toLowerCase() === "circle" && isFilled(s) ? 0 : thicknessOf(s) / 2;
     };
     var lo = { x: Infinity, y: Infinity };
     var hi = { x: -Infinity, y: -Infinity };
@@ -2379,16 +2395,23 @@ const MOCK = (theme) => `(function () {
     //      手指在弹幕列表上滑到底之后会**接力**滚它，整个界面（含房间顶栏）被顶上去、底边露出画布色
     //      （用户 2026-09-16 报的就是这个）。无头里没有 IME，所以这里验的是这条链子的**布局那一半**：
     //      ① 常态 ② 面板展开（固定高度的兄弟最多、最容易把外壳撑破的一档）③ 把 --safe-bottom 换成
-    //      键盘高度（原生在键盘弹出时就是换这个值）三种状态下，文档都不可滚、body/#root 高度 = 视口高。
+    //      键盘高度（原生在键盘弹出时就是换这个值）三种状态下，文档都不可滚，且「body 铺满视口、
+    //      #root 恰好短掉 body 的上下内边距（= 让开系统栏 / 键盘）」这条链子成立。
     //      IME 那一半（系统会不会额外 resize / 平移窗口）只能在设备上看，见 docs/ui.md §9.3。
     function docBox() {
       var se = document.scrollingElement;
+      var bodyStyle = getComputedStyle(document.body);
       return {
         overflow: se.scrollHeight - se.clientHeight,
         scrollTop: se.scrollTop,
         bodyH: document.body.getBoundingClientRect().height,
         rootH: document.getElementById("root").getBoundingClientRect().height,
         viewH: window.innerHeight,
+        // body 的上下内边距 = 让开系统栏 / 键盘的那两条（--safe-top / --safe-bottom）。
+        // #root 的高度以百分比写在 body 上，解析的是 body 的**内容盒** —— 键盘那一档
+        // 因此短掉内边距那么多，这不是漏让开，正是让开本身（见下面那条断言的说明）。
+        padTop: Number.parseFloat(bodyStyle.paddingTop) || 0,
+        padBottom: Number.parseFloat(bodyStyle.paddingBottom) || 0,
       };
     }
     var docIdle = docBox();
@@ -2411,8 +2434,18 @@ const MOCK = (theme) => `(function () {
     out.docNeverScrollable = [docIdle, docPanel, docInset].every(function (d) {
       return d.overflow <= 1 && d.scrollTop === 0;
     });
+    // body 是「整屏那一层」（border-box = 动态视口高），#root 的高度是**可用区** ——
+    // 它以百分比写在 body 上、解析的是 body 的**内容盒**，所以正好等于「视口 − 上下内边距
+    // （--safe-top / --safe-bottom）」。键盘那一档因此是设计意图，不是实现漂了：
+    // 实测 idle / panel 两档 rootH = 900 = 视口高（两条内边距在桌面上都是 0），
+    // keyboardInset 一档 rootH = 564 = 900 − 336（原生在键盘弹出时下发的就是 336px，
+    // 见 docs/ui.md §9.3 与 index.css 顶上那段「界面自补内边距」）。
+    // 旧写法要求 rootH 也 = 视口高，等于要求「让开键盘这件事不发生」。新写法钉住的是这条链子
+    // 本身：body 铺满视口（不让开就没有那一截），root 恰好短掉 body 的内边距（谁把
+    // height:100% / box-sizing 改坏都立刻红），三档一起成立才过。
     out.docHeightsMatchViewport = [docIdle, docPanel, docInset].every(function (d) {
-      return Math.abs(d.bodyH - d.viewH) <= 1 && Math.abs(d.rootH - d.viewH) <= 1;
+      return Math.abs(d.bodyH - d.viewH) <= 1 &&
+        Math.abs(d.rootH - (d.viewH - d.padTop - d.padBottom)) <= 1;
     });
     out.docComposerVisibleWithKeyboardInset = composerVisible;
     out.docSafeBottomRestored = rootStyle.getPropertyValue("--safe-bottom") === prevSafeBottom;
@@ -2455,12 +2488,22 @@ const MOCK = (theme) => `(function () {
     // 不写死 8px：它属于排版令牌（app.module.css），RowRedesign 调它时断言自动跟着走。
     out.layoutScrollerPaddingBottomPx =
       Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
-    // 贴底时的呼吸空间：末行底边 ↔ 面板（= 滚动容器）顶边的间距必须 == 那个内边距
+    // 贴底时的呼吸空间：末行底边 ↔ **滚动容器（.scroller）自己的底边**的间距必须 == 那个内边距。
+    // 尺子为什么量容器而不是「面板顶边」（= 旧口径）：面板是**输入区**那一块里的弹出面板，
+    // 而弹幕区与输入区之间现在还夹着**上下分区**（issue #8：礼物栏与弹幕区共享高度、中间一条
+    // 8px 分割条；默认态礼物栏是折叠的，那一栏就是折叠头那么高）。于是旧口径量到的其实是
+    // 「内边距 + 折叠头 + 分割条」：实测 42.7 = 8（内边距）+ 26.6（折叠头）+ 8.1（分割条），
+    // 而它想验的从来不是这个和 —— 是「贴底时最新一条与它所在滚动区底边之间正好留着内边距」。
+    // 新尺子一点没放水：贴底（layoutScrollBottomGapPx = 0）时内边距被谁挤掉（末行顶到容器边）
+    // 或末行下方多出一截空隙，这条都会红。面板顶边那一份继续留在快照里（分割条口径的证据）。
     out.layoutNewestPanelGapPx = newestAfter
       ? Math.round((rect(panel).top - rect(newestAfter).bottom) * 10) / 10
       : null;
-    out.layoutNewestGapIsPadding = out.layoutNewestPanelGapPx !== null &&
-      Math.abs(out.layoutNewestPanelGapPx - out.layoutScrollerPaddingBottomPx) <= 1;
+    out.layoutNewestContainerGapPx = newestAfter
+      ? Math.round((rect(scroller).bottom - rect(newestAfter).bottom) * 10) / 10
+      : null;
+    out.layoutNewestGapIsPadding = out.layoutNewestContainerGapPx !== null &&
+      Math.abs(out.layoutNewestContainerGapPx - out.layoutScrollerPaddingBottomPx) <= 1;
     // 贴底时的精确几何：为什么最新一条会紧贴容器底边（而不是留出容器下内边距）？
     // scrollHeight - scrollTop - clientHeight = 0 表示已经滚到物理最大位置；
     // 若此时末行底边仍在内容块底边之下（msgListBottomGapPx 为负），说明行高溢出了虚拟高度块。
@@ -2751,12 +2794,22 @@ const MOCK = (theme) => `(function () {
     //      面板与输入区是**兄弟**节点，只判输入区就会把面板内部的按下当成外面。
     //      复现必须补一次真实的「pointerdown」—— 「.click()」只发 click 事件、绕过那条监听，
     //      这正是它当初没被测出来的原因（真鼠标点 tab 一定先有 pointerdown）。
+    // ⚠ 抬起（pointerup）这一步**不能省**：只发 pointerdown 不是「按了一下」，是「按住不放」。
+    //    面板里那三处按下（tab 轨道 / 表情格）与弹幕列表都落在共享分区 .paneDanmaku 里，
+    //    于是 SplitPanes 的「长按 0.5s 换位」计时器被真的挂上：500ms 后它照常触发 —— 那一栏
+    //    进入换位拖拽态、document.body.userSelect 被置成 none，并在 window 上挂一个**吞掉
+    //    下一次 click** 的捕获监听器（600ms 兜底才摘）。实测代价：pressedOnly(弹幕列表) 之后
+    //    约 800ms 那一次 pressLike(通用 tab) 被它吞掉 —— 面板仍停在上一个分组，
+    //    panelBackOnCommon 因此长期为假（点的是「通用」，量到的还是「本房间」）。
+    //    真实用户的手势一定是「按下 + 抬起」，所以这里按 immTap 那条口径补齐抬起。
     var pressLike = function (el) {
       el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
       el.click();
     };
     var pressedOnly = function (el) {
       el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
     };
     var selectedKind = function () {
       var hit = [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-tab"]'))
@@ -2789,9 +2842,32 @@ const MOCK = (theme) => `(function () {
     out.panelReopensAfterOutsidePress = !!byTestId("db-panel") &&
       selectedKind() === targetKind;
     // 复原到「通用」组：后面的表情格度量与它前面的口径一致
-    if (tabOf("common")) pressLike(tabOf("common"));
+    var kindsNow = function () {
+      var p = byTestId("db-panel");
+      return p ? [].slice.call(p.querySelectorAll('[data-testid="db-emote-tab"]')).map(function (b) {
+        return b.getAttribute("data-kind") + ":" + b.getAttribute("aria-selected");
+      }) : null;
+    };
+    var commonTab = tabOf("common");
+    out.panelBackOnCommonDiag = {
+      commonTab: !!commonTab,
+      kindsBefore: kindsNow(),
+      selectedBefore: byTestId("db-panel") ? selectedKind() : "panel-gone",
+      clicked: !!commonTab,
+    };
+    if (commonTab) pressLike(commonTab);
     await sleep(300);
-    out.panelBackOnCommon = selectedKind() === "common";
+    // 面板还在不在、还有哪些组、选中的是哪个 —— 快照里只留一个布尔的话，
+    // 「组没了」「面板被关了」「点了没生效」三种情形长得一模一样。
+    var panelAfterCommon = byTestId("db-panel");
+    out.panelBackOnCommonDiag.kindsAfter = kindsNow();
+    out.panelBackOnCommonDiag.selectedAfter = panelAfterCommon ? selectedKind() : "panel-gone";
+    out.panelBackOnCommonDiag.emptyText = panelAfterCommon &&
+      panelAfterCommon.querySelector('[class*="empty"]')
+      ? panelAfterCommon.querySelector('[class*="empty"]').innerText.trim() : null;
+    // 面板不在了（被谁关了）也是这条断言不成立的一种，不能让 selectedKind() 抛出去
+    // （抛出去就是场景当场死掉，见 admin 那一段的教训）。
+    out.panelBackOnCommon = !!panelAfterCommon && selectedKind() === "common";
 
     clickTool("表情");
     await sleep(300);
@@ -2811,9 +2887,15 @@ const MOCK = (theme) => `(function () {
       return box.bottom <= afterCloseBox.bottom + 1 && box.top >= afterCloseBox.top - 1;
     });
     var afterCloseLast = afterCloseRows[afterCloseRows.length - 1] || null;
-    out.layoutNewestGapNoPanelPx = afterCloseLast
+    // 与上面那条同一支尺子（见那处的说明）：面板收起后列表下面这一档，量的仍是
+    // 「末行 ↔ **滚动容器**底边 = 内边距」。输入区顶边那一份（旧口径）留在快照里做对照 ——
+    // 它与新的容器底边之间正好差着折叠头 + 分割条（实测 42.8 − 8.1 ≈ 34.7）。
+    out.layoutNewestGapComposerPx = afterCloseLast
       ? Math.round((rect(document.querySelector("textarea").parentElement).top -
           rect(afterCloseLast).bottom) * 10) / 10
+      : null;
+    out.layoutNewestGapNoPanelPx = afterCloseLast
+      ? Math.round((rect(afterCloseScroller).bottom - rect(afterCloseLast).bottom) * 10) / 10
       : null;
     out.layoutNewestGapIsPaddingNoPanel = out.layoutNewestGapNoPanelPx !== null &&
       Math.abs(out.layoutNewestGapNoPanelPx - out.layoutScrollerPaddingBottomPx) <= 1;
@@ -4136,10 +4218,36 @@ const MOCK = (theme) => `(function () {
       out.tabIsolationDraftFreshInB = document.querySelector("textarea").value === "";
       out.tabIsolationFollowingReset = !byTestId("db-bottom-anchor") &&
         bottomGap(byTestId("db-chat-scroll")) < 8;
-      // B 间再开一次面板，切回 A 间时它同样必须收起（两个方向都判，不是单向巧合）
-      clickTool("表情");
+      // B 间再开一次面板，切回 A 间时它同样必须收起（两个方向都判，不是单向巧合）。
+      // **用「筛选」而不是「表情」**：夹具里的第二个房间（5555）刻意是「上游没给主播名与标题」
+      // 的形态、connected: false（见 mock 的 __addSecondRoom），而房间页把这当成「没有可发的东西」：
+      // 输入区整块与「表情 / 短语」两枚工具按钮都 disabled={disabled || !loggedIn}
+      // （docs/ui.md §6.1），**点一枚 disabled 的按钮不派发 click** —— 实测 clickTool("表情")
+      // 返回 true（按钮找得到、也真的点了）但面板永远开不出来，这条断言因此恒为假，而
+      // 它旁边的 tabIsolationPanelClosedBackInA 会**顺带变成恒真**（B 间根本没开过面板，
+      // 「切回 A 间时收起」也就无从谈起）。筛选手板不看连接状态（它只是显示偏好），
+      // 在 B 间照常打得开 —— 换它之后这对断言才恢复成「两个方向都真的开过、都真的收起」。
+      var bEmotesTool = buttonWith(byTestId("db-composer-tools"), "筛选");
+      out.tabIsolationBComposer = {
+        toolsRow: !!byTestId("db-composer-tools"),
+        filterTool: !!bEmotesTool,
+        emotesToolDisabled: (function () {
+          var b = buttonWith(byTestId("db-composer-tools"), "表情");
+          return b ? b.disabled === true : null;
+        })(),
+        textareaDisabled: document.querySelector("textarea")
+          ? document.querySelector("textarea").disabled === true : null,
+      };
+      out.tabIsolationBClickedTool = clickTool("筛选");
       await sleep(400);
       out.tabIsolationPanelOpenInB = !!byTestId("db-panel");
+      out.tabIsolationBPanelDiag = {
+        panel: !!byTestId("db-panel"),
+        emoteTabs: [].slice.call(document.querySelectorAll('[data-testid="db-emote-tab"]'))
+          .map(function (b) { return b.getAttribute("data-kind"); }),
+        options: byTestId("db-panel")
+          ? [].slice.call(byTestId("db-panel").querySelectorAll("button")).length : null,
+      };
       tabRoomA = tabFor(fixtureRoom.anchor_uname);
       tabRoomA.click();
       await sleep(900);
@@ -4161,6 +4269,35 @@ const MOCK = (theme) => `(function () {
     //      的 TAP_MS）：两次「按下 → 抬起」都在 400ms 内、落点相距不超过 24px，且不落在
     //      可交互元素上。这一段与 docs/ui.md 2.3.1 的「收起 / 保留」清单一一对应。
     // 整块包一层（同上面几段的手法）：出岔子时让断言红（immersiveBlockRan），不卡死整个场景。
+    //
+    // ⚠ **沉浸态是唯一一个「块内出错会连带打死块外」的状态**：沉浸态里房间头 / 输入区都是
+    //   条件渲染（RoomView 的 {!immersive && …}），它们整个不在 DOM 里；块外的段落照旧
+    //   裸取 byTestId("db-header-more").click()（那是「进房间点 ⋯ 看菜单」的常规动作），
+    //   拿到 null 就是一个**未捕获的 TypeError** —— 场景当场死掉，跑脚本的那一头只能看到
+    //   「视口 wide 的场景未跑完（超时）」，root cause 全被 300s 的超时盖住（实测两引擎都栽在这）。
+    //   所以这里的 finally 是**必需**的：无论块内走到哪一步、抛了什么，先把沉浸态退出来，
+    //   让块外的世界回到它假设的样子；退出结果另记一条布尔（immersiveRestoredAfterBlock）。
+    var immersiveOff = async function () {
+      var root = document.documentElement;
+      if (root.getAttribute("data-immersive") !== "true") return true;
+      var el = document.querySelector('[data-testid="db-chat-wrap"]') ||
+        document.querySelector('[data-testid="db-chat-scroll"]');
+      if (!el) return false;
+      var box = el.getBoundingClientRect();
+      var x = Math.round(box.left + box.width / 2);
+      var y = Math.round(box.top + box.height / 2);
+      var base = {
+        bubbles: true, cancelable: true, composed: true, isPrimary: true,
+        button: 0, pointerId: 1, pointerType: "mouse", clientX: x, clientY: y,
+      };
+      // 两下「点」挨着发（判据看的是两次点的间隔 < 400ms，sleep 会被页面节流拉长，见块内说明）
+      for (var i = 0; i < 2; i += 1) {
+        el.dispatchEvent(new PointerEvent("pointerdown", Object.assign({}, base, { buttons: 1 })));
+        el.dispatchEvent(new PointerEvent("pointerup", Object.assign({}, base, { buttons: 0 })));
+      }
+      await sleep(320);
+      return root.getAttribute("data-immersive") !== "true";
+    };
     var immersiveBlockRan = false;
     try {
       var immTap = function (el, x, y, pointerType) {
@@ -4184,13 +4321,39 @@ const MOCK = (theme) => `(function () {
       // 为空（既不占位、也不进 Tab 序）。
       var immUnrendered = function (el) { return el == null || el.getClientRects().length === 0; };
       var immAttr = function () { return document.documentElement.getAttribute("data-immersive"); };
+      // 垫场：这一步之前刚跑完「A 间 → B 间 → A 间」，而切回 A 间看到的是**这一间房间
+      // 重新回填的历史**（store 里 messages 只有一份、跟着当前房间走；每个房间自己的会话
+      // 缓冲在 Rust 那一头，切回来是靠再 query 一次历史看到的 —— 见 store 的 openRoom），
+      // 夹具那几条历史**撑不满一屏**：实测此刻 scrollHeight == clientHeight、scrollTop 恒 0，
+      // 下面「沉浸态里照样能往上翻历史」就没有了可观察面（不是功能坏了 —— 单独跑一段垫过场的
+      // 场景，进沉浸后滚到中段 scrollTop=765、离底 764px、「回到最新」如期出现且稳定）。
+      // 做法与 tabs 那一段的「隔离垫场」逐字同源。
+      for (var immPad = 0; immPad < 30; immPad += 1) {
+        window.__emit("danmubox://message", window.__mk("danmaku", "沉浸垫场" + immPad, false, {
+          uid: 88002, uname: "垫场观众"
+        }));
+      }
+      await sleep(700);
+      out.immersivePadRows = rows().length;
       var immChat0 = rect(byTestId("db-chat-scroll"));
       var immGift0 = rect(byTestId("db-gift-dock"));
       var immTabs0 = rect(byTestId("db-room-tabs"));
       var immHeader0 = rect(byTestId("db-room-header"));
-      // 输入区整块的高度 = 礼物栏顶边 − 弹幕区底边：文档流里它俩紧挨着输入区的上下
-      // （此刻没有面板 / 举报条 / 房管面板 / 确认条 / 日志块在场，中间就是输入区那一块）。
-      var immComposerH = Math.round((immGift0.top - immChat0.bottom) * 10) / 10;
+      // 输入区整块的高度**直接量输入区这一块**（RoomView 的 shell 里它是被收起的三块之一）。
+      // 旧写法拿「礼物栏顶边 − 弹幕区底边」推算，前提是「文档流里礼物栏与弹幕区紧挨着输入区的上下」
+      // —— 那是**上下分区（issue #8）之前**的结构：礼物栏搬进共享分区之后，那一段量到的是
+      // 弹幕区与礼物栏之间的**分割条**（实测 8.0px），输入区那块（100px 量级）根本不在这条缝里，
+      // 等式必然差一大截。这里改用与文件里其它段落同源的办法（closest('[class*="composer"]')）。
+      var immComposerEl = document.querySelector("textarea")
+        ? document.querySelector("textarea").closest('[class*="composer"]')
+        : null;
+      var immComposerH = immComposerEl ? Math.round(rect(immComposerEl).height * 10) / 10 : 0;
+      var immGiftHeadH = Math.round((immGift0 ? immGift0.height : 0) * 10) / 10;
+      out.immersiveRemovedBlocksPx = [
+        immTabs0 ? Math.round(immTabs0.height * 10) / 10 : null,
+        immHeader0 ? Math.round(immHeader0.height * 10) / 10 : null,
+        immComposerH,
+      ];
       var immTextareas0 = document.querySelectorAll("textarea").length;
       var immTapX = Math.round(immChat0.left + immChat0.width / 2);
       var immTapY = Math.round(immChat0.top + immChat0.height / 2);
@@ -4218,18 +4381,45 @@ const MOCK = (theme) => `(function () {
       out.immersiveChatGrewByRemovedBlocks = immTabs0 !== null && immHeader0 !== null &&
         immComposerH > 0 && Math.abs(out.immersiveChatGrewPx -
           (immTabs0.height + immHeader0.height + immComposerH)) < 1.5;
-      // 礼物 / SC 栏留在场上、高度一点没变，且它上面的弹幕区正好接着它的顶边
-      out.immersiveKeepsGiftDock = byTestId("db-gift-dock") !== null &&
+      // 礼物 / SC 栏留在场上、高度一点没变；它与弹幕区之间**只隔着那条分割条**
+      // （弹幕区拿走收起腾出的全部高度，没有别的块被挤错）。旧写法要求「弹幕区底边紧贴礼物栏顶边」，
+      // 同样是上下分区之前的结构 —— 折叠态下礼物栏在弹幕区正下方，中间那一条 8px 就是分割条
+      // （实测 8.0），所以相邻性改成「弹幕区底边 = 分割条顶边、礼物栏顶边 = 分割条底边」。
+      var immSplit1 = rect(byTestId("db-pane-splitter"));
+      out.immersiveGiftHeightDeltaPx = immGift0 && immGift1
+        ? Math.round((immGift1.height - immGift0.height) * 10) / 10 : null;
+      out.immersiveKeepsGiftDock = byTestId("db-gift-dock") !== null && !!immGift0 &&
+        !!immGift1 && !!immSplit1 &&
+        // 折叠态（此刻它就是折叠的）在沉浸态里照旧折叠：高度仍然是折叠头那一个数
+        !byTestId("db-gift-body") &&
         Math.abs(immGift1.height - immGift0.height) < 1 &&
-        Math.abs(rect(byTestId("db-chat-scroll")).bottom - immGift1.top) < 1;
+        Math.abs(immGift1.height - immGiftHeadH) < 1 &&
+        Math.abs(rect(byTestId("db-chat-scroll")).bottom - immSplit1.top) < 1 &&
+        Math.abs(immGift1.top - immSplit1.bottom) < 1;
       snap();
       // ③ 沉浸态里照样能往上翻历史、「回到最新」跟着出现、点了又贴底（虚拟列表重新量高）
       var immScroll = byTestId("db-chat-scroll");
       immScroll.scrollTop = Math.round((immScroll.scrollHeight - immScroll.clientHeight) * 0.5);
-      await sleep(350);
+      // 采样而不是只量一次：虚拟列表在沉浸态里会重新量高、MessageList 的 ResizeObserver
+      // 又会在「跟随中」时重新贴底 —— 「滚上去之后按钮没出现」到底是没滚成（scrollTop 为 0）、
+      // 还是滚了又被弹回底，采样数组一眼分得出来。
+      var immSamples = [];
+      for (var immStep = 0; immStep < 5; immStep += 1) {
+        await sleep(immStep === 0 ? 80 : 150);
+        var immNow = byTestId("db-chat-scroll");
+        immSamples.push({
+          top: immNow ? Math.round(immNow.scrollTop) : null,
+          gap: immNow ? bottomGap(immNow) : null,
+          anchor: !!byTestId("db-bottom-anchor"),
+        });
+      }
+      out.immersiveScrollSamples = immSamples;
       out.immersiveScrollsWhenImmersive = immScroll.scrollTop > 0 &&
         bottomGap(immScroll) > 8 && byTestId("db-bottom-anchor") !== null;
-      byTestId("db-bottom-anchor").click();
+      // 按钮不在就**不点**：这一步以前是裸取 .click()，沉浸块内一旦走到这里就抛 TypeError，
+      // 被 catch 吞掉之后沉浸态留在场上，块外的裸取（房间头那枚 ⋯）拿到 null → 未捕获异常 →
+      // 整个场景死掉（实测两引擎都栽在这，跑脚本那头只看到「场景未跑完（超时）」）。
+      if (byTestId("db-bottom-anchor")) byTestId("db-bottom-anchor").click();
       await sleep(400);
       out.immersiveJumpToLatestWhenImmersive = byTestId("db-bottom-anchor") === null &&
         bottomGap(immScroll) < 8;
@@ -4238,6 +4428,17 @@ const MOCK = (theme) => `(function () {
       await sleep(400);
       var immAnchor = rows()[4];
       var immAnchorTop = immAnchor ? Math.round(rect(immAnchor).top * 10) / 10 : null;
+      // 认的是**这一条消息**，不是「第 5 个渲染出来的格子」：虚拟列表渲染的是窗口里那几行，
+      // 视口一变窗口就挪（退出沉浸时弹幕区矮回去 193px，窗口里换一批行），rows()[4]
+      // 指向的已经不是同一条了 —— 实测差值 88.1px ≈ 一整行（81.1px），量的是「换了一条」。
+      // 行的外层包装上有 data-index（MessageList 用虚拟项的 index 打的那一枚），
+      // 记下它就能在退出之后把**同一条消息**找回来；比按下标取更硬，不是放水。
+      var immAnchorWrap = immAnchor ? immAnchor.closest("[data-index]") : null;
+      var immAnchorIndex = immAnchorWrap ? immAnchorWrap.getAttribute("data-index") : null;
+      var rowByIndex = function (index) {
+        var wrap = index === null ? null : document.querySelector('[data-index="' + index + '"]');
+        return wrap ? wrap.querySelector('[data-testid="db-msg-row"]') : null;
+      };
       // 顺带钉住「不跟双击选词打架」：选中一段正文（双击选词的等价物），
       // 进出沉浸模式都不许把它清掉，正文本身也不许变成不可选。
       var immBody = immAnchor ? immAnchor.querySelector('[data-testid="db-msg-body"]') : null;
@@ -4256,8 +4457,12 @@ const MOCK = (theme) => `(function () {
       // ⑤ 触屏双击（pointerType = touch）退出：鼠标与触摸走的是同一条指针判据
       await immDoubleTap(byTestId("db-chat-scroll"), immTapX, immTapY, "touch");
       var immChat2 = rect(byTestId("db-chat-scroll"));
-      var immAnchorTopAfter = immAnchor && immAnchor.isConnected
-        ? Math.round(rect(immAnchor).top * 10) / 10 : null;
+      // 用 data-index 把**同一条消息**找回来（见上面 immAnchorIndex 的说明）
+      var immAnchorAfter = rowByIndex(immAnchorIndex);
+      var immAnchorTopAfter = immAnchorAfter
+        ? Math.round(rect(immAnchorAfter).top * 10) / 10 : null;
+      out.immersiveAnchorIndex = immAnchorIndex;
+      out.immersiveAnchorFoundAfter = !!immAnchorAfter;
       out.immersiveExitOnTouchDoubleTap = immAttr() === null;
       out.immersiveRestoresLayout = byTestId("db-room-header") !== null &&
         byTestId("db-composer-tools") !== null &&
@@ -4309,12 +4514,27 @@ const MOCK = (theme) => `(function () {
       immersiveBlockRan = true;
     } catch (e) {
       out.immersiveBlockError = String((e && e.stack) || e);
+    } finally {
+      // 无论成败都退出沉浸态（见块上那段说明），并把「退出来了没有」记进快照 ——
+      // 快照是判官拿到的唯一证据，出错那一条（immersiveBlockError）也必须落进去，
+      // 否则现场只剩「场景未跑完（超时）」一句话。
+      out.immersiveRestoredAfterBlock = await immersiveOff();
+      snap();
     }
     out.immersiveBlockRan = immersiveBlockRan;
+    snap();
 
 
 
     // ---- admin 房管（issue #3）：权限前置、写操作二次确认、面板三块与错误原样展示
+    // 整段包一层（同 tabs / immersive 段的手法：try/catch + xxxBlockRan）—— 这一段里有 5 处
+    // **裸取** byTestId("db-header-more").click()、db-admin-close 之类的常规动作，「进房间点 ⋯」
+    // 的前置状态一旦被谁弄坏（历史教训：沉浸态泄漏时房间头整个不在 DOM 里），裸取就是未捕获异常，
+    // 场景当场死掉、跑脚本那一头只看到「场景未跑完（超时）」。包起来之后这一段最多红一片，
+    // 后面的段落照跑。缩进保持原样不动：这一段的注释与断言排布本来就按「段」读，
+    // 为了多一层缩进把 500 行重排一遍，只会把这次的改动淹在空白差异里。
+    var adminBlockRan = false;
+    try {
     out.adminIdentityFetched = calls.indexOf("room_session") >= 0;
     // **预载**（issue #4/第 5 条：连接上就有房管权限的房间时把数据加载好）：身份就绪之后
     // **不打开面板**也已经拉过三块名单 —— 数 IPC 调用即可（一次都没有 = 打开面板才拉，慢半拍）。
@@ -4555,19 +4775,43 @@ const MOCK = (theme) => `(function () {
     out.adminPanelTabLabels = out.adminPanelSections.join(",") === "禁言,黑名单,屏蔽词";
     // 键盘：←→ 换 tab、Home / End 跳首尾，焦点跟着选中项走（WAI-ARIA tabs 口径）。
     // 键事件派发在**已聚焦的那一枚 tab** 上，轨道自身的 keydown 因此收到它 —— 与真实按键同一条路径。
+    // ⚠ 先**点回「禁言」**把起点定下来：轨道上的方向键是**相对当前选中的那一枚**算的
+    //   （current = TAB_ORDER.indexOf(tab)），而上面那次 adminWalk() 巡完三个 tab 之后
+    //   停在「屏蔽词」上。不点回起点的话，第一步「在禁言上按 →」实际是在**屏蔽词**上按 →
+    //   走到「禁言」（0 的下一个），于是 adminTabKeyboardFollows 恒为假 ——
+    //   实测（9-15 两引擎 × 四档全红）每一步的现场都记在 adminTabKeyboardSteps 里：
+    //   第一步 expected=blacklist 而 selected=silent、焦点也还在 silent 上，正是「起点不对」。
+    if (adminTabOf("silent")) adminTabOf("silent").click();
+    await sleep(280);
+    var adminKeySteps = [];
     var adminKeyStep = async function (fromKind, key, expectKind) {
       var fromEl = adminTabOf(fromKind);
       if (!fromEl) return false;
       pressKey(fromEl, key);
       await sleep(280);
-      return adminSelectedKind() === expectKind &&
-        document.activeElement === adminTabOf(expectKind);
+      // 每一步的现场都记账：只看最后那个布尔，失败时分不清是「选中项没跟着走」还是
+      // 「选中了但焦点没挪过去」（两者的修法完全不同）。
+      var focused = document.activeElement;
+      var step = {
+        key: key,
+        from: fromKind,
+        expect: expectKind,
+        selected: adminSelectedKind(),
+        focusKind: focused && focused.getAttribute
+          ? focused.getAttribute("data-kind") : null,
+        focusTestId: focused && focused.getAttribute
+          ? focused.getAttribute("data-testid") : null,
+        focusTag: focused ? focused.tagName : null,
+      };
+      adminKeySteps.push(step);
+      return step.selected === expectKind && step.focusKind === expectKind;
     };
     var adminKeyOk = await adminKeyStep("silent", "ArrowRight", "blacklist");
     adminKeyOk = (await adminKeyStep("blacklist", "ArrowLeft", "silent")) && adminKeyOk;
     adminKeyOk = (await adminKeyStep("silent", "End", "keywords")) && adminKeyOk;
     adminKeyOk = (await adminKeyStep("keywords", "Home", "silent")) && adminKeyOk;
     out.adminTabKeyboardFollows = adminKeyOk;
+    out.adminTabKeyboardSteps = adminKeySteps;
     // 房管面板是最高的一个（窄屏撞 45vh 上限），它展开时最能暴露「跟随被悄悄关掉」：
     // 修复前这里实测离底 398px，最新一条落在面板下方 318px 处。
     out.layoutAdminBottomGap = bottomGap(byTestId("db-chat-scroll"));
@@ -4796,6 +5040,12 @@ const MOCK = (theme) => `(function () {
     document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     await sleep(200);
     out.adminPanelStaysClosed = !byTestId("db-admin-panel");
+    snap();
+    adminBlockRan = true;
+    } catch (e) {
+      out.adminBlockError = String((e && e.stack) || e);
+    }
+    out.adminBlockRan = adminBlockRan;
     snap();
 
     // ---- 滚到顶部时第一条不被头部压住（头部是文档流里的一行，不是 sticky/fixed 浮层）。
@@ -5557,17 +5807,71 @@ const MOCK = (theme) => `(function () {
     out.splitterDragGrewOnScreen = !!draggedRatio && draggedRatio > shownAtEntry + 0.05;
     snap();
 
-    // ---- 重新挂载后保持：切到另一个房间标签再切回来（RoomView 重挂，本地状态回到初始）----
+    // ---- 切到另一个房间标签再切回来：RoomView 的**本地状态**复位（room_id 那条 effect：
+    //      礼物栏回到折叠、面板收起…），输入区那份比例落在 prefs 上、因此原样保持。
+    // ⚠ 判据不能要求「标签条上正好两枚」：这一段跑在**标签条拖动那一段之后**，
+    //   那一段用 __addRooms(n) 又开了好几个房间，标签数早就不是 2 了 ——
+    //   旧写法（length === 2）于是恒为假，三条件一起红，还把「本地状态复位」这条口径
+    //   悄悄跳过（实测两引擎 × 两个视口全红）。改成**按标签自己的 data-active 找当前房间**，
+    //   再挑一枚别的房间，与标签数无关。
     var tabsForRemount = allByTestId("db-room-tab");
-    var remountAvailable = tabsForRemount.length === 2;
+    var activeTabForRemount = tabsForRemount.filter(function (t) {
+      return t.getAttribute("data-active") === "true";
+    })[0];
+    var otherTabForRemount = tabsForRemount.filter(function (t) {
+      return t !== activeTabForRemount;
+    })[0];
+    var remountAvailable = !!activeTabForRemount && !!otherTabForRemount;
+    var tabByRoomId = function (roomId) {
+      return allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === roomId;
+      })[0];
+    };
     if (remountAvailable) {
-      tabsForRemount[1].click();
+      var remountRoomId = activeTabForRemount.getAttribute("data-room-id");
+      var otherRoomId = otherTabForRemount.getAttribute("data-room-id");
+      // ⚠ 先点一次**当前这一枚**标签，把标签条的「吞掉这一下 click」标志消费掉：标签条拖动
+      //    那一段（排在文件里本段之前）用真实指针事件做了好几次拖动排序，而真实浏览器在
+      //    pointerup 之后**还会补一发 click**（App 的 swallowClick 就是为它准备的：拖完不许
+      //    顺手切房间），场景里没有补那一发，于是那个标志一直挂着 true，会把**紧接着的第一次**
+      //    标签点击吞掉 —— 本段第一次点「别的房间」正好撞上。实测：activeAfterOther 仍是 5440，
+      //    房间根本没换，下面两条断言（折叠态 / 比例保持）跟着一起红。点自己这一枚不换房间，
+      //    正好当消费；标志为假时它也只是原地重开一次，无副作用。
+      activeTabForRemount.click();
+      await sleep(250);
+      var remountProbe = {
+        activeBefore: remountRoomId,
+        other: otherRoomId,
+        giftBodyBefore: !!byTestId("db-gift-body"),
+        giftHeightBefore: Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10,
+        headHeightBefore: Math.round(headBox0.height * 10) / 10,
+        ratioPrefBefore: window.__prefs["ui.gift_pane_ratio"],
+      };
+      otherTabForRemount.click();
       await sleep(700);
-      allByTestId("db-room-tab")[0].click();
+      remountProbe.activeAfterOther = (function () {
+        var t = allByTestId("db-room-tab").filter(function (x) {
+          return x.getAttribute("data-active") === "true";
+        })[0];
+        return t ? t.getAttribute("data-room-id") : null;
+      })();
+      remountProbe.giftBodyAfterOther = !!byTestId("db-gift-body");
+      tabByRoomId(remountRoomId).click();
       await sleep(900);
+      remountProbe.activeAfterBack = (function () {
+        var t = allByTestId("db-room-tab").filter(function (x) {
+          return x.getAttribute("data-active") === "true";
+        })[0];
+        return t ? t.getAttribute("data-room-id") : null;
+      })();
+      remountProbe.giftBodyAfterBack = !!byTestId("db-gift-body");
+      remountProbe.giftHeightAfterBack = byTestId("db-pane-gift")
+        ? Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10 : null;
+      remountProbe.ratioPrefAfterBack = window.__prefs["ui.gift_pane_ratio"];
+      out.splitterRemountProbe = remountProbe;
     }
-    // 「重挂」要靠第二个房间标签才做得出（夹具给得出两条）；做不出就是夹具的事，明着写出来，
-    // 不把它悄悄放过 —— 与 tabs 那一段的 tabsRendered 同一条口径。
+    // 切房那一趟做得出来才算数（标签条上至少要有两枚、且能认出当前那一枚）；
+    // 做不出就是夹具的事，明着写出来，不把它悄悄放过 —— 与 tabs 那一段的 tabsRendered 同一条口径。
     out.splitterRemountAvailable = remountAvailable;
     out.splitterCollapsedAfterRemount = remountAvailable && !byTestId("db-gift-body") &&
       Math.abs(rect(byTestId("db-pane-gift")).height - headBox0.height) <= 1;

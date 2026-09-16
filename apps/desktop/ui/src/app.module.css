@@ -1577,7 +1577,12 @@
      短语与筛选面板因此与表情面板**等高、且不随内容伸缩** ——
      内容超出在各自的可滚区里滚（短语 .phrasesBody、筛选面板自己的 overflow-y）。 */
   --panel-pad-y: var(--sp-2);
-  --panel-h: calc(var(--emote-grid-h) + var(--panel-pad-y) * 2);
+  /* 定高一并算上**上边框**：三块面板共用这一条 `border-top: 1px`，而 `.phrases` /
+     `.filterPanel` 是**定高**（`height: var(--panel-h)`，border-box 把 1px 边框算在盒内），
+     `.picker` 是**内容驱动**（高度 = 边框 + 内边距 + 三行大表情格，边框在盒外）。
+     公式里不写这 1px 的话，内容驱动的那一块会比定高的那两块**高整整 1px**
+     （实测宽屏：表情 169.1 / 筛选 168.1 / 短语 168.1 —— 冒烟的 panelHeightsMatch 就是这条）。 */
+  --panel-h: calc(var(--emote-grid-h) + var(--panel-pad-y) * 2 + 1px);
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
   padding: var(--panel-pad-y) var(--sp-3);

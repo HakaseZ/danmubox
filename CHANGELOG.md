@@ -1560,6 +1560,80 @@
 > **也不含** `issue` 2609160959 #6（安卓键盘避让）：那一票仍在另一个 worktree 里开发、**未合入本批**，因此 `dev → main` 的 PR 暂缓开，
 > 等它合进来一次带全。三端手工冒烟（`docs/testing.md` §10）本批未跑。
 
+### Removed
+
+- **输入区上方的「将发送」预览整块删除**（`issue` 2609161236 #1，用户原话「这个将发送xxx的，直接去掉，没有这个需求」；提交 `05124cd`）。
+  删掉的是 `Composer.tsx` 的 `preview` useMemo（草稿扫描 + 长名优先匹配）、`previewFont`（`ui.font_scale` 在输入区的唯一跟随者）与整块预览 JSX
+  （`data-testid="db-send-preview"`，含 `styles.preview` / `previewLabel`「将发送」/ `previewEmote`），CSS 三条规则与 `docs/ui.md` 对应节同步删除。
+  **「点选表情即发」的链路一行未动**；`panelEmotes` / `grouped` 等仍被面板与筛选使用者保留，未做连带清理。
+  **已实测**：源码与出厂 `dist` 里 `db-send-preview`、`previewEmote`、「将发送」各 **0 次**（正向对照「发送」8 次）；四道闸全绿
+  （`tsc -b` / `npm run build` / `node --check` / `--precheck`）。**未实测**：两引擎全量冒烟（按常驻规矩由主流程统一跑）——运行期 DOM 里预览节点
+  是否彻底不存在，本票只有静态证据。
+
+### Changed
+
+- **礼物与大航海的金额展示单位改成「元」**（`issue` 2609161236 #2：用户先写「按电池算，瓜子这个单位官方已经废弃」，随后改口「元」并给出口径
+  「1 元 = 10 电池，1 人气票 1 电池」；提交 `56e45bf`）。展示侧唯一公式 **`元 = 金瓜子 / 1000`**（`filtering.ts` 新增 `COINS_PER_YUAN = 1000`，
+  `amountText` 用它换算）；**SC 的 `amount` 上游本来就是元，不做任何换算**；`amount <= 0` 一律不画金额格（既有口径未动）；整数元不带小数、
+  非整数保留必要小数（上限 3 位 —— 金瓜子 ÷ 1000 的全部可能值都落在 3 位内）。
+  **单位取证**（本条是唯一会差 10 / 100 倍的地方）：上游 `price` / `total_coin` 是**金瓜子**，不是电池也不是元 —— ① 公开社区协议文档的礼物字段表
+  逐字写着「`price | num | 该值/1000的单位为元`」，紧邻的 `coin_type`「一般为 gold，即电池」说明 `gold` 只是**币种名**（原仓已归档，读的是三个独立镜像副本，
+  该行逐字一致）；② SC 样本 `price=30` 配 `rate=1000`；③ 舰长 `price=138000` ↔ 官方标价 138 元；④ 钱包 `gold=15000` ↔ 15 元 ↔ 150 电池，
+  与用户口径「1 元 = 10 电池 = 1000 金瓜子」互为交叉验证。**未实测**：没有任何一条**真实礼物载荷**与官方页面价目逐条对照过（`docs/protocol.md` 附录 A 的
+  A8 / A12 至今零样本，且 `AGENT.md` §8 第 16 条禁止为测试送礼）——已按待校准写进附录 A，并把换算收在单一常量上便于日后一处改。
+  **用户 2026-09-16 的两条裁决一并记下**：① **余额那枚控件继续显示「电池」**（「余额便于计算可用电池」），**流水的「元」便于统计真实金额** ——
+  两者并存是**刻意的**，不是漏改（`wallet.rs` 的 `电池 = gold / 100` 一字未动）；② **独立礼物栏的折叠汇总保持「按 kind 分组」现状**，不合并成单条合计
+  （单位统一后跨组求和已无单位障碍，但用户明确保留现状）。文档同步：`docs/contract.md` §5 / §9、`docs/ipc.md`、`docs/ui.md`。
+
+### Fixed
+
+- **中文输入法组字时按回车选词不再把弹幕直接发出去**（`issue` 2609161236 #3；提交 `d02274e`）。判据 =
+  `composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || imeCommitTailRef.current`，三处输入
+  （弹幕框 / 新增短语 / 短语就地改名）同口径。**两个必须写下来的实现事实**：① React 19 的合成 `KeyboardEvent` **不拷贝** `isComposing`
+  （`react-dom` 只按自己的 `KeyEvent` 接口逐项拷贝），读 `event.isComposing` 拿到的是 `undefined`，必须走 `event.nativeEvent`；
+  ② WebKit（macOS 上 Tauri 用的 `WKWebView`）那一次回车是**先 `compositionend`、后 `keydown`**，那次 `keydown` 的 `isComposing` 已回到 `false`、
+  `keyCode` 回到 `13`，前两项都拦不住 —— 由 `onCompositionEnd` 置位、`setTimeout(…, 0)` 在**本轮任务结束时**清掉的「提交尾巴」窗口兜住
+  （不用一次性标志：那会让「鼠标选完候选、再按回车发送」失灵；也不写死 50ms 这类没有实测依据的窗口）。
+  **已实测**：A/B 两档 —— 旧实现 4 条断言红、新实现 6/6 绿，正向对照「隔一轮任务后的普通回车照发且草稿清空」两边都真；真实 IME 事件序用
+  CDP `Input.imeSetComposition` 在 Chromium 上验过（组字中回车**不发**、上屏本身不发、用户自己那次回车发）。
+  **未实测**：WebKit 没有 IME 注入通道，只验了合成事件路径；**提交那一次回车没有 `preventDefault`**，在 WebKit 的时序下**理论上**会给正文多一个换行
+  （Chromium 实测没有；真机上若观察到，补一句 `if (!event.nativeEvent.isComposing) event.preventDefault();` 即可）。
+
+### Fixed
+
+- **房间标签条不再画滚动条**（`issue` 2609161352 #1，用户原话「顶部 tab 滚动的时候不要有滑块，会挡住，能隐藏掉吗」；提交 `a0a0a14`）。
+  `.tabs` 加 `scrollbar-width: none` 与独立的 `.tabs::-webkit-scrollbar { display: none }`，并**删掉 `scrollbar-gutter: stable`** ——
+  一旦滚动条不再绘制，它恒为 no-op（同一条产物带/不带它做 A/B：WebKit 与 Chromium 的 gap / clientHeight / offsetHeight / clientWidth / offsetWidth 完全一致）。
+  **这条例外必须写明**：`index.css` 顶部原有一条硬规矩「故意不给 `::-webkit-scrollbar` 写样式」（写了会把 macOS 覆盖式滚动条换成常驻经典条，曾导致内容右移与窗口右缘拖不动）；
+  本次在该处**原地补了窄例外**并给三条依据：① `display: none` 宽高皆 0、一个像素不画，「占位」与「常驻」两个前提都不成立；② 例外按选择器生效、不是文档级开关（本仓 `.adminRail` 已有先例）；
+  ③ 只横向滚、纵向不滚，生不出站在窗口右缘的竖条；边界是**只许 `display: none`**，想写宽度/颜色要先在原地补论证。
+  **已实测**（真产物 CSS + 真 DOM，360×844、dsf 2，before/after 由同一构建管线派生，两个变体：引擎默认 / 注入 14px 经典占位式滚动条）：
+  WebKit + 注入档改前「标签底边到容器内底边」为 **14px**（滚动条吃掉一条）→ 改后 **0**；四档改后均 0，横向仍可滚（`scrollLeft` 赋值 0→826→1652、滚轮 `deltaX` 0→140），`pageerror` 0。
+  **未实测**：两引擎全量冒烟在本批收尾时统一跑（新增三条断言因此只做过语法闸/构造闸 + 真浏览器里的等价几何复算）；真机 macOS WKWebView / Android WebView 的观感；
+  以及覆盖式滑块本身在无头里**根本不被绘制**（专门写了纯白容器探针：滚动中非白像素 0）——所以「用户看到的那条滑块消失」这件事在本机只能由「计算值 `scrollbar-width: none` + 占位为 0」间接证明。
+  规格：`docs/ui.md` §2.3 / §11；冒烟新增 `tabStripScrollbarThicknessPx` / `tabStripNoScrollbarSpace` / `tabStripScrollsWithHiddenScrollbar`。
+
+### Added
+
+- **GitHub Actions CI（刻意最小：两个 job，都跑 `macos-14`）**（提交 `16762b9`；用户 2026-09-16「同时在github上弄一个简单的ci」）。
+  `check` = `cargo fmt`（**存量不通过，用 `continue-on-error` 只当观察哨**：HEAD 上 81 处 / 14 文件差异，且没有一处属于本批改动，`AGENT.md` §9 早记着这件事）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` → 前端 `npm ci` + `npm run build`（= `tsc -b && vite build`）。
+  `artifacts` = macOS `.dmg`（`tauri build --bundles dmg`）与**已签名的** Android release APK（`tauri android build --apk --ci`），**只在 `workflow_dispatch` 与 `v*` tag 上跑**（每次 push 都出包太贵），两个产物各用 `actions/upload-artifact@v4` 上传（`if-no-files-found: error`）。
+  触发：push 到 `main`、任何 `pull_request`、`workflow_dispatch`；`permissions: contents: read`、`concurrency` 取消同 ref 的旧运行、cargo registry 与 npm 有缓存、artifacts job 不缓存 `target` 与 Gradle（近 GB 级，恢复比重新下载慢）。
+  **两个平台细节写进这里**：① 选 `macos-14` 而不是 Linux，是为了让 CI 的命令与本机验证过的**逐字一致**（Linux 上还得补 WebKitGTK 那一套系统依赖）；产出的 dmg / APK 因此天然是 arm64。
+  ② **冒烟不进 CI**：两引擎无头冒烟要真浏览器 + macOS 宿主 `smoke/wkwebview-host.swift`，且**同一台机上必须串行**（并发会先杀掉 WebKit 的 WebContent 进程，报成 `Target crashed`）——仍由本地 / 主流程跑。
+  **顺带把「干净克隆必须能构建」这条前提补上**（这是加 CI 才暴露的存量缺口）：`TauriActivity.kt` 与 `proguard-tauri.pro` 只在 `tauri android init` 时从 crate 模板拷进来，而 `app/.gitignore` 又把 `generated/` 整个忽略 → 干净检出上 Gradle 必报 `Unresolved reference: TauriActivity`。
+  已把这两份**纳入版本管理**（实测与真构建产物**逐字节相同**；同版本 tauri 下内容稳定），并给 `buildSrc/.kotlin` 增量缓存加了忽略。**已实测**：在一个干净 worktree 上真跑 CI 的那条命令 ——
+  `CI=true tauri android build --apk --ci` **rc=0、381 秒**、四个 ABI（`aarch64` / `armv7` / `i686` / `x86_64`）的 `libdanmubox_desktop.so` 全部编出、全程无 `Unresolved reference`（该 worktree 无本地 keystore，故产物是 `-unsigned`，属预期）。
+  **签名口径**：CI 用 `keytool` **现场生成一次性 keystore**（口令由 `run_id` / `run_attempt` 派生，run 结束即消失；`gen/android/{keystore.jks,keystore.properties}` 是本机自用私钥，已 gitignore、绝不入库也绝不进 CI）→ **CI 产物与本地产物签名不同，装过本地包的设备要先卸载**。
+  **未验证**：工作流**尚未在 GitHub 上真跑过**（推送后的首轮结果随后回填；`docs/operations.md` §5.13 也按此口径写明）。文档：`docs/operations.md` §5.13（新增）、§5.3（macOS 出包与 Android 干净克隆两条按实测改写）、§1.6（过期说法改写）、§5.7（CI 签名交叉引用）。
+
+### Fixed
+
+- **三个弹出面板（表情 / 短语 / 筛选）现在真的等高**（测试发现的真 bug，修在 `apps/desktop/ui/src/app.module.css` 的 `--panel-h`）。
+  定高公式漏了**三块共用的那 1px 上边框**：`.picker`（表情）是**内容驱动**高度、边框在盒外，`.phrases` / `.filterPanel` 是 `height: var(--panel-h)` 的**定高**（`border-box` 把边框算在盒内）——
+  于是内容驱动的那块**正好高 1px**（实测宽屏 表情 **169.1** / 筛选 **168.1** / 短语 **168.1**），与用户 item 8「展开高度看齐表情界面」的口径不符。
+  公式改为 `calc(var(--emote-grid-h) + var(--panel-pad-y) * 2 + 1px)`（注释写明这 1px 的来由），`docs/ui.md` §6.1 / §6.3 / §9.1 / §9.2 同步。**已实测**：冒烟 `panelHeightsMatch`（容差 `< 1`，口径未放松）在两引擎 × 两视口 × 两主题四组合全绿，三块逐块 **169.1 / 169.1 / 169.1**。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

@@ -94,6 +94,8 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 
 Android 产物：`apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（通用）与同目录 `apk/<arm64|arm|x86|x86_64>/release/app-<abi>-release.apk`（分 ABI）；**未签名包**（缺 `keystore.properties` 的构建）装不进设备。前置条件、签名与清除口径见 [`docs/operations.md`](docs/operations.md) §5.3–§5.7、§5.12。
 
+**Android 构建前必须先 `. scripts/android-env.sh`（「不污染宿主」口径的一部分，2026-09-16 实测踩过）**：它会把 `RUSTUP_HOME` / `CARGO_HOME` 一起指向仓库内的 `.android-env/`；**漏掉这一步直接跑 `tauri android build`**，`rustup` 会转去宿主 `~/.rustup` 找 `rust-std`，实测后果是**构建卡住 4 分多钟**、并在 `$HOME` 落下一份约 **7MB 的 `.partial`**（当次已清理，事后复核宿主 `~/.rustup` 里**没有**被塞入 android std 目录：`toolchains/*/lib/rustlib/` 下 android 目录数为 0）。
+
 环境变量：`DANMUBOX_LOG`（默认 `info`；`debug` 会输出每条业务载荷的原文，是字段校准的采集入口）。
 
 **多 worktree 并行时的 target 目录口径（用户 2026-09-16 定，硬要求）**：每个 worktree 一律用**自己**的

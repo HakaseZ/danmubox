@@ -129,34 +129,40 @@
 房间页只有**一条纵向生长轴**（用户 2026-09-12：参照官方 web 直播栏重排）。各区域职责固定：
 
 ```
-[标签条：房间]   ← **只在房间页里**渲染（主页不挂，见 §2.2）
+[标签条：房间]   ← **只在房间页里渲染**（主页不挂，见 §2.2）
 [房间头（一排）：◀返回 · ●状态点 · 直播间标题 …… 在线 x · 看过 x · ⋯]
-[弹幕列表  ← 唯一的 flex-1 生长区与滚动区]
-[弹出面板（表情 / 短语 / 筛选 / 房管）← 在输入区上方、向上展开，列表随之变矮并重新贴底]
+[共享分区 ← 唯一的 flex-1 生长区（弹幕列表与礼物 / SC 栏共享这一块高度，见 §5.4）]
+[  ├ 弹幕列表 ← 内部滚动（默认在上；ui.gift_pane_on_top 为真时换到下面）
+   ├ 分割条（常驻，热区 8px，可拖动改比例）
+   └ 礼物 / SC 栏 ← 内部滚动（默认在下，可折叠）]
+[弹出面板（表情 / 短语 / 筛选 / 房管）← 在输入区上方、向上展开，只挤共享分区]
 [输入区：输入框 + 工具行（表情 短语 筛选 …… 电池 发送）]
-[礼物 / SC 栏 ← 在输入区下方，全宽，可折叠]
 ```
 
 **五个面板同时最多开一个**（房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏，用户 2026-09-13 第 4 条；礼物栏由 `ui.gift_panel` 决定存不存在，**默认就在场**，所以这条互斥在默认形态下是实打实的五个）：打开任一个都会收起另外四个（状态都在 `RoomView` 一处，输入区那三个是受控的）。收起某一个不影响别人 —— 「再点一次工具按钮收起」与「点面板 / 输入区外面收起」两条老路照旧。
 
 | 区域 | 为什么在这里 |
 |---|---|
-| 弹幕列表 | 唯一会生长/滚动的区域；其它区域展开只会挤它，**不会盖住最新弹幕** |
-| 弹出面板 | 面板是文档流里的一块（不是浮层），展开时列表上弹；跟随模式下重新贴底；与房管面板 / 礼物栏互斥 |
-| 房管面板 | 与弹出面板同层（输入区上方），由房间头 `⋯` 菜单开合（**该菜单项只在 `RoomSession.is_admin === true` 时存在**，§4.9）；展开时同样只挤压弹幕列表（§4.9）。**进到有房管权限的房间就把数据加载好**，打开时再静默重拉一次（§4.9） |
+| 共享分区 | **唯一的 flex-1 生长区**：弹幕列表与礼物 / SC 栏上下分格、比例可拖（默认「弹幕在上、礼物在下」，`ui.gift_pane_on_top` 为真时对调，§5.4）；其它区域展开只会挤它，**不会盖住最新弹幕** |
+| 弹幕列表 | 共享分区里的那一格，自己在内部滚动（`db-chat-scroll`）；跟随 / 贴底口径见 §7 |
+| 弹出面板 | 面板是文档流里的一块（不是浮层），展开时只挤共享分区；跟随模式下重新贴底；与房管面板 / 礼物栏互斥 |
+| 房管面板 | 与弹出面板同层（输入区上方），由房间头 `⋯` 菜单开合（**该菜单项只在 `RoomSession.is_admin === true` 时存在**，§4.9）；展开时同样只挤压共享分区（§4.9）。**进到有房管权限的房间就把数据加载好**，打开时再静默重拉一次（§4.9） |
 | 输入区 | 贴底；工具行在输入框下方、发送在右（电池在发送左侧，§6.4） |
-| 礼物栏 | 输入区下方的全宽折叠条：**把宽度还给弹幕**（`ui.gift_panel` 为真时出现，**默认就开**；它出不出现与「礼物在不在弹幕流里」是两件事，见 §5） |
+| 礼物栏 | 共享分区里的另一格（默认在下、可折叠、分隔条可拖）：**把宽度还给弹幕**（`ui.gift_panel` 为真时出现，**默认就开**；它出不出现与「礼物在不在弹幕流里」是两件事，见 §5） |
 
 | 项 | 规则 |
 |---|---|
-| 标签条 | **只在房间页里渲染**：列表页已经有「已连接房间」卡片列表（§2.2），主页再挂一条标签条是重复（用户 2026-09-12）。已打开房间的标签，按打开顺序排列，可横向滚动；激活标签高亮，标签上的圆点与房间头那颗**同一个东西**（同一判据、同一套 `--live-*` 令牌，见 §3.1）；标签的 `title` 里带这颗点的文案。标签上的名字是**主播名**（`anchor_uname`，取不到才退回直播间标题，标题也没有才退到「房间 <号>」——口径同 §2.2），**不显示房间号**（用户 #18） |
+| 标签条 | **只在房间页里渲染**：列表页已经有「已连接房间」卡片列表（§2.2），主页再挂一条标签条是重复（用户 2026-09-12）。已打开房间的标签，按打开顺序排列；激活标签高亮，标签上的圆点与房间头那颗**同一个东西**（同一判据、同一套 `--live-*` 令牌，见 §3.1）；标签的 `title` 里带这颗点的文字。标签上的名字是**主播名**（`anchor_uname`，取不到才退回直播间标题，标题也没有才退到「房间 <号>」——口径同 §2.2），**不显示房间号**（用户 #18） |
+| 标签条滚动 | 开再多也**不把单枚标签挤窄**：每枚标签有自己的最小宽度（`--tab-min-w` = **96px**：状态点 8 + 间距 4 + 左右内边距 16 + 边框 2 = 30px 的「壳」，余下 66px 在 `--fs-2` 下约 4–5 个汉字），`flex: 0 0 auto` 关掉 flex 收缩；超出的部分由标签条**横向滚动**（`overflow-x: auto` + `scrollbar-gutter: stable`，与 `.listPage` 同一口径；`overscroll-behavior-x: contain` 就地截断越界滚动链）。触摸的横滑是**滚动**（`touch-action: pan-x`），不是拖动排序 |
+| 拖动排序 | **指针事件**（鼠标与触摸同一套；HTML5 拖放在触摸下不发 `dragstart`，因此不用）：按住标签横向拖过 **5px** 阈值才进入拖拽态，低于阈值松手仍是**点击**（切房间）。拖动中被拖那一枚半透明（`data-dragging`）、目标位插一根强调色指示条（`db-tab-drop`）；拖拽态下容器不再滚（`touch-action: none`）。松手重排 store 的 `rooms`（`moveRoom`，不是就地改写），**`activeRoomId` 不变** —— 拖的是排列，不是切房间（拖动之后浏览器补发的那一下 `click` 被吞掉）。触摸下先**按住 400ms**才算「拿起来」（横着一划仍然是滚动，浏览器接管手势并回 `pointercancel`）。拖动中标签条**不做边缘自动滚动**：要跨过一屏以外的位置，先滚到目标附近再拖（拖到首位 / 末尾本身是支持的，落点按标签中点判、下标两侧夹取）。边界：只有一个房间时整条标签条不渲染；拖动中被拖的房间被关掉（上游快照不再包含它）则整次作废、顺序不动 |
+| 顺序的作用域 | **会话内有效**：不新增偏好键、不跨重启保留（房间列表本身是会话态，`rooms_list` 才是集合的事实来源）。上游快照落地时只改**集合** —— 已有的房间按界面现有顺序留住，新出现的房间排到末尾（`store.mergeRoomOrder`）；否则切一次房间就会重拉一次快照，用户拖过的顺序当场弹回上游那一份 |
 | 多标签共存 | 已打开的房间保留各自的长连接与**会话缓冲**；切换标签只切换**渲染**，不断开、不清空缓冲。**界面本地状态一律重置**：弹出面板（表情 / 短语 / 筛选）与房管面板、房管确认条、右键菜单、举报条、礼物栏的折叠与否、弹幕列表的滚动位置与「跟随」开关，全部回到初始值 —— 只有**输入草稿按房间各留一份**（正文 + 回复目标 + @，§6.5.1）。用户 2026-09-13 的口径：「面板、菜单、滚动等一律重置」，**不是**把整页重挂（重挂会连草稿一起丢） |
 | 新增标签 | 在房间列表点击房间：已打开则激活该标签，未打开则新开 |
 | 关闭标签 | 关闭该房间页，断开连接、销毁并清空该房间的会话缓冲；**不**删除房间数据（不调 `rooms_remove`） |
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-send-preview` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
 
 ### 2.4 会话缓冲生命周期（契约 §4.3）
 

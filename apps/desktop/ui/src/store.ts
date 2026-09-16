@@ -74,6 +74,12 @@ interface AppStore {
   removeRoom: (roomId: number) => Promise<void>;
   openRoom: (roomId: number) => Promise<void>;
   closeRoom: () => void;
+  /**
+   * 拖动重排标签（`docs/ui.md` §2.3「拖动排序」）：把 `roomId` 挪到数组下标 `toIndex`。
+   * **只动顺序** —— `activeRoomId` 不变（拖的是排列，不是切房间）。顺序是**会话态**：
+   * 不落偏好键（`rooms_list` 才是房间集合的事实来源，见 `mergeRoomOrder`）。
+   */
+  moveRoom: (roomId: number, toIndex: number) => void;
   connect: (roomId: number) => Promise<void>;
   disconnect: (roomId: number) => Promise<void>;
   refresh: (roomId: number) => Promise<void>;
@@ -481,6 +487,28 @@ async function reloadRooms(): Promise<RoomView[] | undefined> {
 }
 
 /**
+ * `rooms_list` 落地时的**顺序口径**：上游给**集合**，界面给**顺序**。
+ *
+ * 用户拖过的排列在本次会话里必须一直有效（`docs/ui.md` §2.3「拖动排序」），而
+ * `openRoom` 每切一次房间都会 `connect` → 重拉一次 `rooms_list`：不保序的话
+ * 「拖完点一下标签，顺序当场弹回上游那一份」，拖动排序等于没做。
+ *
+ * 规则：上一份快照里有的房间按**界面现有顺序**留住；新出现的房间（`rooms_add` /
+ * 别处加的）按上游顺序接在末尾 —— `sort` 稳定，所以同一条路径上的相对顺序就是上游顺序。
+ * 集合仍以上游为准：上游不再返回的房间直接消失。
+ */
+function mergeRoomOrder(previous: RoomView[], incoming: RoomView[]): RoomView[] {
+  const rank = new Map(previous.map((room, index) => [room.room_id, index]));
+  return incoming
+    .slice()
+    .sort(
+      (a, b) =>
+        (rank.get(a.room_id) ?? Number.MAX_SAFE_INTEGER) -
+        (rank.get(b.room_id) ?? Number.MAX_SAFE_INTEGER),
+    );
+}
+
+/**
  * 丢掉上一个身份留下的界面状态（用户 2026-09-13：「切换用户也要做隔离」）。
  *
  * 为什么连房间列表、表情库、房管三块也一起丢：它们全按凭据算出来——房间的连接态属于旧凭据，
@@ -711,7 +739,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
     try {
       const room = await api.roomsAdd(input);
       const rooms = await reloadRooms();
-      if (rooms !== undefined) set({ rooms });
+      if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
       await get().openRoom(room.room_id);
     } catch (error) {
       set({ error: describeError(error) });
@@ -734,7 +762,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
         }));
       }
       const rooms = await reloadRooms();
-      if (rooms !== undefined) set({ rooms });
+      if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -804,13 +832,30 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }));
   },
 
+  moveRoom(roomId, toIndex) {
+    set((state) => {
+      const from = state.rooms.findIndex((room) => room.room_id === roomId);
+      // 拖动中房间没了（关标签 / 移除房间 / 上游快照不再包含它）：整次重排作废 ——
+      // 别的房间也不许被带着挪一位。只有一个房间时同理，没什么可挪的。
+      if (from < 0 || state.rooms.length < 2) return {};
+      const to = Math.max(0, Math.min(toIndex, state.rooms.length - 1));
+      // 落在原位 = 没有变化（拖了一圈放回原处、只开两枚时互相换位都会走到这里）：
+      // 不动 `rooms` 的引用，订阅者因此不会白重渲染一次。
+      if (to === from) return {};
+      const next = state.rooms.slice();
+      const moved = next.splice(from, 1)[0];
+      next.splice(to, 0, moved);
+      return { rooms: next };
+    });
+  },
+
   async connect(roomId) {
     try {
       await api.roomsConnect(roomId);
       // `rooms_list` 的落地复核（审计 P66）：这一份被更新的快照越过就丢掉，
       // 否则 A→B 连点时 A 那条后到的快照会把 B 的连接态指回旧值。
       const rooms = await reloadRooms();
-      if (rooms !== undefined) set({ rooms });
+      if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -829,7 +874,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
           : {}),
       }));
       const rooms = await reloadRooms();
-      if (rooms !== undefined) set({ rooms });
+      if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -842,7 +887,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
       // 也可能只是把当前连接掐了重连——两种情况下 `connected` 都以重拉结果为准，
       // 否则房间头菜单里的「断开连接」会拿着旧状态一直置灰。
       const rooms = await reloadRooms();
-      if (rooms !== undefined) set({ rooms });
+      if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
     } catch (error) {
       set({ error: describeError(error) });
     }
@@ -948,7 +993,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
     const rooms = await reloadRooms();
     // 落地复核（审计 P67）：这一轮重拉期间又换了一次人，房间列表交给那一代去铺。
     if (epoch !== identityEpoch) return;
-    if (rooms !== undefined) set({ rooms });
+    if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
   },
 
   async switchAccount(name) {

@@ -19,15 +19,16 @@ import styles from "../app.module.css";
     （正文里的**醒目可读色**，不是身份牌那枚彩底白字，见 app.module.css 令牌段）。 */
 const MENTION_RE = /@[^\s@,，。、:：;；!！?？.．"“”'‘’()（）[\]【】<>《》]+/g;
 
-/** 把正文按 `@昵称` 切成「普通文字 / 强调片段」两族，其余字符原样保留。 */
-function withMentions(text: string): ReactNode[] {
+/** 把正文按 `@昵称` 切成「普通文字 / 强调片段」两族，其余字符原样保留。
+    `testId` 由调用方给（`db-msg-mention` / `db-gift-mention`，见 `Props.scope`）。 */
+function withMentions(text: string, testId: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let end = 0;
   for (const match of text.matchAll(MENTION_RE)) {
     const at = match.index ?? 0;
     if (at > end) nodes.push(text.slice(end, at));
     nodes.push(
-      <span key={at} className={styles.mention} data-testid="db-msg-mention">
+      <span key={at} className={styles.mention} data-testid={testId}>
         {match[0]}
       </span>,
     );
@@ -43,10 +44,37 @@ interface Props {
   prefs: Prefs;
   /** 右键（或行尾「⋯」）时把坐标与消息交给上层弹菜单（docs/ui.md §4.5）。 */
   onMenu: (message: Message, at: MenuPoint) => void;
+  /**
+   * 这一行渲染在**哪一处**（docs/ui.md §5.3）：弹幕区（`msg`）还是独立礼物栏（`gift`）。
+   *
+   * 两处**共用这一个组件**（用户 2026-09-16 第 2 条：「礼物区域的显示和弹幕区直接保持一致」），
+   * scope 只做两件事：把行内的 `data-testid` 分成 `db-msg-*` / `db-gift-*` 两族（否则
+   * 「弹幕流里还有没有这条」的断言会被礼物栏那一份蒙混过去），以及下面那条金额行的开关。
+   */
+  scope: "msg" | "gift";
+  /**
+   * 礼物 / 大航海行**额外画一行金额**（`db-gift-amount`）：只有独立礼物栏为真。
+   *
+   * 依据：弹幕流里这三类**不画金额**（§4.1：行内的 `×N` 与金额挤在一起不好读，金额在礼物栏里
+   * 按「`<金额> 元`」呈现）；礼物栏那一份因此保留金额，而 SC 两处都画 —— 金额行本来就是 SC
+   * 卡片规格的一部分（`.scAmount`）。
+   */
+  showGiftAmount?: boolean;
 }
 
+/** 行内各格的 `data-testid` 前缀（两族分得开，见 `Props.scope`）。 */
+const testIdFor = (scope: "msg" | "gift") => (part: string) => `db-${scope}-${part}`;
+
 /** 六种 kind 的渲染规范见 docs/ui.md §4.1；互动与系统行的文案由展示层生成。 */
-export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
+export function MessageRow({
+  row,
+  anchorUid,
+  prefs,
+  onMenu,
+  scope,
+  showGiftAmount = false,
+}: Props) {
+  const t = testIdFor(scope);
   const { message, count } = row;
   const badges = badgesFor(message, anchorUid);
   const medal = medalColors(message);
@@ -93,6 +121,12 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   // 金额格按 §4.1 的规格：低一档加粗；上游没给价（amount = 0）时**不画**这一格。
   const scTier = message.kind === "superchat" ? superChatTier(message.amount) : 0;
   const scAmount = message.kind === "superchat" ? amountText(message.amount, "superchat") : "";
+  // 礼物 / 大航海的金额行：**只有礼物栏那一份**画（`showGiftAmount`，见 Props 的说明）；
+  // 与 SC 那一格同一个规格（`.scAmount`：独占一行、低一档加粗），两处的金额因此一个样子。
+  const giftAmount =
+    showGiftAmount && (message.kind === "gift" || message.kind === "guard")
+      ? amountText(message.amount, message.kind)
+      : "";
   const variant = [
     kindClass[message.kind] ?? "",
     autoHide ? styles.autoHide : "",
@@ -105,7 +139,7 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
   return (
     <div
       className={`${styles.row} ${variant}`}
-      data-testid="db-msg-row"
+      data-testid={t("row")}
       data-sc-tier={scTier > 0 ? scTier : undefined}
       style={autoHide ? { animationDuration: `${INTERACT_AUTO_HIDE_MS}ms` } : undefined}
       onContextMenu={(event) => {
@@ -120,8 +154,8 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
         // 头像列永远占位：没有头像（face 为空串）时不画假图，但列宽照留，
         // 否则这一行的身份簇 / 正文会整体左移，逐行对不齐（issue #8）。
         // 它钉在**首行盒**上（高度 = 行盒高、内部居中），不随折行掉到行的中间。
-        <span className={styles.avatarCol} data-testid="db-msg-avatar-col">
-          <Avatar url={message.face} name={message.uname} />
+        <span className={styles.avatarCol} data-testid={t("avatar-col")}>
+          <Avatar url={message.face} name={message.uname} testId={t("avatar")} />
         </span>
       )}
       {/* 正文块 = **上下两行**（参考图口径，用户 2026-09-13）：第一行身份
@@ -135,16 +169,16 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
           // 牌在昵称**右边**（参考图：蓝底白字的房间牌跟在用户名后面）。
           // 「回复了谁」不再另起一格（用户 2026-09-13 第 1 条：与正文里自带的 @ 重复）——
           // 身份行的最后那一枚「回复 @某人」的牌子已删，@ 改在**正文里**就地强调（见 withMentions）。
-          <span className={styles.identity} data-testid="db-msg-identity">
+          <span className={styles.identity} data-testid={t("identity")}>
             {message.uname.length > 0 && (
               // 昵称**不吃**弹幕自身颜色：那是正文的颜色，套到人名的后果是普通弹幕
               // （上游给 16777215 白色）在浅色主题下与背景同色、整条人名看不见（用户实测）。
-              <span className={styles.name} data-testid="db-msg-name">
+              <span className={styles.name} data-testid={t("name")}>
                 {message.uname}:
               </span>
             )}
             {hasBadges && (
-              <span className={styles.badges} data-testid="db-msg-badges">
+              <span className={styles.badges} data-testid={t("badges")}>
                 {badges.anchor && (
                   <span className={`${styles.badge} ${styles.badgeAnchor}`}>主播</span>
                 )}
@@ -182,7 +216,7 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
                 右边缘相同（用户 2026-09-12「时间要对齐」）；`flex: none` 保证昵称 + 牌
                 再长也压不扁它（超出的部分由可收缩的昵称省略号吸收）。 */}
             {prefs["ui.show_timestamp"] && (
-              <span className={styles.time} data-testid="db-msg-time">
+              <span className={styles.time} data-testid={t("time")}>
                 {formatClock(message.ts)}
               </span>
             )}
@@ -191,7 +225,7 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
           // 没有身份行的行（`kind === "system"`、或既无昵称又无徽标）：时间**独占正文块的
           // 首行**、同样靠右 —— 不因为缺身份行就把时间丢掉；正文仍从下一行、左边缘起点开始。
           prefs["ui.show_timestamp"] && (
-            <span className={`${styles.timeLine} ${styles.time}`} data-testid="db-msg-time">
+            <span className={`${styles.timeLine} ${styles.time}`} data-testid={t("time")}>
               {formatClock(message.ts)}
             </span>
           )
@@ -202,7 +236,7 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             正文里的 @昵称 就地强调（用户 2026-09-13 第 1 条），其余文字原样。
             大表情（bulge）尺寸太大，由 `.contentEmoteBulge` 单独占一行；
             通用表情（原图 200×60 的横条）走 `.contentEmoteWide` 的宽盒，见那条注释。 */}
-        <span className={styles.content} data-testid="db-msg-body">
+        <span className={styles.content} data-testid={t("body")}>
           {message.emote ? (
             // 表情弹幕：正文就是表情名，只显示文字会让人以为「表情没渲染」，
             // 因此改画图（标题与 alt 都保留表情名——图加载不出来时浏览器回退显示 alt）。
@@ -221,14 +255,16 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             />
           ) : (
             <span className={rejected ? styles.rejectedText : undefined}>
-              {withMentions(text)}
+              {withMentions(text, t("mention"))}
             </span>
           )}
           {/* 礼物行始终显示数量（连击折叠后的次数）；其余类型不再有 ×N ——
               「相似消息合并」已整条删除（P49），count > 1 只可能来自礼物连击。
               它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。 */}
           {(count > 1 || message.kind === "gift") && (
-            <span className={styles.merged}>×{count}</span>
+            <span className={styles.merged} data-testid={t("count")}>
+              ×{count}
+            </span>
           )}
           {message.send_state !== undefined && (
             // 发送没成的标记（乐观渲染，用户 2026-09-13）：正常行（刚插入还在等回执的本地行、
@@ -237,7 +273,7 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             // 见 `sendOutcomeText`），「未确认」那档只说明我们没等到回声。
             <span
               className={styles.sendState}
-              data-testid="db-msg-send-state"
+              data-testid={t("send-state")}
               data-state={message.send_state}
             >
               {message.send_reason ?? SEND_STATE_TEXT[message.send_state]}
@@ -248,8 +284,15 @@ export function MessageRow({ row, anchorUid, prefs, onMenu }: Props) {
             单位是元 —— 与礼物栏同一口径（2026-09-16 统一）：`amountText` 对 SC 用原值、
             对礼物 / 大航海按契约 §5 的 `元 = 金瓜子 / 1000` 换算，两处印的都是元。 */}
         {scAmount.length > 0 && (
-          <span className={styles.scAmount} data-testid="db-msg-sc-amount">
+          <span className={styles.scAmount} data-testid={t("sc-amount")}>
             {scAmount}
+          </span>
+        )}
+        {/* 礼物 / 大航海的金额行：与上面 SC 那一格同一个规格（`.scAmount`），只在礼物栏那一份画
+            （`showGiftAmount`）—— 弹幕流里这两类不画金额，见 §4.1 与 Props 的说明。 */}
+        {giftAmount.length > 0 && (
+          <span className={styles.scAmount} data-testid={t("amount")}>
+            {giftAmount}
           </span>
         )}
       </span>

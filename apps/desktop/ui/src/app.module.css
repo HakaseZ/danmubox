@@ -805,9 +805,11 @@
 
 .paneGift {
   flex-grow: var(--gift-share);
-  /* 礼物栏不可被压到比它的**折叠头**更矮（契约 §8）：--gift-min-h 是 JS 实测的折叠头高度 */
+  /* 礼物栏不可被压到比它的**折叠头**更矮（契约 §8）：--gift-min-h 是 JS 实测的折叠头高度。
+     背景**与弹幕栏同色**（用户 2026-09-16 第 2 条：「一样的背景颜色」）：这一栏的行就是
+     MessageRow（scope="gift"），行的底色必须与弹幕区逐行相同，因此这里不另刷 `--bg-elevated`
+     —— 两栏的分界由分割条那条发丝线给出，不靠底色。 */
   min-height: var(--gift-min-h);
-  background: var(--bg-elevated);
 }
 
 /* 折叠态：礼物栏 = 它的折叠头（折叠优先于份额），弹幕区拿走剩下的全部；
@@ -1347,8 +1349,10 @@
   color: var(--danger);
 }
 
-/* 礼物 / SC 栏：**与弹幕区上下分区的一栏**（issue #8），高度由份额驱动（不再按内容、也不再固定），
-   背景与分隔线交给 `.paneGift` / `.splitter`，这里只管栏内的排布。 */
+/* 礼物 / SC 栏：**与弹幕区上下分区的一栏**（issue #8），高度由份额驱动（不再按内容、也不再固定）。
+   栏内**没有自己的行样式**了（用户 2026-09-16 第 2 条）：行就是弹幕行（`MessageRow`，
+   scope="gift"），列表就是 `MessageList`（`.chatArea` / `.scroller` / `.msgList`）——
+   布局、底色、自动滚动全部与弹幕区同一套代码；两条 CSS 规则因此只剩折叠头与汇总。 */
 .giftDockHead {
   display: flex;
   flex: none; /* 折叠头永远按自己的高度占位，不被展开区挤压 */
@@ -1386,58 +1390,6 @@
 .giftDockToggle {
   flex: none;
   color: var(--fg-dim);
-}
-
-/* 展开区：吃掉折叠头之外的全部高度（栏高由份额定），自己在里面滚 —— 与弹幕列表各自滚动 */
-.giftDockBody {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0 var(--sp-3) var(--sp-2);
-  font-size: var(--fs-2);
-}
-
-/* 礼物栏的**一条**（§5.3）：头像 + 昵称 + 内容 + 数量 + 金额在同一行里。
-   头像走行外共用的 `--avatar`（`:root` 的 1.35em），这里把基准调大一档：
-   礼物栏的字号是 `--fs-2`（12px 上下），照 1.35em 算出来只有 16px，太小看不清。
-   昵称与内容都是单行省略：礼物栏窄，宁可截断也不折行（折叠条只有一行高）。 */
-.giftItem {
-  --avatar: 1.8em;
-
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  padding: var(--sp-1) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.giftWho {
-  flex: none;
-  max-width: 8em;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--fg-dim);
-}
-
-.giftWhat {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.giftCount,
-.giftAmount {
-  flex: none;
-  white-space: nowrap;
-}
-
-/* 金额格（带单位）：等宽数字，逐行右边缘对齐 */
-.giftAmount {
-  color: var(--fg-dim);
-  font-variant-numeric: tabular-nums;
 }
 
 /* 「回到最新」（用户 2026-09-13 #2：「指这整个按钮删掉，用一个返回按钮旋转 90° 来代替」）：

@@ -44,6 +44,9 @@
 //          右边缘与正文块的右边缘齐平、逐行等宽（纵向对齐），且不挤正文宽度
 //   limit  弹幕字数上限：上限来自 room_session.danmaku_length（40）；超限即截断并提示；
 //          工具行常显 已用/上限；@昵称 前缀不计入有效上限
+//   ime    组字中的回车是**输入法**的、不是「发送」：组字中（compositionstart 之后）、只有
+//          isComposing 自报、以及 compositionend 之后紧跟的那次 keydown（WebKit 时序）三种
+//          都不许发；隔一轮任务之后用户自己按的回车必须发（守卫不许滥杀）
 //   theme  主题**按钮**在**房间列表页页头**（点一下前进一档：亮 → 暗 → 自动，三下一轮回到原档；
 //          图标随档变且三档同一套矢量规范、切档真的落到 <html data-theme>、深浅对比度达标）
 //   gift   礼物类消息的去向与独立礼物栏（issue 2609152029 第 4/5 条）：`ui.gift_in_danmaku`
@@ -3374,6 +3377,85 @@ const MOCK = (theme) => `(function () {
       out.limitBlockError = String((e && e.stack) || e);
     }
     out.limitBlockRan = limitBlockRan;
+
+    // ---- ime 中文输入法组字时的回车（issue #2 第 3 条：macOS 实测「回车选词」会把弹幕直接发出去）。
+    //      场景里只能派发**合成事件**（同 pressKey 那段的说明：运行器没有把真实键盘 / IME 序列
+    //      送进来的通道），因此这里把「判据依赖的四种时序」逐条摆出来，判据只落在两件对外可观察
+    //      的事上：chat_send 有没有被调用、草稿还在不在。前三种都不许发，第四种**必须发**：
+    //        ① 组字中：compositionstart 之后、compositionend 之前的回车（真实 IME 选词就是这一次）；
+    //        ② 只有 isComposing 自报组字（Chromium 提交候选那次 keydown 的形态：不带
+    //           compositionstart 也自报）—— 与 ① 分开，免得「只看组字态」的实现蒙过去；
+    //        ③ WebKit 时序：compositionend **先**到，同一次按键的 keydown 随后到、带着
+    //           isComposing=false / keyCode=13 —— 这是 macOS 宿主引擎（WKWebView）上的真凶，
+    //           只看 ①② 会在这里变红；
+    //        ④ 隔了一轮任务之后用户自己按的回车 —— 守卫要是连它也吃，等于「修完发不出弹幕」。
+    //      ④ 与 ③ 靠得近是有意的：它证明守卫的窗口止于**一轮任务**，不是「一直等到下次按键」。
+    var imeBlockRan = false;
+    try {
+      var imeArea = document.querySelector("textarea");
+      var imeTexts = ["组字中样本", "自报组字样本", "提交候选样本", "组字后的回车样本"];
+      var imeSendCount = function () {
+        return window.__callsWithArgs.filter(function (c) { return c.cmd === "chat_send"; }).length;
+      };
+      // 每条时序都重新铺一遍草稿：前一条发没发过都不影响后一条（互不依赖）
+      var imeSeed = async function (text) {
+        typeIntoArea(imeArea, "");
+        await sleep(150);
+        typeIntoArea(imeArea, text);
+        await sleep(150);
+        return imeSendCount();
+      };
+      var imeKeydown = function (isComposing, keyCode) {
+        imeArea.focus();
+        imeArea.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter", code: "Enter", keyCode: keyCode, isComposing: isComposing,
+          bubbles: true, cancelable: true
+        }));
+      };
+      var imeCompose = function (type) {
+        imeArea.dispatchEvent(new CompositionEvent(type, { bubbles: true }));
+      };
+
+      // ① 组字中的回车
+      var imeBeforeComposing = await imeSeed(imeTexts[0]);
+      imeCompose("compositionstart");
+      imeKeydown(true, 229);
+      await sleep(400);
+      out.imeComposingEnterDoesNotSend = imeSendCount() === imeBeforeComposing;
+      out.imeComposingEnterKeepsDraft = imeArea.value === imeTexts[0];
+      imeCompose("compositionend");
+      await sleep(300);
+
+      // ② 没有 compositionstart，只有 isComposing 自报的那次回车
+      var imeBeforeFlag = await imeSeed(imeTexts[1]);
+      imeKeydown(true, 229);
+      await sleep(400);
+      out.imeIsComposingFlagDoesNotSend = imeSendCount() === imeBeforeFlag &&
+        imeArea.value === imeTexts[1];
+
+      // ③ compositionend 先到、keydown 后到（WebKit 时序）：两者**同一轮任务**里背靠背派发
+      var imeBeforeCommit = await imeSeed(imeTexts[2]);
+      imeCompose("compositionstart");
+      imeCompose("compositionend");
+      imeKeydown(false, 13);
+      await sleep(400);
+      out.imeCommitTailEnterDoesNotSend = imeSendCount() === imeBeforeCommit &&
+        imeArea.value === imeTexts[2];
+
+      // ④ 隔一轮任务之后的普通回车：必须发出去（并且清空草稿）
+      var imeBeforePlain = await imeSeed(imeTexts[3]);
+      await sleep(300);
+      imeKeydown(false, 13);
+      await sleep(500);
+      out.imeNextTaskEnterSends = imeSendCount() === imeBeforePlain + 1 && imeArea.value === "";
+      typeIntoArea(imeArea, "");
+      await sleep(200);
+      snap();
+      imeBlockRan = true;
+    } catch (e) {
+      out.imeBlockError = String((e && e.stack) || e);
+    }
+    out.imeBlockRan = imeBlockRan;
 
     // ---- 超时兜底（用户 2026-09-13：不要永远停在「发送中」）：这条**故意不回推**，
     //      看它在 SEND_CONFIRM_TIMEOUT_MS（8s）到点后是否被标成失败族的「未确认」。

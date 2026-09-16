@@ -918,8 +918,8 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 |---|---|
 | `npm ci` / `npm run build` / 三条 Rust 命令 / `tauri build --bundles dmg` | **本机实测过**，产物路径即上文与 §5.3（`cargo fmt` 的不通过属存量，见 [`../AGENT.md`](../AGENT.md) §9） |
 | `tauri android build --apk --ci` | **本机干净 worktree 上真跑完过**（rc=0；`npm ci` 22 秒 + 构建，合计 381 秒；四个 ABI 全部编出，产物 `…/apk/universal/release/app-universal-release-unsigned.apk`）。那份 worktree 没有本地 keystore，所以是**未签名**产物；CI 里先造一次性 `keystore.properties`，产物名是 `app-universal-release.apk`（上传用的是 `*/release/*.apk` 通配，两种命名都覆盖） |
-| Android 工具链在 **runner 上**的安装（`setup-java`＋`setup-android`＋`sdkmanager` 装 `platform-tools` / `platforms;android-36` / `build-tools;35.0.0` / `ndk;27.0.12077973`，再写 NDK 链接器 `config.toml`） | **未在 runner 上验证**：它是本机 `scripts/android-env.sh` 的等价改写（版本号、包名、linker 路径都取自该脚本与本机实测），但 GitHub runner 的 `sdkmanager` 版本与包名写法（`;` / `/` 两种形式一一对应，见脚本注释）只能等第一次真跑才见分晓 —— 工作流里因此写了「先 `;` 后 `/`」的兜底重试 |
-| CI 工作流本身 | 从未在本仓库真实运行过（本轮只做了 YAML 可解析 + 每条命令的本机等价核对） |
+| Android 工具链在 **runner 上**的安装 | **已实测（2026-09-21，run `35108747297`）**：首次真跑暴露出 `android-actions/setup-android@v3` 会去装上游早已下架的 `tools` 包（`Failed to find package 'tools'` → job 失败），**已改成自取 cmdline-tools**（同版本同 URL 解压成 `cmdline-tools/latest`，再用 `sdkmanager` 装 `platform-tools` / `platforms/android-36` / `build-tools/35.0.0` / `ndk/27.0.12077973`），复跑该 job 全步骤 success 并上传了两个产物 |
+| CI 工作流本身 | **已真跑**：`check` job 在 PR 与 push 上多次 success（冷缓存 3m43s / 热缓存 53s–1m30s）；`artifacts` job 手动触发两次 —— 第一次抓到 setup-android 的失败，修好后第二次全步骤 success 并上传 `danmubox-macos-dmg` / `danmubox-android-apk` |
 
 ---
 

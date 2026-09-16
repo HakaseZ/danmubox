@@ -4426,7 +4426,23 @@ const MOCK = (theme) => `(function () {
       // ④ 沉浸态里滚到中段再展开：**当前阅读位置不许被弹走**（与 layoutPanelScrollStable 同款量法）
       immScroll.scrollTop = Math.round((immScroll.scrollHeight - immScroll.clientHeight) * 0.45);
       await sleep(400);
-      var immAnchor = rows()[4];
+      // 锚定「当前正在读的那一行」= **视口里最靠上的那一行**（按 data-index 认它）。
+      // 旧写法取 rows()[4]（第 5 个**渲染出来**的格子）：虚拟列表的窗口带 12 行 overscan，
+      // 45% 处那个窗口是从列表开头开始的，于是 rows()[4] 落在视口**上方**（top 为负、用户
+      // 根本看不见）—— 它随「上方各行的实测落账」而动是本分，拿它当阅读位置量错了对象。
+      // 实测同一次退出：视口里那一行位移 **0.0px**，而 overscan 里那个第 5 格位移 88.1px。
+      // 旧数值仍然记进快照（immersiveAnchorSlotIndex / ...SlotDeltaPx）当对照。
+      var immScrollBox = rect(byTestId("db-chat-scroll"));
+      var immVisibleRow = immScrollBox
+        ? rows().filter(function (r) { return rect(r).bottom > immScrollBox.top + 1; })[0] || null
+        : null;
+      var immAnchorSlot = rows()[4];
+      var immAnchorSlotWrap = immAnchorSlot ? immAnchorSlot.closest("[data-index]") : null;
+      var immAnchorSlotIndex = immAnchorSlotWrap
+        ? immAnchorSlotWrap.getAttribute("data-index") : null;
+      var immAnchorSlotTop = immAnchorSlot
+        ? Math.round(rect(immAnchorSlot).top * 10) / 10 : null;
+      var immAnchor = immVisibleRow || immAnchorSlot;
       var immAnchorTop = immAnchor ? Math.round(rect(immAnchor).top * 10) / 10 : null;
       // 认的是**这一条消息**，不是「第 5 个渲染出来的格子」：虚拟列表渲染的是窗口里那几行，
       // 视口一变窗口就挪（退出沉浸时弹幕区矮回去 193px，窗口里换一批行），rows()[4]
@@ -4463,6 +4479,12 @@ const MOCK = (theme) => `(function () {
         ? Math.round(rect(immAnchorAfter).top * 10) / 10 : null;
       out.immersiveAnchorIndex = immAnchorIndex;
       out.immersiveAnchorFoundAfter = !!immAnchorAfter;
+      // 对照：同一个场景里那个 overscan 格子（旧锚点）的位移 —— 它动不代表阅读位置动了。
+      var immAnchorSlotAfter = rowByIndex(immAnchorSlotIndex);
+      out.immersiveAnchorSlotIndex = immAnchorSlotIndex;
+      out.immersiveAnchorSlotDeltaPx = immAnchorSlotTop !== null && immAnchorSlotAfter
+        ? Math.round((Math.round(rect(immAnchorSlotAfter).top * 10) / 10 - immAnchorSlotTop) * 10) / 10
+        : null;
       out.immersiveExitOnTouchDoubleTap = immAttr() === null;
       out.immersiveRestoresLayout = byTestId("db-room-header") !== null &&
         byTestId("db-composer-tools") !== null &&

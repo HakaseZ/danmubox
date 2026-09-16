@@ -62,7 +62,10 @@ pub struct AppState {
     bus: EventBus,
     counters: Arc<Counters>,
     prefs: Mutex<Prefs>,
-    rooms: Mutex<Rooms>,
+    /// 已登记房间。`Arc` 是因为**事件转发器也要改它**：`LIVE` / `PREPARING` 到达时先把
+    /// `live_status` 落进登记表，再把整条 `Room` 推给界面 —— 不落登记表的话，下一次
+    /// `rooms_list` 重拉（开房间 / 加房间 / 换号）会把旧状态盖回界面。
+    rooms: Arc<Mutex<Rooms>>,
     /// 前端在**开始采集**时交上来的渲染引擎标识（`navigator.userAgent`）。
     ///
     /// 内核版本只有页面自己知道，而白屏一类问题同时取决于它：因此诊断开始时存下来，
@@ -78,7 +81,7 @@ impl AppState {
             bus: EventBus::new(BUS_CAPACITY),
             counters: Arc::new(Counters::default()),
             prefs: Mutex::new(Prefs::load(&prefs_path())),
-            rooms: Mutex::new(Rooms::default()),
+            rooms: Arc::new(Mutex::new(Rooms::default())),
             engine: Mutex::new(String::new()),
         })
     }
@@ -225,6 +228,71 @@ fn rooms_list(state: State<'_, AppState>) -> Vec<RoomView> {
         .iter()
         .filter_map(|id| view(&state, &rooms, *id))
         .collect()
+}
+
+/// 定期刷新**已登记房间**的开播状态（`docs/contract.md` §4 的 30 秒那一拍、§7 的命令表）。
+///
+/// 列表页站着不动时，「我的房间」那些卡片的状态要自己跟着上游变 —— 在这之前它们的
+/// `live_status` 只在 `rooms_add` 那一刻取过一次，之后永远不动（用户 2026-09-16 报的
+/// 「开播下播时状态不会自动更新」在列表上的那一半）。
+///
+/// 三条纪律：
+/// - **只动 `live_status`**：标题与昵称另有来源（`getH5InfoByRoom`），这一条路上不打那一跳，
+///   每个房间因此只有**一次**只读 GET；
+/// - **逐个房间并发**取；单个失败只跳过它（一个房间被删 / 被锁不该让整页都刷不成）；
+/// - **一个都没成功**（多半是断网）→ `UPSTREAM_ERROR`：前端据此退避，
+///   断网时不会每 30 秒打一次上游。没有已登记房间时**一个请求都不发**。
+#[tauri::command]
+async fn rooms_refresh_status(state: State<'_, AppState>) -> ApiResult<Vec<RoomView>> {
+    let ids: Vec<i64> = {
+        let rooms = state.rooms.lock().expect("rooms poisoned");
+        rooms.order.clone()
+    };
+
+    if !ids.is_empty() {
+        let live = Arc::new(BiliLive::with_store(Arc::clone(&state.store)).map_err(ApiError::from)?);
+        let mut tasks = tokio::task::JoinSet::new();
+        for room_id in ids {
+            let live = Arc::clone(&live);
+            tasks.spawn(async move { (room_id, live.live_status(room_id).await) });
+        }
+
+        let mut fresh: Vec<(i64, i32)> = Vec::with_capacity(tasks.len());
+        let mut failed = 0usize;
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok((room_id, Ok(live_status))) => fresh.push((room_id, live_status)),
+                Ok((room_id, Err(error))) => {
+                    failed += 1;
+                    tracing::debug!(room_id, %error, "开播状态取失败，这一拍跳过这个房间");
+                }
+                Err(error) => {
+                    failed += 1;
+                    tracing::debug!(%error, "开播状态刷新任务未跑完");
+                }
+            }
+        }
+
+        if fresh.is_empty() {
+            return Err(ApiError::from(danmubox_core::Error::Upstream(format!(
+                "{failed} 个房间的开播状态都没取到"
+            ))));
+        }
+
+        let mut rooms = state.rooms.lock().expect("rooms poisoned");
+        for (room_id, live_status) in fresh {
+            if let Some(room) = rooms.meta.get_mut(&room_id) {
+                room.live_status = live_status;
+            }
+        }
+    }
+
+    let rooms = state.rooms.lock().expect("rooms poisoned");
+    Ok(rooms
+        .order
+        .iter()
+        .filter_map(|id| view(&state, &rooms, *id))
+        .collect())
 }
 
 /// 解析房间号 / 短号 / URL 并登记；不建立连接。
@@ -815,7 +883,10 @@ async fn wallet_balance(state: State<'_, AppState>) -> ApiResult<i64> {
 // ---------------------------------------------------------------- 事件转发
 
 /// 把事件总线上的事件转发给前端（`docs/ipc.md` §4 的五个事件名）。
-fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus) {
+///
+/// `rooms` 是已登记房间（`AppState.rooms` 的同一份）：开播状态那条**先落登记表再推界面**
+/// （见下面 `Event::LiveStatus` 那一支）。
+fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus, rooms: Arc<Mutex<Rooms>>) {
     let mut receiver = bus.subscribe();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -831,6 +902,29 @@ fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus) {
                 }
                 Ok(Event::Room(room)) => {
                     let _ = app.emit("danmubox://room", &room);
+                }
+                // `LIVE` / `PREPARING`（`docs/protocol.md` §10.7 的侧路）：房间的开播状态变了。
+                // 两步的顺序是有意的 —— **先**把状态落进登记表，**再**把改后的整条 `Room` 推给界面：
+                // 登记表是界面另一个事实来源（`rooms_list` 在开房间 / 加房间 / 换号时都会重拉），
+                // 不落它就会出现「刚看到开播，点一下别的房间又变回未开播」。
+                Ok(Event::LiveStatus(status)) => {
+                    let room = {
+                        let mut rooms = rooms.lock().expect("rooms poisoned");
+                        rooms.meta.get_mut(&status.room_id).map(|room| {
+                            room.live_status = status.live_status;
+                            room.clone()
+                        })
+                    };
+                    match room {
+                        Some(room) => {
+                            let _ = app.emit("danmubox://room", &room);
+                        }
+                        // 能连上的房间都登记过，走不到这里；真走到也只记一笔，不推半条假元信息。
+                        None => tracing::debug!(
+                            room_id = status.room_id,
+                            "开播状态事件来自未登记的房间，忽略"
+                        ),
+                    }
                 }
                 Ok(Event::Session(session)) => {
                     let _ = app.emit("danmubox://session", &session);
@@ -1202,7 +1296,7 @@ pub fn run() {
 
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
-            spawn_event_forwarder(handle.clone(), state.bus.clone());
+            spawn_event_forwarder(handle.clone(), state.bus.clone(), Arc::clone(&state.rooms));
 
             // 日志行 → danmubox://log
             tauri::async_runtime::spawn(async move {
@@ -1222,6 +1316,7 @@ pub fn run() {
             account_qr_start,
             account_qr_poll,
             rooms_list,
+            rooms_refresh_status,
             rooms_add,
             rooms_remove,
             rooms_connect,
@@ -1325,6 +1420,11 @@ mod tests {
 
         async fn resolve_room(&self, _input: &str) -> danmubox_core::Result<Room> {
             Ok(Room::default())
+        }
+
+        // 这条票只测会话重建：开播状态给未开播即可。
+        async fn live_status(&self, _room_id: i64) -> danmubox_core::Result<i32> {
+            Ok(0)
         }
 
         async fn room_identity(&self, room_id: i64) -> danmubox_core::Result<RoomSession> {

@@ -1709,6 +1709,38 @@
 > **产物**：macOS `.dmg` 与 Android 已签名 release APK 按本批重新构建（方式与签名口径见 `docs/operations.md` §5.3/§5.7/§5.13）。
 > **未验证**：macOS 的「一键诊断」点击路径（屏幕锁着，合成点击被吃掉）、真机 Android 的 MediaStore 行为、真机上的拖动观感、三端手工冒烟清单（`docs/testing.md` §10）、以及 `docs/protocol.md` A47（服务端是否要求回 ack）。
 
+### Added
+
+- **开播 / 下播时状态自动更新：打开的房间实时更新 + 列表定期查询**（`issue` 2609162141 #1；提交 `64bf3df`）。
+  此前有两处缺口（都已实测确认）：① `LIVE`（开播）/ `PREPARING`（下播）**本来就在我们认的命令表里**，但只被归一化成一条「开播 / 下播」的**文字消息**就结束了 —— 全仓没有任何地方把它写成房间的 `live_status`；而且 `danmubox://room` 这个事件**根本没有发布点**（前端那条分支在真实链路里永远不会被触发）；② 房间列表的 `live_status` **只在添加房间那一刻取过一次**，之后不刷新；前端也**完全没有轮询**（唯一的 `setInterval` 是扫码轮询与诊断倒计时）。
+  **实时那条**：`LIVE` → `live_status = 1`、`PREPARING` → `0`（`PREPARING` 推 0 而不是 2「轮播」，理由是无实测依据、推错也只是短暂不一致，下一拍列表会用上游只读值纠回）；新增 `Event::LiveStatus` 与端口 `LiveSource::live_status()`（实现是一次只读 `getRoomPlayInfo`，不走 `getH5InfoByRoom` 那一跳）；外壳在事件到达时**先落登记表、再推整条 `Room`** —— 不先落表的话，下一次 `rooms_list` 重拉会把旧状态盖回界面。
+  **定期那条**：新增 IPC `rooms_refresh_status`（逐房间并发只读、只改 `live_status`；单个失败只记日志跳过，**全部失败**才报 `UPSTREAM_ERROR` 让前端退避；没有已登记房间时一个请求都不发）；前端进列表页立即一拍、之后每 **30 秒**一拍（周期进契约 §4），**页面不可见就整拍跳过**，失败按 **30→60→120→240 秒**封顶退避、成功复位，落地复用 `rooms_list` 的同一份快照序号护栏与保序逻辑。
+  **刻意没做**：不顺带刷新该房间的 `room_stats`（在线 / 看过）—— 上游那两条在下播后的行为没有实测依据，「凭空清零」等于编造上游行为；界面既有口径是「上游没给过则为 null、保留上一次值」。
+  文档：契约 §4（周期常量）/ §6 / §7（新命令）、`docs/ipc.md`、`docs/ui.md`、`docs/protocol.md` §10.7、`docs/architecture.md`。
+
+### Fixed
+
+- **CI 的 `artifacts` job 首次真跑即失败**（提交 `ad8709b`）：`android-actions/setup-android@v3` 会去装上游**早已下架**的 `tools` 包 —— 实测输出 `Warning: Failed to find package 'tools'` → `sdkmanager` 非零退出 → 整个 job 失败。改成与 `scripts/android-env.sh` **同款口径**：自取同一版本的 `cmdline-tools`（同 mac_arm64 包与 URL）→ 解压成 `cmdline-tools/latest` → 用它装 `platform-tools` / `platforms/android-36` / `build-tools/35.0.0` / `ndk/27.0.12077973`，装完自检三样都在（缺任一样后面 Gradle 配置阶段必挂）；cmdline-tools 版本固定后不再需要 `;` → `/` 的兜底重试。**这条正好落在 `docs/operations.md` §5.13 那张「本机验证到什么程度」的表里标着「未在 runner 上验证」的格子上** —— 首次真跑把它照出来了。
+
+### Fixed
+
+- **退出沉浸模式时阅读位置漂 88.1px（≈一行）**（[issue #4](https://github.com/HakaseZ/danmubox/issues/4)；提交 `a6416f5`）。
+  **根因（实测分解）**：退出沉浸的那一帧，React 把房间头与标签条插回弹幕区**上方**，于是**滚动容器自己的顶边**下移 **88.1px**（= 标签条 31.1 + 房间头 57）—— 而**容器里的内容一动没动**（同一行的 `contentTop`、`scrollTop` 逐位相同）。断言量的是**屏幕坐标**，于是把「容器的位移」记成了「阅读位置跑了」。
+  这也解释了此前那版「暂停态锚定行」修法为什么在全量场景里零效果：它差分的是「锚点行**在容器内**的偏移」，而该值恒为 1px → 1px ⇒ 补偿恒为 0（后来用同结构探针复现了这个结论）。顺带否证了另一个猜测：「锚点上方各行重算偏移」不成立。
+  **修法**：冻结视口（非跟随）时记下**滚动容器自己的顶边**，`ResizeObserver` 回调里按容器位移**一次性**补 `scrollTop`（容器**内**的偏移仍归虚拟列表自己的尺寸锚定管）；跟随态仍走贴底。
+  **实测**：`immersiveExitKeepsReadingPositionPx` 由基线 **88.1 × 4 组合（两引擎）** 降到 **0.1 / 0.1 / 0.1 / 0.1（Chromium）与 0.1 / 0 / 0.1 / 0（WebKit）**；**容差与断言一行未动**（只改注释与文档口径）。`docs/ui.md` §7.3 新增一行（进退沉浸：容器顶边会挪，按容器自己的位移补；容器内那部分归虚拟列表；两条不许合成一条），§2.3.1 与 §7.2 同步；`docs/testing.md` §10.6 把该条改记为**已修**（含两种试过但不可用的写法）。
+  **同票记录的覆盖缺口**（既有、本票未动）：§7.3 表里「宽度变化 / 字体档位」与「过滤变更 / 礼物折叠」两行**没有任何锚定断言**（后者描述的行为在 `src` 里也没实现）。
+
+> **本轮（批次 `2609162141`：P124 开播/下播状态自动更新 + [issue #4](https://github.com/HakaseZ/danmubox/issues/4) 沉浸阅读位置 + CI `artifacts` 首跑修复）的验证口径**，如实记录：
+> **两条缺陷都是先由用户在用的时候发现、再被无头冒烟钉住的**：P124 的两处缺口（`LIVE` / `PREPARING` 从未被写成房间的 `live_status`、`danmubox://room` **根本没有发布点**、列表不刷新、前端不轮询）在集成前的探针里逐条实测；issue #4 的 **88.1px** 偏差在两引擎基线上数值逐位一致。
+> **Rust 与前端闸门（集成后重跑）**：`cargo clippy --workspace --all-targets -- -D warnings` **零告警**；`cargo test --workspace` **257 passed / 0 failed**（`danmubox-bili` 191 + `danmubox-core` 58 + `danmubox-desktop` 8）；前端 `npm run build`（= `tsc -b && vite build`，由产物构建那一趟真跑）、`node --check`、`run-headless.mjs --precheck` 全过。**未跑** `cargo fmt`（存量不通过，见 `AGENT.md` §9）。
+> **本轮首次真跑**（集成后的树、仓库自带 `run-headless.mjs`）：起点 = **两引擎都在 wide 视口就死在一个未捕获的 `TypeError`**（`roomStatus*` 那段的准入前提：它在**房间页**点了只渲染在**列表页**的 `db-account`，且该段没有 `try/catch` ⇒ 整场场景不产出快照 → runner 报「视口未跑完（超时）」）**+ 12 条断言红**（`cheapGift*` 11 条 + `swapDoesNotEatNextTap`）。
+> **收敛 = 12 条全部按实测定性、一条强度都没放松、无一条是应用回归**：11 条是**量法失效**（新房间标签的 `data-room-id` 取出来是**字符串**、入参是**数字** ⇒ 用数字找标签永远找不到、标签根本没点下去、整段全量在旧房间上；改前探针实测 `=== 5555` → `false`、`=== "5555"` → `true`，归一化后同一段能量出 `rows=3` 且汇总与断言字面量逐字相同）；`swapDoesNotEatNextTap` 是**钩子换位后的量法失效**（`db-gift-body` 已被改造成**行内**正文格，礼物列表为空时开合两态都取不到它 ⇒ 断言恒假；改前实测那一下 click 的 `defaultPrevented=false` 且折叠真的翻转 ⇒ **应用行为是对的**，改量本栏自己的折叠状态：`db-gift-area` 在场 + `db-gift-dock` 的 `aria-expanded`，两条信号同时翻转才算过）；第 12 条是**期望值字面量的算术错**（原期望把 0.11 元也算成低价，与 `docs/contract.md` §8 line 487「`amount <= 0` 不算低价」+「低价 = 单个价值 ≤ 0.1 元」矛盾 ⇒ 按契约改正为「礼物 2 · 0.11 元」，判据落在**条数 = 2**、强度不降）。`roomStatus*` 那段由 triage 票**代补准入前提（先回列表页）+ `try/catch` + `roomStatusBlockRan` 兜底**（断言一行未动）。教训已写成 `docs/testing.md` §9.3 三条准入条件 + `AGENT.md` §9 DoD 勾选项。
+> **最终验收（两引擎 × 四个视口组合，仓库自带 runner，集成树）：两边都 `EXIT=0`、8 个视口全部断言成立、失败清单为空** —— Chromium 与 WebKit 各 `695 / 899 + 723 / 935 + 695 / 899 + 723 / 935 = 3668 项快照`、各 48 张截图。其中 `roomStatus*` 全绿（房间头 / 标签页两处圆点随**同一条事件**实时变色、进房即停轮询、列表页自动刷新）＝ **P124 的权威验收**；`immersiveExitKeepsReadingPositionPx` 由 88.1px 降到 0.1px 级 ＝ issue #4 的修复在全量场景里成立。日志与 96 张截图在 `.android-env/verify/final-{chromium,webkit}/`。
+> **环境如实记录**：Chromium 那 4 个视口本次**回落到用户自己的 Google Chrome**（冒烟自带的那只 Chrome for Testing 在 `Page.captureScreenshot` 出帧自检上超时；它在 2026-09-16 是过的，属瞬时环境问题，非配置回归），回落那次仍在 runner 的 300s/视口上限内跑完（110–270s/视口）—— 此前几轮的「视口未跑完」是机器被占满所致。
+> **产物**（自用，本批**重新打包**，构建方式见 `docs/operations.md` §5.3 / §5.4 / §5.7）：macOS `danmubox_0.1.0_aarch64.dmg` **5,069,549 字节**（`hdiutil verify` → checksum VALID；独立可执行 14,047,856 字节、前端已内嵌；**真启动 20 秒存活、`panic`/`ERROR` 零命中**，启动日志里可见 `api.live.bilibili.com/room/v1/Room/get_status_info_by_uids` 轮询 ＝ P124 那条链路在打包产物里是活的）；Android `danmubox_0.1.0_universal-release.apk` **54,854,528 字节**（四 ABI `arm64-v8a/armeabi-v7a/x86/x86_64`，`apksigner verify` → **Verifies**、v2 签名、签名者 `CN=danmubox`，包名 `dev.kksk.danmubox` / 0.1.0 (1000) / targetSdk 36）。两份都在 `.android-env/dist/`，**覆盖了 09-16 那两份不含本批改动的旧产物**。
+> **未验证**：三端手工冒烟清单（`docs/testing.md` §10）、真机 macOS / Android 观感、`docs/protocol.md` A46–A47 等既有未验证项。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

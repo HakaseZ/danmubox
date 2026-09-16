@@ -131,23 +131,39 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK（cmdline-tools + sdkmanager）
-        uses: android-actions/setup-android@v3
+      # ⚠️ **不要用 `android-actions/setup-android@v3`**：它会去装上游早已下架的 `tools` 包，
+      # 在 macos-14 上直接失败（2026-09-21 首次真跑实测：`Warning: Failed to find package 'tools'`
+      # → `The process '…/sdkmanager' failed with exit code …` → 整个 job 失败）。
+      # 改成与 `scripts/android-env.sh` **同款口径**：自取同一版本的 cmdline-tools（同 mac_arm64 包、
+      # 同 URL），解压成 `cmdline-tools/latest`（zip 内层就是 `cmdline-tools/`，不落成 `latest` 的话
+      # sdkmanager 找不到自己的根），再用它装我们真正需要的四个组件。
+      - name: Android cmdline-tools（自取，不经 setup-android）
+        run: |
+          set -euo pipefail
+          tools_zip="$RUNNER_TEMP/commandlinetools.zip"
+          curl -fL --retry 3 -o "$tools_zip" \
+            "https://dl.google.com/android/repository/commandlinetools-mac_arm64-16111833_latest.zip"
+          rm -rf "$ANDROID_HOME/cmdline-tools/latest" "$RUNNER_TEMP/cmdline-tools-unzip"
+          mkdir -p "$RUNNER_TEMP/cmdline-tools-unzip" "$ANDROID_HOME/cmdline-tools"
+          unzip -q "$tools_zip" -d "$RUNNER_TEMP/cmdline-tools-unzip"
+          mv "$RUNNER_TEMP/cmdline-tools-unzip/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          # PATH 的改动对「后续步骤」生效，所以这一步里用绝对路径自检一次。
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --version
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
       - name: 装 Android SDK 组件
         run: |
           set -euo pipefail
-          # 版本与包名取自 scripts/android-env.sh（DANMUBOX_SDK_PACKAGES / DANMUBOX_NDK_VERSION）与本机实测：
-          # compileSdk 36 → platforms;android-36；AGP 8.11 用 build-tools 35.0.0；NDK 与本机同版本。
-          # 不需要 emulator / system-image（CI 不跑模拟器）。
-          # 许可：新 CLI 的 --licenses 已是空操作，许可哈希由 --install 自动落盘（脚本里同样的注释）。
+          # 清单与 `scripts/android-env.sh` 一致（版本取本机实测）：compileSdk 36 → `platforms/android-36`；
+          # AGP 8.11 用 `build-tools/35.0.0`；NDK 与本机同版本。不需要 emulator / system-image（CI 不跑模拟器）。
+          # cmdline-tools 版本已被上一步固定，因此包名只写新 CLI 的 "/" 形式（不再需要 ";" 兜底）。
           yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
-          # 包名写法随 cmdline-tools 版本而异：旧版用 ";"，新版（本机 cmdline-tools 23.0）用 "/"，
-          # 两种形式一一对应（见 scripts/android-env.sh 顶部注释）。先按 ";" 试，失败再按 "/" 试一次。
           sdkmanager --sdk_root="$ANDROID_HOME" --install \
-            "platform-tools" "platforms;android-36" "build-tools;35.0.0" "ndk;27.0.12077973" \
-          || sdkmanager --sdk_root="$ANDROID_HOME" --install \
             "platform-tools" "platforms/android-36" "build-tools/35.0.0" "ndk/27.0.12077973"
+          # 自检：这三样缺一样，后面的 tauri android build 必然在 Gradle 配置阶段失败。
+          ls -d "$ANDROID_HOME/platforms/android-36" \
+                "$ANDROID_HOME/build-tools/35.0.0" \
+                "$ANDROID_HOME/ndk/27.0.12077973"
 
       - name: 导出 Android 环境变量 + NDK 链接器配置
         run: |

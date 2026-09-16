@@ -3865,6 +3865,164 @@ const MOCK = (theme) => `(function () {
     }
     out.tabsBlockRan = tabsBlockRan;
 
+    // ---- 沉浸模式（issue #1）：弹幕区**双击**收起标题栏与输入区，只留弹幕区与礼物 / SC 栏，
+    //      再双击恢复。判据是**指针事件**（鼠标双击与触屏点两下走同一条路，见 RoomView 顶部
+    //      的 TAP_MS）：两次「按下 → 抬起」都在 400ms 内、落点相距不超过 24px，且不落在
+    //      可交互元素上。这一段与 docs/ui.md 2.3.1 的「收起 / 保留」清单一一对应。
+    // 整块包一层（同上面几段的手法）：出岔子时让断言红（immersiveBlockRan），不卡死整个场景。
+    var immersiveBlockRan = false;
+    try {
+      var immTap = function (el, x, y, pointerType) {
+        var base = {
+          bubbles: true, cancelable: true, composed: true, isPrimary: true,
+          button: 0, pointerId: 1, pointerType: pointerType, clientX: x, clientY: y,
+        };
+        el.dispatchEvent(new PointerEvent("pointerdown", Object.assign({}, base, { buttons: 1 })));
+        el.dispatchEvent(new PointerEvent("pointerup", Object.assign({}, base, { buttons: 0 })));
+      };
+      // 两下「点」**挨着发**（中间不 sleep）：判据量的是两次点的间隔，而 sleep 会被页面节流拉长
+      // —— 实测在被节流的页面里 sleep(60) 落成 **473ms** 的间隔，直接超出 400ms 窗口。
+      // 真实用户当然不会快到这个程度，这里要验的是**判据本身**，不是人手速；间隔为 0 必定在窗口内。
+      var immDoubleTap = async function (el, x, y, pointerType) {
+        immTap(el, x, y, pointerType);
+        immTap(el, x, y, pointerType);
+        await sleep(320);
+      };
+      // 「DOM 层面不可见」的两条路：条件渲染的那几块**不在 DOM 里**；标签条在 App 里
+      // （房间页的兄弟节点），走 CSS 的 display: none —— 仍在 DOM 里，但 getClientRects()
+      // 为空（既不占位、也不进 Tab 序）。
+      var immUnrendered = function (el) { return el == null || el.getClientRects().length === 0; };
+      var immAttr = function () { return document.documentElement.getAttribute("data-immersive"); };
+      var immChat0 = rect(byTestId("db-chat-scroll"));
+      var immGift0 = rect(byTestId("db-gift-dock"));
+      var immTabs0 = rect(byTestId("db-room-tabs"));
+      var immHeader0 = rect(byTestId("db-room-header"));
+      // 输入区整块的高度 = 礼物栏顶边 − 弹幕区底边：文档流里它俩紧挨着输入区的上下
+      // （此刻没有面板 / 举报条 / 房管面板 / 确认条 / 日志块在场，中间就是输入区那一块）。
+      var immComposerH = Math.round((immGift0.top - immChat0.bottom) * 10) / 10;
+      var immTextareas0 = document.querySelectorAll("textarea").length;
+      var immTapX = Math.round(immChat0.left + immChat0.width / 2);
+      var immTapY = Math.round(immChat0.top + immChat0.height / 2);
+      // ① 单击**不**切（判据是双击）：标签条 / 房间头 / 属性三处都还是原样
+      immTap(byTestId("db-chat-scroll"), immTapX, immTapY, "mouse");
+      await sleep(500);
+      out.immersiveSingleTapIgnored = immUnrendered(byTestId("db-room-tabs")) === false &&
+        byTestId("db-room-header") !== null && immAttr() === null;
+      // ② 双击弹幕区 → 进沉浸模式（鼠标指针）
+      await immDoubleTap(byTestId("db-chat-scroll"), immTapX, immTapY, "mouse");
+      var immChat1 = rect(byTestId("db-chat-scroll"));
+      var immGift1 = rect(byTestId("db-gift-dock"));
+      out.immersiveEnterOnChatDoubleTap = immAttr() === "true";
+      out.immersiveHidesHeader = immHeader0 !== null &&
+        byTestId("db-room-header") === null && byTestId("db-live-dot-box") === null;
+      out.immersiveHidesComposer = immTextareas0 === 1 &&
+        byTestId("db-composer-tools") === null && byTestId("db-input-count") === null &&
+        document.querySelector("textarea") === null;
+      out.immersiveHidesTabs = immTabs0 !== null && byTestId("db-room-tabs") !== null &&
+        immUnrendered(byTestId("db-room-tabs")) &&
+        getComputedStyle(byTestId("db-room-tabs")).display === "none";
+      out.immersiveChatGrewPx = Math.round((immChat1.height - immChat0.height) * 10) / 10;
+      // 弹幕区长高的**正好**是被收起来的那三块之和（标签条 + 房间头 + 输入区）：
+      // 既证明「收起」，也证明这几块腾出来的高度全归弹幕区，没有别的块被挤错。
+      out.immersiveChatGrewByRemovedBlocks = immTabs0 !== null && immHeader0 !== null &&
+        immComposerH > 0 && Math.abs(out.immersiveChatGrewPx -
+          (immTabs0.height + immHeader0.height + immComposerH)) < 1.5;
+      // 礼物 / SC 栏留在场上、高度一点没变，且它上面的弹幕区正好接着它的顶边
+      out.immersiveKeepsGiftDock = byTestId("db-gift-dock") !== null &&
+        Math.abs(immGift1.height - immGift0.height) < 1 &&
+        Math.abs(rect(byTestId("db-chat-scroll")).bottom - immGift1.top) < 1;
+      snap();
+      // ③ 沉浸态里照样能往上翻历史、「回到最新」跟着出现、点了又贴底（虚拟列表重新量高）
+      var immScroll = byTestId("db-chat-scroll");
+      immScroll.scrollTop = Math.round((immScroll.scrollHeight - immScroll.clientHeight) * 0.5);
+      await sleep(350);
+      out.immersiveScrollsWhenImmersive = immScroll.scrollTop > 0 &&
+        bottomGap(immScroll) > 8 && byTestId("db-bottom-anchor") !== null;
+      byTestId("db-bottom-anchor").click();
+      await sleep(400);
+      out.immersiveJumpToLatestWhenImmersive = byTestId("db-bottom-anchor") === null &&
+        bottomGap(immScroll) < 8;
+      // ④ 沉浸态里滚到中段再展开：**当前阅读位置不许被弹走**（与 layoutPanelScrollStable 同款量法）
+      immScroll.scrollTop = Math.round((immScroll.scrollHeight - immScroll.clientHeight) * 0.45);
+      await sleep(400);
+      var immAnchor = rows()[4];
+      var immAnchorTop = immAnchor ? Math.round(rect(immAnchor).top * 10) / 10 : null;
+      // 顺带钉住「不跟双击选词打架」：选中一段正文（双击选词的等价物），
+      // 进出沉浸模式都不许把它清掉，正文本身也不许变成不可选。
+      var immBody = immAnchor ? immAnchor.querySelector('[data-testid="db-msg-body"]') : null;
+      var immSelected = "";
+      var immSelectable = false;
+      if (immBody) {
+        var immRange = document.createRange();
+        immRange.selectNodeContents(immBody);
+        var immSel = window.getSelection();
+        immSel.removeAllRanges();
+        immSel.addRange(immRange);
+        immSelected = immSel.toString();
+        immSelectable = getComputedStyle(immBody).userSelect !== "none";
+      }
+      out.immersiveSelectionProbe = { selected: immSelected.length, selectable: immSelectable };
+      // ⑤ 触屏双击（pointerType = touch）退出：鼠标与触摸走的是同一条指针判据
+      await immDoubleTap(byTestId("db-chat-scroll"), immTapX, immTapY, "touch");
+      var immChat2 = rect(byTestId("db-chat-scroll"));
+      var immAnchorTopAfter = immAnchor && immAnchor.isConnected
+        ? Math.round(rect(immAnchor).top * 10) / 10 : null;
+      out.immersiveExitOnTouchDoubleTap = immAttr() === null;
+      out.immersiveRestoresLayout = byTestId("db-room-header") !== null &&
+        byTestId("db-composer-tools") !== null &&
+        immUnrendered(byTestId("db-room-tabs")) === false &&
+        Math.abs(immChat2.height - immChat0.height) < 1.5;
+      out.immersiveExitKeepsReadingPositionPx = immAnchorTop !== null && immAnchorTopAfter !== null
+        ? Math.round((immAnchorTopAfter - immAnchorTop) * 10) / 10 : null;
+      out.immersiveExitKeepsReadingPosition = immAnchorTop !== null &&
+        immAnchorTopAfter !== null && Math.abs(out.immersiveExitKeepsReadingPositionPx) < 8 &&
+        byTestId("db-bottom-anchor") !== null && bottomGap(byTestId("db-chat-scroll")) > 8;
+      out.immersiveKeepsTextSelection = immSelected.length > 0 && immSelectable &&
+        window.getSelection().toString() === immSelected;
+      // ⑥ 落在可交互元素上的双击**不**切（判据的另一半）。两个探针，都是真的落在 button 上的双击：
+      //    ① 临时插一枚**稳定的**按钮进弹幕区（挂完就用，用完即摘）—— 它没有任何 click 处理，
+      //       所以这一对「点」必然被完整判据看到：判据里少了「排除可交互元素」这一条，这里就会翻进沉浸态。
+      //    ② 真实的「回到最新」按钮（此刻不在跟随，它在场）—— 同一个判据在真实控件上的实例。
+      //    断言只认「没翻进去、房间页没被拆」，不去认那枚按钮还在不在：万一某个引擎给派发的指针事件
+      //    补一个 click，②里的按钮会被点掉（跟随恢复），那与「双击不切沉浸」是两件事。
+      var immProbe = document.createElement("button");
+      immProbe.setAttribute("type", "button");
+      immProbe.setAttribute("data-testid", "db-immersive-probe");
+      immProbe.style.cssText = "position:absolute;left:8px;top:8px;width:40px;height:40px;z-index:9";
+      byTestId("db-chat-wrap").appendChild(immProbe);
+      await immDoubleTap(immProbe, Math.round(rect(immProbe).left + 20),
+        Math.round(rect(immProbe).top + 20), "mouse");
+      var immAfterProbe = immAttr();
+      var immJump = byTestId("db-bottom-anchor");
+      var immJumpBox = rect(immJump);
+      if (immJumpBox) {
+        await immDoubleTap(immJump, Math.round(immJumpBox.left + immJumpBox.width / 2),
+          Math.round(immJumpBox.top + immJumpBox.height / 2), "mouse");
+      }
+      immProbe.remove();
+      out.immersiveButtonDoubleTapIgnored = immAfterProbe === null && immAttr() === null &&
+        byTestId("db-room-header") !== null && byTestId("db-immersive-probe") === null;
+      out.immersiveButtonProbe = {
+        attrAfterProbe: immAfterProbe,
+        attrAfterJump: immAttr(),
+        jumpStillThere: byTestId("db-bottom-anchor") !== null,
+      };
+      // 复原成「跟随最新」：后面的段落依赖它（顺手清掉刚才那段落选择）
+      window.getSelection().removeAllRanges();
+      immScroll = byTestId("db-chat-scroll");
+      immScroll.scrollTop = immScroll.scrollHeight;
+      await sleep(500);
+      out.immersiveRestoredPinned = byTestId("db-bottom-anchor") === null &&
+        bottomGap(immScroll) < 8 && immAttr() === null;
+      snap();
+      immersiveBlockRan = true;
+    } catch (e) {
+      out.immersiveBlockError = String((e && e.stack) || e);
+    }
+    out.immersiveBlockRan = immersiveBlockRan;
+
+
+
     // ---- admin 房管（issue #3）：权限前置、写操作二次确认、面板三块与错误原样展示
     out.adminIdentityFetched = calls.indexOf("room_session") >= 0;
     // **预载**（issue #4/第 5 条：连接上就有房管权限的房间时把数据加载好）：身份就绪之后

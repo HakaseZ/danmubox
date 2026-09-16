@@ -37,6 +37,14 @@ interface AppStore {
   session?: SessionState;
   rooms: RoomView[];
   activeRoomId?: number;
+  /**
+   * 沉浸模式（issue #1）：弹幕区双击收起标题栏与输入区、只留弹幕区与礼物区的**会话内瞬态**。
+   * 它**不是**偏好 —— 不进 `prefs.json`、不跨重启（契约 §8 的键表里没有它，界面也不许自己加）；
+   * 切房间与关房间一律回到非沉浸态（`RoomView` 在 `room_id` 变化时清一次，`closeRoom` 这里再清一次）。
+   * 放在 store 而不是组件本地：「进 / 出」有两条入口（弹幕区双击、系统返回手势），
+   * 而且需要**一处**统一清空，不能让每个组件各持一份。
+   */
+  immersive: boolean;
   messages: Message[];
   status: Record<number, { state: ConnState; detail: string }>;
   /** 各房间最近一次的观众数（协议 §10.7）；上游还没给过的一侧为 undefined。 */
@@ -136,6 +144,11 @@ interface AppStore {
   /** 执行一次房管写操作；调用方负责二次确认。成功返回 true。 */
   runAdmin: (roomId: number, action: AdminAction) => Promise<boolean>;
   updatePrefs: (patch: Partial<Prefs>) => Promise<void>;
+  /**
+   * 切沉浸模式：`true` 进、`false` 出（返回手势与切房间清理都复用同一个动作，
+   * 调用方不直接改字段）。见 `immersive` 的注释。
+   */
+  setImmersive: (value: boolean) => void;
   dismissError: () => void;
   setNotice: (notice?: string) => void;
 }
@@ -562,6 +575,7 @@ function adminCalls(roomId: number, action: AdminAction): (() => Promise<unknown
 
 export const useApp = create<AppStore>((set, get, store) => ({
   rooms: [],
+  immersive: false,
   messages: [],
   status: {},
   roomStats: {},
@@ -793,6 +807,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
     clearRoomTimers();
     set((state) => ({
       activeRoomId: undefined,
+      // 离开房间页即离开沉浸态：这枚标志是房间页的界面状态，不跟着房间活到下一次进来
+      // （重进同一房间是**新会话**，见 `docs/ui.md` §2.4）。
+      immersive: false,
       messages: [],
       adminSilent: [],
       adminBlacklist: [],
@@ -894,6 +911,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   setNotice(notice) {
     set({ notice });
+  },
+
+  setImmersive(immersive) {
+    set({ immersive });
   },
 
   async report(message, reason) {

@@ -323,8 +323,16 @@ sessdata = ""
 - 包结构：16 字节大端头 `packetLen:u32 | headerLen:u16(=16) | protover:u16 | op:u32 | seq:u32`。
 - **protover 是载荷编码版本**：`0` 裸 JSON / `1` 认证与心跳包的帧头版本 / `2` zlib / `3` brotli。请求固定用 `3`。
 - **op 才是包类型**：`2` 心跳 / `3` 心跳回应（人气值）/ `5` 业务消息 / `7` 认证 / `8` 认证成功。
+  > **差异注（2026-09-16，不改上行取值）**：官方产物里还有一个 `24` = SocketAck（客户端→服务端，body `{msg_id, cmd, p_msg_type}`，
+  > 触发 `msg_id && p_is_ack`）；**本仓未实现**。另有 HTTP 侧同类回执 `POST /xlive/open-interface/v1/dm/message_ack`，**本仓也未实现**。
+  > 两条机制与身份无关、**我方 2026-09-16 游客态采集里均未命中触发条件**（`msg_id` / `p_is_ack` 各 0 命中，帧头 `seq` 未采样）——见 `protocol.md` §5 / §11.7 / 附录 A47。
 - 认证包（op=7，帧头 `protover=1`）：body JSON `{ "uid", "roomid", "protover": 3, "buvid", "platform": "web", "type": 2, "key" }`；游客 `uid=0`、`key=""`。
+  > **差异注（2026-09-16，不改上行列出的字段）**：官方 web 客户端的认证包**比我们多三个字段**——
+  > `support_ack: true`、`queue_uuid`、`scene`（官方 `scene: t.extra.scene || ""`，**具体取值未确定**）。
+  > **本仓不发送这三个字段**——这是**现状记录**，不是规范要求；取证与限定见 `protocol.md` §7.1。
 - WS 心跳包（op=2，帧头 `protover=1`）：body 为字面量 `[object Object]`。（参考实现中 Go 侧发空 body 亦稳定；以 Python 侧与官方 web 客户端行为为准。）
+  > **旁证（2026-09-16）**：官方产物发的心跳体与本行**逐字节一致**（官方传对象 `{}`，`TextEncoder.encode({})` 先把入参 `ToString` 成 `"[object Object]"`）。
+  > **首包时机**：官方在收到 `op=8 code=0` 的同一次回调内**立即**发首包（不是等 60 秒；§4 的 60 秒是上界），随后每 30 秒一次——见 `protocol.md` §8.1。
 - **HTTP 心跳（易漏，务必实现）**：每 60 秒 `GET https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat`，参数 `pf=web` 与 `hb=base64("60|<真实room_id>|1|0")`。缺它连接会被上游判死。
 - `op=5` 的 body 解压后可能仍是「多个 16 字节头子包」的拼接，必须循环按头拆分直到消费完；子包 protover 可能再次为 2 或 3。
 - `op=3` 的 body 为 4 字节大端无符号整数，即人气值。

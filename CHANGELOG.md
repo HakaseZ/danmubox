@@ -1645,6 +1645,35 @@
 > **未验证**：三端手工冒烟清单（`docs/testing.md` §10）、真机 macOS / Android 观感、Android 键盘避让的内核那一半（WebView < M139 造不出复现）、`docs/protocol.md` A46（受影响账号 + 可复现房间）、送礼 / SC / 大航海的真实载荷逐条对照。
 > **CI**：`.github/workflows/ci.yml` 随本批落地，`check` job 已在本 PR 上真跑（首轮结果回填在 `docs/requests.md` E16）。
 
+### Calibration
+
+- **把「只读官方网页端产物 + 一次游客态实测」的结论回填进协议文档**（`docs/protocol.md` 附录 A47 那次取证；**只改文档，不改任何代码**）。逐条来源：
+  - `op=24` SocketAck（客户端 → 服务端，`{msg_id, cmd, p_msg_type}`，触发 `msg_id && p_is_ack`）与 HTTP
+    `POST /xlive/open-interface/v1/dm/message_ack`（`{terminal: 0, sequence: <帧头 seq>}`，触发 `seq > 1`）——
+    来源：**官方产物** `room-player.<hash>.prod.min.js` 的 `WS_OP_*` 常量表与 `processSingleMessageReply` / `onReceivedMessage`。
+    **我方两条都未实现**，本轮**未命中触发条件**。
+  - 认证包官方的三个附加字段 `support_ack: true` / `queue_uuid` / `scene`（**官方发送、我方未发送**；`scene` 的**具体取值未确定**）——
+    来源：同上产物的 `userAuthentication()`。
+  - 心跳：官方首个 `op=2` 在收到 `op=8 code=0` 的**同一次回调内立即发出**（**不是等 60 秒**，60 秒只是上界）、
+    周期 `heartBeatInterval` 默认 **30**；心跳体 `[object Object]` 与官方**逐字节一致**（官方传的是对象 `{}`，
+    `TextEncoder` 先把入参 `ToString`）——来源：同上产物。本实现已于 2026-09-16 改为认证成功即发首包，与之对齐。
+  - `op=8` 非 0 code：官方命名 **`-101 = WS_AUTH_TOKEN_ERROR`**（官方行为 = 停重试 + 重取 token）；
+    **我方未区分 `-101`**，一律按认证失败计数 + 退避（现状如实记录，未实测到该 code）。
+  - 官方入站 cmd 分派器（页面 bundle `app.<hash>.js` 的 `receiveMessage`）与我们映射表的差集：官方认 / 我方未认约 190 条
+    （原样收入，**只作事实记录、不是待实现需求**），以及反向差异（`GUARD_BUY` / `USER_TOAST_MSG` / `SUPER_CHAT_MESSAGE_JP`
+    在官方页面产物里 **0 命中**）。规格：`docs/protocol.md` §10.0.1。
+  - 我方实测（**2026-09-16 游客态 3 分钟、公开测试房间 5440、470 包 / 185 条消息 / `mirrored_dropped` 19**）：
+    原始载荷里 `msg_id` 与 `p_is_ack` **各 0 命中**（`danmubox::raw` 打印了全部 185 条原文）⇒ 未观测到「服务端要求回 `op=24`」；
+    帧头 `seq` **日志无出口** ⇒ HTTP `message_ack` 的触发条件**本轮无法判定**。
+    `unknown_cmd: 37` 全部是 `COLLABORATION_LIVE_WATCHED`(17) / `COLLABORATION_LIVE_ONLINE`(17) /
+    `COLLABORATION_LIVE_POPULARITY`(3)——顺手更正一处易误读：同窗口 `ENTRY_EFFECT` 也恰好 37 条，但它**已经归一化**（`kind=interact`），
+    与 `unknown_cmd` 的 37 只是数值巧合（§10.0.2）。
+  - **未实测**：主播登录态下的服务端行为（本票不登录）、`scene` 的具体取值、以及 ack 是否为「连上却收不到消息」的成因
+    （需要受影响账号上的真实对照）。**需主流程另开票**的项：`op=24` / `message_ack` 的实现（先补帧头 `seq` 的 `debug` 日志再采一轮）、
+    `COLLABORATION_LIVE_*` 等未映射命令的归一化、`-101` 的专用分支。
+  - 规格：`docs/protocol.md` §5 / §7.1 / §8.1 / §10.0.1 / §10.0.2 / §11.7 / §13.3 / 附录 A46–A47；
+    `docs/contract.md` §6 只**增补差异注**（既有字段、常量与规范性描述一字未改）。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

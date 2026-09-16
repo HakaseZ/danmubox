@@ -27,9 +27,12 @@
 //   step1  关注列表自动加载、列表页展示关注项
 //   step2  进房间、历史回填可见
 //   step3  头部在线/看过且无人气；系统/互动行的渲染与弱化；历史与实时同款
-//   step4  系统类消息的白名单（勾「消息类型 → 系统」芯片，不是已删的「系统通知」开关）
+//   step4  系统类消息的白名单（勾「消息类型 → 系统」那一项，不是已删的「系统通知」开关）
 //   step5  互动行 8 秒后自动消失
 //   step6  关掉自动消失后互动行常驻
+//   filter 筛选面板的两块表单是**两列勾选清单**（issue 2609160959 第 3 / 4 条）：消息类型 6 项
+//          与辅助功能 4 枚开关都是按行铺满的两列（列/行几何 + 不许横向滚动 + 不再是芯片样），
+//          四枚辅助开关逐枚点开再点回（偏好与复选框同步翻）；辅助功能 = 字号滑杆（整行）+ 四枚开关
 //   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级；
 //          内容不足视口时整体贴底；头像列永远占位（昵称三列纵向对齐）；粉丝牌真彩色与兜底色；
 //          回复关系可见；舰长标只认本房间的 guard_level；「回到最新」是**圆形图标钮**（下箭头，
@@ -432,7 +435,7 @@ const MOCK = (theme) => `(function () {
     // 房管屏蔽词走 admin_keywords_*（IPC 命令，不是偏好键），不在这一份里。
     "composer.phrases": ["早上好"], "filter.uids": [],
     // 默认白名单**不含 system**（契约 §8.1 / §4.8）：系统行默认不渲染，
-    // 要看就现场勾「消息类型 → 系统」那一枚芯片（step4）。
+    // 要看就现场勾「消息类型 → 系统」那一项（step4）。
     "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard"],
     "filter.medal_level_min": 0, "history.buffer_rows": 5000,
     // 「最近观看」（契约 §8）：离线甲（room 300）先看过，**夹具第 1 条**（真实取样）后看过 ——
@@ -3326,57 +3329,172 @@ const MOCK = (theme) => `(function () {
     await sleep(300);
     var filterPanel = byTestId("db-panel");
     out.filterPanelShown = !!filterPanel;
-    // ---- 筛选面板重排（item 11）：只剩「消息类型」与「显示」两块 —— 关键词那一整块随 item 9
-    //      删除，主题下拉随 item 10 搬到列表页页头，因此面板里**没有**关键词、也没有主题控件。
+    // ---- 筛选面板重排（item 11 + issue 2609160959 第 3 / 4 条）：两块 ——「消息类型」与
+    //      「辅助功能」（关键词那一整块随 item 9 删除，主题下拉随 item 10 搬到列表页页头）。
+    //      两块的表单**同一形态**：两列勾选清单（第 3 条要的就是这个，第 4 条把
+    //      时间戳 / 互动消息自动消失 / 弹幕包含礼物 / 独立礼物栏四枚开关并进来）。
     out.filterPanelSections = filterPanel
       ? [].slice.call(filterPanel.querySelectorAll("h3")).map(function (h) { return h.innerText.trim(); })
       : [];
-    out.filterPanelTwoBlocks = out.filterPanelSections.join(",") === "消息类型,显示";
+    out.filterPanelTwoBlocks = out.filterPanelSections.join(",") === "消息类型,辅助功能";
     out.filterPanelNoKeywords = !!filterPanel && filterPanel.innerText.indexOf("关键词") < 0;
     out.filterPanelNoThemeSelect = !!filterPanel &&
       !filterPanel.querySelector('[data-testid="db-pref-theme"]');
-    // 两块的内容都还在（都按**各自的 section** 数，不拿整块的 label 当分母）：
-    // 「消息类型」6 枚芯片（契约 §8 的 kind 全集）、「显示」= 字号滑杆 + **四枚**开关
-    // （时间戳 / 互动消息自动消失 / 弹幕包含礼物 / 独立礼物栏）。
-    // 开关的**文案**由下面的 step4 / step6 / gift 三段用 clickLabelIn / setGiftSwitch 点到
-    // （点得到就说明文案在），这里只数控件并列出 label 文案，不解析 select 的 innerText。
-    var filterSections = filterPanel ? [].slice.call(filterPanel.querySelectorAll("section")) : [];
-    var kindsSection = filterSections[0] || null;
-    var displaySection = filterSections[1] || null;
-    out.filterPanelKindChips = kindsSection
-      ? [].slice.call(kindsSection.querySelectorAll("label")).map(function (l) {
-          return l.innerText.trim();
-        })
-      : [];
-    out.filterPanelKindChipsComplete = out.filterPanelKindChips.length === 6;
-    // 六枚芯片的**文案**（契约 §8 的 KIND_LABEL）：系统那一枚就在这里，step4 点它
-    out.filterPanelKindChipLabels =
-      out.filterPanelKindChips.join(",") === "弹幕,礼物,SC,互动,大航海,系统";
-    var displayHas = function (selector) {
-      return !!displaySection && !!displaySection.querySelector(selector);
+    // 两块各自按**稳定钩子**定位（不再靠 sections[0] / [1] 的下标）：db-filter-kinds /
+    // db-filter-aux 是本次新增的 data-testid（docs/ui.md §8.5）。
+    // 「消息类型」= 6 项（契约 §8 的 kind 全集）；「辅助功能」= 字号滑杆 + **四枚**复选框。
+    // 文案由下面的 step4 / step6 / gift 三段用 clickLabelIn / setGiftSwitch 点到
+    // （点得到就说明文案在），这里只列文案并数控件，不解析 select 的 innerText。
+    var kindsSection = byTestId("db-filter-kinds");
+    var auxSection = byTestId("db-filter-aux");
+    var labelsOf = function (root) {
+      return root ? [].slice.call(root.querySelectorAll("label")) : [];
     };
-    // 「显示」块的控件清单：**旧的「礼物栏」下拉已随 issue 2609152029 第 1 条删除**
-    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），所以这里数的是四枚复选框，
-    // 并另外钉住「select 一个都不剩」——旧断言里的 giftMode: displayHas("select")
-    // 是**按已删控件写的**，改名不是可选项（那个控件已经不存在了）。
-    out.filterPanelDisplayLabels = displaySection
-      ? [].slice.call(displaySection.querySelectorAll("label")).map(function (l) {
-          return l.innerText.trim();
-        })
-      : [];
-    out.filterPanelDisplayControls = {
-      fontScale: displayHas('input[type="range"]'),
-      switches: displaySection
-        ? displaySection.querySelectorAll('input[type="checkbox"]').length : 0,
-      selects: displaySection ? displaySection.querySelectorAll("select").length : 0,
+    var kindLabels = labelsOf(kindsSection);
+    out.filterPanelKindItems = kindLabels.map(function (l) { return l.innerText.trim(); });
+    out.filterPanelKindItemsComplete = out.filterPanelKindItems.length === 6;
+    // 六项的**文案**（契约 §8 的 KIND_LABEL）：系统那一项就在这里，step4 点它。
+    // 字段名从 *KindChips 改成 *KindItems：那个形态（芯片）正是本批删掉的（第 3 条），
+    // 留着旧名字等于让快照撒谎。
+    out.filterPanelKindLabels =
+      out.filterPanelKindItems.join(",") === "弹幕,礼物,SC,互动,大航海,系统";
+    // 「辅助功能」块的控件清单：**旧的「礼物栏」下拉已随 issue 2609152029 第 1 条删除**
+    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），所以这里数的是四枚复选框，并另外
+    // 钉住「select 一个都不剩」；字号滑杆仍在（它只是排布换成了整行）。
+    var auxLabels = labelsOf(auxSection).filter(function (l) {
+      return !!l.querySelector('input[type="checkbox"]');
+    });
+    out.filterPanelAuxLabels = auxLabels.map(function (l) { return l.innerText.trim(); });
+    out.filterPanelAuxControls = {
+      fontScale: !!auxSection && !!auxSection.querySelector('input[type="range"]'),
+      switches: auxLabels.length,
+      selects: auxSection ? auxSection.querySelectorAll("select").length : 0,
     };
-    out.filterPanelGiftSwitchesPresent =
-      out.filterPanelDisplayLabels.indexOf("弹幕包含礼物") >= 0 &&
-      out.filterPanelDisplayLabels.indexOf("独立礼物栏") >= 0;
-    out.filterPanelDisplayComplete = out.filterPanelDisplayControls.fontScale &&
-      out.filterPanelDisplayControls.switches === 4 &&
-      out.filterPanelDisplayControls.selects === 0 &&
-      out.filterPanelGiftSwitchesPresent;
+    out.filterPanelAuxSwitchesPresent =
+      out.filterPanelAuxLabels.indexOf("弹幕包含礼物") >= 0 &&
+      out.filterPanelAuxLabels.indexOf("独立礼物栏") >= 0;
+    out.filterPanelAuxComplete = !!out.filterPanelAuxControls.fontScale &&
+      out.filterPanelAuxControls.switches === 4 &&
+      out.filterPanelAuxControls.selects === 0 &&
+      out.filterPanelAuxSwitchesPresent;
+    // 字号滑杆那一行**仍占满整行**（横跨两列，滑杆贴右）：两列清单里唯一的例外，也是
+    // 最容易在改排布时被顺手压丢的一条（docs/ui.md §8.2 / §8.5）。
+    var rangeLabel = labelsOf(auxSection).filter(function (l) {
+      return !!l.querySelector('input[type="range"]');
+    })[0];
+    var rangeInput = rangeLabel ? rangeLabel.querySelector('input[type="range"]') : null;
+    out.filterPanelRangeSpansRow = !!rangeLabel && !!auxSection && !!rangeInput &&
+      rect(rangeLabel).width >= rect(auxSection).width - 2 &&
+      rect(rangeInput).width >= rect(rangeLabel).width / 2;
+    // ---- 两列清单的**几何**（第 3 / 4 条）：把一组 label 按**取整后的左边缘**分组 ——
+    //      恰好 2 组、各组成员数相同、纵向分层，就是「两列」这个形态（不看 CSS 类名）。
+    //      逐项落在哪一列（0 = 左 / 1 = 右）也记进快照：010101 = 按行铺（DOM 序 = 阅读序，
+    //      Tab 顺序与目视一致），000111 = 按列铺。两者都算两列，因此只记录、不当判据。
+    var columnGeometry = function (items) {
+      var cols = [];
+      items.forEach(function (el) {
+        var left = Math.round(rect(el).left);
+        var hit = null;
+        for (var i = 0; i < cols.length; i += 1) {
+          if (Math.abs(cols[i].left - left) < 2) hit = cols[i];
+        }
+        if (!hit) { hit = { left: left, items: [] }; cols.push(hit); }
+        hit.items.push(el);
+      });
+      cols.sort(function (a, b) { return a.left - b.left; });
+      var rows = [];
+      items.forEach(function (el) {
+        var top = Math.round(rect(el).top);
+        if (rows.indexOf(top) < 0) rows.push(top);
+      });
+      return {
+        columns: cols.length,
+        rows: rows.length,
+        perColumn: cols.map(function (c) { return c.items.length; }).join("/"),
+        order: items.map(function (el) {
+          return cols.length === 2 && Math.abs(rect(el).left - cols[1].left) < 2 ? 1 : 0;
+        }).join(""),
+      };
+    };
+    out.filterPanelKindGeom = columnGeometry(kindLabels);
+    out.filterPanelAuxGeom = columnGeometry(auxLabels);
+    var twoColumnsEven = function (geom, perColumn, order) {
+      return !!geom && geom.columns === 2 && geom.rows === order.length / 2 &&
+        geom.perColumn === perColumn && geom.order === order;
+    };
+    out.filterPanelKindsTwoColumns = twoColumnsEven(out.filterPanelKindGeom, "3/3", "010101");
+    out.filterPanelAuxTwoColumns = twoColumnsEven(out.filterPanelAuxGeom, "2/2", "0101");
+    out.filterPanelTwoColumnLists = out.filterPanelKindsTwoColumns && out.filterPanelAuxTwoColumns;
+    // ---- 「不要使用现在的按钮形式」（第 3 条）：清单里每一项都是**朴素的复选框 + 文字** ——
+    //      没有旧芯片那层底色与描边（旧样式给 label 上 --bg-input 底 + 1px 描边 + 胶囊圆角），
+    //      两块里也一个 button 都没有；两块的形态还必须**逐项一致**（第 4 条要的是同一形态）。
+    var labelForm = function (l) {
+      var lcs = getComputedStyle(l);
+      return [lcs.backgroundColor, lcs.borderTopWidth, lcs.borderBottomWidth, lcs.display].join("|");
+    };
+    out.filterPanelKindLabelBackground = kindLabels.length > 0
+      ? getComputedStyle(kindLabels[0]).backgroundColor : null;
+    var plain = function (list) {
+      return list.length > 0 && list.every(function (l) {
+        var lcs = getComputedStyle(l);
+        return lcs.backgroundColor === "rgba(0, 0, 0, 0)" &&
+          parseFloat(lcs.borderTopWidth) === 0 &&
+          !!l.querySelector('input[type="checkbox"]') &&
+          l.querySelectorAll("input").length === 1;
+      });
+    };
+    out.filterPanelPlainCheckboxList = plain(kindLabels) && plain(auxLabels);
+    out.filterPanelSameFormBothLists = kindLabels.length > 0 &&
+      kindLabels.concat(auxLabels).every(function (l) {
+        return labelForm(l) === labelForm(kindLabels[0]);
+      });
+    out.filterPanelNoButtons = !!filterPanel && filterPanel.querySelectorAll("button").length === 0;
+    // 两列清单不许把面板撑出横向滚动（窄屏 360 是这条的边界值，§9.1）
+    out.filterPanelNoHorizontalOverflow = !!filterPanel &&
+      filterPanel.scrollWidth <= filterPanel.clientWidth + 1;
+    // ---- 「默认勾选」（issue 2609160959 第 2 条）：本页跑在**干净环境**里 —— mock 的偏好
+    //      就是契约 §8 的默认值（ui.interact_auto_hide = true、ui.show_timestamp = false），
+    //      没有任何本机覆盖，因此这两枚复选框必须照实画成「互动消息自动消失 = 勾上 /
+    //      时间戳 = 未勾」。它们同时守住「复选框的形态与偏好值一致」这条渲染路径。
+    var auxBoxOf = function (label) {
+      var picked = auxLabels.filter(function (l) { return l.innerText.trim() === label; })[0];
+      return picked ? picked.querySelector('input[type="checkbox"]') : null;
+    };
+    var autoHideBox = auxBoxOf("互动消息自动消失");
+    var timestampBox = auxBoxOf("时间戳");
+    out.filterPanelAutoHideCheckedByDefault = !!autoHideBox && autoHideBox.checked &&
+      window.__prefs["ui.interact_auto_hide"] === true;
+    out.filterPanelTimestampUncheckedByDefault = !!timestampBox && !timestampBox.checked &&
+      window.__prefs["ui.show_timestamp"] === false;
+    // ---- 四枚辅助开关**逐枚真的能切**（第 4 条）：点一下偏好跟着翻、复选框跟着画，再点一下
+    //      回到原值 —— 因此后面各段（时间戳 / step4 / step5 / step6 / gift 四种组合）跑在
+    //      **与改前完全相同的默认形态**上，切完行为不变这件事由那些既有断言继续钉住。
+    var auxSpecs = [
+      { label: "时间戳", key: "ui.show_timestamp" },
+      { label: "互动消息自动消失", key: "ui.interact_auto_hide" },
+      { label: "弹幕包含礼物", key: "ui.gift_in_danmaku" },
+      { label: "独立礼物栏", key: "ui.gift_panel" },
+    ];
+    var auxTogglesOk = true;
+    var auxToggleReport = [];
+    for (var ai = 0; ai < auxSpecs.length; ai += 1) {
+      var spec = auxSpecs[ai];
+      var box = auxBoxOf(spec.label);
+      if (!box) { auxTogglesOk = false; auxToggleReport.push(spec.label + ":missing"); continue; }
+      var before = window.__prefs[spec.key];
+      box.click();
+      await sleep(250);
+      var flippedOk = window.__prefs[spec.key] === !before && box.checked === !before;
+      box.click();
+      await sleep(250);
+      var restoredOk = window.__prefs[spec.key] === before && box.checked === before;
+      auxTogglesOk = auxTogglesOk && flippedOk && restoredOk;
+      auxToggleReport.push(spec.label + " " + String(before) + "->" + String(!before) + "->" +
+        String(before) + (flippedOk && restoredOk ? "" : " FAIL"));
+    }
+    out.filterPanelAuxToggles = auxTogglesOk;
+    out.filterPanelAuxToggleReport = auxToggleReport.join(" / ");
+    snap();
     // ---- item 8：短语与筛选面板同样没有标题与关闭按钮（db-panel-close 钩子整个界面不再提供），
     //      高度与表情面板同源（--panel-h）——逐个数进快照，最后比三者相等。
     out.filterPanelCloseGone = !!filterPanel &&
@@ -3479,8 +3597,8 @@ const MOCK = (theme) => `(function () {
 
     // ---- step4 系统类白名单（语义不得改）：勾上「消息类型 → 系统」之后**新来**的系统行要出现。
     //      这里点的**不再是**「系统通知」那枚开关（ui.system_notice 已随 item 1 删除，两个门
-    //      盖的消息集合逐字相同）：显示块只剩「时间戳」「互动消息自动消失」，面板里没有第二条
-    //      label 含「系统」二字，因此点到的必然是「消息类型」里那一枚「系统」芯片。
+    //      盖的消息集合逐字相同）：辅助功能块只剩「时间戳」「互动消息自动消失」，面板里没有第二条
+    //      label 含「系统」二字，因此点到的必然是「消息类型」里那一项「系统」。
     //      这里不拿很早以前那条（它已滚出虚拟列表的渲染范围），改发一条新的，断言更硬。
     out.step4_toggledSystem = clickLabelIn(filterPanel, "系统");
     await sleep(400);

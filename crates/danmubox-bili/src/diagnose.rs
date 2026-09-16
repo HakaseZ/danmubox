@@ -513,7 +513,7 @@ mod tests {
             "danmubox_bili::http",
             "上游返回 DedeUserID=7654321; SESSDATA=deadbeef&bili_jct=cafe; uname=某主播",
         );
-        diag.log_line(1_200, "INFO", "danmubox::ui", "房间 5440 的弹幕已连接");
+        diag.log_line(1_200, "INFO", "danmubox::ui", "房间 5440 的弹幕已连接，+1.56 s 后收到首条");
 
         let report = render_report(&diag.snapshot(2_000), &env(), &[5440]);
 
@@ -523,6 +523,14 @@ mod tests {
         assert!(report.contains("id=***"), "房间号要变成占位符：\n{report}");
         assert!(report.contains("SESSDATA=***"));
         assert!(report.contains("uname=***"));
+
+        // 同一条路径的**反面**：报告存在的理由（时间戳含秒 / 应用版本 / 计数 / 时长）
+        // 一个都不许被抹 —— 公开测试房间 `1` 的短号就是 `1`，早先的实现把
+        // `0.1.0`、`13:55:01`、`共 1 次`、`+1.56 s` 全抹成了 `***`（2026-09-16 实测复盘）。
+        let thin = render_report(&diag.snapshot(2_000), &env(), &[1]);
+        for keep in ["应用版本：0.1.0", "00:00:01.000", "+1.56 s"] {
+            assert!(thin.contains(keep), "「{keep}」必须原样保留：\n{thin}");
+        }
     }
 
     /// 时长与时刻的写法本身也要对（不足 1 秒 / 1 分钟以内 / 更长）。

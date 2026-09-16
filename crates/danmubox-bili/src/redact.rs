@@ -150,6 +150,20 @@ pub(crate) fn redact_for_export(text: &str, secret_numbers: &[i64]) -> String {
 }
 
 /// 把整段数字里**等于**给定值的那些换成占位符（`15440` 这种更长的一串不动）。
+///
+/// 只处理「看起来是个独立数字」的位置。三类**一律不碰** —— 它们是报告存在的理由
+/// （时间 / 版本 / 计数 / 时长 / 从开始算起的偏移），误伤比漏抹严重：
+///
+/// - **只有一位**的：`共 1 次记录`、`[1] 开始`、`host_list[0]`。一位数当房间号只可能
+///   是公开测试房间 `1`（契约 §4.1 明记的例外），为它把报告里的序号与计数全抹掉，
+///   等于把诊断报告变成一份读不懂的文件；
+/// - 两侧是 `.` / `:` 的：`0.1.0`（版本）、`13:55:01`（时刻）、`+1.56 s`（小数）；
+/// - 左边是 `+` 的：`+619 ms` / `+32.75 s`（相对开始的偏移）。
+///
+/// 首次实测（2026-09-16，公开测试房间 `1`）就是被这三类反例打回来的：房间号 `1` 让
+/// `应用版本：0.***.0`、`13:55:***`、`共 *** 次记录`、`+***.56 s` 全成了 `***`。
+/// 房间号真正会出现的形状（`room_id=5440`、`?id=5440`、`房间 5440`）都不在反例里，
+/// 因此仍然照抹。
 fn mask_numbers(text: &str, numbers: &[i64]) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -166,8 +180,17 @@ fn mask_numbers(text: &str, numbers: &[i64]) -> String {
             index += 1;
         }
         let run = &text[start..index];
+        let before = text[..start].chars().next_back();
+        let after = text[index..].chars().next();
+        // 「键值对形态」的值位（`room_id=1`、`?id=1`、`&id=1`）：这里的一位数字**也认**，
+        // 因为上下文已经说清它是个标识，不存在「计数」的歧义。
+        let after_equals = matches!(before, Some('=') | Some('?') | Some('&'));
+        let standalone = after_equals
+            || (run.len() >= 2
+                && !matches!(before, Some('.') | Some(':') | Some('+'))
+                && !matches!(after, Some('.') | Some(':')));
         match run.parse::<i64>() {
-            Ok(value) if numbers.contains(&value) => out.push_str(PLACEHOLDER),
+            Ok(value) if standalone && numbers.contains(&value) => out.push_str(PLACEHOLDER),
             _ => out.push_str(run),
         }
     }
@@ -207,6 +230,42 @@ fn secret_value(rest: &str) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ④ 实测打回来过的一条（2026-09-16，用户复核公开测试房间 `1` 的那份报告）：
+    /// **时间戳（含秒）/ 应用版本 / 计数 / 时长 / 偏移必须原样**，只有房间号与 uid 该消失。
+    /// 房间号 `1` 是个位数，早先的实现把 `0.1.0` / `13:55:01` / `共 1 次` / `+1.56 s`
+    /// 一起抹成了 `***` —— 那份报告就没法读了。
+    #[test]
+    fn export_redaction_keeps_times_versions_and_counts() {
+        let text = "应用版本：0.1.0    生成时间：2026-09-16 13:55:01 UTC\n\
+                    连接尝试：共 1 次记录    [1] 开始 2026-09-16 13:55:00 UTC\n\
+                    首条业务载荷：+1.56 s    认证包发出：+619 ms\n\
+                    收包 88    入站帧 36 条    host_list[0] zj-cn-live-comet.chat.bilibili.com\n\
+                    房间 1 未登记    room_id=1    ?id=1    uid=7654321";
+        let out = redact_for_export(text, &[1, 7654321]);
+        for keep in [
+            "应用版本：0.1.0",
+            "13:55:01",
+            "13:55:00",
+            "共 1 次记录",
+            "[1] 开始",
+            "+1.56 s",
+            "+619 ms",
+            "收包 88",
+            "入站帧 36 条",
+            "host_list[0]",
+        ] {
+            assert!(out.contains(keep), "「{keep}」必须原样保留：\n{out}");
+        }
+        for gone in ["room_id=1", "?id=1", "uid=7654321"] {
+            assert!(!out.contains(gone), "「{gone}」必须被抹掉：\n{out}");
+        }
+        // 反例的**边界**也钉住：裸文本里的**一位**数字不抹。一位数当房间号只可能是公开
+        // 测试房间 `1`（契约 §4.1 明记的例外），为它把「房间 1 未登记」这类文案里的 `1`
+        // 抹掉，就会连 `共 1 次记录` / `[1] 开始` 一起毁掉 —— 报告的可读性优先，
+        // 而键值对形态（`room_id=1` / `?id=1`，上面刚断言过）一位也照样抹。
+        assert!(out.contains("房间 1 未登记"), "裸文本的一位数字不抹：\n{out}");
+    }
 
     /// ③ 导出文件的更严一档：房间号也抹掉，且覆盖「键名形态」与「裸数字」两种，
     /// 凭据 / uid / 昵称照旧（日志口径那一层不能因为叠了一层就漏）。

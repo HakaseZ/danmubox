@@ -332,6 +332,8 @@ type RoomStats = {   // 与 §3.1 同名，事件即它本身
 };
 ```
 
+**`ConnState` 仍是这四个取值**：`protocol.md` §13.1 的终态 `Failed` **不新增取值**——§13.3 步骤 6 明写「房间状态置为 error」。连续 3 次认证失败后自动重连**停止**，这个终态同样报 `"error"`，`detail` 里带「已停止自动重连；手动刷新可重置」。前端要区分「退避重连中」与「已停止自动重连」时读 `detail`；若要单独呈现一档，得先在 `protocol.md` §13、本节与 `ui.md` §3.3 一起加取值。
+
 **`danmubox://session` 的判别规则**：这个事件名上目前只推一种载荷——房内身份 `RoomSession`（`Event::Session`，会话建立时向总线发一次）。但前端必须按**判别字段**分派，而不是假定载荷种类：有 `logged_in`（boolean）→ 登录态 `SessionState`；有 `is_admin`（boolean）→ 房内身份 `RoomSession`。分派写错（例如把身份当登录态）会把 `session.logged_in` 覆盖成 `undefined`，界面随即误判成游客态。
 
 ### 4.1 控制台桥（前端 → 后端的内部命令）

@@ -296,7 +296,7 @@ export function Composer({
   };
 
   // 接口给的包（`emotes_list` 的按房间包 + 主站「我的表情」）是**唯一**的来源：
-  // 面板分组与「将发送」预览都走这一份。同一个 `emoticon_unique` 只保留先来的那条
+  // 面板分组走这一份。同一个 `emoticon_unique` 只保留先来的那条
   // （顺序是 `emotes` 在前、`ownedEmotes` 在后，因此同名时接口包优先）。
   const panelEmotes = useMemo(() => {
     const known = new Set<string>();
@@ -369,35 +369,6 @@ export function Composer({
       ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
       [next]?.focus();
   };
-
-  // 输入区预览：把草稿里能对上的表情名换成图片，让用户看清「这条发出去长什么样」。
-  const preview = useMemo(() => {
-    if (draft.length === 0 || panelEmotes.length === 0) return null;
-    // 长名优先，避免短名吃掉长名的前缀。
-    const candidates = panelEmotes
-      .filter((emote) => emote.text.length > 0 && emote.url.length > 0)
-      .sort((a, b) => b.text.length - a.text.length);
-    const parts: { text: string; emote?: Emote }[] = [];
-    let buffer = "";
-    let matched = 0;
-    for (let i = 0; i < draft.length; ) {
-      const hit = candidates.find((emote) => draft.startsWith(emote.text, i));
-      if (hit) {
-        if (buffer.length > 0) {
-          parts.push({ text: buffer });
-          buffer = "";
-        }
-        parts.push({ text: hit.text, emote: hit });
-        matched += 1;
-        i += hit.text.length;
-      } else {
-        buffer += draft[i];
-        i += 1;
-      }
-    }
-    if (buffer.length > 0) parts.push({ text: buffer });
-    return matched > 0 ? parts : null;
-  }, [draft, panelEmotes]);
 
   /** 在光标处插入（面板点选与 @ 都走这里），插完把光标放到插入内容之后。 */
   const insertAtCaret = (text: string) => {
@@ -522,10 +493,6 @@ export function Composer({
       onPanel(null);
     }
   };
-
-  // 「将发送」预览是**弹幕行长什么样**的预览，所以它跟弹幕区一起缩放；三个面板不跟
-  // （用户 2609140651：字号只控制弹幕区，不改面板区）。
-  const previewFont = { fontSize: `${prefs["ui.font_scale"]}em` };
 
   return (
     <>
@@ -755,25 +722,6 @@ export function Composer({
           <span className={styles.previewLabel}>
             将 @{mentionTarget.uname} · 删掉文本里的 @{mentionTarget.uname} 即取消
           </span>
-        </div>
-      )}
-
-      {preview && (
-        <div className={styles.preview} data-testid="db-send-preview" style={previewFont}>
-          <span className={styles.previewLabel}>将发送</span>
-          {preview.map((part, index) =>
-            part.emote ? (
-              <img
-                key={`${index}-${part.text}`}
-                className={styles.previewEmote}
-                src={part.emote.url}
-                alt={part.text}
-                title={part.text}
-              />
-            ) : (
-              <span key={`${index}-${part.text}`}>{part.text}</span>
-            ),
-          )}
         </div>
       )}
 

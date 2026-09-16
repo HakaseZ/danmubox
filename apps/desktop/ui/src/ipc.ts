@@ -91,6 +91,14 @@ export const api = {
     call<SessionState>("account_remove", { name }),
 
   roomsList: () => call<RoomView[]>("rooms_list"),
+  /**
+   * 定期刷新已登记房间的开播状态（契约 §4 的 30 秒那一拍）。
+   *
+   * 与 `roomsList` 的区别：它**真的去问上游**（每个房间一次只读 GET），而 `rooms_list` 只是
+   * 登记表的一份快照 —— 房间的 `live_status` 不重问上游就永远不会变。返回形状与 `roomsList`
+   * 相同，因此落地口径也相同（同一个快照序号护栏 + `mergeRoomOrder`）。
+   */
+  roomsRefreshStatus: () => call<RoomView[]>("rooms_refresh_status"),
   roomsAdd: (input: string) => call<RoomView>("rooms_add", { input }),
   roomsRemove: (roomId: number) =>
     invoke<void>("rooms_remove", { roomId }),

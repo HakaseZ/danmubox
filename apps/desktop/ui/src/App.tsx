@@ -353,6 +353,7 @@ export function App() {
   const send = useApp((state) => state.send);
   const report = useApp((state) => state.report);
   const loadFollowed = useApp((state) => state.loadFollowed);
+  const startListStatusPolling = useApp((state) => state.startListStatusPolling);
   const updatePrefs = useApp((state) => state.updatePrefs);
   const dismissError = useApp((state) => state.dismissError);
   const setNotice = useApp((state) => state.setNotice);
@@ -380,6 +381,19 @@ export function App() {
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
+
+  /**
+   * 列表页的开播状态轮询（契约 §4）：**只在房间列表页、且会话已就绪**时跑，进房间页立刻停。
+   *
+   * 门为什么还挂在 `session` 上：`activeRoomId` 在启动时本来就是空的，而那一刻 `bootstrap`
+   * 还没落地 —— 先跑会把它的 `rooms` / `followed` 覆盖成一轮还没回来（或更旧）的快照。
+   * `session` 是 `bootstrap` 里那一次 `set` 带进来的，所以它到了就代表启动数据已经就位。
+   */
+  const listPolling = activeRoomId === undefined && session !== undefined;
+  useEffect(() => {
+    if (!listPolling) return;
+    return startListStatusPolling();
+  }, [listPolling, startListStatusPolling]);
 
   // 提示 3 秒后自动消失。
   useEffect(() => {

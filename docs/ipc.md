@@ -26,7 +26,7 @@
 | 命令注册 | 全部集中在 `apps/desktop/src-tauri/src/lib.rs` 的 `tauri::generate_handler![…]`；命令函数也在该文件（没有 `commands.rs`） |
 | 命令名 | `snake_case`，与 `contract.md` §7 字面一致 |
 | 参数名 | Rust 侧 `snake_case`；Tauri 2 把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId`、`query`、`patch`、`upstreamId` 等 camelCase 键 |
-| 同步/异步 | 38 条命令：28 条 `async fn`，10 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `diagnose_start` / `frontend_log`。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` |
+| 同步/异步 | 39 条命令：29 条 `async fn`，10 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `diagnose_start` / `frontend_log`。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` |
 | 成功返回 | §3 签名表「返回」列的 JSON 值；`void` = 无返回体 |
 | 失败返回 | `invoke` reject，值为 `ApiError`：`{ "code": string, "message": string }`（`lib.rs`）。前端按 `code` 分支；`message` 是给人看的文案（Rust `Display` 或上游原文），**不得**解析它做逻辑，也没有 `detail` 这类嵌套字段 |
 | 错误码 | `code` 取自 `core::error::Error::code()`，共八个（下表）；错误对象的集合以本文为准 |
@@ -63,6 +63,7 @@
 | `account_logout` | `name: Option<String>` | `SessionState` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省 = 当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
 | `account_remove` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
 | `rooms_list` | 无 | `RoomView[]` | — | 已登记房间 + 当前连接状态 + 当前会话缓冲条数。同步命令 |
+| `rooms_refresh_status` | 无 | `RoomView[]` | `UPSTREAM_ERROR` `INTERNAL` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，`contract.md` §4）：逐个房间只读上游一次 `getRoomPlayInfo`（游客同样成立），把最新的 `live_status` 落进登记表，返回同一份 `RoomView[]` 形状（前端按与 `rooms_list` 相同的口径落地）。**只动 `live_status`**，不碰标题 / 昵称 / 连接态。逐个房间**并发**取，单个失败只记日志并跳过它；**一个都没成功**（且有房间要问）→ `UPSTREAM_ERROR`（前端据此退避，断网时不会每 30 秒打一次）。没有已登记房间时不发任何请求，直接返回空数组 |
 | `rooms_add` | `input: String` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号；解析不出即 `BAD_REQUEST`。只登记，不建连 |
 | `rooms_remove` | `room_id: i64` | `void` | `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
 | `rooms_connect` | `room_id: i64` | `void` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 建立会话：创建 supervisor、创建会话缓冲、开始收包。幂等：已连接时直接 `Ok`。**连接态不在返回值里**——看 `danmubox://status` 或重拉 `rooms_list` |
@@ -331,7 +332,7 @@ type DiagnoseExport = {
 | 事件名 | 载荷（snake_case） | 触发时机 | 频率控制 |
 |---|---|---|---|
 | `danmubox://message` | `Message` | 每归一化一条消息；同时写入该房间会话缓冲 | 不节流；前端按帧合批渲染 |
-| `danmubox://room` | `Room` | **当前实现里没有发布点**（`EventBus::publish_room` 无调用者），房间元信息变化不会推这个事件；前端以重拉 `rooms_list` 为准（`ipc.ts` 仍保留 `listen` 与 `onRoom` 分支，供未来接上）。载荷不含连接态——连接态走 `danmubox://status` | — |
+| `danmubox://room` | `Room` | 长连接里 `LIVE` / `PREPARING` 到达（`protocol.md` §10.7）：先把登记表里该房间的 `live_status` 改掉，再把改后的**整条** `Room` 推给界面（`LIVE` → `1`、`PREPARING` → `0`，见 `contract.md` §6）。界面据此合并 `rooms` 与 `followed` 里同号的那一条 —— 房间头状态点 / 标签页圆点 / 列表卡片 / 关注行同时变，不需要重连或手动刷新。载荷不含连接态——连接态走 `danmubox://status`（总线上推的是 `Event::LiveStatus` 这条小载荷，**桌面外壳**补齐整条 `Room` 后再推给界面；总线上的 `Event::Room` 因此仍无生产者） | 事件驱动（一条连接生命周期内至多几次） |
 | `danmubox://session` | `RoomSession` | 会话建立后本人房内身份取到时推一次；取不到则只记日志、不推 | 事件驱动 |
 | `danmubox://status` | `StatusEvent` | 连接状态变化；会话关闭（`RoomClosed`）也以 `disconnected` 形态从这里推出 | 事件驱动 |
 | `danmubox://send` | `ChatSendResult` | 每次 `chat_send` 得到结果（**与命令返回值同构**，同一份对象再发一次） | 事件驱动 |
@@ -450,7 +451,8 @@ type SendState = "unconfirmed" | "rejected";   // Message.send_state（另有 Me
 | `report(message, reason)` | `chat_report` | 与命令同参：整条 `Message` + `ReportReason` |
 | `loadReportReasons()` | `report_reasons` | 首次拉取后缓存；失败不覆盖已有清单 |
 | `loadEmotes(roomId)` / `loadOwnedEmotes(retryFailedOnly?)` | `emotes_list` / `emotes_owned` | 由 `RoomView` 的 effect 在登录态就绪时触发；主站表情成功一次后不再重复拉。房间表情落地前复核 `activeRoomId`（§8） |
-| `loadFollowed()` | `follow_list` | 会话就绪后与登录/换号后各自动调用一次；返回后按 `ui.md` §2.2 的排序链渲染 |
+| `loadFollowed()` | `follow_list` | 会话就绪后与登录/换号后各自动调用一次；返回后按 `ui.md` §2.2 的排序链渲染。**返回是否成功**（`boolean`）供列表页轮询判退避；失败仍进全局错误条，不静默 |
+| `startListStatusPolling()` | `rooms_refresh_status`（+ 登录时的 `follow_list`） | 列表页的开播状态轮询（`contract.md` §4）：返回**停止函数**，进房间页或卸载即停。进入列表页立即一拍，之后每 30 秒一拍；`document.visibilityState` 不是 `visible` 就整拍跳过（不发请求）；下一拍只在上一拍落地后才排（**不重叠**）；失败按 30 → 60 → 120 → 240 秒封顶退避、成功复位。落 `rooms` 走与 `rooms_list` 同一个**快照序号护栏**（§8） |
 | `loadBalance()` | `wallet_balance` | 状态栏展示；进入房间时刷新；换人即作废（§8） |
 | `loadRoomIdentity(roomId)` | `room_session` | 进房取一次快照；之后靠 `danmubox://session` 更新。落地前复核身份世代（§8） |
 | `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块；落地前复核 `activeRoomId` 仍是它（§8） |

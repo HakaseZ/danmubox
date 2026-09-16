@@ -39,6 +39,21 @@ pub struct RoomStats {
     pub watched: Option<i64>,
 }
 
+/// **房间开播状态**（`docs/contract.md` §6 / §7）。
+///
+/// 来源是长连接里的 `LIVE` / `PREPARING`（`docs/protocol.md` §10.7 的侧路）：它们到达时
+/// 把房间的 `live_status` 置成 `1` / `0`，界面据此把状态点**在原地**换掉 —— 不需要重连，
+/// 也不需要用户手动刷新（在这之前这两条命令只入一条 `system` 消息、没人写回房间状态）。
+///
+/// 它**不是连接状态**：连接状态是 [`StatusEvent`]，走 `danmubox://status`。两者语义不同
+/// （在不在播 ≠ 连没连上），界面那颗点的判据同时读两者，见 `docs/ui.md` §3.1。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveStatus {
+    pub room_id: i64,
+    /// 0 未开播 / 1 直播中（口径与 `Room.live_status` 一致）。
+    pub live_status: i32,
+}
+
 /// 事件总线上的事件。UI、会话缓冲、日志三个消费方共用同一份。
 ///
 /// clippy 会建议把 `Message` 装箱以缩小枚举。**不采用**：`Message` 是域模型本体，
@@ -56,6 +71,8 @@ pub enum Event {
     Session(RoomSession),
     /// 房间观众数变化（在线人数 / 累计看过）。
     RoomStats(RoomStats),
+    /// 房间开播状态变化（`LIVE` / `PREPARING`）。
+    LiveStatus(LiveStatus),
 }
 
 /// 广播总线。慢消费者由 `broadcast` 自行丢弃旧值，不阻塞上游。
@@ -249,6 +266,15 @@ impl MessageSink {
             room_id,
             online,
             watched,
+        }));
+    }
+
+    /// 房间开播状态（`LIVE` / `PREPARING`）：只影响界面上的状态点，因此与会话缓冲无关 ——
+    /// 那两条命令照旧各自入一条 `system` 消息，这条只是**额外的**状态通路（见 [`LiveStatus`]）。
+    pub fn publish_live_status(&self, room_id: i64, live_status: i32) {
+        self.bus.publish(Event::LiveStatus(LiveStatus {
+            room_id,
+            live_status,
         }));
     }
 

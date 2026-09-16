@@ -12,12 +12,17 @@ use crate::pb::InteractWordV2;
 
 /// 会产生一条 `system` 消息的命令：生命周期与公告类。
 /// `docs/protocol.md` §10.7 对每一类都给了缓冲策略。
-const SYSTEM_CMDS: [(&str, &str); 5] = [
-    ("LIVE", "开播"),
-    ("PREPARING", "下播"),
-    ("ROOM_CHANGE", "标题或分区变更"),
-    ("CUT_OFF", "被切断"),
-    ("NOTICE_MSG", "系统公告"),
+///
+/// 第三个字段是**开播状态**（`docs/protocol.md` §10.7 的侧路）：`Some(n)` = 这条命令到达时
+/// 把本房间的 `live_status` 置成 `n` 并冒泡给界面（`LIVE` → 1 直播中、`PREPARING` → 0 未开播）。
+/// `None` = 与开播状态无关。轮播（`2`）不由这两条推出：它是主播另设的状态，无实测表明
+/// `PREPARING` 会切到轮播；推错也只是短暂不一致，列表页那一拍会用上游的只读值纠回来。
+const SYSTEM_CMDS: [(&str, &str, Option<i32>); 5] = [
+    ("LIVE", "开播", Some(1)),
+    ("PREPARING", "下播", Some(0)),
+    ("ROOM_CHANGE", "标题或分区变更", None),
+    ("CUT_OFF", "被切断", None),
+    ("NOTICE_MSG", "系统公告", None),
 ];
 
 /// 计数类命令：**不写入会话缓冲**（`docs/protocol.md` §10.7），
@@ -66,6 +71,13 @@ pub enum Dispatch {
         online: Option<i64>,
         watched: Option<i64>,
     },
+    /// **房间的开播状态变了**（`LIVE` / `PREPARING`，协议 §10.7 的侧路）。
+    ///
+    /// 与 [`Dispatch::Message`] 不是二选一：这两条命令**照旧**入会话缓冲一条 `system` 消息
+    /// （「开播」/「下播」），同时把状态冒泡给界面 —— 用户 2026-09-16 报的
+    /// 「开播下播时状态不会自动更新」缺的正是后者（事件到了只入缓冲，没人把它写回房间状态）。
+    /// 两者一起带出来，消费方按「先投消息、再投状态」处理，顺序与从前一致。
+    LiveStatus { message: Message, live_status: i32 },
 }
 
 /// 把一条业务 JSON 载荷映射为领域产出；不产生任何产出时返回 `None`。
@@ -77,6 +89,10 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
     // 阶段 1 的字段实测校准入口：`DANMUBOX_LOG=debug` 时输出原始载荷
     // （`docs/protocol.md` 附录 B.1）。关闭级别时不做任何格式化。
     tracing::debug!(target: "danmubox::raw", cmd, payload = %value, "原始业务载荷");
+
+    // `LIVE` / `PREPARING` 顺带带出的开播状态（协议 §10.7 的侧路）：只在 `SYSTEM_CMDS` 里标注了
+    // 状态的那两条上被赋值，其余命令恒为 `None`（因此产出仍是 `Dispatch::Message`）。
+    let mut status_update: Option<i32> = None;
 
     let message = match cmd {
         "DANMU_MSG" => danmaku(room_id, value),
@@ -129,11 +145,14 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
                 tracing::debug!(cmd = other, "已知但与当前房间无关的命令，丢弃");
                 None
             } else {
-                match SYSTEM_CMDS.iter().find(|(name, _)| *name == other) {
-                    Some((_, label)) => {
+                match SYSTEM_CMDS.iter().find(|(name, _, _)| *name == other) {
+                    Some((_, label, live)) => {
                         let mut m =
                             Message::new(room_id, MessageKind::System, danmubox_core::now_ms());
                         m.content = (*label).to_string();
+                        // `LIVE` / `PREPARING` 另带开播状态（协议 §10.7 的侧路）：
+                        // 界面靠它把房间头 / 标签页 / 列表卡片的状态点在原地换掉，不必重连重刷。
+                        status_update = *live;
                         Some(m)
                     }
                     None => {
@@ -153,7 +172,14 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
             tracing::debug!(cmd, kind = m.kind.as_str(), "已归一化命令（原始载荷见上一条 debug 输出）");
         }
     }
-    message.map(Dispatch::Message)
+    match (message, status_update) {
+        (Some(message), Some(live_status)) => Some(Dispatch::LiveStatus {
+            message,
+            live_status,
+        }),
+        (Some(message), None) => Some(Dispatch::Message(message)),
+        (None, _) => None,
+    }
 }
 
 /// 单条弹幕。取值路径均用真实流量核对（`docs/protocol.md` §10.1 与附录 A）：
@@ -637,6 +663,9 @@ mod tests {
     fn message(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> {
         match dispatch(room_id, value, counters) {
             Some(Dispatch::Message(message)) => Some(message),
+            // `LIVE` / `PREPARING` 也带一条 `system` 消息（另外那份开播状态由
+            // `live_and_preparing_bubble_the_room_status` 单独断言）。
+            Some(Dispatch::LiveStatus { message, .. }) => Some(message),
             Some(Dispatch::RoomStats { .. }) => panic!("期望消息，实际拿到房间观众数"),
             None => None,
         }
@@ -1398,6 +1427,44 @@ mod tests {
         }
         assert_eq!(c.snapshot().unknown_cmd, 0);
         assert_eq!(c.snapshot().counter_updates, 0);
+    }
+
+    #[test]
+    fn live_and_preparing_bubble_the_room_status() {
+        let c = counters();
+
+        // ① `LIVE`：照旧入一条「开播」的 `system` 消息，**并且**把开播状态带出来
+        //    （用户 2026-09-16：开播下播时状态不会自动更新）。
+        let live = dispatch(1, &json!({"cmd": "LIVE"}), &c).expect("LIVE 必须产生产出");
+        let Dispatch::LiveStatus {
+            message,
+            live_status,
+        } = live
+        else {
+            panic!("LIVE 必须带上房间的开播状态");
+        };
+        assert_eq!(live_status, 1, "LIVE → 直播中");
+        assert_eq!(message.kind, MessageKind::System);
+        assert_eq!(message.content, "开播");
+
+        // ② `PREPARING`：下播 → 未开播。
+        let preparing = dispatch(1, &json!({"cmd": "PREPARING"}), &c).expect("PREPARING 必须产生产出");
+        let Dispatch::LiveStatus {
+            message,
+            live_status,
+        } = preparing
+        else {
+            panic!("PREPARING 必须带上房间的开播状态");
+        };
+        assert_eq!(live_status, 0, "PREPARING → 未开播");
+        assert_eq!(message.content, "下播");
+
+        // ③ 其余系统类命令**不带**状态：它们不改 `live_status`（轮播也不由这两条推出）。
+        let other = dispatch(1, &json!({"cmd": "ROOM_CHANGE"}), &c).expect("ROOM_CHANGE 必须产生消息");
+        assert!(
+            matches!(other, Dispatch::Message(_)),
+            "只有 LIVE / PREPARING 带开播状态"
+        );
     }
 
     #[test]

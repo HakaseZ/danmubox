@@ -916,7 +916,6 @@ export function RoomView({
           ) : null
         }
       />
->>>>>> feat/2609160959-splitter
 
       {messageMenu && (
         <ContextMenu
@@ -1065,9 +1064,8 @@ export function RoomView({
       )}
 
       {/* 房间头 ⋯ 的菜单：它的触发钮在收起的房间里，沉浸态里也没有理由浮着
-          （行右键菜单不在此列：它属于弹幕行，那一块在沉浸态里照旧在场上）。 */
+          （行右键菜单不在此列：它属于弹幕行，那一块在沉浸态里照旧在场上）。 */}
       {!immersive && headerMenu && (
->>>>>> feat/2609160959-splitter
         <ContextMenu
           at={headerMenu}
           items={headerMenuItems}

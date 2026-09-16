@@ -4646,8 +4646,12 @@ const MOCK = (theme) => `(function () {
       // 锚定「当前正在读的那一行」= **视口里最靠上的那一行**（按 data-index 认它）。
       // 旧写法取 rows()[4]（第 5 个**渲染出来**的格子）：虚拟列表的窗口带 12 行 overscan，
       // 45% 处那个窗口是从列表开头开始的，于是 rows()[4] 落在视口**上方**（top 为负、用户
-      // 根本看不见）—— 它随「上方各行的实测落账」而动是本分，拿它当阅读位置量错了对象。
-      // 实测同一次退出：视口里那一行位移 **0.0px**，而 overscan 里那个第 5 格位移 88.1px。
+      // 根本看不见）—— 拿它当阅读位置量错了对象，换掉它是为了让断言指向「用户在看的那一条」。
+      // 但**改口径并不能救回这条断言**：修之前两处数值相同（都是 88.1px，见
+      // immersiveAnchorSlotDeltaPx / immersiveExitKeepsReadingPositionPx 的对照），
+      // 因为 88.1px 根本不是「一行的位移」，而是**滚动容器自己下移了** —— 退出沉浸时
+      // 房间头 57 + 房间标签条 31.1 回到弹幕区**上方**，容器顶边整体下移 88.1px，
+      // 容器里的内容（scrollTop、锚点行的内容坐标、它相对容器顶边的 1px 偏移）一动没动。
       // 旧数值仍然记进快照（immersiveAnchorSlotIndex / ...SlotDeltaPx）当对照。
       var immScrollBox = rect(byTestId("db-chat-scroll"));
       var immVisibleRow = immScrollBox
@@ -4663,7 +4667,8 @@ const MOCK = (theme) => `(function () {
       var immAnchorTop = immAnchor ? Math.round(rect(immAnchor).top * 10) / 10 : null;
       // 认的是**这一条消息**，不是「第 5 个渲染出来的格子」：虚拟列表渲染的是窗口里那几行，
       // 视口一变窗口就挪（退出沉浸时弹幕区矮回去 193px，窗口里换一批行），rows()[4]
-      // 指向的已经不是同一条了 —— 实测差值 88.1px ≈ 一整行（81.1px），量的是「换了一条」。
+      // 指向的已经不是同一条了。**别把 88.1px 读成行高**：layoutLastRowHeightPx 是 81.1，
+      // 两个数只是同量级；88.1 = 房间头 57 + 房间标签条 31.1，是容器自己的位移。
       // 行的外层包装上有 data-index（MessageList 用虚拟项的 index 打的那一枚），
       // 记下它就能在退出之后把**同一条消息**找回来；比按下标取更硬，不是放水。
       var immAnchorWrap = immAnchor ? immAnchor.closest("[data-index]") : null;

@@ -146,7 +146,9 @@ function countdown(ms: number): string {
  * **沉浸模式**（issue #1）是这条生长轴上的一次「收起」：弹幕区双击进 / 出（判据见
  * {@link TAP_MS} 那一段），收起房间头、输入区（含三个弹出面板）与举报 / 房管 / 日志那几块，
  * 只留**弹幕区**与**礼物 / SC 栏**（`ui.gift_panel` 为真时）——弹幕区因此长高，
- * 虚拟列表靠 `MessageList` 自己的 `ResizeObserver` 重新量高（跟随中会重新贴底，不跟随则原地不动）。
+ * 虚拟列表靠 `MessageList` 自己的 `ResizeObserver` 重新量高（跟随中会重新贴底；不跟随则把正在读的
+ * 那一行按回原来的屏幕位置 —— 收起 / 展开还会把房间头与标签条搬进搬出弹幕区**上方**，
+ * 容器顶边跟着挪 88.1px，`docs/ui.md` §7.3 第 5 行）。
  * 房间标签条不在本组件里（它在 `App` 里、是本页的兄弟），由 `<html data-immersive>` +
  * 一条 CSS 规则收起（见下面的 effect）。状态本体是 store 的 `immersive`（会话内瞬态）。
  */

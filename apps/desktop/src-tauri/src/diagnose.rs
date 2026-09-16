@@ -5,7 +5,6 @@
 //! 因此这里没有临时文件、没有中转目录：桌面端直接写目标路径，Android 直接往
 //! MediaStore 里插一条。
 
-use std::path::PathBuf;
 
 use danmubox_core::diagnose::ShellEnv;
 #[cfg(target_os = "android")]
@@ -25,11 +24,6 @@ pub fn file_name(now_ms: i64) -> String {
         "{FILE_PREFIX}{}{FILE_SUFFIX}",
         danmubox_core::diagnose::utc_parts(now_ms).stamp()
     )
-}
-
-/// 桌面三端的落盘路径：**主目录下的 `Downloads`**（不存在则主目录）。
-pub fn desktop_target(name: &str) -> PathBuf {
-    danmubox_core::downloads_dir().join(name)
 }
 
 /// 报告头要的平台与版本信息。
@@ -149,15 +143,6 @@ mod tests {
         let name = file_name(1_789_531_954_000);
         assert_eq!(name, "danmubox-diagnose-20260916-041234.txt");
         assert!(name.starts_with(FILE_PREFIX) && name.ends_with(FILE_SUFFIX));
-    }
-
-    /// 落盘位置 = 导出目录 + 文件名（导出目录本身由 `core::downloads_dir` 决定：
-    /// 主目录下的 `Downloads`，不存在则主目录 —— 真机实测见交付报告）。
-    #[test]
-    fn the_target_path_is_the_download_folder_entry() {
-        let name = file_name(0);
-        let path = desktop_target(&name);
-        assert_eq!(path.file_name().and_then(|part| part.to_str()), Some(name.as_str()));
     }
 
     /// **一次诊断只出一个文件**（用户口径的硬要求）：写完之后目录里除了那一个文件

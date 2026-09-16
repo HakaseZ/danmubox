@@ -468,6 +468,11 @@ impl BiliLive {
     ///
     /// 返回的 [`Attempt`] 里 `host` 是空的：`host_list` 只有 [`BiliLive::run_once`] 见过，
     /// 由它补上。
+    ///
+    /// 参数多是因为它同时握着「会话内六件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
+    /// 入站流）与诊断采集句柄 `diag` —— 收成结构只会让调用点更长，与 `send::build_params`
+    /// 同一取舍（那里的 `#[allow]` 注释同样说明了这点）。
+    #[allow(clippy::too_many_arguments)]
     async fn read_loop<S>(
         &self,
         room_id: i64,

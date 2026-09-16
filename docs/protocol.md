@@ -106,13 +106,20 @@
 
 | `op` | 名称 | 方向 | body 形态 | 处理 |
 |---|---|---|---|---|
-| `2` | 心跳 | 客户端 → 服务端 | 字面量字符串 `[object Object]` | 首包 60 秒内发出，收到 `op=3` 后重置为每 30 秒一次，见 §8.1 |
+| `2` | 心跳 | 客户端 → 服务端 | 字面量字符串 `[object Object]` | 认证成功即发首包（**官方口径是「同一次回调内立即发」，60 秒只是上界**），收到 `op=3` 后重置为每 30 秒一次，见 §8.1 |
 | `3` | 心跳回应 / 人气值 | 服务端 → 客户端 | 4 字节大端无符号整数（人气值）；兼容历史上带 16 字节前缀的形态（body ≥ 20 字节时取偏移 16 起的 4 字节） | 解析为整数，计数 + `debug` 日志，并作为「连接存活」信号重置 WS 心跳周期 |
 | `5` | 业务消息 | 服务端 → 客户端 | 压缩子包拼接或 JSON（见 §6、§9） | 解包 → `cmd` 分发 → 归一化 → 广播 / 入会话缓冲 |
 | `7` | 认证 | 客户端 → 服务端 | JSON 对象（见 §7） | 连接建立后立即发送一次 |
-| `8` | 认证回应 | 服务端 → 客户端 | JSON 对象，含 `code` 字段 | `code=0` 视为成功；非 0 一律按认证失败处理（见 §13.3） |
+| `8` | 认证回应 | 服务端 → 客户端 | JSON 对象，含 `code` 字段 | `code=0` 视为成功；非 0 一律按认证失败处理（见 §13.3）。已知非 0 取值只有官方自己命名的 **`-101 = WS_AUTH_TOKEN_ERROR`**（§13.3） |
+| `24` | SocketAck（消息回执） | 客户端 → 服务端 | JSON `{msg_id, cmd, p_msg_type}` | **我方未实现**（唯一一种我们缺的出站包）；官方在收到带 `msg_id && p_is_ack` 的入站包时回发。来源：官方产物 `room-player.<hash>.prod.min.js` 的 `WS_OP_*` 常量表（`WS_OP_SOCKET_ACK: 24`）与 `processSingleMessageReply`。**未实测**：2026-09-16 游客态 3 分钟采集（470 包 / 185 条消息）里原始载荷 `msg_id` / `p_is_ack` 各 **0 命中**，本轮未出现触发条件（核对步骤见附录 A47）。另一条同类机制是 HTTP `message_ack`（§11.7） |
 
 > 未知 `op` 不得猜测语义：记 `warn`（含 `op` 原值、`packetLen`、`protover`）后丢弃该包。
+>
+> **本表取值的官方旁证（2026-09-16 只读核对）**：官方产物模块内的 op 常量表逐项为
+> `2 / 3 / 5 / 7 / 8 / 24`，帧头常量 `WS_PACKAGE_HEADER_TOTAL_LENGTH: 16`、默认 `version / operation / sequence: 1`、
+> `WS_BODY_PROTOCOL_VERSION_NORMAL: 0` / `_BROTLI: 3`、`WS_AUTH_OK: 0`、`WS_AUTH_TOKEN_ERROR: -101`
+> —— 与我们 §3 / §5 / §6 的取值一致，**除 `24` 这条我们缺的**（`protover` 的 `2` = zlib 我们只用作解码兼容，
+> 官方这一侧只写 0 / 3）。取证方式：游客态只读取 `room-player.<hash>.prod.min.js` 并按关键字切上下文（不落盘）。
 
 ---
 
@@ -157,6 +164,19 @@
 { "uid": 0, "roomid": 123456, "protover": 3, "buvid": "设备标识值", "platform": "web", "type": 2, "key": "" }
 ```
 
+**官方产物比上表多发的字段（官方发送、我方未发送）**——官方弹幕 WS 客户端的 `userAuthentication()` 构造的 body
+（2026-09-16 只读取自 `room-player.<hash>.prod.min.js`，未用真实样本复现）：
+
+| 字段 | 官方取值 | 我方 | 说明与限定 |
+|---|---|---|---|
+| `support_ack` | `true`（字面量布尔） | **不发送** | 与官方另一条回执机制配套（WS `op=24`，§5；HTTP `message_ack`，§11.7） |
+| `queue_uuid` | `t.queue_uuid`（字符串，由外层透传） | **不发送** | **取值形态未确定**：产物里只看到透传，没有默认值常量，也没看到它在哪里被赋值 |
+| `scene` | `t.extra.scene \|\| ""` | **不发送** | **具体取值未确定**：播放器把 `scene` 注入弹幕引擎的那一处不在可定位的模块边界内（`playerInitOptions` 里没有 `scene`）。旁证：页面另有 `scene: 120, biz: 4`（`GetSceneAndBiz`），但那是**播放器上报通道**，**不能**直接等同于弹幕 WS 的 `scene` |
+
+官方另有**条件字段** `aid`（`t.aid` 存在时并入）与 `from`（`t.from > 0` 时并入，取值 `parseInt(t.from, 10) || 7`）——
+两者我方也不发送，且与本仓主线无关（本仓只连直播间弹幕，不传视频稿件 `aid`）。
+官方构造体**不做任何身份分支**：`uid` 就是当前登录用户自己的 uid（游客态为 `0`），产物里没有 `isAnchor` / `isOwner` / `is_uper` 之类的判断（同一份产物里 `isAnchor` 只出现在页面 UI 权限判断处）。
+
 ### 7.2 游客与登录形态
 
 | 形态 | `uid` | `key` | 能力差异 |
@@ -188,7 +208,7 @@ danmubox 必须同时维持**两个**心跳：WS 心跳（`op=2`，保活 WS）�
 | 帧头 `protover` | `1`（body 不压缩） |
 | `op` | `2` |
 | `seq` | `1` |
-| 首包时机 | 认证成功（`op=8` 且 `code=0`）后 **60 秒内必须发出** |
+| 首包时机 | 认证成功（`op=8` 且 `code=0`）后**立即**发出——**不是等 60 秒**；60 秒只是硬上界。等到 60 秒才发首包，会让一部分候选节点一直把我们挂在「心跳未建立」上——症状是能认证、能回心跳，但**不下发弹幕**（2026-09-16 实测修正） |
 | 周期 | 常规 30 秒；**收到 `op=3` 回应后重置为 30 秒**计时 |
 | 兼容 | 空 body 亦被上游接受，但**以 `[object Object]` 为规范实现** |
 | 重连后 | 旧定时器必须取消，重新以认证成功为起点计时 |
@@ -203,6 +223,22 @@ danmubox 必须同时维持**两个**心跳：WS 心跳（`op=2`，保活 WS）�
 | 不在重连窗口补发 | 断线期间错过的节拍作废，不与新连接的首次心跳合并 |
 | 僵死判定 | 连续 3 个心跳周期（90 秒）内未收到任何入站帧（`op=3` / `op=5` / `op=8`）→ 判定连接僵死，主动断开并重连 |
 | 心跳失败不重试 | 发送失败等价于连接故障，直接进入退避流程，不重复 `op=2` |
+
+> **与官方产物的逐项对照（2026-09-16，来源：游客态只读 `room-player.<hash>.prod.min.js`，非真实流量）**
+>
+> - **首包时机 = 立即，不是等 60 秒**：官方在 `op=8` 的处理里，对 `code === WS_AUTH_OK(0)` 这一支**直接调用
+>   `this.heartBeat()`**，而 `heartBeat()` 的第一件事就是 `ws.send(convertToArrayBuffer({}, WS_OP_HEARTBEAT))`
+>   —— 即**收到认证回应 `code=0` 的同一次回调内发出**，中间没有 `setTimeout`（定时器只用于**下一次**心跳）。
+>   同一条分支对**空 body** 也起心跳（`else this.heartBeat()`）。⇒ 上表「立即」是官方口径，60 秒只是上界。
+> - **周期 = 30 秒**：`HEART_BEAT_INTERVAL = setTimeout(…, 1e3 * heartBeatInterval)`，同一模块的默认项是
+>   `heartBeatInterval: 30`（同处还有 `connectTimeout: 5e3`、`retryInterval: 5`、`retry: true`）。
+> - **心跳体与官方逐字节一致**：官方传给编码器的是**对象** `{}`，而 `TextEncoder.encode({})` 会先把入参
+>   `ToString` 成 `"[object Object]"` ⇒ 官方发出去的就是 15 字节 ASCII `[object Object]`，
+>   与本实现 `HEARTBEAT_BODY`（`ws.rs`）**逐字节相同**（不是空 body、也不是 `{}`）——两侧取的是同一个字面量。
+>   标注：**取值出处是官方产物**（非真实抓包）；我方发的就是这个字面量（上表已记）。
+> - **本实现已对齐**：首包改为「认证成功即发」（2026-09-16），与上面的官方口径一致；周期仍是 30 秒。
+>
+> **未实测**：产物给不出真实网络往返耗时，毫秒级间隔只能在真机抓包上标定。
 
 ### 8.2 HTTP 心跳（`webHeartBeat`）
 
@@ -318,6 +354,92 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 > **实测记录（2026-09-11）**：以游客态连接一个在线约 20 万的在播房间（房间号不写入仓库，见 `AGENT.md` §8）抓取 35 秒，实际出现 29 条业务载荷，全部落在上表：`DANMU_MSG`、`INTERACT_WORD_V2`、`ENTRY_EFFECT`、`WATCHED_CHANGE`、`LIKE_INFO_V3_UPDATE`、`LIKE_INFO_V3_CLICK`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`POPULARITY_CHANGE`、`ONLINE_RANK_COUNT`、`ONLINE_RANK_V3`、`RANK_CHANGED_V2`、`PK_INFO`、`WIDGET_BANNER`、`UNIVERSAL_EVENT_GIFT`、`UNIVERSAL_EVENT_GIFT_V2`、`SEND_GIFT_V2`、`HOT_ROOM_NOTIFY`、`STOP_LIVE_ROOM_LIST`。
 > 其中 `RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)` **尚无载荷样本**，不得凭命名猜测语义（见附录 A22）。
 
+#### 10.0.1 官方 cmd 分派器与我们映射表的差集（**事实记录，不是待实现需求**）
+
+官方入站命令的处置表在**页面 bundle** 里（`app.<hash>.js` 的 `receiveMessage` 大 switch，由
+`Ed(t){ t.on("receiveMessage", Cd) }` 注册；另有一份较小的 `ar(t)`，以及 SSR 里按房间订阅的
+`module_control_infos.cmd_list`）。与我们 §10.0 映射表的两个方向差异（2026-09-16 只读核对，**未逐条用真实流量确认**）：
+
+**(a) 官方认、我方未认** —— 这些命令到我们这里**一律计入 `unknown_cmd` 并丢弃**（§10.8）。清单**原样收入**（抽取方式是产物里 `"X" === t.cmd` 比较链的全量枚举；其中极少数 token 可能是同一段代码里的非 cmd 字面量）：
+
+```text
+AI_GIFT_CUSTOM_TASK  ANCHOR_LOT_AWARD  ANCHOR_LOT_CHECKSTATUS  ANCHOR_LOT_END
+ANCHOR_LOT_START  ANCHOR_LOTTERY_ACTIVITY  AREA_RANK_CHANGED  BIG_R_WELCOME
+BOX_ACTIVITY_START  BVC__CANVAS_DATA  BVC_KUAWAN____TS  CHANGE_ROOM_INFO
+CHASE_FRAME_SWITCH  CHG_RANK_REFRESH  CNY_REDPACKET  COLLABORATION_LIVE_INFO
+COLLABORATION_LIVE_ONLINE  COLLABORATION_LIVE_POPULARITY  COLLABORATION_LIVE_WATCHED
+COLLECTION_PRAISE_STATUS  COLLECTION_PRAISE_UPDATE_PROCESS  COMBO_SEND  COMMON_ANIMATION
+COMMON_NOTICE_DANMAKU  DANMU_ACTIVITY_CONFIG  DANMU_AGGREGATION  DANMU_EXTRA  DM_INTERACTION
+EFFECT_DANMU_MSG  ENTRY_EFFECT_MUST_RECEIVE  FANS_CLUB_POKE_GIFT_NOTICE  FULL_SCREEN_MASK_OPEN
+FULL_SCREEN_SPECIAL_EFFECT  GIFT_COMBO  GIFT_MENU_SWITCH_MSG  GIFT_PANEL_PLAN  GIFT_POPUP
+GIFT_STAR_PROCESS  GUARD_ACHIEVEMENT_ROOM  GUARD_BENEFIT_RECEIVE  GUARD_FAME_GLORY_EVENT
+GUARD_HONOR_THOUSAND  GUARD_NOTICE_PUSH  HALF_SCREEN_TRIGGER  HOUR_RANK_AWARDS
+INTERACT_JOIN  INTERACT_LEAVE  INTERACT_OPERATION  LIKE_GUIDE_USER  LIKE_SO_HOT
+LITTLE_MESSAGE_BOX  LITTLE_TIPS  LIVE_INTERACT_GAME_STATE_CHANGE  LIVE_INTERNAL_ROOM_LOGIN
+LIVE_MULTI_VIDEO_LINK  LIVE_OPEN_PLATFORM_CLOUD_GAME  LIVE_OPEN_PLATFORM_GAME  LIVE_PANEL_ICON_INFO
+LIVE_PLAYER_LOG_RECYCLE  LIVE_ROOM_TOAST_MESSAGE  LIVE_SEI_CHANNEL  LOG_IN_NOTICE
+LOL_PLAYER_GRADE  LPL_REALTIME_STATUS_CHANGED  MESSAGEBOX_USER_GAIN_MEDAL
+MESSAGEBOX_USER_MEDAL_CHANGE  MESSAGEBOX_USER_MEDAL_COMPENSATION  MILESTONE_UPDATE_EVENT
+MULTI_VOICE_APPLICATION  MULTI_VOICE_OWNER_LEAVE  MULTI_VOICE_PK_STATUS_V2  MULTI_VOICE_SEND_EMOJI
+MULTI_VOICE_STATUS_SYNC  OFFICIAL_ROOM_EVENT  ON_COMMON_CARD_UPDATE  ONLINE_RANK_TOP3
+OTHER_SLICE_PUBLISH_RESULT  OTHER_SLICE_SETTING_CHANGED  PAY_LIVE_VALIDATE
+PK_AGAIN PK_AUDIENCE PK_BATTLE_CRIT PK_BATTLE_END PK_BATTLE_FINAL_PROCESS PK_BATTLE_GIFT
+PK_BATTLE_MULTIPLE_AWARD PK_BATTLE_MULTIPLE_BEGIN PK_BATTLE_MULTIPLE_DRAW_RES PK_BATTLE_MULTIPLE_RES
+PK_BATTLE_PRE_NEW PK_BATTLE_PRO_TYPE PK_BATTLE_PROCESS_NEW PK_BATTLE_PUNISH_END PK_BATTLE_RANK_CHANGE
+PK_BATTLE_SETTLE_NEW PK_BATTLE_SPECIAL_GIFT PK_BATTLE_START_NEW PK_BATTLE_VIDEO_PUNISH_BEGIN
+PK_BATTLE_VIDEO_PUNISH_END PK_BATTLE_VOTES_ADD PK_END PK_INFO PK_MATCH PK_MIC_END PK_PRE
+PK_PROCESS PK_SETTLE PK_START
+PLAY_TOGETHER  PLAYTOGETHER_ORDER_VOICE_DISPATCH  PLAYTOGETHER_SERVICE_CARD_CHANGE
+POPULAR_RANK_CHANGED  POPULAR_RANK_GUIDE_CARD  POPULARITY_RANK_TAB_CHG
+POPULARITY_RED_POCKET_V2_NEW  POPULARITY_RED_POCKET_V2_START  POPULARITY_RED_POCKET_V2_WINNER_LIST
+POPULARITY_STATUS_CHANGE  PROGRAM_CHANGE  RANK_CHANGED  RANK_CHANGED_V2  RANK_REM
+RECALL_DANMU_MSG  RED_POCKET_START  REDIRECT_EMPTY_PAGE  REENTER_LIVE_ROOM  REENTER_LIVE_ROOM_V2
+REVENUE_RANK_CHANGED  ROOM_ADMIN_REVOKE  ROOM_ANON_KEY  ROOM_BANNER  ROOM_BLOCK_INTO  ROOM_KICKOUT
+ROOM_LIMIT  ROOM_LIVE_FORBID  ROOM_LOCK  ROOM_RANK  ROOM_REFRESH  ROOM_SILENT_OFF  ROOM_SILENT_ON
+ROOM_SKIN_MSG  ROOM_SWITCH_INFO_CONFIG_CHANGE  SEND_TOP  SHOPPING_CART_SHOW  SPECIAL_GIFT
+STARLIVE_PK_MSG  SUPER_CHAT_AUDIT  SUPER_CHAT_ENTRANCE  SUPER_CHAT_MESSAGE_DELETE
+SUPER_VIP_CONNECT_DIG_V2  TEAM_LIVE_START  TEAM_MEMBER_CHANGE  TEAM_MEMBER_SELECT_CHANGE
+THERMAL_STORM_DANMU_BEGIN  THERMAL_STORM_DANMU_OVER  THERMAL_STORM_DANMU_UPDATE
+TRANSFER_FLOW_INFO  UNIVERSAL_ASR_TEXT  UNIVERSAL_EVENT_GIFT  UNIVERSAL_INTERACT_INVITATION
+UNIVERSAL_INTERACT_JOIN  UNIVERSAL_INTERACT_LEAVE  UNIVERSAL_INTERACT_OPERATION
+USER_PANEL_RED_ALARM  USER_TOAST_MSG_V2  USER_VIRTUAL_MVP
+VIDEO_CONNECTION_JOIN_END  VIDEO_CONNECTION_JOIN_START  VIDEO_CONNECTION_MSG
+VOICE_CHAT_UPDATE  VOICE_JOIN_STATUS  VTR_GIFT_LOTTERY  WARNING  WATCH_ROOM_TOAST_MESSAGE
+WEALTH_NOTIFY  WEB_REPORT_CONTROL  WEBROOMBRIDGELISTENERTYPE  WEBROOMBRIDGEPOSTMESSAGE
+WIDGET_BANNER  WIDGET_GIFT_STAR_PROCESS  WIDGET_WISH_INFO_V2  WIDGET_WISH_LIST
+WIN_ACTIVITY  WIN_ACTIVITY_USER
+```
+
+> **这份清单只是事实记录**：它既不代表这些命令都会出现在我们的链路上，也**不是**一份待实现需求清单。
+> 若要动 `cmd.rs`，先用附录 B 的采集流程确认哪些命令**真的到过**，再按 §10.0 的 `kind` 集合决定归类
+> （`kind` 恒为六种，不得新增）。报告点名的**高价值候选**（最可能在真实弹幕流里出现）：
+> `COMBO_SEND`、`GIFT_COMBO`、`SEND_TOP`、`SPECIAL_GIFT`、`SUPER_CHAT_ENTRANCE`、`SUPER_CHAT_MESSAGE_DELETE`、
+> `RECALL_DANMU_MSG`、`WATCH_ROOM_TOAST_MESSAGE`、`COMMON_NOTICE_DANMAKU`、`ONLINE_RANK_TOP3`、
+> `RANK_CHANGED(_V2)`、`ENTRY_EFFECT_MUST_RECEIVE`、`USER_TOAST_MSG_V2`、`LIKE_SO_HOT`、`VOICE_JOIN_STATUS`。
+
+**(b) 我方认、官方页面产物里不认**（反向差异，同一次核对）：`GUARD_BUY`、`USER_TOAST_MSG`、`SUPER_CHAT_MESSAGE_JP`
+这三个**精确串**在官方页面 bundle 里 **0 命中**——官方走的是 `USER_TOAST_MSG_V2` 与 `GUARD_*` 家族。
+**不因此改动本仓映射**：① 官方**页面**分发器不是完整清单（`DANMU_MSG_MIRROR` / `HOT_ROOM_NOTIFY` /
+`PLAYURL_RELOAD(_MASTER)` / `STOP_LIVE_ROOM_LIST` 这些我们已处置的命令也不在它里面，由播放器层或其它模块处理）；
+② §10.3 / §10.6 的归类另有实测依据（A33 实测到 `SUPER_CHAT_MESSAGE` 真实出现）。这条差异只作**旁证**登记。
+
+#### 10.0.2 实测：本轮窗口里被计入 `unknown_cmd` 的命令
+
+2026-09-16 游客态 3 分钟采集（公开测试房间 5440；470 包 / 185 条消息）里 `unknown_cmd: 37`，来源**全部是同一族**命令：
+
+| `cmd` | 次数 | 现状 |
+|---|---|---|
+| `COLLABORATION_LIVE_WATCHED` | 17 | 未映射 → `debug` 日志（「未处理的命令，丢弃并计数」）+ 丢弃 + 计入 `unknown_cmd`（§10.8） |
+| `COLLABORATION_LIVE_ONLINE` | 17 | 同上 |
+| `COLLABORATION_LIVE_POPULARITY` | 3 | 同上 |
+
+**影响（只记事实，不定方案）**：这三条是「联动直播」的状态播报，本实现看不到它们的内容（不入会话缓冲、也不冒泡给界面）。
+**它们都在 10.0.1(a) 的清单里**——若将来要归一化，先按附录 B 确认真实出现频率再定 `kind`。
+
+> **一条容易看错的对应关系**：同一窗口里 `ENTRY_EFFECT` 恰好出现 **37** 次、`unknown_cmd` 也恰好是 **37**，
+> 两者**不是**同一批数据。`ENTRY_EFFECT` 这一轮**已经归一化**（37 条逐条走「已归一化命令 cmd="ENTRY_EFFECT"
+> kind="interact"」，落 §10.4 的 `interact`）；37 那个计数来自上表的 `COLLABORATION_LIVE_*` 三条（17 + 17 + 3）。
+
 ### 10.1 `DANMU_MSG`（`kind=danmaku`）
 
 语义：普通聊天弹幕，含文本、发送者、颜色、粉丝牌与勋章信息。
@@ -386,7 +508,7 @@ fn handle_business(payload: &[u8], depth: usize) -> Vec<RawCmd>:
 | `content` | 礼物名称 + 数量的组合描述 | 面向展示的说明文本 | 待实测校准（A8） |
 | `uid` / `uname` | 送礼用户槽位 | 与 `DANMU_MSG` 用户信息结构不一定同形 | 待实测校准（A8） |
 | `face` | **没有可靠来源 → 留空串** | 社区文档那份字段表只有礼物名 / 价格 / `coin_type`，载荷里也没有可确证的昵称同层头像槽位；实测流量里 `SEND_GIFT` 样本数为零。没有来源就不猜路径（契约 §5 的 `face`） | 待实测校准（A8） |
-| `amount` | 价格槽位（单价 × 数量，单位为金瓜子） | 无价字段时 `0`，不得猜测 | 待实测校准（A8） |
+| `amount` | 价格槽位（单价 × 数量，单位为金瓜子；展示时 `÷1000` = 元，见本节末「金额单位」） | 无价字段时 `0`，不得猜测 | 待实测校准（A8） |
 | 连击标识 | 礼物标识 + 连击数的字段组合 | 供会话内连击聚合（见 §12.3） | 待实测校准（A8） |
 | `medal_level` / `medal_name` / `guard_level` | 送礼用户粉丝牌槽位 | 无则 `0` / `""` / `0` | 待实测校准（A4） |
 | `ts` | 载荷时间戳槽位 | 归一化为 UTC 毫秒 | 待实测校准（A7） |
@@ -412,9 +534,9 @@ JSON 里只有 `{dmscore, pb}`。
 | 1 | `gift_id` | 礼物 id（如 `31164` = 粉丝团灯牌） |
 | 2 | `gift_name` | 礼物名 |
 | 3 | `num` | 数量 |
-| 5 / 6 | `price` / `discount_price` | 原价 / 折后价（金瓜子） |
-| 7 | `total_coin` | 本次总瓜子数，**金额优先用它** |
-| 8 | `coin_type` | `gold`（电池体系）/ 银瓜子等 |
+| 5 / 6 | `price` / `discount_price` | 原价 / 折后价（金瓜子；展示 `÷1000` = 元） |
+| 7 | `total_coin` | 本次总金瓜子数（价 × 数量），**金额优先用它**；展示 `÷1000` = 元 |
+| 8 | `coin_type` | `gold`（金瓜子这一族的币种名；社区文档写作「gold，即电池」——**别据此把数值当电池数**，见本节末「金额单位」）/ 银瓜子等 |
 | 9 | `tid` | 订单号，作为 `Message.upstream_id` |
 | 10 | `timestamp` | 秒级时间戳 |
 | 12 | `batch_combo_id` | 连击标识（`batch:gift:combo_id:…`），供会话内聚合 |
@@ -430,6 +552,21 @@ JSON 里只有 `{dmscore, pb}`。
 | 8 | `medal` | message | `Message.medal_level` / `medal_name`（`{5: level, 6: name}`） |
 | 10 | `gift` | message | 礼物子消息（上表） |
 | 29 | `anchor` | message | 受赠主播（`{1: uname, 2: uid}`），本期不消费 |
+
+> **金额单位（2026-09-16 复核；展示换算的唯一口径）**：礼物侧这几个数值字段（V1 的 `price`、
+> V2 的 `price` / `discount_price` / `total_coin`）**数值口径都是金瓜子**，判据三条：
+> ① 社区协议文档（bilibili-API-collect `docs/live/gift.md`，本仓无副本）对礼物 `price` 的原话是
+> **「该值 / 1000 的单位为元」**；② SC 载荷里的 **`rate = 1000`**（A9，实测样本）与之一致；
+> ③ 大航海 `price` 同为 **CNY × 1000**（A12）——舰长 `138000` ↔ 官方标价 **138 元**，两边对得上。
+> **`coin_type = gold` 只是币种名**（社区文档那句「一般为 gold，即电池」说的是币种，不是「这个数就是电池数」）：
+> 金瓜子与电池另有比值 —— **1 电池 = 100 金瓜子 = 0.1 元**（1 元 = 10 电池、1 人气票 = 1 电池，
+> 用户 2026-09-16 口径；与 A29 实测的 `电池 = gold / 100` 逐项吻合）。
+> **因此展示换算只有一条：`元 = 金瓜子 / 1000`**（`contract.md` §5「金额单位」；SC 的 `price` 上游就是元，
+> 不参与这条换算）。把 `price` 当电池数会差 **10 倍**，直接当元显示会差 **1000 倍**。
+>
+> **这条口径的证据强度要说清楚**：价格字段在本仓**从来没拿到真实礼物样本**（A8 / A12 都记着「仍未实测」，
+> B 站授权也不允许为测试送礼），所以上面三条是**社区文档口径 + 两条已实测旁证**（SC 的 `rate`、钱包的
+> 电池比值），**不是**「某条真实礼物的 `price` 与官方页面价目逐条对照过」。仍未闭环的那一格见附录 A.2。
 
 > **易错点**：礼物子消息的 tag 3 是 `num`，顶层 tag 3 是 `face`——两张表**各自独立编号**，
 > 别把顶层那套套到子消息上（反之亦然）。
@@ -453,8 +590,10 @@ JSON 里只有 `{dmscore, pb}`。
 | `guard_level` | `data.user_info.guard_level`（本房间大航海等级）；`data.medal_info.guard_level` 走 `medal_guard_level`，**两者不互相兜底** | 样本两者都在 |
 | `is_admin` | `data.user_info.manager` | 房管标记（样本 `0`）|
 
-**换算**：同一载荷还带 `data.rate = 1000`，即 1 元 = 1000 金瓜子——礼物金额（金瓜子）
-与 SC 金额（元）因此**不同口径**，`contract.md` §5 对此的措辞是「礼物金瓜子或 SC 金额」。
+**换算（2026-09-16 归并）**：同一载荷还带 `data.rate = 1000`，即 **1 元 = 1000 金瓜子**——这正是礼物侧
+`price` / `total_coin` 的换算比（§10.2「金额单位」）。SC 的 `price` 上游**就是元**，礼物与大航海是金瓜子；
+**界面对两者的展示单位因此统一成元**（`contract.md` §5）：SC 直接显示，礼物 / 大航海 `÷1000` ——
+`amount <= 0`（上游没给价）一律不画金额格。
 
 **其他可用字段**（本实现暂不用）：`time`（SC 持续秒数，样本 `60`）、`start_time` / `end_time`、
 `message_font_color` / `background_*`（官方客户端用于 SC 配色）、`token`。
@@ -544,7 +683,7 @@ JSON 里只有 `{dmscore, pb}`。
 | `guard_level` | 守护等级槽位 | `1` 总督 / `2` 提督 / `3` 舰长 | 待实测校准（A12） |
 | `uid` / `uname` | 购买用户槽位 | `USER_TOAST_MSG` 可能只带昵称 | 待实测校准（A13） |
 | `face` | **无来源** | 两节字段表里都没有头像字段（实测样本零条，A33）→ `Message.face` 留空串，不猜路径 | 未观测到（A12 / A13） |
-| `amount` | 价格 / 数量槽位（金瓜子） | 无法确证时 `0`，不得推算 | 待实测校准（A12） |
+| `amount` | 价格 / 数量槽位（金瓜子；展示 `÷1000` = 元，见 §10.2「金额单位」） | 无法确证时 `0`，不得推算 | 待实测校准（A12） |
 | `ts` | 载荷时间戳槽位 | 归一化为 UTC 毫秒 | 待实测校准（A7） |
 
 噪声过滤建议：
@@ -719,6 +858,26 @@ resp.msg / resp.message == "k"     → blocked_room
 `show_reply` 在无关系的消息里同样是 `true`。因此界面只能统一渲染「@昵称」；**能准确区分的是我们自己发出的那条**
 （发送时 `reply.dmid` 非空即回复），这也是当前唯一可落地的判定式。
 
+### 11.7 收包后的回执：HTTP `message_ack`（官方实现，我方未实现）
+
+本节记的虽是**出站请求**，但触发源在**入站**方向：官方客户端对「服务端要求回执」的消息会补发一条 HTTP 请求。
+它是我们缺的两条 ack 机制之一（另一条是 WS `op=24`，见 §5）。**来源：官方产物** `room-player.<hash>.prod.min.js`
+（2026-09-16 游客态只读核对，未用真实流量复现）：
+
+| 项 | 官方口径 |
+|---|---|
+| 方法 / 地址 | `POST /xlive/open-interface/v1/dm/message_ack` |
+| body | `{ "terminal": 0, "sequence": <帧头 seq> }` |
+| 触发条件 | 官方 `onReceivedMessage(e, t)` 里 **`t > 1`** 才发；`t` 就是 `onMessageReply(body, seq)` 一路透传下来的**帧头 `seq`**（不是消息体里的任何字段） |
+| 身份相关性 | **无**——与「是不是主播」无关（同 §5 的 `op=24`）；方向也是**观众 → 服务端**，不是「主播回应服务端」 |
+
+**本实现现状（如实记录）**：**没有**这条请求，也**没有** `op=24`（`ws.rs` 的读循环里 `op=24` 会落到「其他包」的
+`trace` 分支被丢弃；发侧只有 `op=7` 与 `op=2`）。
+
+**未实测（本轮无法判定触发条件）**：`seq > 1` 判不出——**帧头 `seq` 在现有日志里没有任何出口**：
+`proto.rs` 会把 `Header.seq` 解析出来，但**没有任何代码路径打印它**，`danmubox::raw` 打印的是业务载荷 JSON、
+不含帧头字段。⇒ 要判定必须先在 `ws.rs` 的读循环补一条带 `seq` 的 `debug` 日志（或临时桩），再按附录 A47 采一轮。
+
 ---
 
 ## 12. 分发与内存缓冲边界
@@ -796,7 +955,16 @@ stateDiagram-v2
 | 3 | `code≠0` → 记 `warn`：`code` 数值原值 + `op=8` 原始 body（脱敏）写入 `debug` 日志；**不得**为未知 code 编造含义 |
 | 4 | 若为登录态且上游语义指向凭据失效 → 标记会话可能失效，通过 `danmubox://session` 事件通知前端 |
 | 5 | 连续失败计数 +1；未达上限 → 进入 `Backoff`（按 §13.2 等待，重跑房间解析与 `getDanmuInfo`） |
-| 6 | 连续失败达 3 次 → 进入 `Failed`：房间状态置为 error，发 `danmubox://room` 事件，等待人工 `rooms_connect` |
+| 6 | 连续失败达 3 次 → 进入 `Failed`：房间状态置为 `error`（`ConnState::Error`，经 `danmubox://status` 推出，`detail` 写明「已停止自动重连；手动刷新可重置」；§13.4 与 [`ipc.md`](ipc.md) 的连接态通道就是它），**停止自动重连**，等待人工 `rooms_connect` / `rooms_reconnect`（§14：重置计数并跳过退避） |
+
+> **`op=8` 非 0 `code` 的已知取值（官方产物命名，2026-09-16 只读核对，来源 `room-player.<hash>.prod.min.js`）**：
+> 官方同一模块的常量表里有 `WS_AUTH_OK: 0` 与 **`WS_AUTH_TOKEN_ERROR: -101`**，且把 `-101` **单列**处理——
+> 置 `retry = !1`（**停止重试**）+ 回调包装层 `log("token expired, reconnect.") → destroy() → init()`，即**重新取 token**；
+> 其余非 0 code 交给 `onClose()`（当断开重连）。
+>
+> **我们的现状（未区分 `-101`，如实记录）**：任何非 0 `code` 都走上面的步骤 3–6——`warn` + 连续失败计数 + 退避，
+> **没有** `-101` 的专用分支，也不因它停止自动重连、不显式重取 token。是否按官方口径细分由主流程另开票。
+> **未实测**：本轮 `op=8` 全部是 `code=0`（2026-09-16 游客态 3 分钟采集 470 包，状态 `Connected verified`），非 0 code 一次都没出现。
 
 > **实测补充（2026-09-12）**：凭据失效时上游的表现是**握手后立刻 reset**（`Connection reset without closing handshake`），**不是** `op=8` 带非 0 code——因此单靠认证回应判不出失效，必须在**会话层**先向 `nav` 求证（见下）。
 >
@@ -860,7 +1028,7 @@ stateDiagram-v2
 |---|---|
 | 单房间单连接 | 同一 `room_id` 同时只允许一条 WS；重复 `rooms_connect` 幂等 |
 | 遵守退避 | 禁止在退避窗口内主动重试或「心跳探测」，手动重连（§14）除外 |
-| 节点切换 | 同一节点连续失败 2 次后切换 `host_list` 下一项；全部失败回到首项并继续退避 |
+| 节点切换 | 单次尝试内按 `host_list` 顺序、**从轮换游标起**把候选试完一轮（一个不通就换下一个）；同一节点连续失败 2 次后把游标推进到下一项。游标跨重连保留、轮完一轮回到首项（越界对 `host_list` 长度取模），继续按 §13.2 退避；手动重连（§14）重置游标与失败计数 |
 | 并发上限 | 订阅房间数上限由偏好在 UI 侧约束；协议层不做硬限，但每房间独立 supervisor，避免相互阻塞 |
 | 禁止行为 | 自动化刷弹幕、批量小号、抓取非公开接口数据 |
 
@@ -961,11 +1129,11 @@ stateDiagram-v2
 | A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态（布尔 / 等级 / 位标志） | 同上，需一名房管账号发言样本 | 以已知房管与非房管各 3 条对照，确定判定式 | 房管徽标、`is_admin` |
 | A6 | `Message.upstream_id`（举报所需标识） | 举报弹幕所需的上游标识位于哪个槽位（弹幕 id / 消息 id / 组合串） | 同上，抓取一条可被举报的弹幕原文 | 用该标识对目标弹幕发起一次举报并核对是否命中，确认取哪个槽位 | `chat_report`、`upstream_id` |
 | A7 | 时间戳字段 | 各命令载荷中时间戳的字段名与单位（秒 / 毫秒）；缺失时是否可安全回退到本地时间 | 同上 | 与本地收帧时间比对，误差应在秒级以内；写入归一化规则 | `ts` 全命令 |
-| A8 | `SEND_GIFT`（含金额与连击字段） | 礼物名称、数量、单价（金瓜子）字段名；礼物标识与连击数（去重聚合用）字段名；用户 UID / 昵称字段名 | 同上，需真实礼物样本 | **按权威文档核对（2026-09-12），仍未实测**：`data.name`（礼物名）、`data.price`（金瓜子，文档记「该值/1000 的单位为元」）、`data.coin_type`（一般为 `gold`，即电池体系）。实现已按此填 `content` 与 `amount`。**但实测流量里没有 `SEND_GIFT`，只有 `SEND_GIFT_V2`**（后者字段抄自官方 proto，见 §10.2）。**头像（`Message.face`）无来源**：社区字段表里没有头像字段，载荷里也没有可确证的昵称同层头像槽位——刻意留空，等有样本再回填 | `cmd.rs` |
+| A8 | `SEND_GIFT`（含金额与连击字段） | 礼物名称、数量、单价（金瓜子）字段名；礼物标识与连击数（去重聚合用）字段名；用户 UID / 昵称字段名 | 同上，需真实礼物样本 | **按权威文档核对（2026-09-12），仍未实测**：`data.name`（礼物名）、`data.price`（金瓜子，文档记「该值/1000 的单位为元」）、`data.coin_type`（一般为 `gold`，即电池体系）。实现已按此填 `content` 与 `amount`。**但实测流量里没有 `SEND_GIFT`，只有 `SEND_GIFT_V2`**（后者字段抄自官方 proto，见 §10.2）。**头像（`Message.face`）无来源**：社区字段表里没有头像字段，载荷里也没有可确证的昵称同层头像槽位——刻意留空，等有样本再回填。**单位再核对（2026-09-16）**：社区字段表原文就是「该值 / 1000 的单位为元」，与 SC 的 `rate = 1000`（A9）互证；`coin_type = gold` 是币种名、**不等于**数值按电池计（§10.2「金额单位」）。仍属**文档口径**，未见真实礼物样本 | `cmd.rs` |
 | A9 | `SUPER_CHAT_MESSAGE` / `_JP`（含金额与去重字段） | SC 标识、金额、正文、时长字段名；`_JP` 与主命令的载荷差异 | 同上，需真实 SC 样本 | **已实测（2026-09-12）**：字段见 §10.3——`message` / `price`（**元**）/ `id` / `ts`（秒）/ `uinfo.base.name` / `user_info.{uname,guard_level,manager}` / `medal_info.{medal_level,medal_name,guard_level}`，另有 `rate = 1000`（1 元 = 1000 金瓜子）。10 分钟采集到 1 条 SC。**`_JP` 仍未见样本**。头像按同一 `uinfo.base` 层的 `face` 取用（**该键本轮未逐项记录**，实现按同路径取值，取不到即空串） | `cmd.rs`、§10.3 |
 | A10 | `INTERACT_WORD`（V1） | 互动类型枚举的字面值与取值集合（进入 / 关注 / 分享等） | 同上 | 按可触发的类型逐项采集，建立完整映射后再写描述文案 | `content` 文案 |
 | A11 | `INTERACT_WORD_V2` 的 proto 字段名 | 上表 §10.4 所列 8 个字段的真实 tag 号、类型与嵌套结构；`msg_type` 枚举值与文案映射 | 同上，需一条 V2 进场样本与一条 V1 同场景样本 | base64 解码 `data` 后用 `prost` 试解，与 V1 对照确认字段名与语义 | `interact` 解析、`prost` schema |
-| A12 | `GUARD_BUY` | 守护等级字段、数量与价格字段及单位（金瓜子 / 月） | 同上，需一次真实开通样本 | **按权威文档核对（2026-09-12），仍未实测**：`uid` / `username` / `guard_level`（1 总督·2 提督·3 舰长）/ `num` / `price`（原金瓜子标价，CNY×1000）/ `gift_id` / `gift_name` / `start_time`。实现已按此填全（含按等级补名称）。样本仍未出现——10 分钟巨型房间采集里零条（A33）。字段表里**没有头像字段**，`Message.face` 因此留空（见 §10.6）| `cmd.rs`、§10.6 |
+| A12 | `GUARD_BUY` | 守护等级字段、数量与价格字段及单位（金瓜子 / 月） | 同上，需一次真实开通样本 | **按权威文档核对（2026-09-12），仍未实测**：`uid` / `username` / `guard_level`（1 总督·2 提督·3 舰长）/ `num` / `price`（原金瓜子标价，CNY×1000）/ `gift_id` / `gift_name` / `start_time`。实现已按此填全（含按等级补名称）。样本仍未出现——10 分钟巨型房间采集里零条（A33）。字段表里**没有头像字段**，`Message.face` 因此留空（见 §10.6）。**单位再核对（2026-09-16）**：`price` = 金瓜子（CNY×1000），展示 `÷1000` = 元——舰长 `138000` ↔ 官方标价 138 元；仍属**文档口径**，未见真实开通样本 | `cmd.rs`、§10.6 |
 | A13 | `USER_TOAST_MSG` | 播报文本、角色、数量字段；与 `GUARD_BUY` 的时间关系 | 同上 | **按权威文档核对（2026-09-12），仍未实测**：`guard_level` / `num` / `price` / `role_name` / `payflow_id` 等（该命令**没有昵称字段**，实现因此在 `role_name` 缺失时按等级补名字）。与 `GUARD_BUY` 的时间关系仍未知。同样**没有头像字段**（`Message.face` 留空） | `cmd.rs` |
 | A14 | `ENTRY_EFFECT` | 触发用户的 UID / 昵称 / 舰长等级字段位置 | 同上 | 以高价值账号进场触发，记录字段。**昵称与 UID 已实测**（`data.uid` / `data.uinfo.base.name`）；`uinfo.base.face` 按同层取用但**该键本身未观测到** | `interact` 归一化 |
 | A15 | `op=8` 认证回应 | body 字段名、`code` 的实际取值集合与各分类归属 | 同上，另加「未登录 / 登录失效」两种状态各一次 | 记录全部出现过的 `code` 与对应状态，建立粗分类表 | §13.3、§15.2 |
@@ -993,7 +1161,7 @@ stateDiagram-v2
 | A22 结案（2026-09-12） | 剩余四个命令的处置 | 准绳是需求的展示面（`REQUIREMENTS.md` §2.1：弹幕 / 礼物 / SC / 进场与互动提示 / 开播下播标题分区 / 人气值），**不在展示面内的有意忽略，且忽略项不需要字段表** | `PK_INFO`（连麦对决状态）、`RANK_CHANGED_V2`（榜单名次变动）、`WIDGET_BANNER`（活动横幅）三者均不在 §2.1 内 → **有意忽略**。注意它们**仍留在 `unknown_cmd` 计数里**，不与 `ONLINE_RANK_V3` / `PLAYURL_RELOAD` 同列：那几个是**已观测且确认无关**（高频，会把计数器淹掉），这几个**从未观测到**——一旦真的收到，计数器正是用来报警的，放进忽略表反而失去这个能力。**唯一仍在展示面内的是礼物**：`UNIVERSAL_EVENT_GIFT(_V2)` 属 §2.1 的「礼物」，必须映射，登记在 `roadmap.md` §8.1，等一条真实载荷。`is_show` 的展示语义已由 `COMBO_SEND` 的实测结论回答（见上一段）|
 | A22 补充（2026-09-12） | 无载荷样本的那些**之外**的命令 | 逐个看真实载荷，凭载荷（不看命令名）决定处置 | 一次 40 秒观察里出现的命令与载荷字段：`ONLINE_RANK_COUNT`（`count`/`count_text`/`online_count`/`online_count_text`）→ 计数类，已用于人气值；`ONLINE_RANK_V3`（只有 `pb`）→ 已知且无关（protobuf 高能榜，不展示；出现频率最高，40 秒 43 条）；`WATCHED_CHANGE`（`num`/`text_small`/`text_large`）→ 计数类（「看过人数」与需求要的人气值不是同一口径）；`LIKE_INFO_V3_UPDATE`（`click_count`）/ `LIKE_INFO_V3_CLICK`（`uid`/`uname`/`like_text`/`fans_medal`…）→ 计数类，不逐条展示；`ENTRY_EFFECT`（`uid` + **`uinfo.base.name`**；另有 `copy_writing` 模板 `"<%昵称%> 来了"`）→ **复用互动解析**：昵称从 `uinfo` 取（实测确认有），文案由界面统一成「XX 进入直播间」，两条进场路径保持一致；模板留给网页端，不采用（否则同一事件两种措辞）；`PLAYURL_RELOAD` / `PLAYURL_RELOAD_MASTER`（`room_id`/`playurl`/`reload_option`）→ 已知且无关（播放器自己的事）；`NOTICE_MSG`（`business_id` + `full{background,color,head_icon,highlight,tail_icon…}`）→ 系统公告；`STOP_LIVE_ROOM_LIST`（`room_id_list`）/ `HOT_ROOM_NOTIFY`（`threshold`/`ttl`）→ 已知且无关。**仍缺样本**：`RANK_CHANGED_V2` / `PK_INFO` / `WIDGET_BANNER` / `UNIVERSAL_EVENT_GIFT(_V2)`（本次观察里一条都没出现，需 PK / 连麦 / 抽奖活动期的房间）；`is_show` 的展示语义见上一段的 `COMBO_SEND` 结论 |
 | A22-1 | 未归类命令的**规模** | 这些命令在真实流量里占多大比例 | 任一 ≥2 小时长连的 `CounterSnapshot` | **已实测**：2 小时 4 分收 6956 个业务包，其中 `unknown_cmd` **1887**（约 27%）；已直接观测到的命令名见 §10.0 的实测记录。这批命令偏**活动驱动**（PK / 抽奖 / 礼物 V2 管线），不随时可复现，需要在活动期抓样本 | §10.0 |
-| A23 | 人气值口径 | `POPULARITY_CHANGE.data.popularity` 与 `op=3` 心跳回应的数值是否为同一口径、更新频率差异 | 同一房间同时记录两类来源各 ≥10 个值 | **已实测（2026-09-12）**：两者**同一口径**，同房间先后给出同一个值（样本 `10643676`）；差异在频率——`POPULARITY_CHANGE` 是随事件推送（85 秒内 2 次），`op=3` 只随心跳回应（首个 60 秒后每 30 秒一次）。因此界面**以 `POPULARITY_CHANGE` 为主**、`op=3` 为兜底（两路都接）。**2026-09-12 展示口径变更**：界面不再展示人气值（用户反馈：该参数官方客户端也没实现），改为展示在线人数与累计看过（A22 补充的两个字段，见 §10.7 与契约 §5 `RoomStats`）；`op=3` 与 `POPULARITY_CHANGE` 两路口径依旧成立，只落 `debug` 日志 |
+| A23 | 人气值口径 | `POPULARITY_CHANGE.data.popularity` 与 `op=3` 心跳回应的数值是否为同一口径、更新频率差异 | 同一房间同时记录两类来源各 ≥10 个值 | **已实测（2026-09-12）**：两者**同一口径**，同房间先后给出同一个值（样本 `10643676`）；差异在频率——`POPULARITY_CHANGE` 是随事件推送（85 秒内 2 次），`op=3` 只随心跳回应（首个 60 秒后每 30 秒一次）。因此界面**以 `POPULARITY_CHANGE` 为主**、`op=3` 为兜底（两路都接）。**2026-09-12 展示口径变更**：界面不再展示人气值（用户反馈：该参数官方客户端也没实现），改为展示在线人数与累计看过（A22 补充的两个字段，见 §10.7 与契约 §5 `RoomStats`）；`op=3` 与 `POPULARITY_CHANGE` 两路口径依旧成立，只落 `debug` 日志。**2026-09-16**：首包心跳改为认证成功即发（§8.1），`op=3` 回应的起点随之提前——上面那句「首个 60 秒后」是**旧实现**观测到的节奏，不是上游的固有节拍 |
 | A24 | 上游主动断连的周期与诱因 | 是否为常态轮换、是否与心跳节奏或房间热度相关 | 连续多次 ≥2 小时长连，记录每次断连的时刻与间隔 | **已实测（2 小时 4 分）**：共 4 次断连，**全部由上游发起**（TLS `close_notify` / `Connection reset by peer`），间隔约 1 分钟 / 40 分钟 / 18 分钟，**无固定周期**；退避按 `5s→10s→20s→40s` 升级；期间 **HTTP 心跳失败 0 次**；每次断连后均自动恢复。结论：属上游常态轮换，不应视为故障 | §13.2、S1-AC2 |
 | A25 | `msg/send` 的请求形态 | 参数放 body 还是 query；`rnd` 的取值语义；`csrf` 与 `csrf_token` 是否必须是同一值；`w_rid` 是否必需 | 登录态下各发一条，用抓包或对照官方 web 客户端请求 | **已验证**：`application/x-www-form-urlencoded` body（含 `w_rid`、`csrf` / `csrf_token`）的上报被上游接受且弹幕成功出现；`rnd` 语义仍未知但不影响发送 | §11.1、`send.rs` |
 | A26 | 表情包库接口 | 端点路径、查询参数、是否需 WBI 签名、响应信封与字段名、包分类的判定依据 | 登录态下请求一次并比对原始响应 | **已实测（端点 2026-09-11 / 分类 2026-09-12）**：`GET /xlive/web-ucenter/v2/emoticon/GetEmoticons?platform=pc&room_id=<id>`（`platform=web` 被拒为 `code=500`）；信封 `data.data[]`；表情字段 `emoji`（显示文本）/`url`/`emoticon_unique`（房间专属形如 `room_<房间号>_<id>`）/`emoticon_id`——**不存在 `text` 字段**。**分类判据**：包级 `pkg_perm`/`unlock_identity`/`unlock_need_gift` 在实测的三个包里取值完全相同、不能用于分类；判据在**表情级**——`identity` 的语义取自**官方客户端的解锁文案映射**（`emoticonDanmakuPermCheck`）：`identity === 4` → 「加入主播的粉丝团」，`identity` 1/2/3 → 「开通主播的总督/提督/舰长」。由此：含 identity 4 或 `unlock_need_level > 0` → 粉丝牌包；只有 identity 1..=3 → **大航海包**；都没有（identity 99）→ 按 `pkg_type` 分通用（1）/ 房间（2）。**注意**：实测的一个包（「UP主大表情」）**同时含粉丝团与大航海门槛的表情**，因此包级分类只是近似， REQUIREMENTS §2.2 的「按身份分组」严格来说应按**表情级** `identity` 分组——这条留待后续决定 | `emote.rs` |
@@ -1003,7 +1171,7 @@ stateDiagram-v2
 | A26 补充之三（2026-09-12） | 无权限的表情能不能**置灰**：上游对「我无权使用」的表情是不返回、还是返回并带标记 | 表情级 `perm` 的取值与语义；能否用它唯一定出「我能不能用这个表情」 | 用两个身份不同的账号（在同一房间里一个有舰长身份、一个没有；两个都是使用者的账号）对**同一个房间**各拉一次 `GetEmoticons`，逐包逐表情比对 | **已实测**：上游**会**返回无权使用的表情，并在**表情级**用 `perm` 标明可用性。两边拿到**完全相同**的 3 个包 / 68 个表情（连顺序都一样），唯一差别是「舰长专属」那一批（`identity = 3`、`unlock_need_level = 1`，5 个）：无舰长身份的一侧 `perm = 0`，有舰长身份的一侧 `perm = 1`；`identity = 4`（粉丝团）那批两侧都是 `perm = 1`（两个账号都持有该房间的粉丝牌），`identity = 1/2`（总督/提督）两侧都是 `perm = 0`（都没有）。**包级** `pkg_perm` 三个包都是 `1`、包级 `unlock_*` 全为 0，对判定没用——判据只能取**表情级 `perm`**。⇒ 置灰判据 = `perm == 0`（字段缺失按可用处理），实现派生成 `Emote.locked`（`docs/contract.md` §5）；另有可用的解锁提示字段 `unlock_show_text` / `unlock_show_image` / `unlock_show_color`，本期未消费 | `emote.rs`、`model.rs` |
 | A27 | 举报接口 | 端点路径与表单字段集、理由的合法取值与映射、结果码集合、是否需要 WBI 签名 | 在公开测试房间对**自己刚发的那条**弹幕举报 | **已实测（2026-09-12，用户实操）**：界面走完整流程——先取 `dMReport/ForReason` 的理由清单，再 `POST dMReport/Report`，**全程无失败日志**（非 0 code 会经 IPC 层报错），即 `code=0` 成功。§11.5 的载荷形状（`reason` 文案 + 按文案反查的 `reason_id`，再带 `id_str`/`tuid`/`msg`/`dm_type`）因此有效；未上报的 `ts` / `sign`（取自弹幕 `check_info`）**看来不是必需**——缺失时上游仍接受 | `report.rs`、`chat_report` |
 | A28 | 关注列表接口 | 端点路径、分页参数名与页大小上限、响应信封、`room_id`/`uname`/`face`/`live_status`/分组名的真实字段名、`live_status` 口径 | 登录态下拉取并比对原始响应 | **已解决（2026-09-12，权威文档 + 实测吻合）**：端点 `GET /xlive/web-ucenter/v1/xfetter/GetWebList`；信封 `data.{rooms, list, count, not_living_num}`（`rooms` 与 `list` 内容相同，实测确认）。条目字段：`room_id`/`roomid`、`uid`、`uname`、`face`、`live_status`、`title`、`short_id`、`area*`、`tag_name` 等——实现里用的 `roomid`/`uname`/`face`/`live_status` 全部命中。**参数 `hit_ab`（默认 true）会影响字段值**：true 时拿到全部在播房间但 `online`/`short_id`/封面/链接等被置零，false 时只有前 10 个但字段齐全；本实现只用 `room_id`/`uname`/`face`/`live_status`，这几项**不受 `hit_ab` 影响**，因此保持默认即可。**补充（2026-09-12，实测）**：同一响应里另有 `liveTime`（本场开播**时刻**，Unix 秒，实测 `1789174974`）与 `online`（在线人数，实测约 `3739`）；注意还有一个 `live_time` 是「已开播**秒数**」（实测 `12699`），两者相加约等于当前时间，**不能混用**——实现取 `liveTime`。本实现的请求不带 `hit_ab`，实测这两个字段都有值。**注意：本端点不返回关注分组**（见 A34） **修正（2026-09-13 只读实测，两个账号交叉验证；用户报「关注但未开播的也一直没加载到主界面」）**：**本端点只返回在播房间**，未开播的一个都不给。证据：账号 A 关注 90 人、当时在播 0 人 → `count=0`、`list=[]`、`rooms=[]`，而 `not_living_num=90`；账号 B 关注 5 人、在播 0 人 → `not_living_num=5`、列表同样空。换 `page_size`（10/30/50/100）、翻到第 2/3 页、加 `type` / `sortRule` / `needNotLiving` / `includeNotLiving`、加带 `w_rid` 的 WBI 签名，均拿不到未开播条目（`hit_ab=false` 时连 `not_living_num` 也归零）。原始响应（脱敏）：`smoke/fixtures/follow-getweblist-raw.json`、`follow-getweblist-nohitab-raw.json`。⇒「关注了但没开播」**不是客户端丢的，是本端点根本不给**。未开播那一份的取法（已实现，`follow.rs`）：① **主站关注关系** `GET https://api.bilibili.com/x/relation/followings?vmid=<自己>&ps=50&pn=<页>` —— `data.total` 为全量关注数、`data.list[].mid` 为 uid（实测 total 90 = 本端点 `not_living_num` 90，两套上游对「关注了谁」口径一致）；② **直播批量房间信息** `GET /room/v1/Room/get_status_info_by_uids?uids[]=<uid>...` —— `data` 是**以 uid 为键的对象**（不是数组），条目字段名与本端点同构（`room_id`/`uid`/`uname`/`face`/`title`/`live_status`/`online`/`short_id`/`area*`/`tag_name`），**含未开播**。实测 90 个关注 → 70 个有直播间（另 20 个根本没有直播间，不产生列表项：没有房间可进），70 个当时全部未开播（65 条 `live_status=0` + 5 条 `=2` 轮播）。原始响应（脱敏）：`smoke/fixtures/follow-followings-raw.json`、`follow-status-raw.json`；由其派生的冒烟 IPC 载荷：`smoke/fixtures/follow-list.json`。**未开播条目拿不到「最后开播时刻」**（批量房间信息的 `live_time` 在未开播时为 0，`room/v1/Room/get_info` 的 `live_time` 是 `0000-00-00 00:00:00`）：`live_start_at` 只在对端给 `liveTime` 的**在播**条目上有值，未开播部分排序时落回 `online` / 房间号（`docs/ui.md` §2.2）。**脱敏口径**（这批夹具通用）：数字 id（房间号 / uid / mid / short_id / area id）→ **等长**合成号（首位原样、其余按出现序补零，唯一）；昵称 → 等长唯一掩码（bijective base-26 字母码）；标题 / 标签 / 分区名 / 签名 → 等长类保持掩码（字母数字 → `x`，非 ASCII → `＊`，标点原样）；CDN 地址尾段 → 等长 `x`。字段名与结构一律保留。 | `follow.rs`、`follow_list` |
-| A29 | 电池余额口径 | 端点路径、数值字段名（电池 / 金瓜子 / 银瓜子）、三者之间的关系与单位 | 登录态下请求一次，并与官方「电池」页显示值对照 | **已实测（2026-09-11）**：端点 `GET /xlive/revenue/v1/wallet/myWallet`——**此前四个候选（`revenue/v1|v2`、`app-ucenter`、`pay` 下的 `getUserWallet`）实测全部 404**；返回 `data.gold`（金瓜子）/`silver`/`bp`，**没有独立的「电池」字段**。口径：**电池 = gold / 100**，依据社区文档「金瓜子数量 / 100 = 电池数量」，并用同账号交叉验证（`gold=15000` ↔ 15 元 ↔ 150 电池）。`wallet_balance` 实测返回 **150** | `wallet.rs`、`wallet_balance` |
+| A29 | 电池余额口径 | 端点路径、数值字段名（电池 / 金瓜子 / 银瓜子）、三者之间的关系与单位 | 登录态下请求一次，并与官方「电池」页显示值对照 | **已实测（2026-09-11）**：端点 `GET /xlive/revenue/v1/wallet/myWallet`——**此前四个候选（`revenue/v1|v2`、`app-ucenter`、`pay` 下的 `getUserWallet`）实测全部 404**；返回 `data.gold`（金瓜子）/`silver`/`bp`，**没有独立的「电池」字段**。口径：**电池 = gold / 100**，依据社区文档「金瓜子数量 / 100 = 电池数量」，并用同账号交叉验证（`gold=15000` ↔ 15 元 ↔ 150 电池）。`wallet_balance` 实测返回 **150**。**换算链核对（2026-09-16，用户口径）**：1 元 = 10 电池、1 人气票 = 1 电池 ⇒ 1 电池 = 0.1 元 = **100 金瓜子**，与本条 `电池 = gold / 100` 逐项吻合；同一条链上 `gold = 15000` ↔ 15 元 ↔ 150 电池。它同时钉死了礼物侧的展示口径 `元 = 金瓜子 / 1000`（§10.2「金额单位」）——**别把礼物 `price` 当电池数**（那会差 10 倍） | `wallet.rs`、`wallet_balance` |
 | A30 | 进场回填的历史弹幕 | 能否在进房间时取到最近若干条；上限；字段；**调用前提** | 官方页面前端产物里检索 `dM/` 路径，并在在播房间上实测计数 | **已实测并已实现（2026-09-12）**：`GET /xlive/web-room/v1/dM/gethistory?roomid=<真实房间号>&room_type=<0|1>`（官方页面两个取值都观测到过）。`data.room` **恰好 10 条**（普通用户）+ `data.admin` **至多 10 条**（房管）= 最多 20；`limit` / `page_size` / `size` / `ps` / `page` / `offset` / `last_id` 实测均不加量——**不可翻页**。`timeline` 是**北京时间**秒级 `yyyy-MM-dd HH:mm:ss`（实测：UTC 00:49 时返回 08:49）。**调用前提（关键）**：需要完整的会话 Cookie——带完整 cookie 实测 **3/3 稳定**返回 10+10；只带 `buvid3` 时 **3/3 全空**；完全不带头时 2/3 空。**坑**：取不到时是 `code=0` + 空数组，**与「真的没有弹幕」无法区分**，调用方不得当成错误。字段含 `text` / `uid` / `nickname` / `timeline` / `isadmin` / `guard_level` / `id_str` / `user.medal.{name,level}`；**无文字颜色字段**（`color` 取 0）。实现见 `contract.md` §4.3、`ui.md` §4.7 |
 | A30 补充（2026-09-12） | `data.admin` 这一份该不该拼进历史 | 在「请求者本人是房管」与「不是房管」两类房间里各取一次，比对两份数组 | **已实测**：请求者自己是房管时，`data.admin` 的那 10 条几乎全是**请求者本人**最近的发言（实测 10 条里 9 条是本人），且时间整体早于 `data.room`；两条数组另有 4 条完全重合（同一 `id_str`）。因此「先房管后普通」的拼接在界面上就是「最近 10 条历史之前先铺一屏我自己的发言」＋重复条目——用户报告的「历史前面混入了本人的发言记录」正是这个，与本地发送记录无关。**处置：只取 `data.room`，按 `ts` 升序回填**。非房管房间里 `data.admin` 实测为空数组，说明它只在房管场景下才有内容 | `history.rs`、契约 §4.3、`ui.md` §4.7 |
 | A31 | 表情弹幕发送载荷的**编码** | 官方实现把 `emoticonOptions` 整体交给其请求器，本实现按 JSON 字符串放入表单——该编码是否被接受 | 用 `--emote <唯一键>` 或界面发送，核对回声 | **已实测（2026-09-12，用户实操）**：编码正确。同一账号同一房间的一组对照——`摸摸K头` / `来了来了` / `贴贴` 各自发送两次，走表情载荷的回声 `info[0][13]` 是表情对象，按普通文本发的则是空槽位 `"{}"`。§11.4 的载荷形状（`msg` = 唯一键、`dm_type=1`、`emoticonOptions`）因此全部成立 | `send.rs` |
@@ -1016,6 +1184,10 @@ stateDiagram-v2
 | A43 | **弹幕要不要画粉丝牌**（弹幕侧 `medal.is_light` / 身份侧 `data.medal.is_weared`） | 官方前端凭什么决定画不画一块粉丝牌；「持有牌」与「佩戴牌」是不是一回事 | ① 读官方直播间前端产物里弹幕行的渲染分支（材料取自 `live.bilibili.com` 实际加载的 chunk）；② 真实只读取数对照 `getInfoByUser` 的 `data.medal` | **已实测（2026-09-13）**：官方分支是 `if (F?.is_lighted) { 追加粉丝牌 }`，而 `is_lighted` 由 **`medal.is_light`** 派生 —— **没点亮的牌官方不画**，上游连 `v2_medal_color_*` 都给灰（实测 `#919298CC` / `#919298E6`；亮牌样本是 `#C770A4*`）。**身份侧是另一回事**：`getInfoByUser` 的 `data.medal` = `{cnt, is_weared, curr_weared, curr_show, lookup, up_medal:{level, medal_color, medal_name, uid}, up_medal_v2}` —— `up_medal` 只说**持有**（等级 / 牌名 / 颜色），佩戴与否在同层的 **`is_weared`**；实测某账号在某房间 `up_medal.level = 1` 而 `is_weared = false`，那块牌因此不该画 —— 用户当天报的「刚发出去会有一个 1 级本直播间粉丝牌」就是照 `up_medal` 画出来的。⇒ 判据落成两个字段：弹幕侧 `Message.medal_lit` ← `user.medal.is_light`、身份侧 `RoomSession.my_medal_worn` ← `data.medal.is_weared`，界面两处都按它们过滤。**同层的 `typ` 不参与过滤**：官方另一处按 `typ === 1` 取牌，但实测真实弹幕（含亮牌与灰牌两种）`typ` 都是 0，照它过滤会把真牌也藏掉，语义未实测故本实现不用 | `cmd.rs`、`history.rs`、`ws.rs`、`contract.md` §5、`ui.md` §4.2 / §4.4 |
 | A44 | **弹幕字数上限**（`RoomSession.danmaku_length`） | 官方对单条弹幕的字数上限是多少、从哪来；`@昵称` 前缀算不算在内；超限时是截断还是被拒、提示什么 | ① 读官方直播间前端产物（`live.bilibili.com` 实际加载的 chunk）里的发送前置检查；② 用真实登录态对 8 个房间（含公开测试房间 `1`）请求 `getInfoByUser`，读 `data.property.danmu.length`；③ 在官方页面输入超长文本，看截断位置与提示文案 | **已实测（2026-09-13）**：产物里的取值链是 `n = t.danmu_length \|\| 20` → `baseInfoUser.danmakuLengthLimit` → `inputLengthLimit = danmakuLengthLimit + tempAtUserName.length`（**`@昵称` 前缀不计入上限**）。上限取自进房接口 `getInfoByUser` 的 **`data.property.danmu.length`**：**当前账号 × 8 个房间（含房间 `1` / 5440）实测全是 40**；该字段缺失时官方前端回落 **20**。官方页面输入 60 个汉字 → **截断到 40**、提示「最多输入40个字哦~」，计数元素 `input-limit-hint` 显示 `已用/上限`。**未做逐字符发送标定**（没有一条一条发到被上游拒绝），因此「40 是上游硬上限」只由官方前端与进房接口佐证，未经发送侧验证；本实现按上游下发值在**输入侧**截断，与官方同一口径 | `ws.rs`（解析 `property.danmu.length`）、`model.rs` / `session.rs`（`RoomSession.danmaku_length` 透传）、`contract.md` §5、`ipc.md`、`ui.md` §6.1 |
 | A45 | **上游的「非 JSON 应答」**（风控验证页 / CDN 错误页 / 404 与 405 的纯文本）与客户端对它的解码路径 | `api.live.bilibili.com` 在什么条件下不回 JSON；客户端把这类应答当成什么 | 用真实登录态的 Cookie 与同一套 UA / Referer，对**房管只读**端点（`GET …/xbanned/banned/GetBlackList`）先按 7 次/秒连打 120 次、再 6 并发连打，逐条记录 HTTP 状态、`content-type` 与响应体开头；把同一形状的应答喂给本地桩上的 `BiliHttp`，对照改前的 `response.json::<Value>()` 与改后的分支（同一份桩也覆盖 502 与空体） | **部分实测（2026-09-13，公开测试房间 5440；用户报 issue 2609132259 #6「房管面板打开就报解码失败」）**：① **412 + `text/html` 实测**——上面那轮并发之后，同一端点在 HTTP/1.1 客户端上稳定回 `HTTP 412` + `content-type: text/html`，响应体 3400 字节，是 bilibili 的验证页（`<title>出错啦! - bilibili.com</title>`、`.txt-item.err-code`、验证码容器、`security.bilibili.com/static/js/412.js`）。② **404 / 405 是纯文本**：错误路径回 `404 page not found`、方法用错回 `Method Not Allowed`（Go 默认响应，**不是 JSON**）。③ **触发条件未确定**：先按 7 次/秒连打 120 次（全 200 + JSON），接着 6 并发连打时**第一条响应就是 412**；同一时刻 `reqwest`（rustls + HTTP/2，同账号同 Cookie）打同一端点仍是 200 → 风控看着按**客户端指纹 + 突发**判定，且给 412 的请求补上 `buvid3` / `buvid4` 仍是 412（这次拦截不认设备指纹这一项，别拿「少带 buvid」解释它）。因此**用户那一条报错出自哪个请求无法确定**（面板打开即并发三条只读列表，`silent_list` 还会按 `total_page` 逐页连打）。④ **改前的行为已用桩复核**：把 412 页面交给 `Response::json::<Value>()` → `is_decode() == true`、Display 恰为 `error decoding response body`，与用户原文逐字相同。⇒ 纪律：任何应答**先看状态码与 `content-type`**，不得直接当 JSON 解；失败文案必须带端点路径（**不含查询串与请求体**）、HTTP 状态、`content-type`、响应体前 128 字节（丢控制字符、抹疑似凭据、空体写「（空）」）；`GET` 仅在**非 4xx** 的非 JSON 上重试一次（幂等、无副作用），`POST` 一律不重试（可能已经生效） | `http.rs`（`get_with_cookies` / `post_form` 的解码分支）、`admin.rs` 三个只读列表、`ws.rs` 的 `getInfoByUser` |
+| A46 | **`getDanmuInfo` 的 `Cookie` 头数量与「身份同源」**（重复 `Cookie` 头是否影响弹幕下发） | 同一次请求带**两条** `Cookie` 头（账号 Cookie 一条 + `buvid3=…` 一条）时，上游按哪一条解释、会不会因此判成「身份不同源」而降低信任；合并成一条后「认证包 `uid` / Cookie 的 `buvid` / 换 token 的凭据」是否才算同源 | ① 本地先核对**线上形态**（不抓包）：桩服务器记录原始请求头，数 `Cookie` 行；② 再用真实登录态对同一房间两轮对照——「两条 `Cookie` 头」（改前形态，需临时改回）与「一条合并头」（改后形态）各连打若干次，记录 `getDanmuInfo` 的 `code`、随后 WS `op=7` 认证包的 `op=8` 结果，以及认证成功后**同一时间段**收到的 `DANMU_MSG` 条数 | **待实测校准**：本地形态已闭环（2026-09-16，只读单测 + 桩）——改前 `getDanmuInfo` **确实**发两条 `Cookie` 行（`SESSDATA=…; bili_jct=…; DedeUserID=…; buvid3=…` 与 `buvid3=…`，后者由 `RequestBuilder::header` 的 append 语义叠上去），改后**只有一条**且 `buvid3` 与账号字段同条。**合并规则**（`merge_cookie`）：账号字段在前、`buvid3` 追加在末尾（Cookie 顺序对服务端无语义，账号在前只为肉眼可辨）；账号 Cookie 自带 `buvid3` 时**以入参为准**（入参即进认证包 `buvid` 的那个值，同一条头里留两枚同名键只会让服务端无从取舍）。**仍未实测**：上游对重复 `Cookie` 头的容忍度、以及它是否就是「WS 连上了却收不到弹幕」的成因——本轮只证明客户端发的形态改了，没有任何服务端证据 | `http.rs`（`merge_cookie` / `without_cookie_pair` / `get_request` / `get_with_buvid3` / `danmu_info`）、`ws.rs`（`buvid3` 与认证包同源）。**同一症状（连上却收不到弹幕）的另两个候选成因见 A47** |
+| A47 | **服务端是否要求我方回 ack**（WS `op=24` SocketAck / HTTP `POST /xlive/open-interface/v1/dm/message_ack`） | ① 我们真实收到的 `op=5` 里有没有带 ack 标记的消息（`msg_id` / `p_is_ack`）——有则说明该机制在我们这条链路上真实存在；② 帧头 `seq` 是否 `> 1`（HTTP 那条的触发条件）；③ 若不回 ack，是否影响后续下发（同一房间同一时段的对照窗口） | ① **官方产物证据（已核，2026-09-16 只读）**：两条机制都写在 `room-player.<hash>.prod.min.js` 里——`processSingleMessageReply` 在 `msg_id && p_is_ack` 时发 `op=24`，`onReceivedMessage(e, t)` 在 `t > 1` 时 `POST /xlive/open-interface/v1/dm/message_ack`（`t` = 帧头 `seq`）；**两条都与身份无关**（该 WS 客户端对 uid 零分支，产物里 `isAnchor` 只出现在页面 UI 权限判断处，`isAnchor`/`isOwner`/`is_uper` 在 WS 客户端模块里 0 命中）。② **我方游客态一轮采集（本轮未命中）**：`DANMUBOX_LOG=debug cargo run -p danmubox-cli -- watch 5440 --seconds 300 2> capture.log`，然后 `grep -c '\"msg_id\"' capture.log`、`grep -c '\"p_is_ack\"' capture.log`、`grep -n 'seq' capture.log`（前两条看原始载荷，第三条看帧头） | **未实测 / 未命中（2026-09-16 游客态 3 分钟采集，公开测试房间 5440；470 包 / 185 条消息 / `mirrored_dropped` 19）**：原始载荷里 `msg_id` 与 `p_is_ack` **各 0 命中**（`danmubox::raw` 打印了全部 185 条业务载荷原文）⇒ **「服务端要求我们回 `op=24` ack」这条在本轮观测里没有出现**；帧头 `seq` **本轮未采样**（`proto.rs` 解析出 `Header.seq` 但没有任何代码路径打印它，`danmubox::raw` 打的是载荷 JSON）⇒ **HTTP `message_ack` 的触发条件本轮无法判定**（要判定得先在 `ws.rs` 读循环补一条带 `seq` 的 `debug` 日志或临时桩）。仍未闭环：这两个标记是否只在特定房间 / 特定身份下出现、以及不回 ack 是否就是「连上却收不到消息」的成因（需要受影响账号上的真实对照） | `ws.rs`（出站补 `op=24`）、`http.rs`（补 `message_ack`）、§5、§11.7 |
+| A46 | **`getDanmuInfo` 的 `Cookie` 头数量与「身份同源」**（重复 `Cookie` 头是否影响弹幕下发） | 同一次请求带**两条** `Cookie` 头（账号 Cookie 一条 + `buvid3=…` 一条）时，上游按哪一条解释、会不会因此判成「身份不同源」而降低信任；合并成一条后「认证包 `uid` / Cookie 的 `buvid` / 换 token 的凭据」是否才算同源 | ① 本地先核对**线上形态**（不抓包）：桩服务器记录原始请求头，数 `Cookie` 行；② 再用真实登录态对同一房间两轮对照——「两条 `Cookie` 头」（改前形态，需临时改回）与「一条合并头」（改后形态）各连打若干次，记录 `getDanmuInfo` 的 `code`、随后 WS `op=7` 认证包的 `op=8` 结果，以及认证成功后**同一时间段**收到的 `DANMU_MSG` 条数 | **待实测校准**：本地形态已闭环（2026-09-16，只读单测 + 桩）——改前 `getDanmuInfo` **确实**发两条 `Cookie` 行（`SESSDATA=…; bili_jct=…; DedeUserID=…; buvid3=…` 与 `buvid3=…`，后者由 `RequestBuilder::header` 的 append 语义叠上去），改后**只有一条**且 `buvid3` 与账号字段同条。**合并规则**（`merge_cookie`）：账号字段在前、`buvid3` 追加在末尾（Cookie 顺序对服务端无语义，账号在前只为肉眼可辨）；账号 Cookie 自带 `buvid3` 时**以入参为准**（入参即进认证包 `buvid` 的那个值，同一条头里留两枚同名键只会让服务端无从取舍）。**仍未实测**：上游对重复 `Cookie` 头的容忍度、以及它是否就是「WS 连上了却收不到弹幕」的成因——本轮只证明客户端发的形态改了，没有任何服务端证据 | `http.rs`（`merge_cookie` / `without_cookie_pair` / `get_request` / `get_with_buvid3` / `danmu_info`）、`ws.rs`（`buvid3` 与认证包同源） |
+| A48 | **Android 把诊断报告写进公共下载目录（MediaStore）在真机上的行为** | 报告是否恰好一个、是否出现在真机文件管理器 / 相册外的「下载」里、API 29+ 是否真的**不需要任何权限**（本应用只声明 `INTERNET` 与保活那三枚 + `POST_NOTIFICATIONS`）；API 24–28（无 `MediaStore.Downloads`、且没有 `WRITE_EXTERNAL_STORAGE`）是否**明确报错**而不是静默写进别处 | ① 模拟器（本地 AVD android-35）上走一遍：房间内点「一键诊断」→ 等窗口结束 → `adb shell ls -l /sdcard/Download` 与 `adb pull`；② 真机上重复同一动作（含面板上的「复制路径」）；③ 若有 API 24–28 设备，确认返回的是那条「不支持」错误文案 | **待实测校准**：模拟器一档已闭环（结论与证据见 `docs/operations.md` §2.9）；**真机、多外部存储卷、API 24–28 三档均未验** | `apps/desktop/src-tauri/gen/android/app/src/main/java/dev/kksk/danmubox/DiagnosePlugin.kt`、`apps/desktop/src-tauri/src/diagnose.rs` |
 
 ---
 
@@ -1041,7 +1213,7 @@ stateDiagram-v2
 | 真实峰值消息速率与 `kind` 分布 | 前端按帧批量写入 store，不向 core 回压 | 热房间连续连接 30 分钟，按 `kind` 统计每秒条数，取 p99 | 以实测 p99 校准前端每帧处理行数与 `overscan`（§7.1） |
 | `interact` 洪水占比 | 逐条渲染（不折叠，见 §8.4） | 统计 `INTERACT_WORD` / `INTERACT_WORD_V2` 每秒条数 | 以实测 p99 校准前端每帧处理行数与 `overscan`（§7.1） |
 | SC 卡片配色档位边界 | 本地 5 档梯度 `--sc-1 … --sc-5` | 对照 B 站网页端 SC 卡片，记录 `amount` 与背景色对应关系 | 校准 SC token 与档位分界 |
-| `amount` 单位与取值区间 | 按整数直接格式化显示 | 记录 `SEND_GIFT` / `SUPER_CHAT_MESSAGE` 的 `amount` 原始值 | 修正金额格式化与礼物栏合并展示（§5.3、§8.4） |
+| `amount` 单位与取值区间 | **单位口径已定（2026-09-16）**：SC 的 `amount` 是元、礼物与大航海是金瓜子，界面展示一律按元换算（`元 = 金瓜子 / 1000`，见 §10.2「金额单位」与契约 §5）；`amount <= 0` 不画金额格 | 抓一条真实礼物 / 大航海载荷（`SEND_GIFT_V2` 已有，但没人记录过它的 `price` 与官方页面标价的对照），与同一礼物的官方礼物面板标价对照一次；只读，不需要真的送礼 | 若对照结果不是 `/1000`，只需改 `apps/desktop/ui/src/filtering.ts` 里 `COINS_PER_YUAN` 一处并回填 §10.2 |
 | 徽标视觉与优先级 | 主播 > 房管；大航海槽并列（§4.2） | 对照官方聊天框观察同时具备房管与舰长身份用户的徽标排列 | 校准 §4.2 槽位与并列规则 |
 | 粉丝牌最长名称与等级位数 | 截断 8 / 3 字符 | 实测 `medal_name` 长度分布与 `medal_level` 最大值 | 调整截断阈值 |
 | 舰长三级文案 | 「总督 / 提督 / 舰长」 | 对照 `GUARD_BUY` / `USER_TOAST_MSG` 原始文案 | 校准 `guard` 行文案 |

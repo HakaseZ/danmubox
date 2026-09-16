@@ -89,6 +89,7 @@ danmubox/
 | 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android 应用私有目录——**实现口径**：由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，不是其下的 `files/` 子目录），`danmubox-core` 保持平台无关、不写死平台路径 |
 | 凭据文件 | `config.toml`，权限 **0600**，见 §4.1 |
 | 偏好文件 | `prefs.json`，见 §4.2 |
+| 诊断导出文件 | `danmubox-diagnose-YYYYMMDD-HHMMSS.txt`（UTC）；桌面写主目录下的 `Downloads`（不存在则回退主目录），Android 经 MediaStore 写公共 `Download`；**一次诊断恰好一个文件**，见 §4.4 |
 | 弹幕内存缓冲 | 单次房内会话内 5000 条环形缓冲，离开房间即销毁，见 §4.3 |
 | WS 心跳 | 30 秒（op=2）；连接后首包 60 秒内发出，收到 op=3 回应后重置为 30 秒 |
 | HTTP 心跳 | 60 秒一次，见 §6 |
@@ -159,6 +160,21 @@ sessdata = ""
 - 若将来需要跨会话历史，方案是**追加式 JSONL 文件**（按天分片），不引入数据库；届时另立 ADR。
 - **不引入数据库**（[`decisions/0005-no-local-database.md`](decisions/0005-no-local-database.md)）：落库相关的字段与机制（`dedup_key`、`raw` 保留、`user_version` 迁移、索引、WAL、单写者 actor、保留天数、行数上限清理）不存在，文档与代码中不得出现。
 
+### 4.4 一键诊断的导出文件（规范性）
+
+需求直接来源：用户 2026-09-16 追加（非 `REQUIREMENTS.md` 原文）——「连上了却收不到弹幕」这条问题要能闭环，
+得让用户把连接诊断**交得出来**；同一条口径也把 `docs/testing.md` §10.5 那条遗留（Android 侧没有可打开的业务日志入口）一并解决。
+
+- **一次诊断恰好一个文件**：文件名 `danmubox-diagnose-YYYYMMDD-HHMMSS.txt`，时间取 **UTC**（与报告头一致，全仓不引入本地时区换算）。
+- **位置**：macOS / Windows / Linux 写**用户主目录下的 `Downloads`**（该目录不存在时回退到主目录）；Android 经 **MediaStore** 写**公共 `Download`**（API 29+ 不需要任何权限，本应用只声明 `INTERNET`）。
+  **不写**应用私有目录、不写这两个位置之外的任何地方；跑完不留临时文件。
+- **采集窗口固定 180 秒**（可提前结束）；窗口内收集连接事实与日志行，窗口到点或提前结束时导出。
+- **文件必须可安全发给别人**：凭据 / uid / 昵称按 §4.1 的安全红线与 `crates/danmubox-bili/src/redact.rs` 的口径抹成 `***`；
+  **房间号也抹掉**——日志里房间号是刻意保留的排障主键，这份要外发的文件不是（`operations.md` §3）。
+- **导出后立即清空**内存里的采集内容（含最近几次连接的事实）。
+- 与 §4.3 **不冲突**：§4.3 禁的是**弹幕内容**的落库 / 回看 / 导出；本文件不含弹幕原文
+  （`danmubox::raw` 那条逐条原始载荷的 debug 日志不进文件），只有连接事实与脱敏后的日志行。
+
 ## 5. 领域模型（规范性）
 
 `kind` 取值只有六种：`danmaku` | `gift` | `superchat` | `interact` | `guard` | `system`。
@@ -182,7 +198,7 @@ sessdata = ""
 | `medal_guard_level` | i64 | 发送者**粉丝牌自身**的舰长标记（上游 `user.medal.guard_level`）——那是**牌子所属房间**的身份，只用于牌面样式，**不得**拿来画本房间的舰长标（`protocol.md` A39：拿它画标就是把别的房间的身份按到本房间头上） |
 | `is_admin` | bool | 发送者是否房管（REQUIREMENTS.md 需求） |
 | `is_history` | bool | 是否来自进场回填（§4.3）；实时推送恒为 `false` |
-| `amount` | i64 | 礼物金瓜子或 SC 金额，非交易类为 0 |
+| `amount` | i64 | 金额：**礼物与大航海是金瓜子数，SC 是元**，非交易类为 `0`。界面展示一律按**元**（换算见本节「金额单位」） |
 | `combo_id` | string | 礼物连击标识（上游 `batch_combo_id`，见 `protocol.md` §10.2）；非连击类消息为空串，同一次连击的每条礼物共用它，界面据此聚合，折叠规则见 `ui.md` §8.4 |
 | `emote` | object \| null | 表情弹幕的**整份**表情信息（`EmoteRef`，见下）；非表情弹幕为 `null`。两种来源都算「表情弹幕」：① `info[0][13]` 是对象（`dm_type=1`，图在槽位里）；② **正文整条恰好是一个文字表情 token**（`[dog]` 这类，图在 `extra.emots[正文]` 里，见 `protocol.md` §10.1.x / A42）。正文里夹着别的字时**不设**本字段（本字段是「整条画图」语义，设了会吞掉正文）。存整份而非只存图片地址：渲染要用它（见下）。
 | `reply_to_uid` | i64 | 被回复者的 uid；`0` 表示这条不是回复（上游把它塞在 `info[0][15].extra` 这个 JSON 字符串里，历史条目另有其路径） |
@@ -196,6 +212,16 @@ sessdata = ""
 | `medal_color_border` | string | 同上（`v2_medal_color_border`） |
 | `medal_color_text` | string | 同上（`v2_medal_color_text`）。**空串不是颜色**，界面必须自备兜底色，不得拿黑色顶替 |
 | `upstream_id` | string | **上游弹幕标识，举报必需**（来源待实测，见 `protocol.md` 附录） |
+
+> **金额单位（规范性，2026-09-16）**：`amount` 的**上游取值口径**按 kind 分两种 —— 礼物与大航海是**金瓜子**、
+> SC 是**元**（依据见 `protocol.md` §10.2 / §10.3 / §10.6 的字段表与附录 A8 / A9 / A12）。
+> **界面展示一律是元**：SC 原值即元、不再换算；礼物与大航海按 **`元 = 金瓜子 / 1000`** 换算
+> （换算式的出处：社区协议文档对礼物 `price` 的口径就是「该值 / 1000 的单位为元」，
+> 与 SC 载荷里实测到的 `rate = 1000` 吻合，大航海同为 CNY × 1000）。
+> 整数元不显示小数、非整数保留必要小数（金瓜子 ÷ 1000 最多三位，故小数位上限定为 3）：
+> `138000` → `138 元`、`100` → `0.1 元`（`ui.md` §5.3）。
+> **不得**把 `price` 当电池数：金瓜子与电池另有比值 **1 电池 = 100 金瓜子 = 0.1 元**（即 1 元 = 10 电池，
+> 用户 2026-09-16 口径；与 `protocol.md` A29 实测的 `电池 = gold / 100` 一致），按电池换算会差 10 倍。
 
 > **界面自造的行（乐观渲染，2026-09-13）**：发送弹幕时界面会**先**在列表末尾插一条自己的行，
 > 它带三个**只在界面内存里存在**的东西：`local_id` 取**负数**（真实 `local_id` 恒为正，因此永不碰撞）、
@@ -313,8 +339,16 @@ sessdata = ""
 - 包结构：16 字节大端头 `packetLen:u32 | headerLen:u16(=16) | protover:u16 | op:u32 | seq:u32`。
 - **protover 是载荷编码版本**：`0` 裸 JSON / `1` 认证与心跳包的帧头版本 / `2` zlib / `3` brotli。请求固定用 `3`。
 - **op 才是包类型**：`2` 心跳 / `3` 心跳回应（人气值）/ `5` 业务消息 / `7` 认证 / `8` 认证成功。
+  > **差异注（2026-09-16，不改上行取值）**：官方产物里还有一个 `24` = SocketAck（客户端→服务端，body `{msg_id, cmd, p_msg_type}`，
+  > 触发 `msg_id && p_is_ack`）；**本仓未实现**。另有 HTTP 侧同类回执 `POST /xlive/open-interface/v1/dm/message_ack`，**本仓也未实现**。
+  > 两条机制与身份无关、**我方 2026-09-16 游客态采集里均未命中触发条件**（`msg_id` / `p_is_ack` 各 0 命中，帧头 `seq` 未采样）——见 `protocol.md` §5 / §11.7 / 附录 A47。
 - 认证包（op=7，帧头 `protover=1`）：body JSON `{ "uid", "roomid", "protover": 3, "buvid", "platform": "web", "type": 2, "key" }`；游客 `uid=0`、`key=""`。
+  > **差异注（2026-09-16，不改上行列出的字段）**：官方 web 客户端的认证包**比我们多三个字段**——
+  > `support_ack: true`、`queue_uuid`、`scene`（官方 `scene: t.extra.scene || ""`，**具体取值未确定**）。
+  > **本仓不发送这三个字段**——这是**现状记录**，不是规范要求；取证与限定见 `protocol.md` §7.1。
 - WS 心跳包（op=2，帧头 `protover=1`）：body 为字面量 `[object Object]`。（参考实现中 Go 侧发空 body 亦稳定；以 Python 侧与官方 web 客户端行为为准。）
+  > **旁证（2026-09-16）**：官方产物发的心跳体与本行**逐字节一致**（官方传对象 `{}`，`TextEncoder.encode({})` 先把入参 `ToString` 成 `"[object Object]"`）。
+  > **首包时机**：官方在收到 `op=8 code=0` 的同一次回调内**立即**发首包（不是等 60 秒；§4 的 60 秒是上界），随后每 30 秒一次——见 `protocol.md` §8.1。
 - **HTTP 心跳（易漏，务必实现）**：每 60 秒 `GET https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat`，参数 `pf=web` 与 `hb=base64("60|<真实room_id>|1|0")`。缺它连接会被上游判死。
 - `op=5` 的 body 解压后可能仍是「多个 16 字节头子包」的拼接，必须循环按头拆分直到消费完；子包 protover 可能再次为 2 或 3。
 - `op=3` 的 body 为 4 字节大端无符号整数，即人气值。
@@ -368,6 +402,8 @@ Frontend → Rust 命令（`invoke`）。本节是**命令名索引**，与 `app
 | `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持 |
 | `prefs_get` | 读偏好生效值全集（默认值已合并，见 §8） |
 | `prefs_set` | 写偏好补丁；未知键或非法值 → `BAD_REQUEST`，成功返回合并后的生效值全集 |
+| `diagnose_start` | 一键诊断：开始采集连接诊断（窗口 180 秒，见 §4.4）。同步命令：只写窗口的起止时刻，不碰 IO |
+| `diagnose_export` | 一键诊断：渲染并写出**恰好一个**报告文件（§4.4 的位置与命名）、结束采集并清空采集内容。返回 `{ path, name, bytes, attempts, logs, started_ms, ends_ms }`：`path` 是给用户看的位置（桌面端绝对路径、Android 为 `/sdcard/Download/…`） |
 | `frontend_log` | 前端控制台桥上报：`level` 为 `error` / `warn`（其余按 debug），`target = "danmubox::ui"`。页面 `console.error` / `console.warn` 与未捕获错误经它并入 Rust 侧同一份日志；同一告警 1 秒内只上报一次，防「渲染 → 告警 → 日志 → 重渲染」反馈环（`DANMUBOX_LOG` 见 §4） |
 
 Rust → Frontend 事件：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
@@ -391,6 +427,10 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.pause_on_hover` | boolean | `true` | 鼠标悬停暂停自动滚动 |
 | `ui.gift_in_danmaku` | boolean | `true` | 弹幕流里是否包含礼物 / SC / 大航海（`false` = 它们不出现在弹幕流里） |
 | `ui.gift_panel` | boolean | `true` | 是否显示独立礼物栏（`false` = 不渲染礼物栏） |
+| `ui.gift_pane_on_top` | boolean | `false` | 礼物栏与弹幕区**上下分区**的顺序：`false` = 弹幕在上、礼物在下（默认，与改前一致）；`true` = 礼物在上。分区、分割条与长按换位见 [`ui.md`](ui.md) §5.4 |
+| `ui.gift_pane_ratio` | number | `0.35` | 礼物栏占**共享分区**高度的份额，范围 0.10–0.90；与它在上面还是下面**无关**（换位不改比例）。落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 它的折叠头、弹幕区 ≥ 3 行），因此存的是**指针意图**——同一窗口尺寸下重开必然得到同一画面 |
+| `ui.gift_collapse_cheap` | boolean | `false` | **礼物栏**里把单个价值 ≤ 0.1 元（= 100 金瓜子）的礼物合并成**一条**（`false` = 默认，一条一行不变）。只作用礼物栏，弹幕流的分支不受影响；SC / 大航海不在其列。门槛、落点判据与合并行的形状见 [`ui.md`](ui.md) §5.3「低价礼物桶」 |
+| `ui.gift_exclude_cheap_stats` | boolean | `false` | 把 ≤ 0.1 元的礼物从**折叠汇总 / 统计**里剔除（`false` = 默认，统计与展示一致）。**只改统计**：这些礼物作为消息的展示（礼物栏条目、弹幕流分支）不受影响 |
 | `ui.interact_auto_hide` | boolean | `true` | 互动/进场消息显示一会儿后自动消失（`false` = 常驻） |
 | `ui.show_timestamp` | boolean | `false` | 弹幕前是否显示时间戳（用户 2026-09-12 反馈：要可开关） |
 | `composer.phrases` | string[] | `[]` | 自定义短语（需求 §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
@@ -406,6 +446,20 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 `ui.gift_in_danmaku` / `ui.gift_panel` 对应 REQUIREMENTS.md「可以配置独立一个礼物栏或者礼物混合在弹幕栏中」：
 两者**互相独立**（旧键 `ui.gift_panel_mode` 的 `merged` / `separate` 是一个二选一的门，表达不了「都显示」或「都不显示」）。
 礼物栏自身的结构与统计口径见 [`ui.md`](ui.md) §5。
+
+`ui.gift_pane_on_top` / `ui.gift_pane_ratio` 是**礼物栏与弹幕区共享一块上下分区**时的两枚键（issue #8，用户 2026-09-16）：
+顺序与份额**持久化**，重开应用保持；两者都只在 `ui.gift_panel` 为真时有意义（关掉那一枚时共享区域退化为弹幕区全高，
+分割条不渲染）。取值域与非法值口径与其他键一致：写入非法值 `BAD_REQUEST`、文件里的非法值按未知键忽略并回落默认值（§4.2）。
+
+`ui.gift_collapse_cheap` / `ui.gift_exclude_cheap_stats` 是**低价礼物**的两枚开关（issue 2609162056 第 3、4 条）：
+
+| 项 | 口径 |
+|---|---|
+| 门槛 | **单个价值 ≤ 0.1 元**（`ui.md` 与界面一律按元口径；按 §5「金额单位」的 1 元 = 1000 金瓜子，即 `amount ≤ 100` 金瓜子）。礼物 / SC / 大航海的 `amount` 金瓜子口径见 §5 |
+| 上游没给价（`amount <= 0`） | **不算低价**：§5 的既有口径里 `amount <= 0` 表示上游没给价（不得猜价，界面也不画金额格）。两枚开关因此都不碰它 —— 不然「不知道多少钱」会被当成「0.1 元以下」处理 |
+| 只管礼物 | 只有 `kind = "gift"` 参与判定；SC 与大航海不受这两枚键影响（订单形态与价位都不同，SC 最低 30 元、舰长 138 元） |
+| 两枚互相独立 | 折叠只改礼物栏的分组形状，剔除只改统计口径；四种组合都有确定行为（`ui.md` §8.5） |
+| 默认都是 `false` | **默认行为与改前逐字一致**：多数人的现有效果不该被这两条辅助开关改变（用户 2026-09-16 的新批）；要用的自己勾 |
 
 读写语义（对 `prefs_get` / `prefs_set` 生效）：读返回全部键的**生效值**（默认值已合并）；写接受部分键值补丁，未知键或非法值报 `BAD_REQUEST`，成功返回合并后的生效值全集。
 
@@ -424,7 +478,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 |---|---|
 | 看弹幕 / 发弹幕 | §5、§6 |
 | 三端（macOS / Windows / Android） | §2、§3 依赖方向 |
-| 醒目留言（SC）与礼物金额 | §5 `Message.amount`、§6 |
+| 醒目留言（SC）与礼物金额 | §5 `Message.amount`、§6（**展示单位一律是元**，换算式见 §5「金额单位」） |
 | 表情弹幕发送 | §3 `DanmakuSender`、§5 `Message.emote` / `EmoteRef` |
 | @ 与回复他人 | §5 `Message.reply_to_uid` / `reply_to_uname`、`protocol.md` §11.6 |
 | 按用户身份加载表情包库 | §3 `EmoteProvider`、§5 `Emote` / `RoomSession`、§7 `emotes_list` |
@@ -435,6 +489,9 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 房管身份 | §5 `is_admin` |
 | 本房间粉丝牌等级 | §5 `RoomSession.my_medal_level` |
 | 礼物事件 / 独立礼物栏或混合 | §8 `ui.gift_in_danmaku` / `ui.gift_panel` |
+| 礼物栏与弹幕区共享上下分区、可拖动分割条、长按拖拽换位（issue #8，用户 2026-09-16） | §8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`、`ui.md` §5.4 |
+| 辅助功能：折叠低价礼物 / 剔除低价礼物统计（单个价值 ≤ 0.1 元，issue 2609162056 第 3、4 条） | §8 `ui.gift_collapse_cheap` / `ui.gift_exclude_cheap_stats`、`ui.md` §5.3「低价礼物桶」、`ui.md` §8.5 |
+| 筛选面板两块标题「醒目一些」（只改视觉层级，issue 2609162056 第 5 条） | `ui.md` §8.5（「两块标题」一行） |
 | 关注列表 + 直播中置顶 | §5 `FollowedRoom`、§7 `follow_list` |
 | 房间列表 / 标签条用主播昵称或标题标识（不露房间号） | §5 `Room.anchor_uname` / `title`、`ui.md` §2.2 |
 | 发言失败原因（全局/直播间禁言、等级、频率） | §5 `SendOutcome` |
@@ -457,6 +514,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 草稿与最近发送记录（会话内） | §4.3 |
 | bundle id 变更 | §1 |
 | 前端日志并入后端日志（控制台桥） | §7 `frontend_log`、§4 `DANMUBOX_LOG` |
+| 一键诊断：导出连接诊断文件（用户 2026-09-16 追加，非 REQUIREMENTS.md 原文；同时解决 `testing.md` §10.5 的「Android 没有可打开的业务日志入口」） | §4.4、§7 `diagnose_start` / `diagnose_export`、`ui.md` §3.6、`operations.md` §2.9 |
 
 > 已移除需求的历史清单见 [`../CHANGELOG.md`](../CHANGELOG.md) 的 Removed 段。
 

@@ -376,6 +376,32 @@ export interface AppInfo {
   logged_in: boolean;
 }
 
+/**
+ * 一键诊断：一次采集窗口（契约 §7 `diagnose_start`）。
+ *
+ * 两端都是 UTC 毫秒；界面按 `ends_ms` 倒计时，到点自动收工（`docs/ui.md` §3.6）。
+ */
+export interface DiagnoseStart {
+  started_ms: number;
+  ends_ms: number;
+}
+
+/**
+ * 一键诊断的导出结果（契约 §7 `diagnose_export`）。
+ *
+ * `path` 是**给用户看的位置**：桌面端是 `~/Downloads/danmubox-diagnose-….txt`，
+ * Android 是 `/sdcard/Download/danmubox-diagnose-….txt`。一次诊断只产生这一个文件。
+ */
+export interface DiagnoseExport {
+  path: string;
+  name: string;
+  bytes: number;
+  attempts: number;
+  logs: number;
+  started_ms: number | null;
+  ends_ms: number | null;
+}
+
 export interface Prefs {
   "ui.font_scale": number;
   "ui.theme": "system" | "dark" | "light";
@@ -389,6 +415,27 @@ export interface Prefs {
   "ui.gift_in_danmaku": boolean;
   /** 是否显示输入区下方的**独立礼物栏**（契约 §8）。关掉它只是不画那一条，不影响弹幕流。 */
   "ui.gift_panel": boolean;
+  /**
+   * 礼物栏与弹幕区**共享上下分区**时礼物栏在不在上半（契约 §8，issue #8）。
+   * `false`（默认）= 弹幕在上、礼物在下，与改前一致；换位入口 = 长按任一栏 0.5s 拖到另一栏松手。
+   */
+  "ui.gift_pane_on_top": boolean;
+  /**
+   * 礼物栏占共享分区高度的**份额**（契约 §8，0.10–0.90，默认 0.35）。
+   * 与它在上面还是下面无关（换位不改比例）；落到像素时再被两栏最小高度夹一次
+   * （礼物栏 ≥ 折叠头、弹幕区 ≥ 3 行），所以存的是指针意图而不是实测像素。
+   */
+  "ui.gift_pane_ratio": number;
+  /**
+   * **礼物栏**里把单个价值 ≤ 0.1 元的礼物合并成一条（契约 §8，默认 `false` = 一条一行不变）。
+   * 只作用礼物栏：弹幕流的分支不受影响，SC / 大航海不在其列（docs/ui.md §5.3「低价礼物桶」）。
+   */
+  "ui.gift_collapse_cheap": boolean;
+  /**
+   * 把 ≤ 0.1 元的礼物从**折叠汇总 / 统计**里剔除（契约 §8，默认 `false` = 统计与展示一致）。
+   * 只改统计口径：这些礼物作为消息的展示（礼物栏条目、弹幕流分支）不受影响。
+   */
+  "ui.gift_exclude_cheap_stats": boolean;
   /** 互动/进场消息显示一会儿后自动消失；关掉则常驻。 */
   "ui.interact_auto_hide": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */

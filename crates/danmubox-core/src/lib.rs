@@ -6,6 +6,7 @@
 
 pub mod bus;
 pub mod config;
+pub mod diagnose;
 pub mod error;
 pub mod model;
 pub mod paths;
@@ -20,7 +21,7 @@ pub use model::{
     sort_followed, BlacklistedUser, Emote, EmotePackage, EmoteRef, FollowedRoom, Message,
     MessageKind, ReportReason, Room, RoomSession, SendOutcome, SilentUser,
 };
-pub use paths::{config_path, data_dir, prefs_path};
+pub use paths::{config_path, data_dir, downloads_dir, prefs_path};
 pub use prefs::Prefs;
 pub use session::{HistoryQuery, MessageBuffer, RoomRuntime};
 

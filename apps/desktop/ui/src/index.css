@@ -14,6 +14,25 @@ body,
   margin: 0;
 }
 
+/* 视口锁定：**文档自己永不滚动**，要滚的东西全部在内部容器里（房间列表的 `.listPage`、
+   弹幕列表的 `.scroller`、各面板内部的可滚区）。
+   为什么非锁不可：安卓的键盘避让走的是「界面自补内边距」这一条机制 —— 原生把
+   `systemBars() or ime()` 的高度下发成 `--safe-bottom`（`gen/android/.../MainActivity.kt`），
+   `body` 用它留出底部内边距，窗口本身**不**为键盘 resize
+   （`AndroidManifest.xml` 的 `windowSoftInputMode="adjustNothing"` 把这条钉死）。
+   这条链子只要被谁再叠一次（某个平台版本又替我们 resize 了一次视口、或内部某层内容比容器高），
+   多出来的那一截就会把**文档级滚动区**撑出来：手指在弹幕列表上滑到底之后会**接力**滚它，
+   整个界面（含房间顶栏）被顶上去、底边露出画布色 —— 用户 2026-09-16 报的就是这个。
+   所以这里把三层一起锁死：高度取**动态视口**（`100dvh`，不支持的引擎落回上面的 `100%`），
+   且 html 自己的 overflow 也是 hidden（根元素的 overflow 会传播给视口，写在这里就等于
+   「视口不可滚」），中间任何一层都不可能把溢出透到文档级滚动区里去。 */
+html {
+  height: 100dvh;
+  overflow: hidden;
+  /* 根这一层不做任何滚动效果：既不要越界回弹，也不要安卓的下拉刷新 —— 所有滚动都在内部容器里。 */
+  overscroll-behavior: none;
+}
+
 body {
   background: var(--bg);
   color: var(--fg);
@@ -22,7 +41,10 @@ body {
   /* em 刻度盘的根：--fs-root 是唯一基准；只有弹幕区再乘 `ui.font_scale`（docs/ui.md §8.2） */
   font-size: var(--fs-root);
   line-height: 1.5;
+  /* 视口高（动态）+ 内部裁剪：body 是「界面真正能用的那块」的唯一权威，见上面 html 那段。 */
+  height: 100dvh;
   overflow: hidden;
+  overscroll-behavior: none;
   /* 让开系统栏（状态栏 / 手势栏 / 刘海）：Android 的外壳是 edge-to-edge，窗口与 WebView
      都铺满整屏，顶栏会压在状态栏里、输入区会压在手势栏下（`env(safe-area-inset-*)` 在
      Android WebView 上只报刘海、不报系统栏，实测 top=129 / bottom=0 设备像素）。
@@ -33,6 +55,15 @@ body {
      配色不用管：`body` 的背景本来就会传播到画布，仍然铺满整屏 —— 系统栏后面是界面底色。 */
   padding-top: var(--safe-top);
   padding-bottom: var(--safe-bottom);
+}
+
+/* 应用挂载点：同样裁剪。`body`/`html` 的 overflow:hidden 只保证**视口**不可滚，
+   `#root` 这一层再兜一次 —— 里面有东西比容器高时（外壳的固定高度兄弟挤不下），
+   溢出被这一层吃掉，而不是变成文档级滚动区（见上面那段「视口锁定」）。
+   `position: fixed` 的子元素（右键菜单 / 对话框 / 提示）不受影响：裁剪只作用于
+   **非**固定定位的后代，而 `#root` 没有 transform / filter 这类会接管它们包含块的东西。 */
+#root {
+  overflow: hidden;
 }
 
 button {
@@ -86,4 +117,26 @@ select:focus {
      ① 窗口高度缩到内容装不下时，滚动条出现并吃掉内容右侧一条 → 「元素右侧往中间回缩」；
      ② 它贴在窗口最右缘，吃掉那几像素的 resize 命中区 → 「窗口右边缘拖不动」。
    不写样式即恢复覆盖式滚动条；需要「有没有滚动条都不跳」的容器用 `scrollbar-gutter`
-   （见 app.module.css 的 .listPage / .scroller），**不靠**定制滚动条。 */
+   （见 app.module.css 的 .listPage / .scroller），**不靠**定制滚动条。
+
+   —— 唯一的窄例外（2026-09-16，需求 2609161352 第 1 条）：
+   只针对「**自己横向滚、纵向不滚**（因此不会有竖条站在窗口右缘）、且要的是**彻底不画**而不是
+   『换个样子画』」的容器，目前在册的只有一处 —— `.tabs`（房间标签条，见 app.module.css）。
+   它写两条等价声明（老引擎认后一条，新引擎认前一条，缺一不可）：
+     `scrollbar-width: none`（Chromium ≥121 / Safari ≥18.2）
+     `::-webkit-scrollbar { display: none }`（更老的 WebKit / Blink）
+   用户原话：「顶部 tab 滚动的时候不要有滑块，会挡住，能隐藏掉吗」—— macOS 的覆盖式滚动条
+   浮在内容**之上**，横滚时正好压在标签文字上，所以这里要的正是「连覆盖式那条也不画」。
+   它为什么**不会**引出上面那两个 bug（三条理由，缺一不可）：
+     ① 上面两个 bug 的前提是**占位 + 常驻可见**。`display: none` 让这条滚动条**宽高都是 0、
+        一个像素都不画**：槽既不挤内容，也没有轨道 / 滑块常驻（实测 WebKit：同一页里给 A 写
+        `::-webkit-scrollbar { height: 14px }` → A 的横向槽 14px；A 再加 `display: none`
+        → A 的槽 0px）。所以它既吃不到内容宽度，也不会有东西贴着窗口边缘常驻。
+     ② 例外是**按选择器**生效的，不是文档级开关：同一页里既没写 `::-webkit-scrollbar`
+        也没写 `scrollbar-width` 的容器仍然是覆盖式滚动条（实测同一文档：写了样式的 A 槽 14px、
+        没写的 B 槽 0px）。所以「在这里开一个口子」不会把 `body` / `.listPage` 那些一起拖下水。
+        本仓先例：`.adminRail`（房管面板的横向 tab 轨道）早就在用同一条写法。
+     ③ 这个容器**只横向滚**（`overflow-x: auto`，纵向不滚、生不出纵向滚动条），横向那条躺在
+        它自己的底边、且不画 —— 窗口右缘那条 resize 热区与它无关。
+   边界（照旧是硬的）：例外**只许 `display: none`**。想在滚动条上写宽度 / 圆角 / 颜色 / 悬停
+   效果之前，必须先在**这里**补一份与上面① ② ③ 同等分量的论证，否则一律按禁止处理。 */

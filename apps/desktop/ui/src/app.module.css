@@ -65,7 +65,9 @@
      两档都只动**颜色**：不加底色、不加内边距、不加圆角（用户当天更正：
      「高亮我要求的是使用字体颜色，不是背景，你理解错了」）。 */
   --mention: #fb7299; /* B：品牌粉（深色下当文字 7.1:1 ✓） */
-  /* 徽标底色族：金瓜子 / 中性 / 大航海 / SC 档位 / 被吞标记 */
+  /* 徽标 / 金额底色族：礼物金 / 中性 / 大航海 / SC 档位 / 被吞标记。
+     礼物那枚原本按单位叫「金瓜子」，单位现已改成元（2026-09-16，契约 §5）——色相没动，注释跟着改准。
+     实际情况：--gold 眼下**没有消费方**（全仓只有这一处声明），色值保留不动。 */
   --gold: #c08a2e;
   --neutral: #6b7280;
   --guard-1: #c0392b;
@@ -149,6 +151,11 @@
   /* 触屏与弹出层 */
   --tap-min: 40px; /* 窄屏 sheet / 对话框里的热区下限（触屏） */
   --live-dot: 8px; /* 状态点的**视觉**直径（房间头 / 标签页两处同档；外壳仍是 --sp-3，热区不跟着缩） */
+  /* 房间标签（`.tab` / `.tabActive`）的**可读下限**：开再多房间也不许把单枚标签压到
+     看不全主播名。组成 = 状态点 8 + 间距 4 + 左右内边距 16 + 边框 2 = 30px 的「壳」，
+     余下 66px 在 --fs-2（0.86em）下大约放得下 4–5 个汉字（主播名短于一屏能认出来的量
+     就该换成标签条滚动，而不是继续压窄）。 */
+  --tab-min-w: 96px;
   --title-gap: 2.5em; /* 循环滚动的标题：两份拷贝之间的间隙（跟着标题字号走） */
   /* 房间头顶栏：**半透明**的一层 + 自上而下的一道高光（参考截图的层次做法）。
      值只从本主题已有的槽里混出来 —— 深色下就是「半透明深色」，浅色下自动是半透明白面，
@@ -165,6 +172,13 @@
   --panel-max-h: 260px; /* 宽屏面板在文档流里展开的最大高度 */
   --panel-max-h-narrow: 45vh; /* 窄屏面板的限高（视口份额）：844px 下 ≈ 380px，超出由面板内部滚动 */
   --sheet-max-h: min(80vh, 640px); /* 窄屏账号对话框（模态）的最大高度 */
+  /* 弹幕区与礼物栏共享的那块上下分区（issue #8，见 docs/ui.md §5.4）。
+     `--splitter-hit` 是分割条的**热区**（需求：≥ 8px；看得见的那条线画在热区正中，1px）。
+     弹幕区的最小高度 = **3 行**（单行 = 两个行盒 + 上下 `--sp-2`，见「挤了怎么办」那条：
+     行盒 1.5em × 2 + 8px × 2）：写在下一条规则里，行盒那一半跟着 `ui.font_scale` 缩、
+     内边距那一半不缩 —— 字号拉到 2 倍时「3 行」仍然是 3 行。
+     礼物栏的最小高度不在这里：它是**实测**的折叠头高度（JS 写进 `--gift-min-h`）。 */
+  --splitter-hit: 8px;
 
   /* 系统栏安全区（状态栏 / 手势栏 / 刘海）：Android 的外壳是 edge-to-edge（窗口与
      WebView 都铺满整屏），没有这两个值，顶栏会压在状态栏里、输入区会压在手势栏下。
@@ -185,7 +199,7 @@
 
 /* 浅色不是新主题，只是把同一套语义槽换一组值：组件规则一行都不用改。
    ⚠ 长度令牌（--row-line / --avatar / --badge-h / --emote / --time-col / --tap-min /
-   --panel-max-h* / --sheet-max-h）**不许**出现在这里：@property 注册的 --row-line 若在
+   --panel-max-h* / --sheet-max-h / --splitter-hit）**不许**出现在这里：@property 注册的 --row-line 若在
    :root 被显式赋值，1.5em 会按根字号（16px）算成 24px 并向下继承，行内三个尺度就此脱钩
    （用户 #3 的老 bug）；--avatar 的 :root 默认值也必须永远能解析出值，否则行外共用的头像
    会按原图 512 渲染、把主页顶爆。这一块**只放颜色与阴影**。 */
@@ -221,13 +235,57 @@
   color-scheme: light;
 }
 
-/* 多房间标签页（需求 §2.8） */
+/* 多房间标签页（需求 §2.8）。标签条自己横向滚动：开再多也不压缩单枚标签的可读宽度
+   （`flex: 0 0 auto` 关掉收缩 + `--tab-min-w` 给出下限，见 `.tab` / `.tabActive`）。
+   横向滚动**不配滚动条**，见下面 `scrollbar-width` 那一行。 */
 .tabs {
   display: flex;
   gap: var(--sp-1);
   padding: var(--sp-1) var(--sp-2) 0;
   overflow-x: auto;
+  /* **这条标签条一个滚动条 / 滑块都不画**（用户 2026-09-16 第 1 条：「顶部 tab 滚动的时候
+     不要有滑块，会挡住，能隐藏掉吗」）：macOS 用的是**覆盖式**滚动条，它不占位、浮在内容
+     **之上** —— 标签条横滚时那条滑块正好压在标签文字上。
+     滚动能力一项不减：滚轮 / 触控盘 / 触摸 pan（`touch-action: pan-x`，见下）/ 拖动排序照旧；
+     能滚的容器不靠滚动条自证可滚，这里靠标签被切掉一半与拖动。
+     两套写法都要，缺一不可（现网 Android WebView 是 Chromium 113–133，正好跨过新 API 的线）：
+       · `scrollbar-width: none` —— Chromium ≥121 / Safari ≥18.2 的路径；
+       · `.tabs::-webkit-scrollbar { display: none }` —— 更老的 WebKit / Blink（见下面那条规则）。
+     后一条正面撞上 index.css 里「不许给 ::-webkit-scrollbar 写样式」的硬规矩（2026-09-12 的
+     「内容右侧回缩」「窗口右边缘拖不动」两个 bug 都出自定制滚动条）。这条窄例外成立的三条理由
+     写在 index.css 那段注释里：`display: none` 之后它**宽高都是 0、一个像素都不画**，
+     既挤不动内容，也不在窗口右缘站着 —— 那两条 bug 的前提（占位 + 常驻可见）都不成立。 */
+  scrollbar-width: none;
+  /* 原来这里有一条 `scrollbar-gutter: stable`（与 `.listPage` 同一口径，为的是「出滚动条时
+     整条标签条不跳一下」）。它随之删掉：本条滚动条**永不绘制**，槽恒为 0（WebKit 与 Chromium
+     实测：`display: none` 之后横向槽 0px，有 / 无这条 gutter 没有任何差别），
+     留着只是噪音；而没有滚动条也就没有可跳的那一下。 */
+  /* 横向滑到两端后不再把滚动链甩给外层（拖动 / 惯性滚动的越界链会先落到父级），就地截断。 */
+  overscroll-behavior-x: contain;
+  /* 触摸的横向滑动 = **滚标签条**（原生 pan），不是拖拽排序：浏览器一旦接管手势就回一个
+     `pointercancel`，那次按压随之作废。触摸要排序得先**按住**（App.tsx 的 `TAB_HOLD_MS`）。 */
+  touch-action: pan-x;
   border-bottom: 1px solid var(--border);
+}
+
+/* 上面那条 `scrollbar-width` 的兜底路径（老 WebKit / Blink 不认 `scrollbar-width`）。
+   `display: none` 在 Blink / WebKit 里就是「这个容器不画滚动条」：槽宽按 0 算，
+   滑块与轨道一个像素都不画。**只许写 display: none** —— 一旦在这里写宽度 / 圆角 / 颜色，
+   就会真的把 macOS 的覆盖式滚动条换成占位的经典条，正好踩中 index.css 记的那两个 bug。
+   本仓先例：`.adminRail`（房管面板的横向 tab 轨道）一直就是这一条。 */
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* 拖拽态：整场手势归拖动（被拖项半透明、插入位指示条、光标 grabbing）。
+   ⚠ `touch-action` 是**在 touchstart 那一刻**就被浏览器快照下去的：这条规则写在拿起来之后，
+   对**正在进行**的那场手势无效（实测：`.tabsDragging { touch-action: none }` 加上之后
+   第一次 `pointermove` 照样收到 `pointercancel`）。真正把触摸滚动拦住的是 App.tsx 里
+   那条**挂载时就挂上**的非 passive `touchmove`。这里留着 `none` 只为「拖拽态期间**新**落下
+   的手指也不滚」这一件事。 */
+.tabsDragging {
+  touch-action: none;
+  cursor: grabbing;
 }
 
 .tab,
@@ -235,17 +293,37 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+  /* **不挤压**：flex 项默认会收缩，标签一多就被压成一条条看不清名字的窄片；这里关掉收缩、
+     给出可读下限，超出的部分交给 `.tabs` 的横向滚动。 */
+  flex: 0 0 auto;
+  min-width: var(--tab-min-w);
   max-width: 180px;
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--fs-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* 标签是标签，不是可选文本：拖动时不许顺带拖出一片选区。 */
+  user-select: none;
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: var(--r-2) var(--r-2) 0 0;
   background: transparent;
   color: var(--fg-dim);
+}
+
+/* 被拖的那一枚：留在原位、半透明（位置由插入指示条说，不另画跟随浮层 —— 拖动中容器
+   不会自动滚，浮层脱离列表反而看不出落点）。 */
+.tabDragging {
+  opacity: 0.45;
+}
+
+/* 目标位插空指示：插在哪两枚之间就画在哪两枚之间（宽 2px 的强调色竖条，跟着标签同高）。 */
+.tabDrop {
+  flex: 0 0 auto;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
 }
 
 .tabActive {
@@ -685,11 +763,164 @@
   }
 }
 
-/* 聊天区：房间页里唯一会生长/滚动的区域（面板与礼物栏展开只会挤它） */
+/* 上下分区（issue #8）：弹幕区与礼物栏共享这一块高度，中间一条可拖动的分割条。
+   两栏都 `flex-basis: 0` + `flex-grow: <份额>`：份额就是高度占比，容器高度怎么变都成立；
+   两栏各自的**最小高度**（礼物栏 ≥ 它的折叠头、弹幕区 ≥ 3 行）由下面两条规则兜住，
+   拖到极限 / 窗口从宽缩到 360px 都由浏览器就地夹住，不会溢出、更不会压到 0。
+   房管面板 / 日志条 / 输入区排在它后面（`.shell` 的 flex 列），展开时挤的正是这一块。 */
+.panes {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* 两栏的最小高度是**下限**：真挤到装不下时裁掉，不许把输入区顶出可视区、也不给页面
+     生出新的滚动条（两栏各自的内容都在自己的滚动区里） */
+  overflow: hidden;
+  /* 两个份额由 React 写在 inline style 上；拖动中由 JS 直接改这两个自定义属性
+     （每帧走一趟 setState 会让整棵房间页跟着重渲染），见 SplitPanes 的文件头。
+     `--chat-scale` = ui.font_scale，只给弹幕栏的最小高度用。 */
+  --gift-share: 1;
+  --danmaku-share: 1;
+  --chat-scale: 1;
+  --gift-min-h: 2em;
+}
+
+/* 礼物栏在上：只翻**视觉顺序**，DOM 顺序恒为「弹幕 → 分割条 → 礼物栏」。
+   换位因此不搬节点 —— 弹幕列表的滚动位置与虚拟列表状态原样保留，读屏 / tab 顺序
+   也稳定地按主次走（见 SplitPanes 文件头的第 2 条）。 */
+.panes[data-on-top="true"] {
+  flex-direction: column-reverse;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 0;
+  min-height: 0;
+  position: relative;
+}
+
+/* 弹幕栏：最小高度 = 3 行（单行 = 2 × 行盒 + 2 × --sp-2，见上面「挤了怎么办」那条口径）。
+   9em = 6 × 1.5em（行盒部分）在**这一层**按基准字号算（14px → 126px），跟着 --chat-scale 缩；
+   内边距那一半不缩。 */
+.paneDanmaku {
+  flex-grow: var(--danmaku-share);
+  min-height: calc(9em * var(--chat-scale) + 3 * var(--sp-4));
+}
+
+.paneGift {
+  flex-grow: var(--gift-share);
+  /* 礼物栏不可被压到比它的**折叠头**更矮（契约 §8）：--gift-min-h 是 JS 实测的折叠头高度。
+     背景**与弹幕栏同色**（用户 2026-09-16 第 2 条：「一样的背景颜色」）：这一栏的行就是
+     MessageRow（scope="gift"），行的底色必须与弹幕区逐行相同，因此这里不另刷 `--bg-elevated`
+     —— 两栏的分界由分割条那条发丝线给出，不靠底色。 */
+  min-height: var(--gift-min-h);
+}
+
+/* 折叠态：礼物栏 = 它的折叠头（折叠优先于份额），弹幕区拿走剩下的全部；
+   分割条仍在、仍可拖 —— 拖动会把这一栏拖开（SplitPanes 的 onExpand）。 */
+.paneGiftCollapsed {
+  flex: none;
+}
+
+/* 分割条：热区 8px（需求：拖动热区 ≥ 8px），看得见的那条线绝对定位在热区正中，
+   所以悬停 / 拖动时把它加粗到 2px 也不改布局。`touch-action: none` 让触摸拖动
+   不被页面滚动抢走；`cursor: row-resize` 是「上下拖」的常规光标。 */
+.splitter {
+  position: relative;
+  flex: none;
+  height: var(--splitter-hit);
+  cursor: row-resize;
+  touch-action: none;
+  background: var(--bg);
+}
+
+/* 触摸设备上把热区撑到 24px（= 24dp ≈ 3.8mm）。
+   依据（2026-09-21，模拟器 android-35 / 1080×2400@420dpi、Android WebView Chrome/124、
+   视口 412 CSS px：1 CSS px = 1 dp = 2.625 物理 px）：命中带实测只有
+   **中线上下 4px**（逐 2px 扫 `elementFromPoint`：dy ∈ [-4, +2] 打到分割条，±10 就落进
+   弹幕列表 / 礼物折叠头），也就是 1.2 mm —— 手指接触面直径约 7–9 mm，实测十次里能中几次
+   全看运气；打不中就等于按进了某一栏，于是触发的是「长按换位」或滚动。
+   8px 是需求给桌面鼠标写的下限（`--splitter-hit`），触摸上照搬就是「拖不动」。
+   24px 而不是平台建议的 48dp：分割条是精调控件，热区每加宽 1px 就从两栏各吃掉 0.5px
+   的点击面（弹幕行高约 40px，吃掉太多会让贴着边界的行点不开）。
+   只改热区不改那条线：`::before` 依旧绝对定位在热区正中，视觉一寸不动。 */
+@media (pointer: coarse) {
+  .splitter {
+    height: 24px;
+  }
+}
+
+.splitter::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--border);
+}
+
+.splitter:hover::before,
+.splitter:focus-visible::before,
+.splitter[data-dragging="true"]::before {
+  height: 2px;
+  background: var(--accent);
+}
+
+.splitter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 长按换位拖拽态：被拖的那一栏半透明、跟着指针走（transform 由 JS 写，见 SplitPanes）；
+   落点那一栏描一圈强调色，说清松手会换到哪儿。 */
+.pane[data-swap-drag="true"] {
+  opacity: 0.6;
+  z-index: 1;
+  user-select: none;
+}
+
+.pane[data-swap-over="true"] {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.panes[data-dragging="true"] {
+  user-select: none;
+}
+
+/* 聊天区：房间页里唯一会生长/滚动的区域（面板与礼物栏展开只会挤它）、
+   **双击进 / 出沉浸模式的落点**（issue #1）。 */
 .chatArea {
   flex: 1;
   min-height: 0;
   position: relative;
+}
+
+/* `.chatArea` 外面的那一层（`RoomView` 的 `db-chat-wrap`）：把双击判据绑在「弹幕区」这一块上
+   ——礼物栏与输入区不参与。它不画任何东西、也不改任何尺寸口径，只是把「唯一的 flex-1 生长区」
+   这句话往上传一层（`flex: 1` + `min-height: 0` 与 `.chatArea` 逐字相同），
+   所以有没有这一层，房间页的布局都一样。 */
+.chatWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* 沉浸模式（issue #1）：`RoomView` 收起房间头 / 输入区（含表情、短语、筛选三个面板）/
+   举报条 / 房管面板 / 日志块 —— 那几块都是**条件渲染**（不在 DOM 里），弹幕区因此长高，
+   虚拟列表按 `MessageList` 的 `ResizeObserver` 重新量高。留在场上的只有弹幕区、礼物 / SC 栏
+   （`ui.gift_panel` 为真时）与「回到最新」那枚悬浮钮。
+
+   **房间标签条**是唯一够不着的一块：它渲染在 `App.tsx` 里、与房间页是兄弟节点，
+   组件树里拿不到。所以由 `RoomView` 在 `<html>` 上打一枚 `data-immersive`
+   （与主题落 `data-theme` 是同一处口径：文档根上的属性 + 这里的一条规则），
+   这里按属性把它收起来 —— `display: none` 既不占位、也不进 Tab 序。 */
+:root[data-immersive="true"] [data-testid="db-room-tabs"] {
+  display: none;
 }
 
 .scroller {
@@ -1139,14 +1370,13 @@
   color: var(--danger);
 }
 
-/* 礼物 / SC 栏：在输入区下方、全宽、可折叠（issue #8），不再抢弹幕宽度 */
-.giftDock {
-  border-top: 1px solid var(--border);
-  background: var(--bg-elevated);
-}
-
+/* 礼物 / SC 栏：**与弹幕区上下分区的一栏**（issue #8），高度由份额驱动（不再按内容、也不再固定）。
+   栏内**没有自己的行样式**了（用户 2026-09-16 第 2 条）：行就是弹幕行（`MessageRow`，
+   scope="gift"），列表就是 `MessageList`（`.chatArea` / `.scroller` / `.msgList`）——
+   布局、底色、自动滚动全部与弹幕区同一套代码；两条 CSS 规则因此只剩折叠头与汇总。 */
 .giftDockHead {
   display: flex;
+  flex: none; /* 折叠头永远按自己的高度占位，不被展开区挤压 */
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
@@ -1181,56 +1411,6 @@
 .giftDockToggle {
   flex: none;
   color: var(--fg-dim);
-}
-
-.giftDockBody {
-  max-height: 140px;
-  overflow-y: auto;
-  padding: 0 var(--sp-3) var(--sp-2);
-  font-size: var(--fs-2);
-}
-
-/* 礼物栏的**一条**（§5.3）：头像 + 昵称 + 内容 + 数量 + 金额在同一行里。
-   头像走行外共用的 `--avatar`（`:root` 的 1.35em），这里把基准调大一档：
-   礼物栏的字号是 `--fs-2`（12px 上下），照 1.35em 算出来只有 16px，太小看不清。
-   昵称与内容都是单行省略：礼物栏窄，宁可截断也不折行（折叠条只有一行高）。 */
-.giftItem {
-  --avatar: 1.8em;
-
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  padding: var(--sp-1) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.giftWho {
-  flex: none;
-  max-width: 8em;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--fg-dim);
-}
-
-.giftWhat {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.giftCount,
-.giftAmount {
-  flex: none;
-  white-space: nowrap;
-}
-
-/* 金额格（带单位）：等宽数字，逐行右边缘对齐 */
-.giftAmount {
-  color: var(--fg-dim);
-  font-variant-numeric: tabular-nums;
 }
 
 /* 「回到最新」（用户 2026-09-13 #2：「指这整个按钮删掉，用一个返回按钮旋转 90° 来代替」）：
@@ -1370,7 +1550,12 @@
      短语与筛选面板因此与表情面板**等高、且不随内容伸缩** ——
      内容超出在各自的可滚区里滚（短语 .phrasesBody、筛选面板自己的 overflow-y）。 */
   --panel-pad-y: var(--sp-2);
-  --panel-h: calc(var(--emote-grid-h) + var(--panel-pad-y) * 2);
+  /* 定高一并算上**上边框**：三块面板共用这一条 `border-top: 1px`，而 `.phrases` /
+     `.filterPanel` 是**定高**（`height: var(--panel-h)`，border-box 把 1px 边框算在盒内），
+     `.picker` 是**内容驱动**（高度 = 边框 + 内边距 + 三行大表情格，边框在盒外）。
+     公式里不写这 1px 的话，内容驱动的那一块会比定高的那两块**高整整 1px**
+     （实测宽屏：表情 169.1 / 筛选 168.1 / 短语 168.1 —— 冒烟的 panelHeightsMatch 就是这条）。 */
+  --panel-h: calc(var(--emote-grid-h) + var(--panel-pad-y) * 2 + 1px);
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
   padding: var(--panel-pad-y) var(--sp-3);
@@ -1752,25 +1937,9 @@
   opacity: 0.45;
 }
 
-/* 输入区上方的「将发送」预览：草稿里对得上的表情名在这里显示成图片（docs/ui.md §6.3）。 */
-.preview {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-1);
-  padding: var(--sp-1) var(--sp-3);
-  font-size: var(--fs-2);
-  color: var(--fg-dim);
-  border-top: 1px solid var(--border);
-}
-
+/* 行内的一句说明文字（回复条 / @ 提示 / 面板空态 / 房管面板的计数）：只占内容宽度，不参与伸缩。 */
 .previewLabel {
   flex: none;
-}
-
-.previewEmote {
-  height: 1.5em;
-  vertical-align: middle;
 }
 
 /* 快捷短语面板（需求 §2.2；item 8 / item 11 重排）。面板自上而下两段：
@@ -1833,7 +2002,8 @@
   border-top: 1px solid var(--border);
 }
 
-/* 筛选与显示面板（issue #8：不再常驻占一行；issue #11：只留「消息类型」与「显示」两块） */
+/* 筛选与显示面板（issue #8：不再常驻占一行；issue #11：只留「消息类型」与「辅助功能」两块；
+   issue 2609160959 第 3、4 条：两块里的表单都是**两列勾选清单**，见下面 .filterKinds / .filterFields） */
 .filterGrid {
   display: grid;
   /* 放得下两块就并排（宽屏），放不下就一块一行（竖屏 360）。用 auto-fit 让排布自己跟着
@@ -1851,11 +2021,23 @@
   min-width: 0;
 }
 
+/* 两块的标题（本批第 5 条：标题格式要**醒目一些**）。只动视觉层级 —— 字号 / 字重 / 字色 /
+   分隔线 / 间距；**文案与信息结构一字不动**（两块仍是「标题 + 清单」）。
+   - 字号：`--fs-2`（在 .filterGrid 的 0.86em 之上再乘 0.86 ≈ 正文字号的 0.74 倍）提到
+     `--fs-6`（≈ 1 倍正文）—— 改前标题比它自己的清单项还小，层级是反的；
+   - 字重 700 + 字色 `--fg`（正文，深色 15.8:1 / 浅色 15.5:1；改前是 600 + `--fg-dim` 次级灰）；
+   - 底部一条发丝分隔线（`--border`，只作分隔、不作组件边界）：一块的起点看得见。
+   三项都不改横向盒模型：标题只占自己那一行，窄屏 360 下两列仍是每列 ≈ 160px、
+   面板仍不许横向滚动（§9.1）；面板高度还是 `--panel-h` 那个定值，多出来的一点高度由
+   面板内部滚动吸收（§6.1）。 */
 .filterSection h3 {
   margin: 0;
-  font-size: var(--fs-2);
-  font-weight: 600;
-  color: var(--fg-dim);
+  font-size: var(--fs-6);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--fg);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
 }
 
 .filterSection label,
@@ -1863,40 +2045,35 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+  /* 两列清单里每一项的**最小**宽度归零：标签文字长一点也只在自己那一列里占位，
+     不会把列撑破（与房间里其它可缩项同一条口径）。 */
+  min-width: 0;
 }
 
-/* 显示块内部：字号滑杆占满一行（需要整行的地方），四枚开关（时间戳 / 互动消息自动消失 /
-   弹幕包含礼物 / 独立礼物栏）同排换行 —— 360 下正好两行放得下，宽屏下也跟着那一行的自然宽度排。 */
+/* 两块的表单**同一形态**：两列勾选清单（issue 2609160959 第 3、4 条）。
+   等宽两列（`1fr` 各一）：左列 = 第 1/3/5 项、右列 = 第 2/4/6 项（DOM 序即阅读序，
+   键盘 Tab 与目视顺序一致）。360 下每列 ≈ 160px，最长的一条「互动消息自动消失」
+   （8 个汉字 ≈ 96px + 复选框）仍放得下（docs/ui.md §8.5）。
+   `justify-items: start`：可点区域仍只有「复选框 + 文字」那一段，不留半行宽的隐形热区。 */
+.filterKinds,
 .filterFields {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-items: start;
   gap: var(--sp-2) var(--sp-3);
 }
 
+/* 字号滑杆需要整行宽度，因此横跨两列（两列清单里唯一的例外）：`justify-self: stretch`
+   抵消容器上的 `justify-items: start`，这一行才真的占满两列、滑杆贴右。 */
 .filterRange {
-  flex: 1 1 100%;
+  grid-column: 1 / -1;
+  justify-self: stretch;
   justify-content: space-between;
 }
 
 .filterRange input[type="range"] {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-/* 消息类型：芯片（走同一套下沉面 / 发丝线 / 圆角令牌，深浅两套自动成立） */
-.filterKinds {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-}
-
-.filterKinds label {
-  padding: var(--sp-1) var(--sp-2);
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  cursor: pointer;
 }
 
 /* 弹幕里的表情图：尺寸走 `--emote`（= 1.1 × 行盒），随 `ui.font_scale` 联动（docs/ui.md §4.1）。
@@ -2189,6 +2366,65 @@
   background: var(--bg-input);
 }
 
+/* --------------------------------------------------------------------------
+   一键诊断（Diagnose 票，docs/ui.md §3.6）：采集中 / 刚导出两块都落在这里。
+   与 .logs 同款位置（房间页底部、沉浸态一并收起），因此沿用同一套排版口径；
+   进程里可能还有别的 agent 在改这个文件，本段只属于本票。
+   -------------------------------------------------------------------------- */
+.diagnose {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-input);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+
+.diagnoseLine {
+  color: var(--fg);
+}
+
+/* 路径可能要换行（Android 上是 /sdcard/Download/…），用等宽体便于肉眼核对。 */
+.diagnosePath {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+  user-select: text;
+}
+
+.diagnoseNote {
+  color: var(--fg-dim);
+  line-height: 1.4;
+}
+
+.diagnoseActions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+/* 小按钮沿用现有口径：`--bg-elevated` 底、发丝线边、`--r-3` 圆角
+   （与 .followItem / .toast 同一套令牌，见 docs/ui.md §9.2）。 */
+.diagnoseButton {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  padding: var(--sp-1) var(--sp-3);
+  cursor: pointer;
+}
+
+.diagnoseButton:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.diagnoseButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ==========================================================================
    窄屏（竖屏是**默认形态**；断点取窗口最小宽度 360，宽到 520 都算窄屏）
 
@@ -2273,8 +2509,7 @@
   /* 确认条 / 举报条 / 回复条：窄屏下同样会换行 */
   .adminConfirm,
   .reportBar,
-  .replyBar,
-  .preview {
+  .replyBar {
     flex-wrap: wrap;
     row-gap: var(--sp-1);
   }

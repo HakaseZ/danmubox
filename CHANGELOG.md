@@ -1444,6 +1444,271 @@
 > 新增的三个 frontend 夹具 `smoke/fixtures/gift-sc-guard-rows.json` 是**按协议文档字段表构造**的
 > （不是真实抓包派生：`AGENT.md` §8 第 16 条禁止为测试发送礼物 / SC / 大航海），出处与约束记在 `docs/testing.md` §9.1。
 
+### Added
+
+- **弹幕区与礼物栏共享一块上下分区：可拖分割条 + 长按拖拽换位**（`issue` 2609160959 #8，表述经用户 2026-09-16 确认）。
+  独立礼物栏从「输入区下方」搬进**房间头与输入区之间**的共享分区，新增组件 `apps/desktop/ui/src/components/SplitPanes.tsx`：
+  两栏按份额分配高度（`flex-basis: 0` + 两枚 `flex-grow` 之和恒为 1），中间一条**常驻可拖分割条**（热区 ≥ 8px、焦点态 ↑↓ 微调 0.02），
+  拖动中只写 DOM、松手才回写偏好；长按任一栏 **0.5s** 进入换位拖拽态（半透明 + 跟随指针），拖过分割条松手即上下互换
+  （短按 / 按住前移动 / ESC 三条路都取消）；换位只翻 `flex-direction`（不搬节点，弹幕列表的滚动位置与虚拟列表状态原样保留），
+  比例跟面板走、不因换位而变。`ui.gift_panel` 关掉时分区退化为弹幕区全高、分割条与长按换位一并停用。
+  **输入区下方那段独立礼物栏已移入分区，不再重复渲染**。规格 `docs/ui.md` §5.4 / §2.3，冒烟 `splitter*` / `swap*` 断言族。
+  **已实测**：本票自己的两档引擎冒烟（`.android-env/verify/splitter-chromium.log` / `splitter-webkit.log`）+ 秒级三道闸。
+  **未实测**：合并进 `dev` 后的**两引擎全量冒烟由主流程在集成收尾统一跑**，本轮未复跑。
+- **两枚新偏好键 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`**（同上；`0.x` 期新增，不破坏存量文件）：
+  上下顺序与高度份额都持久化，重开应用保持。契约先行：`docs/contract.md` §8（`bool` 默认 `false`；`0.10–0.90` 默认 `0.35`，
+  非法值回落口径）+ §9 溯源行 → `crates/danmubox-core/src/prefs.rs` 的 SPECS、`docs/ipc.md` 的 `PrefsSnapshot`、前端 `types.ts` 四层。
+  **已实测**：`prefs.rs` 的单测（默认值 / 非法值 / 落盘往返 / 越界回落）随 `cargo test --workspace` 全绿（见文末口径）。
+- **弹幕区双击进 / 出沉浸模式**（#9）。在 `db-chat-wrap` 上双击收起**房间头、房间标签条、输入区**（含输入区上方三个面板），
+  只留弹幕区与礼物 / SC 栏；再双击恢复。判据是指针事件（鼠标双击与触屏点两下同一条路）：两次「按下 → 抬起」都在 400ms 内、
+  落点相距 ≤ 24px，且不落在自带双击语义的可交互元素上；**不** `preventDefault`、**不**改 `user-select`（仍可照常选词）。
+  状态是 store 的**会话内瞬态**（`immersive`，**不进** `prefs.json`；切房间 / 关房间即回到非沉浸态）；房间标签条渲染在 `App.tsx`
+  （房间页的兄弟节点），由 `<html data-immersive>` + `app.module.css` 一条规则收起；系统返回手势在沉浸态里**先退沉浸**、不关房间页；
+  行右键菜单与「回到最新」悬浮钮在沉浸态里照旧可用。规格 `docs/ui.md` §2.3.1，冒烟 `immersive*` 断言族。
+  **已实测**：秒级三道闸（`node --check` / `--precheck` / `npm run build`）。**未实测**：两引擎全量冒烟（主流程跑）。
+- **Android 后台保活：前台服务 + 常驻通知**（#10）。`MainActivity.onStop` 且**页面还有活跃连接**时起一枚 `dataSync` 类型的前台服务
+  （`KeepAliveService` + 一枚点它回应用的常驻通知），`onStart` 即停；没连接、用户主动退出（`isFinishing`）、把任务从最近任务划掉
+  （`onTaskRemoved`）都不保活。服务本身**不做事**（不轮询、不上报、不持唤醒锁、不碰网络）——它只把进程顶到前台档，连接仍然只跑在 Rust 侧。
+  「有没有活跃连接」走与返回手势同一套 JS 桥（`window.__danmuboxHasActiveConnection`），前端 `ui/src/keepalive.ts` 只读地复用 store 里已有的连接状态、
+  不新增任何状态。Android 15 起 `dataSync` 每 24 小时只有 6 小时额度：实现 `Service.onTimeout()` 自停，额度耗尽后再起被拒时接住
+  `ForegroundServiceStartNotAllowedException` 只记一条 logcat、不崩。文档：`docs/operations.md` §2.8、`README.md` §2.2、`docs/testing.md` §10.4（A-9 / A-10）。
+  **已实测（模拟器 AVD android-35，原始输出 `.android-env/verify/ka-*`）**：退到后台 200 秒后进程在、`isForeground=true foregroundId=1 types=0x00000001`、
+  常驻通知在、到 443 的 ESTABLISHED 还有 2 条；点通知回前台后服务与通知都消失、pid 不变；不该起的两档（没房间 / 根页面按返回退出）实测为空；
+  A/B 旧包同一档连接归零。**未实测**：真机收益（省电策略、厂商 ROM 的后台管理、Cached Apps Freezer 的时机），见 `docs/testing.md` §10.5。
+
+### Changed
+
+- **筛选面板两块改成两列勾选清单**（#3 / #4）。「消息类型」的六个 kind 从按钮样芯片改成**等宽两列勾选清单**
+  （按行铺：左列 1/3/5、右列 2/4/6，DOM 序即阅读序）；「时间戳 / 互动消息自动消失 / 弹幕包含礼物 / 独立礼物栏」四枚开关并成同款两列清单，
+  块名由「显示」改为「辅助功能」，字号滑杆仍在（横跨两列、占满整行）。**`filter.kinds` 的语义一字未动**（全选 = 不过滤、至少留一项），
+  `docs/contract.md` 本批**零改动**。规格 `docs/ui.md` §8.5；冒烟字段族随形态改名（`*KindChips` → `*KindItems`、`*Display*` → `*Aux*`，
+  定位钩子改用 `db-filter-kinds` / `db-filter-aux`），本票引擎日志 `filtergrid-*.log`。**未实测**：两引擎全量冒烟（主流程跑）。
+  同批登记一条**判定结论**（#2「互动消息自动消失默认勾选」）：`ui.interact_auto_hide` 的代码默认值**本来就是 `true`**，
+  界面上没勾上是**本机 `prefs.json` 写了显式覆盖**（该文件只存显式改过的键）——因此**不改语义、不动契约**。
+- **房间标签条支持拖动排序与横向滚动**（`issue` 批次 `2609152029` 交付后追加的第 6 条；上批因此未做，**不是实现丢失**，归属本批）。
+  横向滚动：`flex: 0 0 auto` 关掉收缩 + 每枚标签最小宽度 `--tab-min-w`（96px）+ `overflow-x: auto`（`scrollbar-gutter: stable`、
+  `overscroll-behavior-x: contain`）；指针拖动排序（鼠标与触摸同一套）：5px 阈值进拖拽态、被拖项半透明 + 插入位指示条，松开重排 `store.rooms`
+  （新增 `moveRoom`），`activeRoomId` 不变；触摸下横滑 = 滚标签条（`touch-action: pan-x`），按住 400ms 才拿起。顺序是**会话态**、
+  不新增偏好键（`rooms_list` 落地只改集合，`mergeRoomOrder` 保序）。规格 `docs/ui.md` §2.3；冒烟新增 21 条断言（四档引擎日志 `tabstrip-*.log`）。
+  **未实测**：两引擎全量冒烟（主流程跑）。
+- **连接健壮性：按 `docs/protocol.md` 补齐三条护栏，并修掉两处实现偏差**（`issue` 2609160959 #7 方向①/② + 第 5 条日志审查的产出）。
+  ① **认证超时**：发出 `op=7` 后 10 秒内没有 `op=8` → 计一次认证失败、走退避（§7.3）；② **僵死判定**：维护「最后一次入站帧时刻」，
+  90 秒内没有任何入站帧 → 主动断开重连（`warn` 里带 `idle_ms` 与阈值，判定依据可追溯，§8.1）；③ **认证失败上限**：连续 3 次 → 取消定时器、
+  停在原地等人工（§13.1 的 `Failed`，按 §13.3 步骤 6 报 `ConnState::Error` + `detail`），手动重连（`rooms_reconnect`）取消本次连接后重新调 `stream()`，
+  计数与退避归零并**跳过退避**。顺带修：**首包心跳不再等 60 秒**（认证回应一到就发；§8.1 的「60 秒内」是上界，等满会让一部分候选节点一直不下发弹幕）、
+  **节点轮换**（同一节点连续失败 2 次换 `host_list` 下一项，越界取模即「轮完一轮回到首项」，§15.3）。护栏参数收进 `Limits`（生产值逐条对应文档，
+  单测注入毫秒级阈值）；**新增 6 条单测**覆盖上述五条行为（含「有入站帧不误判僵死」与「手动重连重置计数」）。`ConnState` 不新增取值，
+  前端与 IPC 契约不变。**未实测**：`docs/protocol.md` 附录 A **A46** 记的仍是未验证事项 —— 服务端对重复 `Cookie` 头的容忍度、
+  以及「重复头 / 握手口径」是否就是「连上了却收不到弹幕」的成因，**需要受影响的账号 + 可复现房间**才能判死。
+- **日志与错误文案里的用户标识统一脱敏**（`AGENT.md` §8 第 1 条）。`DANMUBOX_LOG=debug` 下 `relation/followings?vmid=<自身 DedeUserID>`、
+  `get_status_info_by_uids?uids[]=<关注的人…>`、黑名单的 `anchor_id=<主播 uid>` 此前会**原样进日志**（实测旧样本：2 行 `vmid` + 90 个 `uids[]`）。
+  规则收敛到 `crates/danmubox-bili/src/redact.rs`，出口只有两个：`http.rs` 的 `log_request`（GET/POST 的 URL 日志）与 `upstream`
+  （上游错误文案——`reqwest::Error` 的 Display 自带完整 URL），回显上游 `message` 的 admin/send/report 也走同一个函数。占位符固定 `***`
+  （uid 只有 10 位，短哈希可被暴力反推），键名匹配要求**词边界**，`roomid=` / `room_id=` 等排障主键不受影响；结构化日志里直接打印的 uid 字段
+  （ws 认证包 / cmd 归一化 / core 去重）改为不打印，只保留 `logged_in` 之类的布尔事实。规格 `docs/operations.md` §3。
+  **已实测**：脱敏前后的真实 debug 日志对照（`.android-env/verify/redact-*.log`）+ 新增 5 条 `redact::tests` 单测。
+- **四条常驻工程规矩固化进仓库文档**（用户 2026-09-16 对话，两次强调「以后都这样」）：① **子 agent 不跑冒烟** —— 全量无头冒烟由主流程在集成收尾
+  统一跑一次，子 agent 只跑不启浏览器的秒级闸（`tsc -b` / `npm run build` / `node --check` / `--precheck`）并在交付里明写「冒烟未跑」；
+  ② **冒烟不再串行** —— 每个 agent 各起独立无头浏览器并行跑、不抢锁（旧的「同一台机上必须串行」**作废**）；
+  ③ **产物来源标记** —— 被当作证据的产物必须能自证属于本次运行（截图独立 `SMOKE_SHOT_DIR=/tmp/<票名>-shots`、日志落
+  `.android-env/verify/<票名>-<engine>.log`、Rust 侧 `cargo test -- --list | grep <新用例名>`）；
+  ④ **每个 worktree 用本地 `CARGO_TARGET_DIR=$PWD/target`**，不得共享（实测共享会让不同 worktree 的构建产物互相覆盖 → 假绿 / 假红）。
+  落点：`AGENT.md` §3（target 口径）与 §9 DoD、`docs/ui.md` §15 运行纪律、`docs/testing.md` §9.2 / §10.1；台账 `docs/requests.md` §2 新增 E14 / E15
+  并改掉 E6 的串行口径。
+- **纠正 `docs/testing.md` §10.5 的一处假绿说法**（2026-09-16 日志审计的产出）。原文写「Android 侧 `adb logcat` **全程零 crash / panic**」，
+  与实测矛盾：**至少三份退出日志各命中一次** `--------- beginning of crash` + `F libc: FORTIFY: pthread_mutex_lock called on a destroyed mutex`
+  （`.android-env/verify/back-logcat.txt:899-905`、`logcat-v2.txt:1500-1506`、`v2-repro-backexit.log:341-347`），都发生在**用户点返回退出应用**
+  的那次优雅退出（其后紧跟 `Zygote: Process … exited cleanly (0)`）；force-stop 那一档（`v2-repro-forcestop.log`）没有命中。
+  现已按事实改写该行，并把「崩在哪、为什么不影响功能、怎么复现」写清。同一批顺带更正 `docs/testing.md` §13 里「后台保活 属非目标功能、不实现故不测」
+  这一行 —— 保活本批已实现并实测到模拟器那一档（见上），§13 只保留「系统级悬浮弹幕层 / 通知推送」为非目标。
+- **`docs/testing.md` §9.2 / §10.1、`docs/ui.md` §15 与 `AGENT.md` §9 按上面四条常驻规矩改齐**（并列的新增小节只写规矩本身，
+  不重复各票的实现细节）。
+
+### Fixed
+
+- **`getDanmuInfo` 出门带两条 `Cookie` 头**（`issue` 2609160959 #7 的方向②/③）。`get_with_cookie` 已按 Cookie 来源设过一条 `Cookie`，
+  `danmu_info` 又 `.header(COOKIE, "buvid3=…")` 追加一条 —— `RequestBuilder::header` 是 **append** 语义，请求因此带两条 `Cookie` 头出门。
+  B 站按身份三要素（`uid` / `buvid` / 换 token 的凭据）**同源**认身份，认证包里的 `buvid` 必须与换 token 那次请求一致。改成先拼好一条再一次性设头
+  （`merge_cookie`）：账号字段在前、`buvid3` 追加在末尾；账号 Cookie 自带 `buvid3` 时以入参（即进认证包的那个值）为准，不留两枚同名键。
+  `get_request` 从此是唯一设 `Cookie` 的地方，`post_form` 也照此只设一次。**已实测**：桩服务器记录原始请求头，**新增 3 条用例**断言
+  「只有一条 `Cookie` 头」「同名键不重复」与 `merge_cookie` 的表驱动用例；把 `danmu_info` 改回 append 形态它们立刻变红。
+- **集成收尾修掉三处合并失误（其中一处让 `tsc -b` / `vite build` 直接红）**。`feat/2609160959-immersive` × `feat/2609160959-splitter` 合并时
+  手工解冲突留下三处残渣，与任一方的功能无关：① `RoomView.tsx` 房间头 ⋯ 菜单上方那条 JSX 注释的收尾写成了 `*/` 而不是 `*/}` —— `{` 因此永不闭合，
+  解析器从那一刻起落在表达式 / 对象字面量里，这就是 `tsc` 报 1068 行「Property assignment expected」却指向 `{!immersive && headerMenu && (` 的**真正原因**
+  （**报错点不在失配处，而在它的下游**）；② `app.module.css` 与 ③ `docs/ui.md` 各残留一行孤立的 `>>>>>>> feat/2609160959-splitter`（CSS 那行直接让
+  postcss 解析失败）。修法是逐段对照两侧分支后补回 `}` 并删掉孤立标记 —— **SplitPanes 的分区与沉浸模式两方功能一件未删**（弹幕槽仍是 `.chatWrap` 包 `MessageList`、
+  礼物槽仍是折叠头 + 列表、两枚偏好键都在；输入区下方那段独立礼物栏**没有**回来）。**已实测**：`tsc -b` 0 错、`npm run build` 通过、
+  `node --check` + `--precheck` 通过、`styles.*` 用到的 176 个类在 `app.module.css` 里全有定义（未丢规则）。
+
+### Calibration
+
+- **附录 A 新增 A46**（`docs/protocol.md`）：服务端对**重复 `Cookie` 头**的容忍度、以及它是否就是「连上了却收不到弹幕」的成因 —— **未实测**，
+  A46 写了核对方法（用受影响的账号抓 `getDanmuInfo` 的原始请求头，再对照同账号在网页端的表现）。判死还需要**受影响的账号 + 可复现房间**（只读即可）。
+- **日志审计的两条遗留登记为待办（均未修、未开票）**：① Android **优雅退出**时的 `FORTIFY: pthread_mutex_lock called on a destroyed mutex`
+  （见上「Changed」里那条纠正；现象稳定复现、不影响退出结果与已有数据，成因未查）；② Android 侧**没有可开启的业务日志入口** —— 应用自身的业务日志
+  在设备上零覆盖，排障只能靠 logcat，建议后续加一个可开关的调试日志入口。
+
+> 本批（`dev/2609160959` 集成收尾）的验证口径，如实记录：Rust 侧跑的是**干净**的一遍 ——
+> `cargo clean -p danmubox-core -p danmubox-bili -p danmubox-desktop` 后 `cargo test --workspace`，
+> **0 failed**（`danmubox-bili` 179 passed / `danmubox-core` 49 passed / `danmubox-desktop` 6 passed / `danmubox-cli` 0 / 四个 crate 的 doc-tests 各 0，合计 **234 passed**）；
+> `cargo clippy --workspace --all-targets -- -D warnings` **零告警**；本批三票 fix 的新用例都自证在跑
+> （`http::tests::danmu_info_sends_single_merged_cookie_header`、`redact::tests::*` 5 条、
+> `ws::tests::auth_timeout_is_a_failure_and_backs_off` / `node_rotation_switches_after_two_consecutive_failures` /
+> `stale_connection_is_dropped_and_never_counts_as_auth_failure` / `first_heartbeat_goes_out_right_after_verify`）。**未跑**：`cargo fmt`（存量不通过，见 `AGENT.md` §9 备注）。
+> 前端四道闸**全绿**：`npx tsc -b`、`npm run build`、`node --check smoke/room-page.mjs`、`node smoke/run-headless.mjs --precheck`。
+> **未跑**：两引擎全量无头冒烟 —— 按用户 2026-09-16 定的规矩「子 agent 不跑冒烟」，它由主流程在集成收尾统一跑（本地 `dev/2609160959` 上尚未跑）。
+> **也不含** `issue` 2609160959 #6（安卓键盘避让）：那一票仍在另一个 worktree 里开发、**未合入本批**，因此 `dev → main` 的 PR 暂缓开，
+> 等它合进来一次带全。三端手工冒烟（`docs/testing.md` §10）本批未跑。
+
+### Removed
+
+- **输入区上方的「将发送」预览整块删除**（`issue` 2609161236 #1，用户原话「这个将发送xxx的，直接去掉，没有这个需求」；提交 `05124cd`）。
+  删掉的是 `Composer.tsx` 的 `preview` useMemo（草稿扫描 + 长名优先匹配）、`previewFont`（`ui.font_scale` 在输入区的唯一跟随者）与整块预览 JSX
+  （`data-testid="db-send-preview"`，含 `styles.preview` / `previewLabel`「将发送」/ `previewEmote`），CSS 三条规则与 `docs/ui.md` 对应节同步删除。
+  **「点选表情即发」的链路一行未动**；`panelEmotes` / `grouped` 等仍被面板与筛选使用者保留，未做连带清理。
+  **已实测**：源码与出厂 `dist` 里 `db-send-preview`、`previewEmote`、「将发送」各 **0 次**（正向对照「发送」8 次）；四道闸全绿
+  （`tsc -b` / `npm run build` / `node --check` / `--precheck`）。**未实测**：两引擎全量冒烟（按常驻规矩由主流程统一跑）——运行期 DOM 里预览节点
+  是否彻底不存在，本票只有静态证据。
+
+### Changed
+
+- **礼物与大航海的金额展示单位改成「元」**（`issue` 2609161236 #2：用户先写「按电池算，瓜子这个单位官方已经废弃」，随后改口「元」并给出口径
+  「1 元 = 10 电池，1 人气票 1 电池」；提交 `56e45bf`）。展示侧唯一公式 **`元 = 金瓜子 / 1000`**（`filtering.ts` 新增 `COINS_PER_YUAN = 1000`，
+  `amountText` 用它换算）；**SC 的 `amount` 上游本来就是元，不做任何换算**；`amount <= 0` 一律不画金额格（既有口径未动）；整数元不带小数、
+  非整数保留必要小数（上限 3 位 —— 金瓜子 ÷ 1000 的全部可能值都落在 3 位内）。
+  **单位取证**（本条是唯一会差 10 / 100 倍的地方）：上游 `price` / `total_coin` 是**金瓜子**，不是电池也不是元 —— ① 公开社区协议文档的礼物字段表
+  逐字写着「`price | num | 该值/1000的单位为元`」，紧邻的 `coin_type`「一般为 gold，即电池」说明 `gold` 只是**币种名**（原仓已归档，读的是三个独立镜像副本，
+  该行逐字一致）；② SC 样本 `price=30` 配 `rate=1000`；③ 舰长 `price=138000` ↔ 官方标价 138 元；④ 钱包 `gold=15000` ↔ 15 元 ↔ 150 电池，
+  与用户口径「1 元 = 10 电池 = 1000 金瓜子」互为交叉验证。**未实测**：没有任何一条**真实礼物载荷**与官方页面价目逐条对照过（`docs/protocol.md` 附录 A 的
+  A8 / A12 至今零样本，且 `AGENT.md` §8 第 16 条禁止为测试送礼）——已按待校准写进附录 A，并把换算收在单一常量上便于日后一处改。
+  **用户 2026-09-16 的两条裁决一并记下**：① **余额那枚控件继续显示「电池」**（「余额便于计算可用电池」），**流水的「元」便于统计真实金额** ——
+  两者并存是**刻意的**，不是漏改（`wallet.rs` 的 `电池 = gold / 100` 一字未动）；② **独立礼物栏的折叠汇总保持「按 kind 分组」现状**，不合并成单条合计
+  （单位统一后跨组求和已无单位障碍，但用户明确保留现状）。文档同步：`docs/contract.md` §5 / §9、`docs/ipc.md`、`docs/ui.md`。
+
+### Fixed
+
+- **中文输入法组字时按回车选词不再把弹幕直接发出去**（`issue` 2609161236 #3；提交 `d02274e`）。判据 =
+  `composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || imeCommitTailRef.current`，三处输入
+  （弹幕框 / 新增短语 / 短语就地改名）同口径。**两个必须写下来的实现事实**：① React 19 的合成 `KeyboardEvent` **不拷贝** `isComposing`
+  （`react-dom` 只按自己的 `KeyEvent` 接口逐项拷贝），读 `event.isComposing` 拿到的是 `undefined`，必须走 `event.nativeEvent`；
+  ② WebKit（macOS 上 Tauri 用的 `WKWebView`）那一次回车是**先 `compositionend`、后 `keydown`**，那次 `keydown` 的 `isComposing` 已回到 `false`、
+  `keyCode` 回到 `13`，前两项都拦不住 —— 由 `onCompositionEnd` 置位、`setTimeout(…, 0)` 在**本轮任务结束时**清掉的「提交尾巴」窗口兜住
+  （不用一次性标志：那会让「鼠标选完候选、再按回车发送」失灵；也不写死 50ms 这类没有实测依据的窗口）。
+  **已实测**：A/B 两档 —— 旧实现 4 条断言红、新实现 6/6 绿，正向对照「隔一轮任务后的普通回车照发且草稿清空」两边都真；真实 IME 事件序用
+  CDP `Input.imeSetComposition` 在 Chromium 上验过（组字中回车**不发**、上屏本身不发、用户自己那次回车发）。
+  **未实测**：WebKit 没有 IME 注入通道，只验了合成事件路径；**提交那一次回车没有 `preventDefault`**，在 WebKit 的时序下**理论上**会给正文多一个换行
+  （Chromium 实测没有；真机上若观察到，补一句 `if (!event.nativeEvent.isComposing) event.preventDefault();` 即可）。
+
+### Fixed
+
+- **房间标签条不再画滚动条**（`issue` 2609161352 #1，用户原话「顶部 tab 滚动的时候不要有滑块，会挡住，能隐藏掉吗」；提交 `a0a0a14`）。
+  `.tabs` 加 `scrollbar-width: none` 与独立的 `.tabs::-webkit-scrollbar { display: none }`，并**删掉 `scrollbar-gutter: stable`** ——
+  一旦滚动条不再绘制，它恒为 no-op（同一条产物带/不带它做 A/B：WebKit 与 Chromium 的 gap / clientHeight / offsetHeight / clientWidth / offsetWidth 完全一致）。
+  **这条例外必须写明**：`index.css` 顶部原有一条硬规矩「故意不给 `::-webkit-scrollbar` 写样式」（写了会把 macOS 覆盖式滚动条换成常驻经典条，曾导致内容右移与窗口右缘拖不动）；
+  本次在该处**原地补了窄例外**并给三条依据：① `display: none` 宽高皆 0、一个像素不画，「占位」与「常驻」两个前提都不成立；② 例外按选择器生效、不是文档级开关（本仓 `.adminRail` 已有先例）；
+  ③ 只横向滚、纵向不滚，生不出站在窗口右缘的竖条；边界是**只许 `display: none`**，想写宽度/颜色要先在原地补论证。
+  **已实测**（真产物 CSS + 真 DOM，360×844、dsf 2，before/after 由同一构建管线派生，两个变体：引擎默认 / 注入 14px 经典占位式滚动条）：
+  WebKit + 注入档改前「标签底边到容器内底边」为 **14px**（滚动条吃掉一条）→ 改后 **0**；四档改后均 0，横向仍可滚（`scrollLeft` 赋值 0→826→1652、滚轮 `deltaX` 0→140），`pageerror` 0。
+  **未实测**：两引擎全量冒烟在本批收尾时统一跑（新增三条断言因此只做过语法闸/构造闸 + 真浏览器里的等价几何复算）；真机 macOS WKWebView / Android WebView 的观感；
+  以及覆盖式滑块本身在无头里**根本不被绘制**（专门写了纯白容器探针：滚动中非白像素 0）——所以「用户看到的那条滑块消失」这件事在本机只能由「计算值 `scrollbar-width: none` + 占位为 0」间接证明。
+  规格：`docs/ui.md` §2.3 / §11；冒烟新增 `tabStripScrollbarThicknessPx` / `tabStripNoScrollbarSpace` / `tabStripScrollsWithHiddenScrollbar`。
+
+### Added
+
+- **GitHub Actions CI（刻意最小：两个 job，都跑 `macos-14`）**（提交 `16762b9`；用户 2026-09-16「同时在github上弄一个简单的ci」）。
+  `check` = `cargo fmt`（**存量不通过，用 `continue-on-error` 只当观察哨**：HEAD 上 81 处 / 14 文件差异，且没有一处属于本批改动，`AGENT.md` §9 早记着这件事）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` → 前端 `npm ci` + `npm run build`（= `tsc -b && vite build`）。
+  `artifacts` = macOS `.dmg`（`tauri build --bundles dmg`）与**已签名的** Android release APK（`tauri android build --apk --ci`），**只在 `workflow_dispatch` 与 `v*` tag 上跑**（每次 push 都出包太贵），两个产物各用 `actions/upload-artifact@v4` 上传（`if-no-files-found: error`）。
+  触发：push 到 `main`、任何 `pull_request`、`workflow_dispatch`；`permissions: contents: read`、`concurrency` 取消同 ref 的旧运行、cargo registry 与 npm 有缓存、artifacts job 不缓存 `target` 与 Gradle（近 GB 级，恢复比重新下载慢）。
+  **两个平台细节写进这里**：① 选 `macos-14` 而不是 Linux，是为了让 CI 的命令与本机验证过的**逐字一致**（Linux 上还得补 WebKitGTK 那一套系统依赖）；产出的 dmg / APK 因此天然是 arm64。
+  ② **冒烟不进 CI**：两引擎无头冒烟要真浏览器 + macOS 宿主 `smoke/wkwebview-host.swift`，且**同一台机上必须串行**（并发会先杀掉 WebKit 的 WebContent 进程，报成 `Target crashed`）——仍由本地 / 主流程跑。
+  **顺带把「干净克隆必须能构建」这条前提补上**（这是加 CI 才暴露的存量缺口）：`TauriActivity.kt` 与 `proguard-tauri.pro` 只在 `tauri android init` 时从 crate 模板拷进来，而 `app/.gitignore` 又把 `generated/` 整个忽略 → 干净检出上 Gradle 必报 `Unresolved reference: TauriActivity`。
+  已把这两份**纳入版本管理**（实测与真构建产物**逐字节相同**；同版本 tauri 下内容稳定），并给 `buildSrc/.kotlin` 增量缓存加了忽略。**已实测**：在一个干净 worktree 上真跑 CI 的那条命令 ——
+  `CI=true tauri android build --apk --ci` **rc=0、381 秒**、四个 ABI（`aarch64` / `armv7` / `i686` / `x86_64`）的 `libdanmubox_desktop.so` 全部编出、全程无 `Unresolved reference`（该 worktree 无本地 keystore，故产物是 `-unsigned`，属预期）。
+  **签名口径**：CI 用 `keytool` **现场生成一次性 keystore**（口令由 `run_id` / `run_attempt` 派生，run 结束即消失；`gen/android/{keystore.jks,keystore.properties}` 是本机自用私钥，已 gitignore、绝不入库也绝不进 CI）→ **CI 产物与本地产物签名不同，装过本地包的设备要先卸载**。
+  **未验证**：工作流**尚未在 GitHub 上真跑过**（推送后的首轮结果随后回填；`docs/operations.md` §5.13 也按此口径写明）。文档：`docs/operations.md` §5.13（新增）、§5.3（macOS 出包与 Android 干净克隆两条按实测改写）、§1.6（过期说法改写）、§5.7（CI 签名交叉引用）。
+
+### Fixed
+
+- **三个弹出面板（表情 / 短语 / 筛选）现在真的等高**（测试发现的真 bug，修在 `apps/desktop/ui/src/app.module.css` 的 `--panel-h`）。
+  定高公式漏了**三块共用的那 1px 上边框**：`.picker`（表情）是**内容驱动**高度、边框在盒外，`.phrases` / `.filterPanel` 是 `height: var(--panel-h)` 的**定高**（`border-box` 把边框算在盒内）——
+  于是内容驱动的那块**正好高 1px**（实测宽屏 表情 **169.1** / 筛选 **168.1** / 短语 **168.1**），与用户 item 8「展开高度看齐表情界面」的口径不符。
+  公式改为 `calc(var(--emote-grid-h) + var(--panel-pad-y) * 2 + 1px)`（注释写明这 1px 的来由），`docs/ui.md` §6.1 / §6.3 / §9.1 / §9.2 同步。**已实测**：冒烟 `panelHeightsMatch`（容差 `< 1`，口径未放松）在两引擎 × 两视口 × 两主题四组合全绿，三块逐块 **169.1 / 169.1 / 169.1**。
+
+> **本轮（`dev/2609161236` = 批次 `2609160959` + `2609161236` + `2609161352` + CI）的验证口径**，如实记录：
+> **Rust** —— `cargo clean -p danmubox-core -p danmubox-bili -p danmubox-desktop` 之后 `cargo test --workspace`：**234 passed / 0 failed**（179 + 49 + 6）；
+> `cargo clippy --workspace --all-targets -- -D warnings` **零告警**。**未跑** `cargo fmt`（存量不通过，见 `AGENT.md` §9）。
+> **前端四道闸**全绿：`npx tsc -b` / `npm run build` / `node --check smoke/room-page.mjs` / `node smoke/run-headless.mjs --precheck`。
+> **两引擎无头冒烟第一次真跑**（Chromium + WebKit × 宽 1440×900 / 窄 360×844 × 深 / 浅 = 8 个视口）：**8 个视口全部 `done: true`**。
+> 起点是**两引擎在 wide 视口就死于一个未捕获抛错**（场景跑不完 → 300s 超时）+ **10 条断言红**；收敛过程 = **12 处按实测只重量法、一条强度都没放松**，其中 **1 条是真 bug**（三块弹出面板差整整 1px，修的是 `--panel-h` 公式，见上一条 Fixed）。
+> **残留 1 条已知红**：`immersiveExitKeepsReadingPosition`（退出沉浸后阅读位置漂 **88.1px ≈ 一行**，只在非跟随态出现，两引擎 × 四组合数值逐位一致）—— 断言**保留不放松**，机制与去向登记在 `docs/testing.md` §10.6，另开一票修。
+> **产物**（自用）：macOS `danmubox_0.1.0_aarch64.dmg`（含独立可执行，前端已内嵌）与 Android `danmubox_0.1.0_universal-release.apk`（四 ABI，**已签名**）；构建方式与签名口径见 `docs/operations.md` §5.3 / §5.7 / §5.13。
+> **未验证**：三端手工冒烟清单（`docs/testing.md` §10）、真机 macOS / Android 观感、Android 键盘避让的内核那一半（WebView < M139 造不出复现）、`docs/protocol.md` A46（受影响账号 + 可复现房间）、送礼 / SC / 大航海的真实载荷逐条对照。
+> **CI**：`.github/workflows/ci.yml` 随本批落地，`check` job 已在本 PR 上真跑（首轮结果回填在 `docs/requests.md` E16）。
+
+### Calibration
+
+- **把「只读官方网页端产物 + 一次游客态实测」的结论回填进协议文档**（`docs/protocol.md` 附录 A47 那次取证；**只改文档，不改任何代码**）。逐条来源：
+  - `op=24` SocketAck（客户端 → 服务端，`{msg_id, cmd, p_msg_type}`，触发 `msg_id && p_is_ack`）与 HTTP
+    `POST /xlive/open-interface/v1/dm/message_ack`（`{terminal: 0, sequence: <帧头 seq>}`，触发 `seq > 1`）——
+    来源：**官方产物** `room-player.<hash>.prod.min.js` 的 `WS_OP_*` 常量表与 `processSingleMessageReply` / `onReceivedMessage`。
+    **我方两条都未实现**，本轮**未命中触发条件**。
+  - 认证包官方的三个附加字段 `support_ack: true` / `queue_uuid` / `scene`（**官方发送、我方未发送**；`scene` 的**具体取值未确定**）——
+    来源：同上产物的 `userAuthentication()`。
+  - 心跳：官方首个 `op=2` 在收到 `op=8 code=0` 的**同一次回调内立即发出**（**不是等 60 秒**，60 秒只是上界）、
+    周期 `heartBeatInterval` 默认 **30**；心跳体 `[object Object]` 与官方**逐字节一致**（官方传的是对象 `{}`，
+    `TextEncoder` 先把入参 `ToString`）——来源：同上产物。本实现已于 2026-09-16 改为认证成功即发首包，与之对齐。
+  - `op=8` 非 0 code：官方命名 **`-101 = WS_AUTH_TOKEN_ERROR`**（官方行为 = 停重试 + 重取 token）；
+    **我方未区分 `-101`**，一律按认证失败计数 + 退避（现状如实记录，未实测到该 code）。
+  - 官方入站 cmd 分派器（页面 bundle `app.<hash>.js` 的 `receiveMessage`）与我们映射表的差集：官方认 / 我方未认约 190 条
+    （原样收入，**只作事实记录、不是待实现需求**），以及反向差异（`GUARD_BUY` / `USER_TOAST_MSG` / `SUPER_CHAT_MESSAGE_JP`
+    在官方页面产物里 **0 命中**）。规格：`docs/protocol.md` §10.0.1。
+  - 我方实测（**2026-09-16 游客态 3 分钟、公开测试房间 5440、470 包 / 185 条消息 / `mirrored_dropped` 19**）：
+    原始载荷里 `msg_id` 与 `p_is_ack` **各 0 命中**（`danmubox::raw` 打印了全部 185 条原文）⇒ 未观测到「服务端要求回 `op=24`」；
+    帧头 `seq` **日志无出口** ⇒ HTTP `message_ack` 的触发条件**本轮无法判定**。
+    `unknown_cmd: 37` 全部是 `COLLABORATION_LIVE_WATCHED`(17) / `COLLABORATION_LIVE_ONLINE`(17) /
+    `COLLABORATION_LIVE_POPULARITY`(3)——顺手更正一处易误读：同窗口 `ENTRY_EFFECT` 也恰好 37 条，但它**已经归一化**（`kind=interact`），
+    与 `unknown_cmd` 的 37 只是数值巧合（§10.0.2）。
+  - **未实测**：主播登录态下的服务端行为（本票不登录）、`scene` 的具体取值、以及 ack 是否为「连上却收不到消息」的成因
+    （需要受影响账号上的真实对照）。**需主流程另开票**的项：`op=24` / `message_ack` 的实现（先补帧头 `seq` 的 `debug` 日志再采一轮）、
+    `COLLABORATION_LIVE_*` 等未映射命令的归一化、`-101` 的专用分支。
+  - 规格：`docs/protocol.md` §5 / §7.1 / §8.1 / §10.0.1 / §10.0.2 / §11.7 / §13.3 / 附录 A46–A47；
+    `docs/contract.md` §6 只**增补差异注**（既有字段、常量与规范性描述一字未改）。
+
+### Added
+
+- **一键诊断：点一下采集连接诊断，导出恰好一个文件**（用户 2026-09-21；提交 `4d501a6` / `6ab5509`）。
+  房间头 `⋯` 菜单新增入口，采集 **180 秒**（可提前结束），导出位置：桌面 `~/Downloads/danmubox-diagnose-<UTC 时间戳>.txt`、**Android 经 `MediaStore` 写公共 `Download` 目录**（API 29+ 免权限，`IS_PENDING` 两步可见性；24–28 明确报不支持而不是静默写到别处）。
+  **用户给的三条硬约束都落在实现里**：① **一次诊断只出一个文件**（采集中目录为空、无临时物，导出后内存里的采集内容立即清空）；② 放在**醒目、好找**的位置（下载目录，不存在则主目录），界面里给出可复制的完整路径；③ **可直接外发**——走比日志更严一档的脱敏（凭据 / uid / 昵称 / **房间号**一律 `***`）。
+  内容覆盖「连上了却收不到弹幕」这条链路的每一环：`getDanmuInfo` 的 `code` 与耗时、`op=7` 发出时刻、`op=8` 是否到达与延迟、**首个入站帧延迟**、`idle_ms`、每次连接尝试的结束原因 / 退避 / 候选节点下标、连续认证失败次数、未识别 `cmd` 计数与**名单**、连接时长、平台与应用 / 内核版本。IPC 36 → 38 条（`diagnose_start` / `diagnose_export`），契约新增 §4.4；`docs/operations.md` §2.9 写了「怎么让用户导出」。
+  **这同时补上了日志审计登记的两条遗留之一**：Android 侧此前没有可打开的业务日志入口（`docs/testing.md` §10.5 已闭环）。
+  **实测**：Android 模拟器上真点击走完全流程，`/sdcard/Download` **恰好一个** 3151 B 文件、凭据自查 grep 0 命中、报告头部的时间戳（含秒）/ 应用版本 / 计数 / 时长原样可读。**未实测**：macOS 的点击路径（GUI 会话全程停在 `loginwindow`，合成点击被锁屏吃掉；已做的只有出包并真启动 14 分钟无 panic、webview 加载与 IPC 到达）—— **用户 2026-09-21 确认这个功能 macOS 与安卓两端都要**，故这一档待屏幕解锁后补测；以及真机（非模拟器）的 MediaStore 行为。
+  **开发中发现并修掉的一处缺陷**：导出时把整段报告又过了一遍通用 `redact()`，导致**过度脱敏**（应用版本变成 `0.***.0`、时间戳秒位、计数、时长都被抹掉）——排查要看的数字正好被抹，报告等于半废。改为**只抹「像标识」的位置**（键值对形态如 `room_id=1`/`?id=1`，以及 ≥2 位且两侧不贴 `.`/`:`、左侧不是 `+` 的独立数字），两条回归用例**同时钉住两头**：该抹的（凭据 / uid / 房间号，含短号）一个不漏，不该抹的（时间戳含秒 / 版本 / 计数 / 时长 / 序号）一个不动。
+- **辅助功能新增两枚开关：折叠低价礼物 / 剔除低价礼物统计**（用户 2026-09-21 第 3、4 条；提交 `01d1d71`）。
+  新偏好键 **`ui.gift_collapse_cheap`**（bool，默认 **false**）与 **`ui.gift_exclude_cheap_stats`**（bool，默认 **false**）——**默认都关 = 默认行为与改前逐字一致**（辅助开关不该改掉多数人的现有效果，理由写进契约 §8 的口径表）。
+  门槛是**单个价值 ≤ 0.1 元**（= 100 金瓜子，按现有的元口径换算）；「折叠」只作用**礼物栏**（同类合并成一条，桶取第一条的身份与位置），「剔除」只改**折叠汇总 / 统计**（`礼物 4 · 0.3 元` → `礼物 2 · 0.11 元`，头部计数 4 → 2），两者互相独立、与弹幕流分支无关；SC 与大航海不受任何影响。边界值逐条钉住：`0.09` / `0.10` 算低价、`0.11` 不算、**金额 0（上游没给价）不算**——否则整组统计会凭空消失。契约 §8/§9 → `prefs.rs`（SPECS）→ `ipc.md`（`PrefsSnapshot`，键数 16 → 18）→ `types.ts` 四处对齐，并有 `spec_table_matches_contract_keys` **直接读契约 §8 逐键比对**当护栏。
+
+### Changed
+
+- **礼物栏的行与弹幕区同一套呈现，SC（醒目留言）不再显示不全**（用户 2026-09-21 第 2 条；提交 `a22f8b3`）。
+  根因量到了：旧礼物栏的正文格是 `white-space: nowrap` + `overflow: hidden` + `text-overflow: ellipsis`，窄屏下 `clientWidth 212 / scrollWidth 466` —— **被裁掉 254px（全文的 55%）**，所以 SC 的长留言根本看不全；同时行高只有 18px（1 行）而弹幕区是 42px（2 行），也没有头像列与身份行，栏底颜色还不同（`--bg-elevated`）。
+  改法：礼物栏**改用弹幕区同一套实现** —— 行 = `MessageRow`、列表 = `MessageList`（`scope="gift"`：testid 分族、空态文案由调用方传入、金额只在这一栏画），因此**虚拟列表、贴底判据、「回到最新」、跟随 / 暂停**全部同源；两处各持自己的滚动位置与列表状态，互不影响。
+  **实测**：同一条 SC 在两处的几何逐项相等（行盒 336×102、头像列 26.3 × 26.3、正文块 288 × 42、字号 14 / 行高 21），**底色像素级一致**（两栏各取 12×12 截图逐字节比较，179 B 完全相同），`scrollWidth == clientWidth` 且 `scrollHeight == clientHeight`（不截断、整段在 DOM 里），把礼物栏滚到顶会出现「回到最新」而弹幕区仍贴底。**替换掉**旧断言 `giftDockItemSingleLine` —— 它钉的正是用户要求删掉的「单行窄条截断」形态，留着等于要求改回去。
+- **筛选面板两块标题更醒目**（用户 2026-09-21 第 5 条；提交 `01d1d71`）。`.filterSection h3` 由 `--fs-2` / 600 / `--fg-dim` 改为 `--fs-6` / 700 / `--fg`，并加 1px 底分隔线与 `letter-spacing .02em`；实测标题 13.846px / 700、清单项 12.04px / 400，**面板定高未变**（169.109px = `--panel-h`），宽窄屏横向溢出都是 0。文案与信息结构一字未动。
+
+### Fixed
+
+- **手机上两条拖动交互（房间标签条拖动排序、共享分区的拖分割条与长按换位）真的能拖了**（用户 2026-09-21 第 1 条「拖动这个交互是不是不太对劲」；提交 `c482052`）。
+  **不是手感问题，是真故障：这两条触摸拖动在此前的构建上一次都没成功过。** 根因：浏览器在 **`touchstart` 那一刻就把 `touch-action` 快照**交给自己的手势识别器，之后再用 JS 改 CSS（`.tabsDragging` 里的 `touch-action: none`）或在 `pointermove` 上 `preventDefault()` 都拦不住**已经起跑**的滚动 —— 自绘拖动当场收到 `pointercancel` 作废。
+  一共三条独立缺陷：① **事件竞争**（主因，两条交互都中）；② `swallowClick` 的「举旗 + 600ms 兜底」窗口**吞掉后续点击**（复现：长按拖完紧接着按礼物折叠头 → 旧版没反应）；③ 标签条**慢点**（按住 >400ms 原地松手）一律吞 click，导致既不排序也不切房间。另外分割条触摸热区只有 **8px**（命中带 ±4px ≈ 1.2mm，手指接触面 7–9mm），按不中就落进某一栏去触发换位/滚动 → 触摸端放大到 **24px**（可见发丝线仍 1px，只改热区）。
+  **写法由对照实验定死**：同页 5 个手势变体跑同一串 CDP 真触摸，只有「**在挂载时注册一条非 passive 的 `touchmove`、且只在拿起来之后 `preventDefault`**」这一种同时满足两件事 —— armed 拖动的 `pointercancel` 从 1 次降到 **0 次**，而横划滚动标签条的位移与基线**逐像素相同**（105px）；另一种「按下时才注册」的写法会把 flick 滚动一起弄死（滚动量 0）。
+  **实测（桌面 Chrome 153 + 安卓模拟器 android-35，均为 CDP 真触摸）**：排序成功 false → **true**、慢点切房 false → **true**、长按换位 null → **true**、拖后补发的 click 被吞 false → **true**；**桌面鼠标路径零回归**（顺序 / 比例落盘 / 热区都不变）。视觉证据（adb 截图 + 视觉模型复核）：被拖标签半透明 + 插入指示条在位、落点栏描边、热区 24px 而可见线仍 1px。
+
+> **本轮（批次 `2609162056`：5 条需求 + 一键诊断 + 构建环境规矩）的验证口径**，如实记录：
+> **Rust** —— `cargo test --workspace` **253 passed / 0 failed**（187 + 58 + 8）；`cargo clippy --workspace --all-targets -- -D warnings` **零告警**（合并后先复现两处阻断 —— `ws.rs` 的 `read_loop` 参数 8/7 与一个死函数 —— 已按仓库既有取舍修掉，见提交 `106e678`）。**前端四道闸**全绿（`tsc -b` / `npm run build` / `node --check` / `--precheck`）。
+> **冒烟：本轮按用户要求没有跑**（`node smoke/run-headless.mjs` 本体与 `--engine webkit` 都没跑）。后果如实记账：本批各票新写入 `smoke/room-page.mjs` 的断言（礼物栏与弹幕区一致、两枚新开关、拖动手势归属、诊断钩子）**只过了 `--precheck`**（语法 + 两主题场景构造），**未在浏览器里执行**；`docs/testing.md` §10.6 登记的那条已知偏差（`immersiveExitKeepsReadingPosition`，[issue #4](https://github.com/HakaseZ/danmubox/issues/4)）仍是上一轮 8 个视口实测的状态，本轮未复跑、也未放松。
+> **产物**：macOS `.dmg` 与 Android 已签名 release APK 按本批重新构建（方式与签名口径见 `docs/operations.md` §5.3/§5.7/§5.13）。
+> **未验证**：macOS 的「一键诊断」点击路径（屏幕锁着，合成点击被吃掉）、真机 Android 的 MediaStore 行为、真机上的拖动观感、三端手工冒烟清单（`docs/testing.md` §10）、以及 `docs/protocol.md` A47（服务端是否要求回 ack）。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

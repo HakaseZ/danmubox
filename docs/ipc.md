@@ -26,7 +26,7 @@
 | 命令注册 | 全部集中在 `apps/desktop/src-tauri/src/lib.rs` 的 `tauri::generate_handler![…]`；命令函数也在该文件（没有 `commands.rs`） |
 | 命令名 | `snake_case`，与 `contract.md` §7 字面一致 |
 | 参数名 | Rust 侧 `snake_case`；Tauri 2 把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId`、`query`、`patch`、`upstreamId` 等 camelCase 键 |
-| 同步/异步 | 36 条命令：27 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` |
+| 同步/异步 | 38 条命令：28 条 `async fn`，10 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `diagnose_start` / `frontend_log`。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` |
 | 成功返回 | §3 签名表「返回」列的 JSON 值；`void` = 无返回体 |
 | 失败返回 | `invoke` reject，值为 `ApiError`：`{ "code": string, "message": string }`（`lib.rs`）。前端按 `code` 分支；`message` 是给人看的文案（Rust `Display` 或上游原文），**不得**解析它做逻辑，也没有 `detail` 这类嵌套字段 |
 | 错误码 | `code` 取自 `core::error::Error::code()`，共八个（下表）；错误对象的集合以本文为准 |
@@ -50,7 +50,7 @@
 
 ## 3. 命令签名表
 
-36 条，与 `generate_handler!` 逐条对应；除表中注明的同步命令外均为 `async fn`。所有命令都接收 `State<'_, AppState>`（下表省略）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
+38 条，与 `generate_handler!` 逐条对应；除表中注明的同步命令外均为 `async fn`。所有命令都接收 `State<'_, AppState>`（下表省略）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
 
 | 命令 | 参数 | 返回 | 错误 | 说明 |
 |---|---|---|---|---|
@@ -87,8 +87,10 @@
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；交给界面前按 `live_status == 1` 置顶（`contract.md` §5），完整展示排序见 `ui.md` §2.2 |
 | `wallet_balance` | 无 | `number`（Rust `i64`） | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额（整数）：上游 `data.gold`（金瓜子）按 `gold / 100` 换算成电池；`gold` 缺失或不可解析 → `UPSTREAM_ERROR`。没有包裹类型（口径与端点见 `protocol.md` 附录 A29） |
 | `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令。平台实现：macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 各一条系统命令；**Android 走官方 `tauri-plugin-opener`（平台 Intent）**——插件只在 Android 目标声明（`[target.'cfg(target_os = "android")'.dependencies]`，桌面构建依赖图与产物一字不变），由 **Rust 侧**调用、**不进 capability**（`capabilities/default.json` 不需要 `opener:*` 权限）；iOS 等其余平台仍是显式 `Unsupported`（不静默失败） |
-| `prefs_get` | 无 | `PrefsSnapshot`（`contract.md` §8 全部 14 键的**生效值**） | `INTERNAL` | 未写入过的键返回 `contract.md` §8 默认值。同步命令 |
+| `prefs_get` | 无 | `PrefsSnapshot`（`contract.md` §8 全部 18 键的**生效值**） | `INTERNAL` | 未写入过的键返回 `contract.md` §8 默认值。同步命令 |
 | `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令 |
+| `diagnose_start` | `engine: String` | `DiagnoseStart` | — | 一键诊断：开始采集连接诊断（`contract.md` §4.4）。`engine` 是渲染引擎标识（前端传 `navigator.userAgent`：内核版本只有页面知道，报告头要用它）。窗口固定 180 秒，界面按 `ends_ms` 倒计时、到点自动收工。采集中**不发送任何数据**（本仓无遥测）。同步命令：只写窗口起止时刻，不碰 IO |
+| `diagnose_export` | 无 | `DiagnoseExport` | `INTERNAL` | 一键诊断：渲染并写出**恰好一个**报告文件（`contract.md` §4.4 的位置与命名）、结束采集并清空采集内容。`INTERNAL` 只在写文件失败时出现（目录不可写 / MediaStore 拒绝），`message` 带本地路径与原话。前端由 `diagnose_start` 的界面在窗口到点或用户点「提前结束」时调用 |
 | `frontend_log` | `level: String, message: String` | `void` | — | **前端 → 后端的内部命令**，不是给业务代码用的：控制台桥把 `console.error` / `console.warn` 与未捕获错误转发过来，写进 `tracing` 日志（`target = "danmubox::ui"`，`level` ∈ `error` / `warn`，其它值降级为 debug）。同步命令，永不失败。详见 §4.1 |
 
 `prefs_set` 接受部分补丁（只提交要改的键），返回合并后的全量生效值。
@@ -120,7 +122,7 @@ type Message = {
   medal_guard_level: number;   // 粉丝牌自身所属房间的舰长标记；只用于牌面样式，不画舰长标
   is_admin: boolean;           // 发送者是否房管
   is_history: boolean;         // 是否来自进场回填；实时推送恒为 false
-  amount: number;              // 礼物金瓜子或 SC 金额，非交易类为 0
+  amount: number;              // 金额：礼物与大航海是金瓜子、SC 是元；界面一律按元展示（金瓜子 ÷1000，contract §5）
   combo_id: string;            // 礼物连击标识（上游 batch_combo_id），非连击为空串
   emote: EmoteRef | null;      // 表情弹幕的整份表情信息；非表情为 null
   reply_to_uid: number;        // 被回复者 uid；0 = 不是回复
@@ -275,11 +277,15 @@ type RoomStats = {
 
 type ReportReason = { id: number; reason: string };
 
-type PrefsSnapshot = {            // contract.md §8 的 14 键全量，键名即契约字面
+type PrefsSnapshot = {            // contract.md §8 的 18 键全量，键名即契约字面
   "ui.font_scale": number; "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean; "ui.pause_on_hover": boolean;
   "ui.gift_in_danmaku": boolean;      // 弹幕流里是否包含礼物 / SC / 大航海（默认 true）
   "ui.gift_panel": boolean;           // 是否显示独立礼物栏（默认 true）
+  "ui.gift_pane_on_top": boolean;     // 礼物栏是否在共享分区的上半（默认 false = 礼物在下）
+  "ui.gift_pane_ratio": number;       // 礼物栏占共享分区高度的份额（默认 0.35，范围 0.10–0.90）
+  "ui.gift_collapse_cheap": boolean;  // 礼物栏里把 ≤0.1 元的礼物合并成一条（默认 false）
+  "ui.gift_exclude_cheap_stats": boolean; // 把 ≤0.1 元的礼物从折叠汇总 / 统计里剔除（默认 false）
   "ui.interact_auto_hide": boolean;   // 互动/进场消息显示一会儿后自动消失（默认 true）
   "ui.show_timestamp": boolean;       // 弹幕前显示时间戳（默认 false）
   "composer.phrases": string[];
@@ -295,6 +301,22 @@ type AppInfo = {
   data_dir: string;
   config_path: string;  // config.toml 的完整路径
   logged_in: boolean;
+};
+
+// 一键诊断（contract.md §4.4）。时间都是 UTC 毫秒。
+type DiagnoseStart = {
+  started_ms: number;   // 采集窗口起点
+  ends_ms: number;      // 窗口截止时刻（界面按它倒计时）
+};
+
+type DiagnoseExport = {
+  path: string;         // 给用户看的位置：桌面端绝对路径；Android 为 /sdcard/Download/…
+  name: string;         // 文件名（danmubox-diagnose-YYYYMMDD-HHMMSS.txt）
+  bytes: number;        // 报告字节数
+  attempts: number;     // 报告里带了几条连接尝试
+  logs: number;         // 报告里带了几行窗口内日志
+  started_ms: number | null;  // 本次采集窗口的起止（直接导出时为 null）
+  ends_ms: number | null;
 };
 ```
 
@@ -331,6 +353,8 @@ type RoomStats = {   // 与 §3.1 同名，事件即它本身
   watched: number | null;
 };
 ```
+
+**`ConnState` 仍是这四个取值**：`protocol.md` §13.1 的终态 `Failed` **不新增取值**——§13.3 步骤 6 明写「房间状态置为 error」。连续 3 次认证失败后自动重连**停止**，这个终态同样报 `"error"`，`detail` 里带「已停止自动重连；手动刷新可重置」。前端要区分「退避重连中」与「已停止自动重连」时读 `detail`；若要单独呈现一档，得先在 `protocol.md` §13、本节与 `ui.md` §3.3 一起加取值。
 
 **`danmubox://session` 的判别规则**：这个事件名上目前只推一种载荷——房内身份 `RoomSession`（`Event::Session`，会话建立时向总线发一次）。但前端必须按**判别字段**分派，而不是假定载荷种类：有 `logged_in`（boolean）→ 登录态 `SessionState`；有 `is_admin`（boolean）→ 房内身份 `RoomSession`。分派写错（例如把身份当登录态）会把 `session.logged_in` 覆盖成 `undefined`，界面随即误判成游客态。
 

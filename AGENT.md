@@ -94,7 +94,16 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 
 Android 产物：`apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（通用）与同目录 `apk/<arm64|arm|x86|x86_64>/release/app-<abi>-release.apk`（分 ABI）；**未签名包**（缺 `keystore.properties` 的构建）装不进设备。前置条件、签名与清除口径见 [`docs/operations.md`](docs/operations.md) §5.3–§5.7、§5.12。
 
+**Android 构建前必须先 `. scripts/android-env.sh`（「不污染宿主」口径的一部分，2026-09-16 实测踩过）**：它会把 `RUSTUP_HOME` / `CARGO_HOME` 一起指向仓库内的 `.android-env/`；**漏掉这一步直接跑 `tauri android build`**，`rustup` 会转去宿主 `~/.rustup` 找 `rust-std`，实测后果是**构建卡住 4 分多钟**、并在 `$HOME` 落下一份约 **7MB 的 `.partial`**（当次已清理，事后复核宿主 `~/.rustup` 里**没有**被塞入 android std 目录：`toolchains/*/lib/rustlib/` 下 android 目录数为 0）。
+
 环境变量：`DANMUBOX_LOG`（默认 `info`；`debug` 会输出每条业务载荷的原文，是字段校准的采集入口）。
+
+**多 worktree 并行时的 target 目录口径（用户 2026-09-16 定，硬要求）**：每个 worktree 一律用**自己**的
+`CARGO_TARGET_DIR=$PWD/target`，**不得共享**（也不要用 `--target-dir` 指到别处凑一个共享目录）。实测共享会让不同
+worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某个分支的 crate 被另一个分支的同名产物顶掉，测试过了但过的不是本分支的代码），
+这种失败极难自查。前端同理：每个 worktree 自己 `npm install` / `npm run build`，不共用 `node_modules` 与 `dist`。
+
+**合并前先看索引（2026-09-21 实测踩过两次）**：`git merge` 会把索引里**已暂存、但与本次合并无关**的路径一并写进合并提交。若工作区里有别人（或用户）已 `git add` 的文件，合并前必须先把它们让开（`git reset -- <路径>`），合完再按需还原 —— 否则那些文件会被悄悄提交进你的合并提交里，若还推了远端就等于把不该入库的内容（例如带他人昵称的截图）发进了公开仓库，只能靠重写历史 + 强推来收场。
 
 新增或改变命令时，必须同时更新本节与 `README.md` §8；**不得**把未验证的命令写成已验证。
 
@@ -207,12 +216,15 @@ Android 产物：`apps/desktop/src-tauri/gen/android/app/build/outputs/apk/unive
 任务完成前逐项自检，全部满足才可交付：
 
 - [ ] **测试只在用户明确要求时跑**（用户 2026-09-13：「我说要测再测吧，每次测太浪费时间了」；同日更早的口径：「没改动的部分不重测」）。因此本清单里那些**跑全量**的条目（全量冒烟、两引擎四档）**默认不跑**：改动落地后只跑**秒级**的三道 —— `npx tsc -b`、`node smoke/run-headless.mjs --precheck`、必要时 `npm run build` —— 并在交付里**明写「哪一项没跑」**，连同**因此未验证的断言清单**；不许让报告读起来像验过了（虚报禁令见 §8 第 7 条）。用户说要测时，仍按下面两条把 Chromium 与 WebKit 两遍跑满。
+- [ ] **子 agent 一律不跑冒烟（用户 2026-09-16 两次强调，第二次明确「以后都这样」）**：全量无头冒烟由**主流程**在集成收尾时**统一跑一次**，子 agent 只跑上一条那三道不启浏览器的秒级闸 + 自己改动相关的机制级验证（单测 / 探针 / `--precheck`），交付里**必须写明「冒烟未跑，留给主流程」**。理由：子 agent 并行时各自起浏览器会互相打架、结果不可比，且冒烟的价值在于「集成后的那棵树」而不是各票的分支。冒烟**不再要求串行**：各起独立无头浏览器、并行跑、不抢锁（旧的「同一台机上必须串行」作废，见 `docs/ui.md` §15）。
+- [ ] **被当作证据的产物必须能自证「属于本次运行」**：截图用独立 `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，冒烟日志落 `.android-env/verify/<票名>-<engine>.log`，Rust 侧用 `cargo test -- --list | grep <新用例名>` 证明新增用例真的在跑；交付里给出这些路径与命令。**不得**拿一个「大概是这次的」旧文件当证据（同一台机上产物互相覆盖是这个仓库反复踩过的坑）。
+- [ ] **多 worktree 并行时，每个 worktree 用本地 `CARGO_TARGET_DIR=$PWD/target`**（见 §3 的口径）：共享 target 目录会让不同 worktree 的产物互相覆盖，表现为假绿 / 假红。改 Rust 的票在自己 worktree 里跑 `cargo test` 时，先确认 `CARGO_TARGET_DIR` 指向本 worktree。
 - [ ] 改动范围与任务描述一致，没有顺带重构无关文件。
 - [ ] `cargo fmt --all -- --check` 通过。**备注（2026-09-15 实测）：本仓库从 HEAD 起就不通过**——差异 **59 处 / 14 文件**（`apps/desktop/src-tauri/src/lib.rs` 11 处、`crates/danmubox-bili/src/cmd.rs` 12 处等），宿主 rustc 1.88.0 / rustfmt 1.8.0 与项目内 rustc 1.98.1 / rustfmt 1.9.0 **两套工具链结果完全相同**，属**存量问题**、不是某一票引入的。因此本条当前**无法当作提交门**（谁也不能在 HEAD 上让它变绿）：提交时只要求「自己改的文件不新增格式差异」，交付里如实写明本条不通过；把全仓一次性格式化属另一票的范围（会动 14 个非本次改动的文件）。
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` 零告警。
 - [ ] `cargo test --workspace` 通过；新增行为有对应验证。
 - [ ] 前端改动通过类型检查，且在 Tauri 应用内目视确认实际界面。**若改动按视口 / 设备分叉**（窄屏、横屏、DPI、移动端），必须确认**该形态在真机上可达**（窗口最小尺寸、断点、设备宽度），并把验证覆盖到**可达面的边界值**——窗口最小宽度是 360 就用 360 验，而不是只验 390。只在无头视口某个宽度里成立的形态，必须在报告里明说「当前入口够不到」。（2026-09-12 教训：窗口 `minWidth` 写死 720 而窄屏断点是 520，冒烟在 390 视口里绿了三次，用户却永远拖不到——断言全绿 ≠ 用户看得见，视口是产品的可达面。）
-- [ ] 前端改动的无头冒烟**必须跑在宿主引擎上**（macOS 桌面端 = WKWebView）。Chromium 的绿只证明「在 Chromium 里成立」：`cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs --engine webkit` 与默认的 Chromium 两遍都要过（同一份场景、同一套断言），报告里给出**两边的结论**；只跑其中一个必须在报告开头写明「宿主引擎未验证」。（2026-09-12 教训：弹幕行重做在无头 Chromium 里 500+ 断言全绿，装到真机上主页直接崩掉——只剩一个头像的角落。渲染引擎和视口一样，是产品的**可达面**：验不到用户实际用的那个引擎，「全绿」对用户没有意义。这一次的根因其实与引擎无关、是夹具看不出来，但**发现它的唯一路径**就是让宿主引擎进验证链。）
+- [ ] 前端改动的无头冒烟**必须跑在宿主引擎上**（macOS 桌面端 = WKWebView）。**这条由主流程执行**（子 agent 不跑冒烟，见上）：`cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs --engine webkit` 与默认的 Chromium 两遍都要过（同一份场景、同一套断言），报告里给出**两边的结论**；只跑其中一个必须在报告开头写明「宿主引擎未验证」。Chromium 的绿只证明「在 Chromium 里成立」。（2026-09-12 教训：弹幕行重做在无头 Chromium 里 500+ 断言全绿，装到真机上主页直接崩掉——只剩一个头像的角落。渲染引擎和视口一样，是产品的**可达面**：验不到用户实际用的那个引擎，「全绿」对用户没有意义。这一次的根因其实与引擎无关、是夹具看不出来，但**发现它的唯一路径**就是让宿主引擎进验证链。）
 - [ ] **改过冒烟场景文件（`apps/desktop/ui/smoke/room-page.mjs` 或任何进冒烟链路的文件）后，两道闸门都要重跑**：①语法 `node --check smoke/room-page.mjs`；②**构造闸门** —— `buildSmokeHtml('dark')` / `buildSmokeHtml('light')` 各真的求值一次（一行命令：`node smoke/run-headless.mjs --precheck`，**不起浏览器**；在 `apps/desktop/ui` 下跑，需要先 `npm run build`）。**只跑 `node --check` 不算过**：那个文件里有几百行注释活在**模板字符串内部**，未转义的反引号在那里**不是语法错**——模板提前收尾、后面那截文本成了合法的表达式/标签模板，`node --check` 照样通过，只有求值到那一行才炸（2026-09-13 同一个坑连炸两次，见提交 `d6580da`）；同理**模板串里的反斜杠会被吃掉**（写 `/rgba?\(/`，页面里实际是 `/rgba?((/`），所以**正则不要写在模板字符串里**——要判计算色就照既有 `luminance` 那样用 indexOf / slice 切。运行器已把这两道内置在**起浏览器之前**：任一道不过就带精确行号立刻退出，不会白起一次浏览器。
 - [ ] **桌面端二进制只许用仓库规定的方式产出**：`cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle`（`README.md` §6/§8、`docs/operations.md`）。**不要**用裸 `cargo build --release -p danmubox-desktop`：那样产出的二进制**前端加载不出来**——webview 从不导航、窗口全白、日志里既没有「页面加载」也没有任何 IPC；而且它**与源码无关**，极难自查。（2026-09-13 实测 A/B：`tauri build` 产出的那份正常；裸 cargo 构建的、**带**临时日志的与**不带**临时日志的（`git stash` 掉后再构建）**都失败**；换回 `tauri build` 后**同一份源码 + 同一份 dist 立刻正常**。）
 - [ ] **改 Rust 的票，必须真启动一次应用并确认存活 ≥ 10 秒、无 panic**：`cargo test` 自带 runtime，测不出「主线程没有 runtime 上下文」这类崩；前端冒烟跑的是浏览器、不是 Tauri 进程 —— 这两层都挡不住「启动即崩」。（2026-09-13 教训：`97af765` 修的正是这一类；此后凡动 Rust 一律按这条验，报告里写明「启动存活 N 秒、无 panic」。）

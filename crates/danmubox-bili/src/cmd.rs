@@ -148,12 +148,9 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
 
     if tracing::enabled!(tracing::Level::DEBUG) {
         if let Some(m) = &message {
-            tracing::debug!(
-                cmd,
-                kind = m.kind.as_str(),
-                uid = m.uid,
-                "已归一化命令（原始载荷见上一条 debug 输出）"
-            );
+            // 发言人的 uid 不进日志（`AGENT.md` §8 第 1 条）：命令与类型足以定位解析问题，
+            // 要核对原始字段时另有 `danmubox::raw` 这一条专用出口（`docs/protocol.md` 附录 B.1）。
+            tracing::debug!(cmd, kind = m.kind.as_str(), "已归一化命令（原始载荷见上一条 debug 输出）");
         }
     }
     message.map(Dispatch::Message)

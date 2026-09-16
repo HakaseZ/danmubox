@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { AdminPanel } from "./AdminPanel";
-import { Avatar } from "./Avatar";
 import { Composer, type PanelKind } from "./Composer";
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
+import { SplitPanes } from "./SplitPanes";
 import { BACK_PRIORITY, registerBackHandler } from "../back";
+import { api, describeError } from "../ipc";
 import { useApp } from "../store";
 import {
   amountText,
   formatCount,
   GIFT_KINDS,
+  giftStatRows,
   splitGiftRows,
   type DisplayRow,
 } from "../filtering";
@@ -21,6 +23,7 @@ import {
   MUTE_HOURS,
   type AdminAction,
   type ConnState,
+  type DiagnoseExport,
   type Emote,
   type Message,
   type Prefs,
@@ -93,21 +96,61 @@ export const LIVE_TEXT: Record<LiveKind, string> = {
 };
 
 /**
+ * 沉浸模式（issue #1）的**双击判据**（唯一一处，`docs/ui.md` §2.3「沉浸模式」）。
+ *
+ * 用**指针事件**（`pointerdown` + `pointerup`）而不是 `dblclick`：鼠标双击、触屏点两下、
+ * 手写笔点两下走的是同一条路，不依赖各引擎「触摸是否合成 dblclick」这件不可靠的事
+ * （WKWebView 上双击本来就是缩放手势）。判据是「两次**点**」：
+ *
+ * - 每次「点」= 指针按下到抬起之间没挪动超过 {@link TAP_SLOP_PX}（拖动 / 滚动 / 选词都不算点）；
+ * - 两次点之间不超过 {@link TAP_MS}、且落点相距不超过 {@link TAP_SLOP_PX}（间隔用
+ *   `performance.now()` 量：同一只钟，不押在引擎对 `event.timeStamp` 的实现上）。
+ *   400ms 是**两边都够用**的那一档：鼠标双击的系统阈值通常在 500ms 上下（手慢的人也点得进来），
+ *   而 Android 的双击超时是 300ms（触屏更快，400ms 一样进得来）；比这更长就会把「两次独立的轻点」误收成一次。
+ * - 只认主指针的主键（`isPrimary` + `button === 0`）：右键弹行菜单、多指手势的副指针都不算。
+ *
+ * **与选中文本 / 双击选词的关系**：这条判据不 `preventDefault`、也不改 `user-select`，
+ * 浏览器原生的双击选词照旧发生；沉浸态只收起标题栏与输入区，弹幕区原样在场，
+ * 选中的文字仍然看得见、仍然复制得到（冒烟 `immersiveKeepsTextSelection` 钉住这一点）。
+ * 落在 {@link TAP_IGNORE} 上的双击**不切**——那些元素有自己的双击语义。
+ */
+const TAP_MS = 400;
+const TAP_SLOP_PX = 24;
+/** 自带双击语义的元素：落在这上面的双击不切沉浸模式。 */
+const TAP_IGNORE = "button, a, input, textarea, select, [role='button'], [contenteditable='true']";
+
+/** 倒计时写法：`2:59`（不足一分钟也补零，免得宽度跳动）。 */
+function countdown(ms: number): string {
+  const total = Math.ceil(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/**
  * 房间页。从左到右、从上到下只有一条生长轴（issue #8 的重排）：
  *
  * ```
  * [头部：◀返回 · ●直播状态 · 直播间标题（放不下就循环滚动） ······ 在线 · 看过 · ⋯菜单]
- * [弹幕列表  ← 唯一的 flex-1 生长/滚动区]
- * [弹出面板（表情 / 短语 / 筛选）← 向上展开，列表自动上弹]
+ * [共享分区 ← 唯一的 flex-1 生长区，由 SplitPanes 管（issue #8）：
+ *    默认 [弹幕列表 ← 内部滚动] / [分割条 8px 热区] / [礼物 / SC 栏 ← 内部滚动]
+ *    `ui.gift_pane_on_top` 换上下，拖动分割条改比例，长按任一栏 0.5s 拖拽换位]
+ * [弹出面板（表情 / 短语 / 筛选 / 房管）← 向上展开，共享分区随之变矮并重新贴底]
  * [输入区：输入框 + 工具行 + 发送]
- * [礼物 / SC 栏 ← 在输入区下方，可折叠]
  * ```
  *
- * 面板与礼物栏都在正常文档流里（不是浮层），所以展开时只会挤压弹幕列表，不会盖住最新弹幕。
+ * 面板在正常文档流里（不是浮层），所以展开时只会挤压共享分区，不会盖住最新弹幕；
+ * 两栏的高度比例与上下顺序都落在 `prefs.json`（契约 §8），重开应用保持。
  *
  * **房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏五者互斥**（用户 2026-09-13 第 4 条）：
  * 同时最多开一个 —— 五个面板状态都在这里（输入区那三个是受控的），打开一个就收起另外四个。
+ *
+ * **沉浸模式**（issue #1）是这条生长轴上的一次「收起」：弹幕区双击进 / 出（判据见
+ * {@link TAP_MS} 那一段），收起房间头、输入区（含三个弹出面板）与举报 / 房管 / 日志那几块，
+ * 只留**弹幕区**与**礼物 / SC 栏**（`ui.gift_panel` 为真时）——弹幕区因此长高，
+ * 虚拟列表靠 `MessageList` 自己的 `ResizeObserver` 重新量高（跟随中会重新贴底，不跟随则原地不动）。
+ * 房间标签条不在本组件里（它在 `App` 里、是本页的兄弟），由 `<html data-immersive>` +
+ * 一条 CSS 规则收起（见下面的 effect）。状态本体是 store 的 `immersive`（会话内瞬态）。
  */
+
 export function RoomView({
   room,
   rows,
@@ -129,6 +172,13 @@ export function RoomView({
   onNotice,
 }: Props) {
   const [showLogs, setShowLogs] = useState(false);
+  // 一键诊断（用户 #4，docs/ui.md §3.6）：`diag` = 采集窗口，`diagResult` = 刚导出完那一次。
+  // 它是本页唯一**不随切房间重置**的临时状态：采集的是「这个进程的连接」，
+  // 与当前在看哪个房间无关（切标签不该把倒计时清掉）。
+  const [diag, setDiag] = useState<{ startedMs: number; endsMs: number } | undefined>();
+  const [diagResult, setDiagResult] = useState<DiagnoseExport | undefined>();
+  const [diagBusy, setDiagBusy] = useState(false);
+  const [diagNow, setDiagNow] = useState(() => Date.now());
   const [headerMenu, setHeaderMenu] = useState<MenuPoint | null>(null);
   const [messageMenu, setMessageMenu] = useState<{ at: MenuPoint; message: Message } | null>(null);
   const [reportTarget, setReportTarget] = useState<Message>();
@@ -160,6 +210,10 @@ export function RoomView({
   const connState = useApp((store) => store.status[room.room_id]?.state);
   const liveKind = liveKindOf(connState, room.connected, room.live_status);
   const liveText = LIVE_TEXT[liveKind];
+  // 沉浸模式（issue #1）：状态在 store 里（会话内瞬态，见 `store.immersive`），
+  // 这里只读出来渲染。**只有**这一处状态，多个组件不各持一份。
+  const immersive = useApp((store) => store.immersive);
+  const setImmersive = useApp((store) => store.setImmersive);
   // 标题放不下就循环滚动（用户 2026-09-13 第 3 条）：量「一份文字」的宽度与可视宽度比，
   // 放不下才启动动画 —— 短标题因此一动不动（不是「一律滚」）。
   const titleText = room.title.length > 0 ? room.title : `房间 ${room.room_id}`;
@@ -242,6 +296,79 @@ export function RoomView({
     }
   };
 
+  // 上一次「点」与本次按下的落点（双击判据的**全部**状态，见文件顶部的 `TAP_MS` 一段）。
+  const lastTapRef = useRef<{ at: number; x: number; y: number } | null>(null);
+  const tapDownRef = useRef<{ x: number; y: number } | null>(null);
+
+  /**
+   * 弹幕区的双击（issue #1）——判据见文件顶部 {@link TAP_MS} 那一段，进 / 出是**同一个动作**。
+   *
+   * 落点用 `event.target` 而不是 `currentTarget`：包裹层里有弹幕行（不是可交互元素，
+   * 双击它就是要切）与「回到最新」那枚按钮（可交互，双击它不切）。事件不 `preventDefault`
+   * —— 双击选词是浏览器的原生行为，这条判据不跟它抢。
+   */
+  const onChatPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // 只认主指针的主键：右键（弹行菜单）、多指手势的副指针都不算「点」。
+    tapDownRef.current =
+      event.isPrimary && event.button === 0
+        ? { x: event.clientX, y: event.clientY }
+        : null;
+    // 按下就把上一次的「点」作废：中间插了一次别的按下（右键 / 副指）之后，
+    // 抬起时不该跟更早的那次凑成「双击」。
+    if (tapDownRef.current === null) lastTapRef.current = null;
+  };
+
+  const onChatPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const down = tapDownRef.current;
+    tapDownRef.current = null;
+    if (down === null || !event.isPrimary || event.button !== 0) return;
+    // 拖动（滚动 / 拖选文字）不是「点」：按下到抬起之间挪动过就不算。
+    if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > TAP_SLOP_PX) return;
+    // 自带双击语义的控件不参与（按钮 / 输入框 / 链接 / 可编辑区），见 `TAP_IGNORE`。
+    if (event.target instanceof Element && event.target.closest(TAP_IGNORE) !== null) return;
+    const now = { at: performance.now(), x: event.clientX, y: event.clientY };
+    const prev = lastTapRef.current;
+    lastTapRef.current = now;
+    if (prev === null) return;
+    if (now.at - prev.at > TAP_MS) return;
+    if (Math.hypot(now.x - prev.x, now.y - prev.y) > TAP_SLOP_PX) return;
+    // 三次连点只切一次：用掉这一对就清空，第三下重新算「第一下」。
+    lastTapRef.current = null;
+    setImmersive(!immersive);
+  };
+
+  /** 触摸滚动会把这一串指针事件 CANCEL 掉：清掉按下记录，免得它跟后面某一下凑成「双击」。 */
+  const onChatPointerCancel = () => {
+    tapDownRef.current = null;
+    lastTapRef.current = null;
+  };
+
+  /**
+   * 沉浸态落到 `<html data-immersive>` 的那一枚属性：**房间标签条**在 `App.tsx` 里
+   * （与本页是兄弟节点，组件树里够不着），由 `app.module.css` 的一条规则按这枚属性收起它。
+   * 与主题落 `data-theme` 是同一处口径（文档根上的属性 + 一条 CSS 规则）。
+   * 只在沉浸时写、离开即删：这枚属性不该影响清单页或别的页面。
+   */
+  useEffect(() => {
+    if (!immersive) return;
+    document.documentElement.dataset.immersive = "true";
+    return () => {
+      delete document.documentElement.dataset.immersive;
+    };
+  }, [immersive]);
+
+  /**
+   * 展开礼物栏（**只开、不关**）：点折叠头那条路走 `toggleGiftDock`（它能收），
+   * 这里给拖动分割条用 —— 礼物栏折叠着时它只有折叠头那么高，份额驱动不了它，
+   * 所以「拖开」这一下与点「展开」同源：同一套互斥（五者最多开一个）也照旧。
+   */
+  const openGiftDock = useCallback(() => {
+    setGiftOpen(true);
+    setPanel(null);
+    setAdminOpen(false);
+    setAdminConfirm(null);
+  }, []);
+
   /**
    * 系统返回手势第 2 级：在房间页 → 回房间列表。`onBack` 就是房间头那枚圆形返回键
    * （`App.tsx` 传给它的正是 store 的 `closeRoom`），两条入口同源。
@@ -264,14 +391,40 @@ export function RoomView({
    * 关的动作复用界面上既有的那三条：`onPanel(null)` 是点面板外 / 再点一次工具按钮走的路，
    * 两个 `toggle` 是 `⋯` 菜单里那条「收起房管面板」与礼物栏按钮走的路，不另写一套状态变更。
    * 每次渲染把最新状态与动作写进 ref（与 `MessageList` 的 `stateRef` 同一套写法）。
+   *
+   * **沉浸态排在最前**（issue #1）：沉浸态里房间头与标签条都不在场上（返回键、标签都没了），
+   * 返回手势该做的第一件事是**退出沉浸**，而不是把整个房间页关掉 —— 后者会连房间一起丢，
+   * 从沉浸态里「一步退回列表页」不是用户按一次返回的意图。
    */
-  const backRef = useRef({ panel, adminOpen, giftOpen, onPanel, toggleAdminPanel, toggleGiftDock });
-  backRef.current = { panel, adminOpen, giftOpen, onPanel, toggleAdminPanel, toggleGiftDock };
+  const backRef = useRef({
+    immersive,
+    panel,
+    adminOpen,
+    giftOpen,
+    onPanel,
+    toggleAdminPanel,
+    toggleGiftDock,
+    setImmersive,
+  });
+  backRef.current = {
+    immersive,
+    panel,
+    adminOpen,
+    giftOpen,
+    onPanel,
+    toggleAdminPanel,
+    toggleGiftDock,
+    setImmersive,
+  };
 
   useEffect(
     () =>
       registerBackHandler(BACK_PRIORITY.panel, () => {
         const now = backRef.current;
+        if (now.immersive) {
+          now.setImmersive(false);
+          return true;
+        }
         if (now.panel !== null) {
           now.onPanel(null);
           return true;
@@ -288,6 +441,54 @@ export function RoomView({
       }),
     [],
   );
+
+  // 倒计时：只在采集期间跑（不采集时没必要一秒一次重渲染）。
+  useEffect(() => {
+    if (diag === undefined) return;
+    setDiagNow(Date.now());
+    const timer = window.setInterval(() => setDiagNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [diag]);
+
+  const diagRemainMs = diag === undefined ? 0 : Math.max(0, diag.endsMs - diagNow);
+
+  const finishDiagnose = useCallback(async () => {
+    setDiagBusy(true);
+    try {
+      const result = await api.diagnoseExport();
+      setDiagResult(result);
+      onNotice("诊断报告已导出");
+    } catch (error) {
+      onNotice(`导出诊断报告失败：${describeError(error)}`);
+    } finally {
+      setDiag(undefined);
+      setDiagBusy(false);
+    }
+  }, [onNotice]);
+
+  // 固定窗口到点**自动收工**：用户不必守着，也不会有「采完忘了导出」这一档。
+  // （提前结束走面板上那颗键，两者最终都只调一次 `diagnose_export`。）
+  useEffect(() => {
+    if (diag === undefined || diagBusy || diagRemainMs > 0) return;
+    void finishDiagnose();
+  }, [diag, diagBusy, diagRemainMs, finishDiagnose]);
+
+  const startDiagnose = useCallback(async () => {
+    if (diag !== undefined || diagBusy) return;
+    setDiagBusy(true);
+    try {
+      // `navigator.userAgent` 是**渲染引擎**的唯一来源（报告头要用它：白屏一类问题
+      // 同时取决于内核版本）。
+      const started = await api.diagnoseStart(navigator.userAgent);
+      setDiagResult(undefined);
+      setDiag({ startedMs: started.started_ms, endsMs: started.ends_ms });
+      onNotice("诊断采集中：这段时间不会自动发送任何数据");
+    } catch (error) {
+      onNotice(`诊断启动失败：${describeError(error)}`);
+    } finally {
+      setDiagBusy(false);
+    }
+  }, [diag, diagBusy, onNotice]);
 
   // 切房间（多标签）时把本页的**临时界面状态**清干净（用户 2026-09-13 第 2 条）：
   // 多标签只是切渲染，`RoomView` 的组件实例被 React 复用，本地状态不显式清就会串台 ——
@@ -307,7 +508,10 @@ export function RoomView({
     setAdminOpen(false);
     setAdminConfirm(null);
     setPendingAction(null);
-  }, [room.room_id]);
+    // 沉浸态同样是**本页的临时界面状态**：切标签（多标签只是切渲染，组件实例被复用）
+    // 必须回到非沉浸态 —— 上一个房间收起的那些区块不该跟着新房间一起消失。
+    setImmersive(false);
+  }, [room.room_id, setImmersive]);
 
   // 房管入口按身份出现（第 3 条，契约 C6）：面板打开期间身份被撤销（事件更新 / 会话重建）
   // 就收起面板与确认条 —— 不能让「非房管还开着房管面板」这一档留下来。
@@ -373,33 +577,69 @@ export function RoomView({
     return () => observer.disconnect();
     // `room.room_id` 也在依赖里：两个房间的标题文字可能一样，但「在线 / 看过」两个数值
     // 占的宽度不同、可视宽度因此不同，只拿文字当依赖会留下上一个房间量出的滚动结论。
-  }, [titleText, prefs["ui.font_scale"], room.room_id]);
+    // `immersive` 同理：沉浸态里房间头整块不在场上（两个 ref 都是 null），退出时它才重新挂上，
+    // 这一趟必须重新量一次 —— 否则短标题会带着上一轮的结论回来（ResizeObserver 绑在新节点上，
+    // 但 `measure()` 得有人叫第一声）。
+  }, [titleText, prefs["ui.font_scale"], room.room_id, immersive]);
 
   const { chatRows, giftRows } = splitGiftRows(rows, prefs);
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
   // 见 splitGiftRows）；折叠态是它自己的本地状态，与偏好无关。
   const giftPanel = prefs["ui.gift_panel"];
+  // 共享分区的顺序与份额（契约 §8）：两枚都是**持久化**的偏好，重开应用保持。
+  const giftPaneOnTop = prefs["ui.gift_pane_on_top"];
 
   /**
-   * 独立礼物栏折叠态的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**，
-   * 各自带自己的单位 —— 礼物与大航海是金瓜子、SC 是元，两组**不加到一起**（契约 §5 的口径，
-   * SC 载荷里那个 `rate` 未经真实样本核验，本轮不做任何换算）。
+   * 独立礼物栏折叠态的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**。
+   *
+   * **单位已统一为元**（2026-09-16，契约 §5「金额单位」）：`amountText` 把礼物 / 大航海的
+   * 金瓜子按 `÷1000` 换算，SC 的原值本来就是元 —— 三组因此**同单位**，先前那条
+   * 「金瓜子与元不加到一起」的红线随之失效。**分组结构本身保留**：是否合并成一条合计
+   * 由用户拍板，本轮不改结构（docs/ui.md §5.3）。
    *
    * 条数取连击折叠后的**次数之和**（`DisplayRow.count`），金额取折叠后累加的 `message.amount`
    * —— 与 `toDisplayRows` 同源，不另立一套口径。空组不出现（没有 SC 就不显示 SC 那一格）。
+   *
+   * 输入是 `giftStatRows(giftRows, prefs)` 而不是 `giftRows`：`ui.gift_exclude_cheap_stats`
+   * 打开时低价礼物整条桶**不进统计**（issue 2609162056 第 4 条）。这枚键只改这一处的口径 ——
+   * 礼物栏的条目由 `giftRows` 渲染，与它无关；「礼物 / SC（N）」那个 N 也跟着这里走
+   * （它数的就是这份汇总的条数，不是礼物栏的行数）。
    */
-  const giftGroups = GIFT_KINDS.map((kind) => {
-    const group = giftRows.filter((row) => row.message.kind === kind);
-    return {
-      kind,
-      label: KIND_LABEL[kind],
-      count: group.reduce((sum, row) => sum + row.count, 0),
-      amount: amountText(
-        group.reduce((sum, row) => sum + row.message.amount, 0),
+  const giftStat = giftStatRows(giftRows, prefs);
+  const giftGroups = GIFT_KINDS
+    .map((kind) => {
+      const group = giftStat.filter((row) => row.message.kind === kind);
+      return {
         kind,
-      ),
-    };
-  }).filter((group) => group.count > 0);
+        label: KIND_LABEL[kind],
+        count: group.reduce((sum, row) => sum + row.count, 0),
+        amount: amountText(
+          group.reduce((sum, row) => sum + row.message.amount, 0),
+          kind,
+        ),
+      };
+    })
+    .filter((group) => group.count > 0);
+
+  /**
+   * 折叠头的汇总文本（docs/ui.md §5.3），三种形态：
+   * - 统计集非空 → 按 kind 分组的「本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 / …」；
+   * - 统计集空、但礼物栏里**还有条目** → 「本场 低价礼物已剔除」：`ui.gift_exclude_cheap_stats`
+   *   把低价礼物整条剔出统计，而它们在展开区里照常可见 —— 这时写「本场暂无礼物」是自相矛盾；
+   * - 统计集空且礼物栏也是空的 → 「本场暂无礼物」（原口径）。
+   */
+  const giftSummaryText =
+    giftGroups.length > 0
+      ? `本场 ${giftGroups
+          .map((group) =>
+            group.amount.length > 0
+              ? `${group.label} ${group.count} · ${group.amount}`
+              : `${group.label} ${group.count}`,
+          )
+          .join(" / ")}`
+      : giftRows.length > 0
+        ? "本场 低价礼物已剔除"
+        : "本场暂无礼物";
 
   const copyText = async (text: string) => {
     try {
@@ -545,128 +785,210 @@ export function RoomView({
       label: showLogs ? "隐藏日志" : "显示日志",
       onSelect: () => setShowLogs((value) => !value),
     },
+    // 一键诊断（用户 #4）：采一段时间连接诊断、导出一个文件（docs/ui.md §3.6）。
+    // 采集中这一项置灰 —— 第二次点击只会把倒计时重置，反而让人以为在重连。
+    {
+      label: diag === undefined ? "一键诊断" : "诊断采集中…",
+      disabled: diag !== undefined || diagBusy,
+      hint:
+        diag === undefined
+          ? "采集 3 分钟连接信息，导出成一个可外发的文件"
+          : "正在采集，可在下方面板提前结束",
+      onSelect: () => void startDiagnose(),
+    },
   ];
 
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-immersive={String(immersive)}>
+      {/* 沉浸模式（issue #1）：房间头整块**不渲染**（标题 / 返回 / 状态点 / ⋯ 一起收起）。
+          这里是条件渲染而不是 CSS 藏起来：收起 = 这一段不在场上（下面输入区 / 举报条 /
+          房管面板 / 日志块同理），于是弹幕区自己长高，虚拟列表按 `MessageList` 的
+          `ResizeObserver` 重新量高。 */}
       {/* 房间头（用户 2026-09-13 的纠正）：**一排**——
           ◀返回 · ●状态点 · 直播间标题（放不下就循环滚动） ······ 在线 · 看过 · ⋯。
           标题不再另起一排；电池也不在这排（挪到输入区的发送按钮左侧），这排腾给
           「当前在线」与「看过」两个数值。连接状态仍可在房间标签页的圆点上看到（见 DOT）。 */}
-      <div className={styles.roomHeader} data-testid="db-room-header">
-        <div className={styles.headerBar} data-testid="db-room-header-bar">
-          <button
-            className={styles.ctlRound}
-            data-testid="db-header-back"
-            title="返回房间列表"
-            aria-label="返回房间列表"
-            onClick={onBack}
-          >
-            {/* 图标规范（返回与 ⋯ **共用同一套**，用户 2026-09-13：「可能他们本就不一致，
-                只调 size 没用？」——上一版只把两枚的墨迹粗细都调成 1.5，形状与光学尺寸仍各走各的）：
-                `viewBox="0 0 24 24"` + `.ctlIcon`（24 × 24 盒，缩放系数正好 1）+ `stroke-width 1.75`
-                + `stroke-linecap/linejoin="round"`；**墨迹居中于 (12,12)**，主轴尺寸都是 16 单位
-                （箭头的高 = ⋯ 的宽）。改前箭头是 `M15 4.5 7.5 12l7.5 7.5`（墨迹 9 × 16.5、
-                居中点偏左 0.75）。 */}
-            <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M15 4.875 9 12l6 7.125"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.75"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-          {/* 状态点 = **外壳 12px（热区 / 悬停面，与改前同尺寸）+ 里面一颗 10px 的圆点**。
-              两件事分开写：外壳承 `title` / `aria-label` / `data-*`，圆点承颜色 ——
-              这样「缩短到 10px」只是看得见的那颗点变小，热区一点没动。 */}
-          <span
-            className={styles.liveDotBox}
-            data-testid="db-live-dot-box"
-            data-live={String(room.live_status)}
-            data-state={liveKind}
-            role="img"
-            title={liveText}
-            aria-label={liveText}
-          >
-            <span
-              className={`${styles.liveDot} ${LIVE_DOT_CLASS[liveKind]}`}
-              data-testid="db-live-dot"
-            />
-          </span>
-          {/* 标题紧跟状态点：**同一排**、左边缘在状态点右侧。放不下时轨道循环滚动，
-              两份拷贝首尾相接（动画走 -50% 正好一份），文字区之外一律裁掉 */}
-          <span
-            className={styles.title}
-            data-testid="db-room-title"
-            title={titleText}
-            ref={titleViewportRef}
-          >
-            <span
-              className={styles.titleTrack}
-              data-testid="db-title-track"
-              data-scroll={String(titleScrolls)}
-              style={titlePeriod > 0 ? { animationDuration: `${titlePeriod}s` } : undefined}
+      {!immersive && (
+        <div className={styles.roomHeader} data-testid="db-room-header">
+          <div className={styles.headerBar} data-testid="db-room-header-bar">
+            <button
+              className={styles.ctlRound}
+              data-testid="db-header-back"
+              title="返回房间列表"
+              aria-label="返回房间列表"
+              onClick={onBack}
             >
-              <span className={styles.titleItem}>
-                <span className={styles.titleText} data-testid="db-title-copy" ref={titleCopyRef}>
-                  {titleText}
+              {/* 图标规范（返回与 ⋯ **共用同一套**，用户 2026-09-13：「可能他们本就不一致，
+                  只调 size 没用？」——上一版只把两枚的墨迹粗细都调成 1.5，形状与光学尺寸仍各走各的）：
+                  `viewBox="0 0 24 24"` + `.ctlIcon`（24 × 24 盒，缩放系数正好 1）+ `stroke-width 1.75`
+                  + `stroke-linecap/linejoin="round"`；**墨迹居中于 (12,12)**，主轴尺寸都是 16 单位
+                  （箭头的高 = ⋯ 的宽）。改前箭头是 `M15 4.5 7.5 12l7.5 7.5`（墨迹 9 × 16.5、
+                  居中点偏左 0.75）。 */}
+              <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M15 4.875 9 12l6 7.125"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            {/* 状态点 = **外壳 12px（热区 / 悬停面，与改前同尺寸）+ 里面一颗 10px 的圆点**。
+                两件事分开写：外壳承 `title` / `aria-label` / `data-*`，圆点承颜色 ——
+                这样「缩短到 10px」只是看得见的那颗点变小，热区一点没动。 */}
+            <span
+              className={styles.liveDotBox}
+              data-testid="db-live-dot-box"
+              data-live={String(room.live_status)}
+              data-state={liveKind}
+              role="img"
+              title={liveText}
+              aria-label={liveText}
+            >
+              <span
+                className={`${styles.liveDot} ${LIVE_DOT_CLASS[liveKind]}`}
+                data-testid="db-live-dot"
+              />
+            </span>
+            {/* 标题紧跟状态点：**同一排**、左边缘在状态点右侧。放不下时轨道循环滚动，
+                两份拷贝首尾相接（动画走 -50% 正好一份），文字区之外一律裁掉 */}
+            <span
+              className={styles.title}
+              data-testid="db-room-title"
+              title={titleText}
+              ref={titleViewportRef}
+            >
+              <span
+                className={styles.titleTrack}
+                data-testid="db-title-track"
+                data-scroll={String(titleScrolls)}
+                style={titlePeriod > 0 ? { animationDuration: `${titlePeriod}s` } : undefined}
+              >
+                <span className={styles.titleItem}>
+                  <span className={styles.titleText} data-testid="db-title-copy" ref={titleCopyRef}>
+                    {titleText}
+                  </span>
                 </span>
+                {titleScrolls && (
+                  <span className={styles.titleItem} aria-hidden="true">
+                    <span className={styles.titleText}>{titleText}</span>
+                  </span>
+                )}
               </span>
-              {titleScrolls && (
-                <span className={styles.titleItem} aria-hidden="true">
-                  <span className={styles.titleText}>{titleText}</span>
-                </span>
-              )}
             </span>
-          </span>
-          {roomStats?.online !== undefined && (
-            <span className={styles.balance} title="当前在线">
-              在线 {formatCount(roomStats.online)}
-            </span>
-          )}
-          {roomStats?.watched !== undefined && (
-            <span className={styles.balance} title="累计看过">
-              看过 {formatCount(roomStats.watched)}
-            </span>
-          )}
-          <button
-            className={styles.ctlRound}
-            data-testid="db-header-more"
-            title="刷新 / 断开 / 日志"
-            aria-label="更多"
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              setHeaderMenu({ x: rect.left - 120, y: rect.bottom + 2 });
-            }}
-          >
-            {/* ⋯ 画成**矢量**（三个圆点）而不是文字字形：文字字形的墨迹厚度由字体决定
-                （实测 Chromium 下 14px 的 U+22EF 墨迹只有 1px，WebKit 又是另一套字体）。
-                与返回**同一套规范**：圆点直径 = **2 × 描边宽**（= 3.5。Material 同款比例 ——
-                一个圆点就是一个零长度描边段的圆头，所以「粗细」与描边同一件事），
-                相邻圆点中心距 6.25（缝 2.75），行宽 16 = 返回箭头的高，整体居中于 (12,12)。
-                改前是 r = 0.75（直径 1.5）、跨度 11.5、居中但明显偏轻。
-                盒子仍是 `.ctlIcon`（24 × 24），控件尺寸一点没动。 */}
-            <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="5.75" cy="12" r="1.75" fill="currentColor" />
-              <circle cx="12" cy="12" r="1.75" fill="currentColor" />
-              <circle cx="18.25" cy="12" r="1.75" fill="currentColor" />
-            </svg>
-          </button>
+            {roomStats?.online !== undefined && (
+              <span className={styles.balance} title="当前在线">
+                在线 {formatCount(roomStats.online)}
+              </span>
+            )}
+            {roomStats?.watched !== undefined && (
+              <span className={styles.balance} title="累计看过">
+                看过 {formatCount(roomStats.watched)}
+              </span>
+            )}
+            <button
+              className={styles.ctlRound}
+              data-testid="db-header-more"
+              title="刷新 / 断开 / 日志"
+              aria-label="更多"
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setHeaderMenu({ x: rect.left - 120, y: rect.bottom + 2 });
+              }}
+            >
+              {/* ⋯ 画成**矢量**（三个圆点）而不是文字字形：文字字形的墨迹厚度由字体决定
+                  （实测 Chromium 下 14px 的 U+22EF 墨迹只有 1px，WebKit 又是另一套字体）。
+                  与返回**同一套规范**：圆点直径 = **2 × 描边宽**（= 3.5。Material 同款比例 ——
+                  一个圆点就是一个零长度描边段的圆头，所以「粗细」与描边同一件事），
+                  相邻圆点中心距 6.25（缝 2.75），行宽 16 = 返回箭头的高，整体居中于 (12,12)。
+                  改前是 r = 0.75（直径 1.5）、跨度 11.5、居中但明显偏轻。
+                  盒子仍是 `.ctlIcon`（24 × 24），控件尺寸一点没动。 */}
+              <svg className={styles.ctlIcon} viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="5.75" cy="12" r="1.75" fill="currentColor" />
+                <circle cx="12" cy="12" r="1.75" fill="currentColor" />
+                <circle cx="18.25" cy="12" r="1.75" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* 唯一的生长区：面板与礼物栏展开时只有它会变矮。
-          `key` 绑房间号：换房即重建这个组件，滚动位置 / 是否跟随 / 悬停暂停随之回到初始
-          （`MessageList` 是本轮 C 票的文件，这里只给 key，不改它）。 */}
-      <MessageList
-        key={room.room_id}
-        rows={chatRows}
-        anchorUid={room.anchor_uid}
-        prefs={prefs}
-        onMenu={(message, at) => setMessageMenu({ at, message })}
+      {/* 弹幕区与礼物栏**共享一块上下分区**（issue #8，契约 §8）：默认弹幕在上、礼物在下，
+          中间一条可拖动的分割条（热区 ≥ 8px）；长按任一栏 0.5s 拖拽换位。
+          两栏的高度比例与上下顺序都落 prefs，重开应用保持；`ui.gift_panel` 关掉时
+          共享区域退化为弹幕区全高、分割条不渲染（见 SplitPanes）。
+          唯一的生长区从「弹幕列表」变成「这一块」：面板 / 房管面板 / 输入区展开时挤的是它。
+          **沉浸模式（issue #1）只收标题栏、房间标签条与输入区**，所以这一块在沉浸态里照旧在场；
+          双击落点仍是弹幕那一栏（`.chatWrap`，见下），礼物栏上的双击与它无关。 */}
+      <SplitPanes
+        giftOnTop={giftPaneOnTop}
+        ratio={prefs["ui.gift_pane_ratio"]}
+        fontScale={prefs["ui.font_scale"]}
+        giftCollapsed={!giftOpen}
+        onRatio={(value) => onPrefs({ "ui.gift_pane_ratio": value })}
+        onSwap={() => onPrefs({ "ui.gift_pane_on_top": !giftPaneOnTop })}
+        onExpand={openGiftDock}
+        danmaku={
+          <div
+            className={styles.chatWrap}
+            data-testid="db-chat-wrap"
+            onPointerDown={onChatPointerDown}
+            onPointerUp={onChatPointerUp}
+            onPointerCancel={onChatPointerCancel}
+          >
+            <MessageList
+              key={room.room_id}
+              rows={chatRows}
+              anchorUid={room.anchor_uid}
+              prefs={prefs}
+              onMenu={(message, at) => setMessageMenu({ at, message })}
+            />
+          </div>
+        }
+        /* 独立礼物栏（issue 2609152029 第 5 条改成**每个礼物 / SC / 大航海一条**；
+           2026-09-16 第 2 条再进一步：**与弹幕区同一套呈现** —— 行就是 MessageRow、
+           列表就是 MessageList（scope="gift"）：一样的布局（头像列 / 身份行 / 正文块 /
+           时间戳）、一样的背景色、一样的自动滚动与「跟随 / 暂停 / 回到最新」。它自己的
+           滚动位置与虚拟列表状态是**另一份实例**，两边互不影响。
+           是否出现由 `ui.gift_panel` 决定（管弹幕流那一头的是 `ui.gift_in_danmaku`，
+           两枚各自独立：都开 = 默认形态，同一批消息两处都渲染）。
+           折叠头带 `data-pane-head`：它是**这一栏的最小高度**（SplitPanes 实测）。
+           空态文案在 `empty` 上（判据「哪一套行算本场」留在调用方）。 */
+        gift={
+          giftPanel ? (
+            <>
+              <button
+                className={styles.giftDockHead}
+                data-testid="db-gift-dock"
+                data-pane-head
+                aria-expanded={giftOpen}
+                onClick={toggleGiftDock}
+              >
+                <span className={styles.giftDockTitle}>
+                  礼物 / SC（{giftGroups.reduce((sum, group) => sum + group.count, 0)}）
+                </span>
+                {/* 折叠态汇总**按 kind 分组**：三组单位已统一为元（契约 §5）—— 分组结构保留，是否合并成一条合计待用户拍板（§5.3）。
+                    文本本体在 `giftSummaryText`（本组件上方，与统计集同源）：`ui.gift_exclude_cheap_stats` 剔掉低价后，「本场暂无礼物」不再成立。 */}
+                <span className={styles.giftDockSummary} data-testid="db-gift-summary">
+                  {giftSummaryText}
+                </span>
+                <span className={styles.giftDockToggle}>{giftOpen ? "收起" : "展开"}</span>
+              </button>
+              {giftOpen && (
+                <MessageList
+                  rows={giftRows}
+                  anchorUid={room.anchor_uid}
+                  prefs={prefs}
+                  scope="gift"
+                  empty={giftRows.length === 0 ? "本场还没有礼物" : undefined}
+                  onMenu={(message, at) => setMessageMenu({ at, message })}
+                />
+              )}
+            </>
+          ) : null
+        }
       />
 
       {messageMenu && (
@@ -677,7 +999,9 @@ export function RoomView({
         />
       )}
 
-      {showLogs && (
+      {/* 日志块与举报条都不是「弹幕区」也不是「礼物区」：沉浸态里一并收起
+          （入口在房间头 ⋯ 菜单里，那块本来就收起来了）。 */}
+      {!immersive && showLogs && (
         <div className={styles.logs}>
           {logs.length === 0
             ? "（暂无日志）"
@@ -685,7 +1009,72 @@ export function RoomView({
         </div>
       )}
 
-      {reportTarget && (
+      {/* 一键诊断（docs/ui.md §3.6）：采集中 / 刚导出两个状态共用页面底部这一块
+          （与日志块同款：入口在房间头 ⋯ 菜单里，沉浸态一并收起）。 */}
+      {!immersive && diag !== undefined && (
+        <div className={styles.diagnose} data-testid="db-diagnose">
+          <div className={styles.diagnoseLine} data-testid="db-diagnose-status">
+            诊断采集中：还剩 {countdown(diagRemainMs)}（到点自动导出，也可以提前结束）
+          </div>
+          <div className={styles.diagnoseNote}>
+            只在本机采集连接信息，<b>不会自动发送任何数据</b>；导出后发给谁由你决定。
+          </div>
+          <div className={styles.diagnoseActions}>
+            <button
+              className={styles.diagnoseButton}
+              data-testid="db-diagnose-finish"
+              disabled={diagBusy}
+              onClick={() => void finishDiagnose()}
+            >
+              提前结束并导出
+            </button>
+            <button
+              className={styles.diagnoseButton}
+              data-testid="db-diagnose-abort"
+              disabled={diagBusy}
+              onClick={() => {
+                setDiag(undefined);
+                onNotice("已放弃本次诊断，不会生成文件");
+              }}
+            >
+              放弃
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!immersive && diag === undefined && diagResult !== undefined && (
+        <div className={styles.diagnose} data-testid="db-diagnose">
+          <div className={styles.diagnoseLine}>
+            诊断报告已导出：
+            <span className={styles.diagnosePath} data-testid="db-diagnose-path">
+              {diagResult.path}
+            </span>
+          </div>
+          <div className={styles.diagnoseNote}>
+            一次诊断只生成这一个文件（{diagResult.attempts} 次连接尝试、{diagResult.logs} 行日志）；
+            凭据、uid、昵称、房间号都已抹掉，可以直接发给别人。
+          </div>
+          <div className={styles.diagnoseActions}>
+            <button
+              className={styles.diagnoseButton}
+              data-testid="db-diagnose-copy"
+              onClick={() => void copyText(diagResult.path)}
+            >
+              复制路径
+            </button>
+            <button
+              className={styles.diagnoseButton}
+              data-testid="db-diagnose-close"
+              onClick={() => setDiagResult(undefined)}
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!immersive && reportTarget && (
         <div className={styles.reportBar}>
           <span className={styles.roomMeta}>
             举报「{reportTarget.content.slice(0, 24)}」
@@ -734,8 +1123,9 @@ export function RoomView({
           面板里不再有身份提示；打开即静默刷新（第 5 条），所以读取失败的**错误条必须留在面板里**
           （没有手动刷新按钮，错误是唯一的反馈）。
           它是文档流里的一块（不是浮层），与输入区的面板一样只挤压弹幕列表；
-          与输入区面板 / 独立礼物栏**互斥**（第 4 条）：开它就关那四个（见上面的三个入口） */}
-      {adminOpen && (
+          与输入区面板 / 独立礼物栏**互斥**（第 4 条）：开它就关那四个（见上面的三个入口）。
+          沉浸态里不渲染（它是输入区上方的一块，入口在房间头 ⋯ 菜单里）。 */}
+      {!immersive && adminOpen && (
         <AdminPanel
           silent={adminSilent}
           blacklist={adminBlacklist}
@@ -750,8 +1140,9 @@ export function RoomView({
         />
       )}
 
-      {/* 二次确认条：所有房管写操作都先经过它，文案说清对象与时长（不可逆） */}
-      {adminConfirm && (
+      {/* 二次确认条：所有房管写操作都先经过它，文案说清对象与时长（不可逆）。
+          它跟着房管面板走，沉浸态里同样不渲染。 */}
+      {!immersive && adminConfirm && (
         <div className={styles.adminConfirm} data-testid="db-admin-confirm">
           <span className={styles.roomMeta}>{adminActionText(adminConfirm)}</span>
           {adminConfirm.kind === "mute" && (
@@ -779,102 +1170,41 @@ export function RoomView({
         </div>
       )}
 
-      <Composer
-        roomId={room.room_id}
-        // 草稿的分键是 `${identityKey}:${roomId}`（契约 C1 修订）：换房、换号都各留一份，
-        // 所以这里既不去清草稿、也不给 `Composer` 加 `key`（重挂会连草稿一起丢）。
-        identityKey={session?.logged_in ? String(session.uid ?? 0) : "guest"}
-        danmakuLength={danmakuLength}
-        disabled={!room.connected}
-        loggedIn={loggedIn}
-        lastOutcome={lastOutcome}
-        lastDetail={lastDetail}
-        emotes={emotes}
-        ownedEmotes={ownedEmotes}
-        ownedError={ownedError}
-        balance={balance}
-        onRefreshBalance={() => void loadBalance()}
-        pendingAction={pendingAction}
-        panel={panel}
-        onPanel={onPanel}
-        prefs={prefs}
-        onPrefs={onPrefs}
-        onSend={onSend}
-        onRetryOwned={() => void loadOwnedEmotes(true)}
-        onNotice={onNotice}
-      />
-
-      {/* 独立礼物栏（issue #8 把它放在输入区下方、全宽、可折叠；issue 2609152029 第 5 条改成
-          **每个礼物 / SC / 大航海一条**：头像 + 昵称 + 内容 + 数量 + 金额，原来那两段
-          「金额排行 + 内容详情」已取消）。是否出现由 `ui.gift_panel` 决定，与弹幕流那一头
-          的 `ui.gift_in_danmaku` 各自独立（两枚都开 = 默认形态，同一批消息两处都渲染）。 */}
-      {giftPanel && (
-        <div className={styles.giftDock} data-testid="db-gift-dock">
-          <button
-            className={styles.giftDockHead}
-            aria-expanded={giftOpen}
-            onClick={toggleGiftDock}
-          >
-            <span className={styles.giftDockTitle}>
-              礼物 / SC（{giftGroups.reduce((sum, group) => sum + group.count, 0)}）
-            </span>
-            {/* 折叠态汇总**按 kind 分组**：各组带各自的单位，金瓜子与元不加到一起（§5.3） */}
-            <span className={styles.giftDockSummary} data-testid="db-gift-summary">
-              {giftGroups.length === 0
-                ? "本场暂无礼物"
-                : `本场 ${giftGroups
-                    .map((group) =>
-                      group.amount.length > 0
-                        ? `${group.label} ${group.count} · ${group.amount}`
-                        : `${group.label} ${group.count}`,
-                    )
-                    .join(" / ")}`}
-            </span>
-            <span className={styles.giftDockToggle}>{giftOpen ? "收起" : "展开"}</span>
-          </button>
-          {giftOpen && (
-            <div className={styles.giftDockBody} data-testid="db-gift-body">
-              {giftRows.length === 0 ? (
-                <div className={styles.empty}>本场还没有礼物</div>
-              ) : (
-                giftRows.map((row) => {
-                  const amount = amountText(row.message.amount, row.message.kind);
-                  return (
-                    <div
-                      key={row.message.local_id}
-                      className={styles.giftItem}
-                      data-testid="db-gift-item"
-                    >
-                      <Avatar url={row.message.face} name={row.message.uname} />
-                      <span className={styles.giftWho} data-testid="db-gift-who">
-                        {row.message.uname}
-                      </span>
-                      <span className={styles.giftWhat} data-testid="db-gift-what">
-                        {row.message.content}
-                      </span>
-                      {/* 数量与弹幕行同一个口径：礼物恒显示 ×N（折叠后是整串连击的次数），
-                          其余 kind 只在真折叠过时才有（`count > 1`）。 */}
-                      {(row.count > 1 || row.message.kind === "gift") && (
-                        <span className={styles.giftCount} data-testid="db-gift-count">
-                          ×{row.count}
-                        </span>
-                      )}
-                      {/* 金额格带单位；上游没给价（amount = 0）时**整格不画**，不拿 0 顶替 */}
-                      {amount.length > 0 && (
-                        <span className={styles.giftAmount} data-testid="db-gift-amount">
-                          {amount}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </div>
+      {/* 输入区（弹幕输入框 + 工具行 + 字数提示）与它上方那三个弹出面板（表情 / 短语 / 筛选）
+          整块不渲染 —— 收起清单里的「输入区」就是把 `Composer` 这一棵子树摘掉，
+          面板 / 引用条 / 预览 / 浮片都跟着走，不必逐个列。
+          草稿不会丢：它按 `身份:房间` 存在 `Composer` 模块级的 Map 里（契约 C1），
+          再挂回来时原样取回。 */}
+      {!immersive && (
+        <Composer
+          roomId={room.room_id}
+          // 草稿的分键是 `${identityKey}:${roomId}`（契约 C1 修订）：换房、换号都各留一份，
+          // 所以这里既不去清草稿、也不给 `Composer` 加 `key`（重挂会连草稿一起丢）。
+          identityKey={session?.logged_in ? String(session.uid ?? 0) : "guest"}
+          danmakuLength={danmakuLength}
+          disabled={!room.connected}
+          loggedIn={loggedIn}
+          lastOutcome={lastOutcome}
+          lastDetail={lastDetail}
+          emotes={emotes}
+          ownedEmotes={ownedEmotes}
+          ownedError={ownedError}
+          balance={balance}
+          onRefreshBalance={() => void loadBalance()}
+          pendingAction={pendingAction}
+          panel={panel}
+          onPanel={onPanel}
+          prefs={prefs}
+          onPrefs={onPrefs}
+          onSend={onSend}
+          onRetryOwned={() => void loadOwnedEmotes(true)}
+          onNotice={onNotice}
+        />
       )}
 
-      {headerMenu && (
+      {/* 房间头 ⋯ 的菜单：它的触发钮在收起的房间里，沉浸态里也没有理由浮着
+          （行右键菜单不在此列：它属于弹幕行，那一块在沉浸态里照旧在场上）。 */}
+      {!immersive && headerMenu && (
         <ContextMenu
           at={headerMenu}
           items={headerMenuItems}

@@ -2,6 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+      后台保活（见 docs/operations.md §2.8）。三枚都是**声明即得**，没有运行时弹窗：
+      * FOREGROUND_SERVICE（API 28 起，起前台服务的总门槛）
+      * FOREGROUND_SERVICE_DATA_SYNC（API 34 起，与下面的 foregroundServiceType="dataSync" 配套；
+        targetSdk 34+ 少这一枚会在创建服务时抛 SecurityException）
+      POST_NOTIFICATIONS 是**运行时**权限（API 33 起，见 MainActivity 里的申请），
+      拒绝只影响「通知抽屉里看不看得到那枚常驻通知」：前台服务照跑，
+      用户还能在系统的「正在运行的应用」（Task Manager）里看到并停掉它。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
@@ -10,12 +23,24 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.danmubox_desktop"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <!-- 软键盘避让只有**一条**机制：界面自己补内边距。
+             `MainActivity` 把「系统栏 ∪ 键盘」的高度下发成页面上的 safe-bottom 内边距令牌
+             （`systemBars() or ime()`），`body` 用它让出底部空间，输入区因此落在键盘上沿 ——
+             实测（模拟器 android-35，1080×2400@420dpi）：键盘弹出前后 `window.innerHeight`
+             恒为 915 CSS px（窗口**没有**被 resize），该令牌 24 → 336.38 CSS px，
+             输入区底边正好落在键盘上沿（gap = 0）。
+             所以这里显式钉成 `adjustNothing`：不让系统再替我们 resize / pan 一次窗口。
+             默认的 `adjustUnspecified` 在别的系统版本上可能解析成 `adjustResize`（视口再缩一次 →
+             键盘高度被算两遍，内容比视口高 → 文档变成可滚容器 → 手指滑弹幕列表会接力滚它，
+             整个界面被顶走）或 `adjustPan`（整窗平移，顶栏直接滑出屏幕）—— 两种都与「自补内边距」
+             叠加成双重避让。详细口径与证据见 docs/ui.md §9.3。 -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"
             android:label="@string/main_activity_title"
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:windowSoftInputMode="adjustNothing">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -23,6 +48,15 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          只有 MainActivity 会起它，别的应用起不到（exported="false"）；也不给任何
+          intent-filter。类型见 KeepAliveService 的文件头。
+        -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <provider
           android:name="androidx.core.content.FileProvider"

@@ -1,6 +1,15 @@
 /src/main/**/generated
+# 例外：TauriActivity.kt 与 proguard-tauri.pro **入库**（同版本 tauri 下内容稳定）。
+# 这两份由 tauri crate 的 build.rs 从它的 mobile/android-codegen/ 生成，而 `tauri android build`
+# 只会重生 wry 那几个文件与下方的 tauri.properties / tauri.build.gradle.kts —— 干净克隆上缺这两份
+# 会以 `Unresolved reference: TauriActivity` 构建失败（实测与解释见 docs/operations.md §5.3）。
+# gitignore 的规则要求：先放行 generated/ 目录本身，再单独放行要保留的那一个文件。
+!/src/main/java/dev/kksk/danmubox/generated/
+/src/main/java/dev/kksk/danmubox/generated/*
+!/src/main/java/dev/kksk/danmubox/generated/TauriActivity.kt
 /src/main/jniLibs/**/*.so
 /src/main/assets/tauri.conf.json
 /tauri.build.gradle.kts
 /proguard-tauri.pro
+!/proguard-tauri.pro
 /tauri.properties

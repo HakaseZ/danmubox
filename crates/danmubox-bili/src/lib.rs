@@ -7,6 +7,7 @@ pub mod admin;
 pub mod asset;
 pub mod auth;
 pub mod cmd;
+pub mod diagnose;
 pub mod emote;
 pub mod follow;
 pub mod history;
@@ -18,6 +19,7 @@ pub mod send;
 pub mod wallet;
 pub mod wbi;
 
+mod redact;
 mod ws;
 
 pub use admin::BiliAdmin;

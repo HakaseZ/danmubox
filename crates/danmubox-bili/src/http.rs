@@ -10,6 +10,7 @@ use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, USE
 use reqwest::StatusCode;
 use serde_json::Value;
 
+use crate::redact;
 use crate::wbi;
 
 pub(crate) const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
@@ -35,6 +36,54 @@ pub const EP_QR_GENERATE: &str =
     "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
 /// 扫码登录：轮询扫码状态。
 pub const EP_QR_POLL: &str = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll";
+
+/// `buvid3` 在 Cookie 与 WS 认证包里的键名。
+const BUVID3: &str = "buvid3";
+
+/// 本次请求的 `Cookie` 头值：账号 Cookie 与 `buvid3` **合成一条**。
+///
+/// 改前 `danmu_info` 走的是「`get_with_cookie` 先设一条，再 `.header(COOKIE, "buvid3=…")`
+/// 追加一条」——`RequestBuilder::header` 是 **append** 语义，请求因此带着**两条**
+/// `Cookie` 头出门（`docs/protocol.md` A46）。B 站按身份三要素（`uid` / `buvid` /
+/// 换 token 用的凭据）**同源**认身份，参考实现（`blivedm` 等）只发一条。
+///
+/// 规则：
+/// - **账号 Cookie 在前**（`SESSDATA` / `bili_jct` / `DedeUserID` 等身份字段原样、原序保留），
+///   `buvid3` 追加在**末尾**。Cookie 的顺序对服务端无语义（RFC 6265 §5.4 按名取值），
+///   把账号部分放前面只为了一眼看出「账号身份在不在」。
+/// - **`buvid3` 以入参为准**：入参给出时，账号 Cookie 里原有的同名键一律让位
+///   （不是并列，也不是保留旧的）。入参就是本次连接要填进认证包 `buvid` 字段的那个值
+///   （`ws.rs` 同名局部变量同时喂给 `getDanmuInfo` 与认证包），两者一致才算同源；
+///   同名键留两枚只会让服务端无从取舍。
+/// - 只有其中一方时就只用那一方（游客态没有账号 Cookie，就只剩 `buvid3=…` 一条）；
+///   两方都没有 → `None`（不设 `Cookie` 头）。
+fn merge_cookie(base: Option<&str>, buvid3: Option<&str>) -> Option<String> {
+    let Some(buvid3) = buvid3.map(str::trim).filter(|value| !value.is_empty()) else {
+        return base.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    };
+    let rest = base
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|base| without_cookie_pair(base, BUVID3));
+    match rest.filter(|rest| !rest.is_empty()) {
+        Some(rest) => Some(format!("{rest}; {BUVID3}={buvid3}")),
+        None => Some(format!("{BUVID3}={buvid3}")),
+    }
+}
+
+/// 去掉 `cookie` 里名为 `name` 的键值对，其余原样保留（值不重新编码），用 `; ` 重新拼。
+///
+/// 键名按 RFC 6265 大小写**敏感**、`;` 分隔、两侧空白忽略；从**第一个** `=` 处断名，
+/// 因此 base64 一类含 `=` 的值不会被截断。顺带把分隔空白归一为 `; `。
+fn without_cookie_pair(cookie: &str, name: &str) -> String {
+    cookie
+        .split(';')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .filter(|pair| pair.split('=').next().unwrap_or_default().trim() != name)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
 
 /// 从响应头收集 `Set-Cookie` 的键值对（只取第一个 `=` 之前作为名）。
 fn collect_set_cookies(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
@@ -119,6 +168,8 @@ pub struct BiliHttp {
     cookie: CookieMode,
     /// `nav` 端点。生产恒为 `EP_NAV`；测试指到本地桩服务器以计数请求。
     nav_url: String,
+    /// `getDanmuInfo` 端点。生产恒为 `EP_DANMU_INFO`；测试指到本地桩服务器以断言请求头。
+    danmu_info_url: String,
 }
 
 impl BiliHttp {
@@ -152,6 +203,7 @@ impl BiliHttp {
             client,
             cookie,
             nav_url: EP_NAV.to_string(),
+            danmu_info_url: EP_DANMU_INFO.to_string(),
         })
     }
 
@@ -159,6 +211,13 @@ impl BiliHttp {
     #[cfg(test)]
     fn with_nav_url(mut self, url: String) -> Self {
         self.nav_url = url;
+        self
+    }
+
+    /// 仅测试：把 `getDanmuInfo` 指到本地桩服务器（生产恒为 `EP_DANMU_INFO`）。
+    #[cfg(test)]
+    fn with_danmu_url(mut self, url: String) -> Self {
+        self.danmu_info_url = url;
         self
     }
 
@@ -171,7 +230,14 @@ impl BiliHttp {
     }
 
     fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        self.get_with_cookie(url, None)
+        let cookie = self.current_cookie();
+        self.get_request(url, cookie.as_deref(), None)
+    }
+
+    /// `buvid3` 与 Cookie 来源**合并成一条** `Cookie` 头（`getDanmuInfo` 用它）。
+    fn get_with_buvid3(&self, url: &str, buvid3: &str) -> reqwest::RequestBuilder {
+        let cookie = self.current_cookie();
+        self.get_request(url, cookie.as_deref(), Some(buvid3))
     }
 
     /// `cookie` 显式给出时用它，否则用客户端配置的 Cookie 来源。
@@ -179,13 +245,27 @@ impl BiliHttp {
     /// 列多个账号时必须能给**每个账号**单独传 Cookie：客户端只有一个
     /// `ConfigStore` 来源（当前账号），拿它去求证别的账号只会得到同一个身份。
     fn get_with_cookie(&self, url: &str, cookie: Option<String>) -> reqwest::RequestBuilder {
-        // 只记 URL，不记请求头与 body：凭据从不进日志。
-        tracing::debug!(target: "danmubox_bili::http", method = "GET", url, "上游请求");
+        match cookie.filter(|value| !value.is_empty()) {
+            Some(cookie) => self.get_request(url, Some(&cookie), None),
+            None => self.get(url),
+        }
+    }
+
+    /// 记一次上游 GET 并设 `Cookie` 头。
+    ///
+    /// `buvid3` 非空时并入同一条（[`merge_cookie`]）——**本函数是唯一设 `Cookie` 的地方**：
+    /// `RequestBuilder::header` 是 **append** 语义，同一个请求上调两次就会发出**两条**
+    /// `Cookie` 头（见 `merge_cookie` 的说明）。
+    fn get_request(
+        &self,
+        url: &str,
+        cookie: Option<&str>,
+        buvid3: Option<&str>,
+    ) -> reqwest::RequestBuilder {
+        // 只记 URL，不记请求头与 body：凭据从不进日志；URL 本身要先过 `log_request` 脱敏。
+        log_request("GET", url, None);
         let mut req = self.client.get(url);
-        if let Some(cookie) = cookie
-            .filter(|value| !value.is_empty())
-            .or_else(|| self.current_cookie())
-        {
+        if let Some(cookie) = merge_cookie(cookie, buvid3) {
             req = req.header(COOKIE, cookie);
         }
         req
@@ -211,23 +291,18 @@ impl BiliHttp {
                 .get(url)
                 .send()
                 .await
-                .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
+                .map_err(|e| upstream("请求失败", e))?;
             let status = response.status();
             let content_type = header_text(response.headers(), CONTENT_TYPE);
             let cookies = collect_set_cookies(response.headers());
             let body = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Upstream(format!("读取响应失败: {e}")))?;
+                .map_err(|e| upstream("读取响应失败", e))?;
             match serde_json::from_slice::<Value>(&body) {
                 Ok(value) => return Ok((value, cookies)),
                 Err(_) if attempt == 1 && !status.is_client_error() => {
-                    tracing::debug!(
-                        target: "danmubox_bili::http",
-                        url,
-                        status = status.as_u16(),
-                        "上游返回的不是 JSON，按瞬时故障重试一次"
-                    );
+                    log_request("GET", url, Some(status.as_u16()));
                 }
                 Err(_) => {
                     return Err(Error::Upstream(decode_failure(
@@ -248,10 +323,10 @@ impl BiliHttp {
             .get(EP_FINGER_SPI)
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("finger/spi: {e}")))?
+            .map_err(|e| upstream("finger/spi", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("finger/spi decode: {e}")))?;
+            .map_err(|e| upstream("finger/spi decode", e))?;
         require_ok(&value, "finger/spi")?;
         let data = value.get("data").unwrap_or(&Value::Null);
         let buvid3 = data.get("b_3").and_then(Value::as_str).unwrap_or_default();
@@ -271,14 +346,15 @@ impl BiliHttp {
             .get(&format!("{EP_ROOM_PLAY_INFO}?{query}"))
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("getRoomPlayInfo: {e}")))?
+            .map_err(|e| upstream("getRoomPlayInfo", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("getRoomPlayInfo decode: {e}")))?;
+            .map_err(|e| upstream("getRoomPlayInfo decode", e))?;
 
         if value.get("code").and_then(Value::as_i64) != Some(0) {
             return Err(Error::RoomNotFound(format!(
-                "输入 `{input}` 未解析出房间（上游 code={}）",
+                "输入 `{}` 未解析出房间（上游 code={}）",
+                redact::redact(input),
                 value.get("code").and_then(Value::as_i64).unwrap_or(-1)
             )));
         }
@@ -312,16 +388,30 @@ impl BiliHttp {
             .get(&format!("{EP_ROOM_H5_INFO}?room_id={room_id}"))
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("getH5InfoByRoom: {e}")))?
+            .map_err(|e| upstream("getH5InfoByRoom", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("getH5InfoByRoom decode: {e}")))?;
+            .map_err(|e| upstream("getH5InfoByRoom decode", e))?;
         require_ok(&value, "getH5InfoByRoom")?;
         Ok(value)
     }
 
     /// 取长连接票据与候选地址。游客态同样需要 `buvid` 与 WBI 签名。
-    pub async fn danmu_info(&self, room_id: i64, buvid3: &str) -> Result<DanmuInfo> {
+    ///
+    /// `buvid3` 与账号 Cookie **合成一条** `Cookie` 头（[`merge_cookie`]）：
+    /// 曾经这里是「先由 `get_with_cookie` 设账号 Cookie、再 `.header(COOKIE, "buvid3=…")`
+    /// 追加一条」，请求带着两条 `Cookie` 头出门（`docs/protocol.md` A46）。
+    ///
+    /// `diag` 是**只写**的诊断出口（一键诊断，`docs/operations.md` §2.9）：这一步的
+    /// 成败（含上游 `code`）是「到底卡在哪一环」的第一环，但它原本只活在这条调用链
+    /// 的错误文案里——`code` 在 `ws.rs` 那边已经还原不出来（只剩一个字符串），
+    /// 因此在这里、在还看得见 `code` 的地方记一笔。协议行为一字未改。
+    pub async fn danmu_info(
+        &self,
+        room_id: i64,
+        buvid3: &str,
+        diag: &danmubox_core::diagnose::Attempt,
+    ) -> Result<DanmuInfo> {
         let (img_key, sub_key) = self.wbi_keys().await?;
         let mixin = wbi::mixin_key(&img_key, &sub_key);
 
@@ -333,21 +423,33 @@ impl BiliHttp {
         ];
         let query = wbi::signed_query(&params, &mixin);
 
-        let value = self
-            .get(&format!("{EP_DANMU_INFO}?{query}"))
-            .header(COOKIE, format!("buvid3={buvid3}"))
+        let value = match self
+            .get_with_buvid3(&format!("{}?{query}", self.danmu_info_url), buvid3)
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("getDanmuInfo: {e}")))?
-            .json::<Value>()
-            .await
-            .map_err(|e| Error::Upstream(format!("getDanmuInfo decode: {e}")))?;
+        {
+            Ok(response) => match response.json::<Value>().await {
+                Ok(value) => value,
+                Err(err) => {
+                    let error = upstream("getDanmuInfo decode", err);
+                    diag.ticket_failed(danmubox_core::now_ms(), &error.to_string());
+                    return Err(error);
+                }
+            },
+            Err(err) => {
+                let error = upstream("getDanmuInfo", err);
+                diag.ticket_failed(danmubox_core::now_ms(), &error.to_string());
+                return Err(error);
+            }
+        };
 
         let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
         if code != 0 {
             // -352 是签名/风控失败，与凭据失效区分（`docs/auth.md` §9.1）。
+            diag.ticket_failed(danmubox_core::now_ms(), &format!("code={code}"));
             return Err(Error::Upstream(format!("getDanmuInfo code={code}")));
         }
+        diag.ticket_ok(danmubox_core::now_ms(), code);
 
         let data = value.get("data").unwrap_or(&Value::Null);
         let token = data
@@ -367,9 +469,9 @@ impl BiliHttp {
             .unwrap_or_default();
 
         if token.is_empty() || hosts.is_empty() {
-            return Err(Error::Upstream(
-                "getDanmuInfo 缺少 token 或 host_list".into(),
-            ));
+            let error = Error::Upstream("getDanmuInfo 缺少 token 或 host_list".into());
+            diag.ticket_failed(danmubox_core::now_ms(), &error.to_string());
+            return Err(error);
         }
         Ok(DanmuInfo { token, hosts })
     }
@@ -394,7 +496,7 @@ impl BiliHttp {
             Err(first) => {
                 tracing::debug!(%first, "HTTP 心跳首次失败，重试一次");
                 self.heartbeat_once(&url).await.map_err(|second| {
-                    Error::Upstream(format!("webHeartBeat 重试后仍失败: {second}"))
+                    upstream("webHeartBeat 重试后仍失败", second)
                 })
             }
         }
@@ -405,10 +507,10 @@ impl BiliHttp {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("webHeartBeat: {e}")))?
+            .map_err(|e| upstream("webHeartBeat", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("webHeartBeat decode: {e}")))?;
+            .map_err(|e| upstream("webHeartBeat decode", e))?;
         require_ok(&value, "webHeartBeat")
     }
 
@@ -425,10 +527,10 @@ impl BiliHttp {
             .get_with_cookie(EP_NAV, cookie.map(str::to_string))
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("nav: {e}")))?
+            .map_err(|e| upstream("nav", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("nav decode: {e}")))?;
+            .map_err(|e| upstream("nav decode", e))?;
         if value.get("code").and_then(Value::as_i64) != Some(0) {
             return Ok(None);
         }
@@ -458,26 +560,28 @@ impl BiliHttp {
     /// 但 **POST 一律不重试**：请求可能已经生效——上游回了页面而不是 JSON，并不能证明它没写进去，
     /// 重试就可能把同一条弹幕发两遍、或把同一个用户禁言两次。
     pub async fn post_form(&self, url: &str, body: &str) -> Result<Value> {
-        // body 里含 csrf 与弹幕原文，一律不记；只记目标地址。
-        tracing::debug!(target: "danmubox_bili::http", method = "POST", url, "上游请求");
+        // body 里含 csrf 与弹幕原文，一律不记；只记目标地址，且地址先过脱敏。
+        log_request("POST", url, None);
         let mut request = self.client.post(url).header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
         );
         if let Some(cookie) = self.current_cookie() {
+            // 只在这里设一次 Cookie：`RequestBuilder::header` 是 append 语义，
+            // 同一个请求上再设一次就是第二条 `Cookie` 头（见 `merge_cookie`）。
             request = request.header(COOKIE, cookie);
         }
         let response = request
             .body(body.to_string())
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("请求失败: {e}")))?;
+            .map_err(|e| upstream("请求失败", e))?;
         let status = response.status();
         let content_type = header_text(response.headers(), CONTENT_TYPE);
         let raw = response
             .bytes()
             .await
-            .map_err(|e| Error::Upstream(format!("读取响应失败: {e}")))?;
+            .map_err(|e| upstream("读取响应失败", e))?;
         serde_json::from_slice::<Value>(&raw)
             .map_err(|_| Error::Upstream(decode_failure("POST", url, status, &content_type, &raw)))
     }
@@ -517,10 +621,10 @@ impl BiliHttp {
             .get(&self.nav_url)
             .send()
             .await
-            .map_err(|e| Error::Upstream(format!("nav: {e}")))?
+            .map_err(|e| upstream("nav", e))?
             .json::<Value>()
             .await
-            .map_err(|e| Error::Upstream(format!("nav decode: {e}")))?;
+            .map_err(|e| upstream("nav decode", e))?;
 
         // 未登录时 nav 的 code 是 -101，但 wbi_img 仍然下发。
         let img = value
@@ -570,93 +674,29 @@ fn default_headers() -> HeaderMap {
     headers
 }
 
-/// 疑似凭据的键名：凭据文件的字段，加上上游下发过的会话令牌。
+/// 上游请求日志的**唯一**出口：URL 里的账号 / 用户 / 设备标识在这里被换掉（规则见
+/// [`crate::redact`]）。新增请求路径只要走这个函数，就不会漏。
 ///
-/// 错误信息里只放响应体的开头，但「上游把请求原样回显」在风控页上并非不可能，
-/// 所以这些键的值必须在出门之前被抹掉（`AGENT.md` §8）。
-const SECRET_KEYS: [&str; 7] = [
-    "dedeuserid__ckmd5",
-    "dedeuserid",
-    "sessdata",
-    "bili_jct",
-    "csrf_token",
-    "qrcode_key",
-    "csrf",
-];
-
-/// 值的结束符（属于值之外的第一个字符就能收尾）。
-fn is_value_end(ch: char) -> bool {
-    matches!(
-        ch,
-        '&' | ';' | ',' | '"' | '\'' | '}' | ')' | '<' | ' ' | '\t' | '\r' | '\n'
-    )
-}
-
-/// 在**小写副本** `lowered` 里找 `from` 之后最靠前的一个凭据键名 → （位置, 键名）。
-///
-/// 同一位置命中多个键名时取**最长**的那个：`dedeuserid__ckmd5` 与 `csrf_token` 分别把
-/// `dedeuserid` 与 `csrf` 包在里面，先匹配短的会把键名截成两段。
-fn next_secret_key(lowered: &str, from: usize) -> Option<(usize, &'static str)> {
-    SECRET_KEYS
-        .iter()
-        .filter_map(|key| {
-            lowered[from..]
-                .find(key)
-                .map(|offset| (from + offset, *key))
-        })
-        .min_by_key(|(at, key)| (*at, std::cmp::Reverse(key.len())))
-}
-
-/// 把 `key=value` / `"key":"value"` 里的值抹成 `***`，其余文本原样保留。
-///
-/// 只认「键名 + 分隔符 + 值」三种成分齐全的位置：上游原话 `CSRF 校验失败` 里的键名之后
-/// 没有分隔符，不能被改写——错误信息里保留上游原话才有诊断价值。
-fn redact_secrets(text: &str) -> String {
-    let lowered = text.to_ascii_lowercase();
-    let mut out = String::with_capacity(text.len());
-    let mut copied = 0;
-    let mut search = 0;
-    while let Some((at, key)) = next_secret_key(&lowered, search) {
-        let after_key = at + key.len();
-        match secret_value(&text[after_key..]) {
-            Some((value_at, value_len)) => {
-                let value_start = after_key + value_at;
-                let value_end = value_start + value_len;
-                out.push_str(&text[copied..value_start]);
-                out.push_str("***");
-                copied = value_end;
-                search = value_end;
-            }
-            // 只是键名本身（例如上游原话里出现 `csrf` 一词）：原样保留，从键名之后继续找。
-            None => search = after_key,
-        }
+/// `status` 只有「非 JSON 重试」那条用得上：它要说明上一次的 HTTP 状态。
+fn log_request(method: &str, url: &str, status: Option<u16>) {
+    let url = redact::redact(url);
+    match status {
+        Some(status) => tracing::debug!(
+            target: "danmubox_bili::http",
+            method,
+            %url,
+            status,
+            "上游返回的不是 JSON，按瞬时故障重试一次"
+        ),
+        None => tracing::debug!(target: "danmubox_bili::http", method, %url, "上游请求"),
     }
-    out.push_str(&text[copied..]);
-    out
 }
 
-/// 键名之后若跟着「分隔符 + 值」→ 返回（分隔符长度, 值长度）。
-///
-/// 分隔符是 `=` / `:` / 引号，允许中间夹空格（`"csrf": "值"`）；值到下一个 `is_value_end`
-/// 字符为止。只有键名而没有值 → `None`。
-fn secret_value(rest: &str) -> Option<(usize, usize)> {
-    let mut delimited = false;
-    for (index, ch) in rest.char_indices() {
-        match ch {
-            '=' | ':' | '"' | '\'' => delimited = true,
-            ' ' | '\t' if delimited => {}
-            _ => {
-                if !delimited || is_value_end(ch) {
-                    return None;
-                }
-                let length = rest[index..]
-                    .find(is_value_end)
-                    .unwrap_or(rest.len() - index);
-                return Some((index, length));
-            }
-        }
-    }
-    None
+/// 上游错误文案的**唯一**出口：`reqwest::Error` 的 `Display` 会附上完整 URL
+/// （`… for url (…?vmid=…)`），上游回显的 `message` 也可能把请求原样吐回来，
+/// 所以文案在成形时就要过 [`crate::redact`]。
+fn upstream(what: &str, detail: impl std::fmt::Display) -> Error {
+    Error::Upstream(redact::redact_display(format_args!("{what}: {detail}")))
 }
 
 /// 响应体开头至多 `limit` 字节的可读文本：丢控制字符、抹疑似凭据，截断时以 `…` 收尾。
@@ -669,7 +709,7 @@ fn body_head(body: &[u8], limit: usize) -> String {
     // 切口可能落在多字节字符中间，末尾那个替换符是切出来的，不代表上游内容。
     let text = lossy.trim_end_matches(char::REPLACEMENT_CHARACTER);
     let visible: String = text.chars().filter(|ch| !ch.is_control()).collect();
-    let visible = redact_secrets(&visible);
+    let visible = redact::redact(&visible);
     if visible.is_empty() {
         return "（空）".to_string();
     }
@@ -693,11 +733,12 @@ fn decode_failure(
     let path = url::Url::parse(url)
         .map(|parsed| parsed.path().to_string())
         .unwrap_or_else(|_| "<无法解析的地址>".into());
-    format!(
+    // 路径与响应体开头都不会带查询串，但文案出口只此一处：整段再过一次脱敏，成本可忽略。
+    redact::redact(&format!(
         "{method} {path} 响应不是 JSON：HTTP {status}，content-type={content_type}，响应体前 {} 字节：{}",
         DECODE_BODY_HEAD_BYTES,
         body_head(body, DECODE_BODY_HEAD_BYTES)
-    )
+    ))
 }
 
 /// 解码失败文案里回显的响应体长度上限。够看清是 HTML 错误页、验证页还是空体，
@@ -742,7 +783,10 @@ pub fn normalize_room_input(input: &str) -> Result<String> {
         .map(str::to_string)
         .unwrap_or_default();
     if digits.is_empty() {
-        return Err(Error::BadRequest(format!("无法从 `{input}` 解析房间号")));
+        return Err(Error::BadRequest(format!(
+            "无法从 `{}` 解析房间号",
+            redact::redact(input)
+        )));
     }
     Ok(digits)
 }
@@ -761,7 +805,10 @@ pub fn normalize_room_input(input: &str) -> Result<String> {
 fn map_room_play_info(play: &Value, h5: &Value, input: &str) -> Result<Room> {
     let room_id = play.get("room_id").and_then(Value::as_i64).unwrap_or(0);
     if room_id == 0 {
-        return Err(Error::RoomNotFound(format!("输入 `{input}` 未解析出房间")));
+        return Err(Error::RoomNotFound(format!(
+            "输入 `{}` 未解析出房间",
+            redact::redact(input)
+        )));
     }
     Ok(Room {
         room_id,
@@ -901,6 +948,9 @@ mod tests {
     /// 合成（非真实）的 `nav` 响应：两个 32 位十六进制 key，形状与实测一致。
     const NAV_OK: &str = r#"{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/0123456789abcdef0123456789abcdef.png","sub_url":"https://i0.hdslb.com/bfs/wbi/fedcba9876543210fedcba9876543210.png"}}}"#;
 
+    /// 合成（非真实）的 `getDanmuInfo` 成功响应：`token` + `host_list`。
+    const DANMU_INFO_OK: &str = r#"{"code":0,"data":{"token":"tok","host_list":[{"host":"a.example","port":2243,"wss_port":443,"ws_port":2244}]}}"#;
+
     /// 缓存是**进程级**静态槽位（`WBI_KEY_CACHE`），碰它的测试必须串行，
     /// 否则互相清空 / 互相喂桩数据会互相打架。
     ///
@@ -909,11 +959,19 @@ mod tests {
     static CACHE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
         LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-    /// 本地桩服务器：按顺序回放 `responses`（最后一份复用），统计收到的请求数。
+    /// 本地桩服务器：按顺序回放 `responses`（最后一份复用）。
     ///
-    /// 每份响应是「状态码、`content-type`、响应体」；返回**基址**（调用方自己拼路径，
-    /// 因此任意端点都能桩住）与命中计数。
-    fn spawn_stub(responses: &[(u16, &str, &str)], delay: Duration) -> (String, Arc<AtomicUsize>) {
+    /// `base` 是**基址**（调用方自己拼路径，因此任意端点都能桩住）；`hits` 是收到的请求数；
+    /// `headers` 是每个请求的**原始请求头**（从请求行起的整块文本），用于断言
+    /// 「只有一个 `Cookie` 头」这类**线上形态**——只测拼串函数的表驱动测试看不出
+    /// `RequestBuilder::header` 的 append 语义。
+    struct Stub {
+        base: String,
+        hits: Arc<AtomicUsize>,
+        headers: Arc<Mutex<Vec<String>>>,
+    }
+
+    fn spawn_stub(responses: &[(u16, &str, &str)], delay: Duration) -> Stub {
         use std::io::{BufRead, Write};
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定本地桩");
@@ -928,6 +986,8 @@ mod tests {
         ));
         let hits = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&hits);
+        let headers: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&headers);
 
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -936,14 +996,16 @@ mod tests {
                 let mut reader =
                     std::io::BufReader::new(stream.try_clone().expect("克隆桩连接"));
                 let mut line = String::new();
+                let mut block = String::new();
                 loop {
                     line.clear();
                     match reader.read_line(&mut line) {
                         Ok(0) | Err(_) => break,
                         Ok(_) if line == "\r\n" => break,
-                        Ok(_) => {}
+                        Ok(_) => block.push_str(&line),
                     }
                 }
+                captured.lock().expect("桩请求头").push(block);
                 counter.fetch_add(1, Ordering::SeqCst);
                 let (status, content_type, body) = {
                     let mut queue = queue.lock().expect("桩队列");
@@ -964,17 +1026,33 @@ mod tests {
             }
         });
 
-        (format!("http://{address}"), hits)
+        Stub {
+            base: format!("http://{address}"),
+            hits,
+            headers,
+        }
     }
 
-    /// 本地 `nav` 桩服务器：按顺序回放 `bodies`（最后一份复用），统计收到的请求数。
-    fn spawn_nav_stub(bodies: &[&str], delay: Duration) -> (String, Arc<AtomicUsize>) {
+    /// 本地 `nav` 桩服务器：按顺序回放 `bodies`（最后一份复用）。
+    fn spawn_nav_stub(bodies: &[&str], delay: Duration) -> Stub {
         let responses: Vec<(u16, &str, &str)> = bodies
             .iter()
             .map(|body| (200u16, "application/json", *body))
             .collect();
-        let (base, hits) = spawn_stub(&responses, delay);
-        (format!("{base}/nav"), hits)
+        let mut stub = spawn_stub(&responses, delay);
+        stub.base = format!("{}/nav", stub.base);
+        stub
+    }
+
+    /// 原始请求头里名为 `Cookie` 的行的**值**（按行取，不做任何合并）。
+    fn cookie_lines(raw: &str) -> Vec<String> {
+        raw.lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("cookie")
+                    .then(|| value.trim().to_string())
+            })
+            .collect()
     }
 
     async fn reset_wbi_cache() {
@@ -988,9 +1066,9 @@ mod tests {
     #[tokio::test]
     async fn consecutive_wbi_key_reads_hit_nav_once() {
         let _guard = CACHE_TEST_LOCK.lock().await;
-        let (nav_url, hits) = spawn_nav_stub(&[NAV_OK], Duration::ZERO);
+        let stub = spawn_nav_stub(&[NAV_OK], Duration::ZERO);
         reset_wbi_cache().await;
-        let http = BiliHttp::new().unwrap().with_nav_url(nav_url);
+        let http = BiliHttp::new().unwrap().with_nav_url(stub.base.clone());
 
         let first = http.wbi_keys().await.expect("第一次取 key");
         let second = http.wbi_keys().await.expect("第二次取 key");
@@ -998,7 +1076,7 @@ mod tests {
         assert_eq!(first, second, "两次取到同一份密钥");
         assert_eq!(first.0, "0123456789abcdef0123456789abcdef");
         assert_eq!(
-            hits.load(Ordering::SeqCst),
+            stub.hits.load(Ordering::SeqCst),
             1,
             "连续两次取 key 只该打一次 nav"
         );
@@ -1008,9 +1086,9 @@ mod tests {
     #[tokio::test]
     async fn concurrent_wbi_key_reads_hit_nav_once() {
         let _guard = CACHE_TEST_LOCK.lock().await;
-        let (nav_url, hits) = spawn_nav_stub(&[NAV_OK], Duration::from_millis(80));
+        let stub = spawn_nav_stub(&[NAV_OK], Duration::from_millis(80));
         reset_wbi_cache().await;
-        let http = BiliHttp::new().unwrap().with_nav_url(nav_url);
+        let http = BiliHttp::new().unwrap().with_nav_url(stub.base.clone());
 
         let (first, second, third, fourth) = tokio::join!(
             http.wbi_keys(),
@@ -1022,7 +1100,7 @@ mod tests {
         for keys in [&first, &second, &third, &fourth] {
             assert!(keys.is_ok(), "并发取 key 都该成功：{keys:?}");
         }
-        assert_eq!(hits.load(Ordering::SeqCst), 1, "并发取 key 只该打一次 nav");
+        assert_eq!(stub.hits.load(Ordering::SeqCst), 1, "并发取 key 只该打一次 nav");
     }
 
     /// 失败降级：`nav` 取不到时错误照旧上抛，且**不写缓存**——下一次调用重新请求，
@@ -1030,15 +1108,15 @@ mod tests {
     #[tokio::test]
     async fn failed_nav_fetch_is_not_cached_and_next_call_retries() {
         let _guard = CACHE_TEST_LOCK.lock().await;
-        let (nav_url, hits) = spawn_nav_stub(&[r#"{"code":0,"data":{}}"#, NAV_OK], Duration::ZERO);
+        let stub = spawn_nav_stub(&[r#"{"code":0,"data":{}}"#, NAV_OK], Duration::ZERO);
         reset_wbi_cache().await;
-        let http = BiliHttp::new().unwrap().with_nav_url(nav_url);
+        let http = BiliHttp::new().unwrap().with_nav_url(stub.base.clone());
 
         let error = http.wbi_keys().await.expect_err("nav 没有 wbi_img 时必须报错");
         assert_eq!(error.code(), "UPSTREAM_ERROR");
         let recovered = http.wbi_keys().await.expect("上游恢复后重新取到 key");
         assert_eq!(recovered.0, "0123456789abcdef0123456789abcdef");
-        assert_eq!(hits.load(Ordering::SeqCst), 2, "失败的那次不许被缓存");
+        assert_eq!(stub.hits.load(Ordering::SeqCst), 2, "失败的那次不许被缓存");
     }
 
     /// 轮换兜底（`docs/auth.md` §4.3）：TTL 到点、或跨 UTC+8 自然日，缓存都必须失效。
@@ -1066,7 +1144,7 @@ mod tests {
     /// 什么内容」——只报一句 `error decoding response body` 等于没有线索。
     #[tokio::test]
     async fn non_json_get_names_endpoint_status_and_body_head() {
-        let (base, hits) = spawn_stub(
+        let stub = spawn_stub(
             &[(
                 412,
                 "text/html",
@@ -1075,7 +1153,8 @@ mod tests {
             Duration::ZERO,
         );
         let url = format!(
-            "{base}/xlive/web-ucenter/v1/banned/GetSilentUserList?room_id=5440&csrf=SECRET"
+            "{}/xlive/web-ucenter/v1/banned/GetSilentUserList?room_id=5440&csrf=SECRET",
+            stub.base
         );
         let error = BiliHttp::new()
             .unwrap()
@@ -1104,7 +1183,7 @@ mod tests {
             "查询串不许进错误信息：{text}"
         );
         assert_eq!(
-            hits.load(Ordering::SeqCst),
+            stub.hits.load(Ordering::SeqCst),
             1,
             "4xx 是上游的明确拒绝，重试没有意义"
         );
@@ -1113,7 +1192,7 @@ mod tests {
     /// 瞬时的非 JSON（CDN 错误页那类 5xx 应答）重试一次就该恢复。
     #[tokio::test]
     async fn transient_non_json_get_retries_once_then_succeeds() {
-        let (base, hits) = spawn_stub(
+        let stub = spawn_stub(
             &[
                 (502, "text/html", "<html>502 Bad Gateway</html>"),
                 (200, "application/json", r#"{"code":0,"data":{}}"#),
@@ -1122,34 +1201,34 @@ mod tests {
         );
         let (value, _) = BiliHttp::new()
             .unwrap()
-            .get_with_cookies(&format!("{base}/x"))
+            .get_with_cookies(&format!("{}/x", stub.base))
             .await
             .expect("重试一次后应当成功");
 
         assert_eq!(value["code"], 0);
-        assert_eq!(hits.load(Ordering::SeqCst), 2, "只重试一次");
+        assert_eq!(stub.hits.load(Ordering::SeqCst), 2, "只重试一次");
     }
 
     /// 重试有上限：两次都不是 JSON 就报错，不会没完没了地打上游。
     #[tokio::test]
     async fn repeated_non_json_get_gives_up_after_one_retry() {
-        let (base, hits) = spawn_stub(&[(502, "text/html", "<html>502</html>")], Duration::ZERO);
+        let stub = spawn_stub(&[(502, "text/html", "<html>502</html>")], Duration::ZERO);
         let error = BiliHttp::new()
             .unwrap()
-            .get_with_cookies(&format!("{base}/x"))
+            .get_with_cookies(&format!("{}/x", stub.base))
             .await
             .expect_err("两次都不是 JSON");
 
         assert_eq!(error.code(), "UPSTREAM_ERROR");
         assert!(error.to_string().contains("HTTP 502"), "{error}");
-        assert_eq!(hits.load(Ordering::SeqCst), 2, "最多两次");
+        assert_eq!(stub.hits.load(Ordering::SeqCst), 2, "最多两次");
     }
 
     /// POST **一律不重试**：请求可能已经生效，重试就会重复发弹幕 / 重复禁言。
     /// 同一测试顺带护栏回显内容——响应体里夹带的凭据值必须在进错误信息前被抹掉。
     #[tokio::test]
     async fn post_form_never_retries_and_redacts_reflected_credentials() {
-        let (base, hits) = spawn_stub(
+        let stub = spawn_stub(
             &[(
                 412,
                 "text/html",
@@ -1160,7 +1239,10 @@ mod tests {
         let error = BiliHttp::new()
             .unwrap()
             .post_form(
-                &format!("{base}/xlive/web-ucenter/v1/banned/GetSilentUserList"),
+                &format!(
+                    "{}/xlive/web-ucenter/v1/banned/GetSilentUserList",
+                    stub.base
+                ),
                 "room_id=5440&csrf=REAL-SECRET",
             )
             .await
@@ -1178,7 +1260,160 @@ mod tests {
         );
         assert!(text.contains("csrf=***"), "键名后的值必须被抹掉：{text}");
         assert!(!text.contains("REAL-SECRET"), "凭据不许进错误信息：{text}");
-        assert_eq!(hits.load(Ordering::SeqCst), 1, "POST 不重试");
+        assert_eq!(stub.hits.load(Ordering::SeqCst), 1, "POST 不重试");
+    }
+
+    /// 回归护栏（`docs/protocol.md` A46）：`getDanmuInfo` 只发**一条** `Cookie` 头，
+    /// 且 `buvid3` 与账号 Cookie 合并在**同一条**里。
+    ///
+    /// 改前 `danmu_info` 先经 `get_with_cookie` 设了账号 Cookie，又
+    /// `.header(COOKIE, "buvid3=…")` 追加了第二条（`RequestBuilder::header` 是 append 语义），
+    /// 桩上数到的是两条 `Cookie` 行——把 `.header(COOKIE, …)` 加回 `danmu_info`，
+    /// 本断言立刻变红。B 站按身份三要素（`uid` / `buvid` / 凭据）同源认身份。
+    /// 测试用的一条诊断记录（`danmu_info` 只往它里面写，不影响请求行为）。
+    fn test_diag() -> std::sync::Arc<danmubox_core::diagnose::Attempt> {
+        // 用独立采集器分配，避免用例之间互相看见（环里那一条无所谓，断言不看它）。
+        danmubox_core::diagnose::Diagnoser::new().begin_attempt(0)
+    }
+
+    #[tokio::test]
+    async fn danmu_info_sends_single_merged_cookie_header() {
+        let _guard = CACHE_TEST_LOCK.lock().await;
+        reset_wbi_cache().await;
+        let stub = spawn_stub(
+            &[
+                (200, "application/json", NAV_OK),
+                (200, "application/json", DANMU_INFO_OK),
+            ],
+            Duration::ZERO,
+        );
+        let http = BiliHttp::with_cookie(Some("SESSDATA=s3; bili_jct=j1; DedeUserID=42".into()))
+            .unwrap()
+            .with_nav_url(stub.base.clone())
+            .with_danmu_url(format!("{}/danmu", stub.base));
+
+        let info = http.danmu_info(5440, "BV3-EXPLICIT", &test_diag()).await.expect("票据");
+
+        assert_eq!(info.token, "tok");
+        assert_eq!(info.hosts, vec!["a.example".to_string()]);
+        let raw = stub.headers.lock().unwrap();
+        assert_eq!(raw.len(), 2, "第一跳 nav，第二跳才是 getDanmuInfo");
+        let cookies = cookie_lines(raw.last().expect("getDanmuInfo 的请求头"));
+        assert_eq!(cookies.len(), 1, "只许有一条 Cookie 头：{cookies:?}");
+        let cookie = &cookies[0];
+        assert!(cookie.contains("SESSDATA=s3"), "账号部分不许丢：{cookie}");
+        assert!(cookie.contains("DedeUserID=42"), "{cookie}");
+        assert!(
+            cookie.ends_with("buvid3=BV3-EXPLICIT"),
+            "`buvid3` 在末尾且是入参那个值：{cookie}"
+        );
+    }
+
+    /// 账号 Cookie **自带** `buvid3` 时也不许出现两枚同名键：入参那个是本次连接要填进
+    /// 认证包 `buvid` 的值，因此让位的是账号 Cookie 里的旧值。
+    #[tokio::test]
+    async fn danmu_info_replaces_buvid3_already_in_account_cookie() {
+        let _guard = CACHE_TEST_LOCK.lock().await;
+        reset_wbi_cache().await;
+        let stub = spawn_stub(
+            &[
+                (200, "application/json", NAV_OK),
+                (200, "application/json", DANMU_INFO_OK),
+            ],
+            Duration::ZERO,
+        );
+        let http = BiliHttp::with_cookie(Some("SESSDATA=s3; buvid3=STALE; DedeUserID=42".into()))
+            .unwrap()
+            .with_nav_url(stub.base.clone())
+            .with_danmu_url(format!("{}/danmu", stub.base));
+
+        http.danmu_info(5440, "BV3-EXPLICIT", &test_diag()).await.expect("票据");
+
+        let raw = stub.headers.lock().unwrap();
+        let cookies = cookie_lines(raw.last().expect("getDanmuInfo 的请求头"));
+        assert_eq!(cookies.len(), 1, "只许有一条 Cookie 头：{cookies:?}");
+        let cookie = &cookies[0];
+        assert!(
+            !cookie.contains("STALE"),
+            "账号 Cookie 里的旧 buvid3 必须让位：{cookie}"
+        );
+        assert_eq!(
+            cookie.matches("buvid3=").count(),
+            1,
+            "同名键只许一枚：{cookie}"
+        );
+        assert!(cookie.ends_with("buvid3=BV3-EXPLICIT"), "{cookie}");
+        assert!(cookie.contains("SESSDATA=s3;"), "其余字段原样：{cookie}");
+    }
+
+    /// `merge_cookie` 的表驱动用例：顺序、同名让位、只有一方、两侧全空。
+    #[test]
+    fn merge_cookie_keeps_account_pairs_first_and_buvid3_once() {
+        let cases: &[(Option<&str>, Option<&str>, Option<&str>)] = &[
+            // 账号 Cookie 在前、`buvid3` 在末尾。
+            (
+                Some("SESSDATA=s; DedeUserID=42"),
+                Some("B"),
+                Some("SESSDATA=s; DedeUserID=42; buvid3=B"),
+            ),
+            // 分隔空白归一为 `; `；旧 `buvid3` 让位。
+            (
+                Some("SESSDATA=s;buvid3=OLD"),
+                Some("B"),
+                Some("SESSDATA=s; buvid3=B"),
+            ),
+            // 值里含 `=` 不许被截断。
+            (Some("SESSDATA=a=b"), Some("B"), Some("SESSDATA=a=b; buvid3=B")),
+            // 键名大小写敏感（RFC 6265）：`BUVID3` 不是 `buvid3`，不参与让位。
+            (
+                Some("sessdata=s; BUVID3=UPPER"),
+                Some("B"),
+                Some("sessdata=s; BUVID3=UPPER; buvid3=B"),
+            ),
+            // 只有账号 Cookie / 只有 `buvid3` / 两侧都没有。
+            (Some("SESSDATA=s"), None, Some("SESSDATA=s")),
+            (None, Some("B"), Some("buvid3=B")),
+            (None, None, None),
+            // 空白串等同缺省。
+            (Some("   "), Some("B"), Some("buvid3=B")),
+            (Some("SESSDATA=s"), Some("  "), Some("SESSDATA=s")),
+        ];
+
+        for (base, buvid3, expected) in cases {
+            assert_eq!(
+                merge_cookie(*base, *buvid3).as_deref(),
+                *expected,
+                "merge_cookie({base:?}, {buvid3:?})"
+            );
+        }
+    }
+
+    /// 传输层失败的文案也带着 URL：`reqwest::Error` 的 `Display` 会附上完整地址
+    /// （`… for url (…)`，见 reqwest 0.12 `error.rs` 的 `Display`），而 B 站的查询串里
+    /// 写着「谁」——`vmid` 就是 `DedeUserID`。这条护栏钉住「UID 不从这条路进错误信息」。
+    #[tokio::test]
+    async fn transport_error_text_hides_uid_taken_from_the_url() {
+        // 先占一个端口再放掉：连过去必然 connection refused（比连不可路由地址更快、更确定）。
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑本地端口");
+            listener.local_addr().expect("端口").port()
+        };
+        let error = BiliHttp::new()
+            .unwrap()
+            .get_with_cookies(&format!(
+                "http://127.0.0.1:{port}/x/relation/followings?vmid=7654321&ps=50&pn=1"
+            ))
+            .await
+            .expect_err("端口已放掉，连不上");
+
+        assert_eq!(error.code(), "UPSTREAM_ERROR");
+        let text = error.to_string();
+        assert!(text.contains("vmid=***"), "URL 里的 uid 必须被抹掉：{text}");
+        assert!(!text.contains("7654321"), "uid 不许出现在错误信息里：{text}");
+        assert!(
+            text.contains("/x/relation/followings") && text.contains("ps=50"),
+            "接口与分页要留下，否则没法排障：{text}"
+        );
     }
 
     /// 错误信息里的响应体开头：128 字节封顶、控制字符清掉（错误信息是单行日志）、
@@ -1192,27 +1427,5 @@ mod tests {
         let head = body_head(long.as_bytes(), 128);
         assert!(head.ends_with('…'), "截断了就要有标记：{head}");
         assert_eq!(head.trim_end_matches('…').len(), 128, "超出部分不许带上");
-    }
-
-    /// 凭据抹除只认「键名 + 分隔符 + 值」三种成分齐全的位置：上游原话 `CSRF 校验失败`
-    /// 不许被改写（错误信息里保留上游原话才有诊断价值），而 `key=value` / `"key": "value"`
-    /// / 长短键名并存这几种形态都必须抹干净。
-    #[test]
-    fn redaction_covers_cookie_and_token_shapes_without_touching_prose() {
-        assert_eq!(
-            redact_secrets("SESSDATA=abc; bili_jct=def&z=1"),
-            "SESSDATA=***; bili_jct=***&z=1"
-        );
-        assert_eq!(
-            redact_secrets(r#"{"csrf_token":"tok","k":"v"}"#),
-            r#"{"csrf_token":"***","k":"v"}"#
-        );
-        assert_eq!(redact_secrets(r#"{"csrf": "tok"}"#), r#"{"csrf": "***"}"#);
-        assert_eq!(redact_secrets("CSRF 校验失败"), "CSRF 校验失败");
-        assert_eq!(
-            redact_secrets("dedeuserid__ckmd5=zz"),
-            "dedeuserid__ckmd5=***",
-            "长键名不许被短键名截断"
-        );
     }
 }

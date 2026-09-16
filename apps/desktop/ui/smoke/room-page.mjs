@@ -27,9 +27,14 @@
 //   step1  关注列表自动加载、列表页展示关注项
 //   step2  进房间、历史回填可见
 //   step3  头部在线/看过且无人气；系统/互动行的渲染与弱化；历史与实时同款
-//   step4  系统类消息的白名单（勾「消息类型 → 系统」芯片，不是已删的「系统通知」开关）
+//   step4  系统类消息的白名单（勾「消息类型 → 系统」那一项，不是已删的「系统通知」开关）
 //   step5  互动行 8 秒后自动消失
 //   step6  关掉自动消失后互动行常驻
+//   filter 筛选面板的两块表单是**两列勾选清单**（issue 2609160959 第 3 / 4 条）：消息类型 6 项
+//          与辅助功能 6 枚开关都是按行铺满的两列（列/行几何 + 不许横向滚动 + 不再是芯片样），
+//          六枚辅助开关逐枚点开再点回（偏好与复选框同步翻）；辅助功能 = 字号滑杆（整行）+ 六枚开关；
+//          两块标题（消息类型 / 辅助功能）的视觉层级比清单项醒目（issue 2609162056 第 5 条：
+//          字号 / 字重 / 字色 / 分隔线，文案与结构一字不动）
 //   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级；
 //          内容不足视口时整体贴底；头像列永远占位（昵称三列纵向对齐）；粉丝牌真彩色与兜底色；
 //          回复关系可见；舰长标只认本房间的 guard_level；「回到最新」是**圆形图标钮**（下箭头，
@@ -41,16 +46,31 @@
 //          右边缘与正文块的右边缘齐平、逐行等宽（纵向对齐），且不挤正文宽度
 //   limit  弹幕字数上限：上限来自 room_session.danmaku_length（40）；超限即截断并提示；
 //          工具行常显 已用/上限；@昵称 前缀不计入有效上限
+//   ime    组字中的回车是**输入法**的、不是「发送」：组字中（compositionstart 之后）、只有
+//          isComposing 自报、以及 compositionend 之后紧跟的那次 keydown（WebKit 时序）三种
+//          都不许发；隔一轮任务之后用户自己按的回车必须发（守卫不许滥杀）
 //   theme  主题**按钮**在**房间列表页页头**（点一下前进一档：亮 → 暗 → 自动，三下一轮回到原档；
 //          图标随档变且三档同一套矢量规范、切档真的落到 <html data-theme>、深浅对比度达标）
 //   gift   礼物类消息的去向与独立礼物栏（issue 2609152029 第 4/5 条）：`ui.gift_in_danmaku`
 //          管弹幕流、`ui.gift_panel` 管独立礼物栏，**四种组合逐个翻一遍**（默认两枚都开）；
 //          礼物栏**每个礼物 / SC / 大航海一条**（头像 + 昵称 + 内容 + 数量 + 金额），连击折叠后
-//          金额是整串的总额；折叠态汇总**按 kind 分组**、各组带各自单位（金瓜子 / 元不合并）；
+//          金额是整串的总额；折叠态汇总**按 kind 分组**、三组各报各的合计（单位统一是元）；
 //          礼物 / SC / 大航海的**头像只在该有源时画**（V1 礼物与大航海无源 → 不画假图）；
 //          SC 卡片按档位令牌上色、金额行低一档加粗且独占一行。
 //          样本来自 `fixtures/gift-sc-guard-rows.json`（**按协议文档字段表构造**，出处见
 //          docs/testing.md §9.1）—— 本仓此前没有任何礼物类样本，这几条行为原本零断言。
+//   splitter 共享分区（issue #8）：弹幕区与礼物栏上下分区、中间一条热区 ≥ 8px 的分割条。
+//          拖分割条**实时**改比例（拖动中一帧都不写 store、松手才落盘）、拖到极限时两栏各自
+//          的最小高度成立（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头）且总量不溢出、比例在重新挂载后保持；
+//          长按任一栏 0.5s 进入换位态（半透明跟随指针）→ 拖过另一栏松手即上下互换且落盘，
+//          短按 / 按住前就移动（在滚列表）/ ESC 三条路都不换位；换位不改比例（只挪位置）；
+//          ui.gift_panel 关掉后分区退化为弹幕区全高、分割条与礼物栏一起消失、换位停用。
+//          两条手势各走一条指针链（拖分割条用 mouse、长按换位用 touch）。
+//   cheapgift 低价礼物两枚开关（issue 2609162056 第 3 / 4 条）：`ui.gift_collapse_cheap` 只改
+//          礼物栏的分组形状（≤0.1 元的礼物合并成一条）、`ui.gift_exclude_cheap_stats` 只改
+//          折叠头的统计口径（礼物 / SC（N）与三组明细），两枚**默认都关**、互相独立；
+//          边界按「0.09 / 0.10 算低价、0.11 不算、0 元（上游没给价）不算」逐条量；SC 与大航海
+//          在两枚开关的四种组合下逐字不变。夹具放在**空会话的新房间**里量（见那一段的说明）。
 //   admin  房管权限前置（**有房管身份才有入口**；不是房管时菜单里没有这一项）、写操作二次确认与
 //          请求形状、身份就绪即预载三块名单、面板三块收成三个 tab（roving tabindex + ←→/Home/End，
 //          tab 文案只有名单名、不带计数）、单点动作走行右键菜单、批量一次确认按序执行、
@@ -59,6 +79,12 @@
 //          第 1 排 = 输入框 + 主操作 + 批量图标钮，批量模式下第 2 排紧贴它下方（全选 / 已选 N 项 / 动作）
 //   panels 五面板互斥：房管面板 / 表情 / 短语 / 筛选 / 独立礼物栏同时最多开一个
 //   tabs   多标签隔离：切房间把面板 / 菜单 / 滚动跟随重置，草稿按「身份 × 房间」各留一份
+//          标签条本身：拖动排序（真实指针事件：越过 5px 阈值才进入拖拽态、拖完不切房间、
+//          阈值以下仍是点击）、横滑是滚动而**按住**才是拖、开 20 个房间后横向滚动且每枚
+//          标签不被压缩到最小宽度以下、拖动中被拖的房间被关掉则整次作废；
+//          **标签条不画滚动条但仍能横滚**（用户 2026-09-16 第 1 条）：溢出时「标签底边 →
+//          容器内底边」那一段为 0（滚动条一旦被画出来就会占掉一条，覆盖式下则是飘在标签上）、
+//          引擎算出来的 `scrollbar-width` 是 `none`、且把 `scrollLeft` 归零再滚仍然能变
 //   follow 未开播也列出（**真实取样夹具**：未开播项第 1 页可见且翻页到底一条不少）、按最后开播时间排序、>30 条分页
 //   account 账号区只留一行身份、**整行即入口**（独立的「账号」按钮已删；游客态同样可点，
 //          键盘 Enter / Space 等价）；对话框里一行一个账号（昵称 + uid + 状态 + 操作），
@@ -426,13 +452,20 @@ const MOCK = (theme) => `(function () {
     // 「ui.gift_panel_mode」这个字符串键拆成了这两枚布尔键）：管弹幕流的那枚与管独立礼物栏的
     // 那枚各管一头，**默认都是 true**（两处都渲染）。
     "ui.gift_in_danmaku": true, "ui.gift_panel": true, "ui.interact_auto_hide": true,
+    // 共享分区的顺序与份额（issue #8，契约 §8 新增的两枚键）：默认「礼物在下、份额 0.35」。
+    // 替身里必须与 prefs_get 同形（真实命令返回的是**合并过默认值的全集**），否则界面拿到的
+    // 是 undefined、断言也就量不到「默认值」这件事。
+    "ui.gift_pane_on_top": false, "ui.gift_pane_ratio": 0.35,
+    // 低价礼物两枚开关（issue 2609162056 第 3 / 4 条，契约 §8）：**默认都是 false**（改前的
+    // 形态就是「不折叠、不剔除」）。替身里必须与 prefs_get 同形，界面才量得到「默认关」这件事。
+    "ui.gift_collapse_cheap": false, "ui.gift_exclude_cheap_stats": false,
     "ui.show_timestamp": false,
     // 键清单照抄契约 §8：ui.system_notice 随「系统类只由 filter.kinds 把关」
     // 一起删掉（两个门盖的消息集合逐字相同），关键词命中那三键随 item 9 一起删掉了，
     // 房管屏蔽词走 admin_keywords_*（IPC 命令，不是偏好键），不在这一份里。
     "composer.phrases": ["早上好"], "filter.uids": [],
     // 默认白名单**不含 system**（契约 §8.1 / §4.8）：系统行默认不渲染，
-    // 要看就现场勾「消息类型 → 系统」那一枚芯片（step4）。
+    // 要看就现场勾「消息类型 → 系统」那一项（step4）。
     "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard"],
     "filter.medal_level_min": 0, "history.buffer_rows": 5000,
     // 「最近观看」（契约 §8）：离线甲（room 300）先看过，**夹具第 1 条**（真实取样）后看过 ——
@@ -472,6 +505,24 @@ const MOCK = (theme) => `(function () {
       room_id: 5555, short_id: 0, anchor_uid: 0, anchor_uname: "",
       title: "", live_status: 0, connected: false, buffered: 0
     });
+  };
+  // 标签条那一段要「开一堆房间」：__addRooms(n) 追加 n 个**上游没给名字**的房间
+  // （与 5555 同款：标签只能报房间号），标签条因此一定横向溢出 ——
+  // 「开多了不挤在一起」才有可观察面。幂等：同一号不会重复登记。
+  window.__addRooms = function (count) {
+    for (var added = 1; added <= count; added += 1) {
+      var id = 6000 + added;
+      if (rooms.some(function (r) { return r.room_id === id; })) continue;
+      rooms.push({
+        room_id: id, short_id: 0, anchor_uid: 0, anchor_uname: "",
+        title: "", live_status: 0, connected: false, buffered: 0
+      });
+    }
+  };
+  // 反向：把某个房间从替身的 rooms_list 里删掉（下一次重拉就不再返回它）——
+  // 用来验「拖动中被拖的那个房间被关掉」。
+  window.__dropRoom = function (roomId) {
+    rooms = rooms.filter(function (r) { return r.room_id !== roomId; });
   };
   // 关注列表（用户 2026-09-13：「关注但未开播的也一直没加载到主界面」）：
   // **70 条真实取样**直接来自夹具（fixtures/follow-list.json ← follow-status-raw.json，
@@ -817,17 +868,33 @@ const MOCK = (theme) => `(function () {
     var box = rect(svg);
     if (!box || !(vb[2] > 0)) return null;
     var scale = box.width / vb[2];
-    // 墨迹厚度：描边 = stroke-width，圆点 = 直径（一个圆点就是一个零长度描边段的圆头）。
+    // 墨迹厚度：描边 = stroke-width，**实心**圆点 = 直径（一个圆点就是一个零长度描边段的圆头）。
     // ⚠ 两者对**外接盒**的贡献不同：描边的几何包围盒是**路径中心线**，四周各要外扩半个笔画；
     //    实心圆的包围盒**本身就是墨迹**，一点都不用外扩（第一版两边都外扩，于是 ⋯ 的墨迹范围
     //    被算成 19.5 × 7，与箭头那 16 对不上 —— 冒烟当场把这条抓住了）。
-    var thicknessOf = function (s) {
-      if (s.tagName.toLowerCase() === "circle") return parseFloat(s.getAttribute("r")) * 2;
+    // ⚠ circle 这个标签名**本身不说明**它是实心还是描边：⋯ 那三枚圆点是 fill 实心
+    //    （厚度 = 直径 3.5 = 2 × 描边规范里的 1.75），而主题按钮的「亮」（太阳的圆心）与
+    //    「自动」（半亮的圆环）都是 fill="none" + stroke-width: 1.75 的**描边环** ——
+    //    它们的厚度就是 1.75、包围盒要外扩半个笔画。旧写法对任何 <circle> 一律按「实心圆点」
+    //    算，于是太阳的圆心被算成厚度 6、自动档的圆环被算成 14.25，两档都撞不过下面这条
+    //    「墨迹粗度 = 1.75」的规范（实测：浅色那一档 themeIconSpecOk=false）。
+    //    判据因此落在**画法**上：fill 缺席或为 none = 描边环，否则 = 实心圆点。
+    var isFilled = function (s) {
+      var fill = s.getAttribute("fill");
+      return fill !== null && fill !== "none";
+    };
+    var strokeWidthOf = function (s) {
       var w = s.getAttribute("stroke-width");
       return w === null ? 0 : parseFloat(w);
     };
+    var thicknessOf = function (s) {
+      if (s.tagName.toLowerCase() === "circle") {
+        return isFilled(s) ? parseFloat(s.getAttribute("r")) * 2 : strokeWidthOf(s);
+      }
+      return strokeWidthOf(s);
+    };
     var padOf = function (s) {
-      return s.tagName.toLowerCase() === "circle" ? 0 : thicknessOf(s) / 2;
+      return s.tagName.toLowerCase() === "circle" && isFilled(s) ? 0 : thicknessOf(s) / 2;
     };
     var lo = { x: Infinity, y: Infinity };
     var hi = { x: -Infinity, y: -Infinity };
@@ -1270,6 +1337,9 @@ const MOCK = (theme) => `(function () {
     out.step2_roomPage = text().indexOf("发送") >= 0;
     out.step2_historyVisible = !!rowWith("这是进场回填的历史弹幕");
     out.chatScroll = !!byTestId("db-chat-scroll");
+    // 只有**一个**房间时标签条不渲染（没有可切的目标，也没有可拖的次序）——
+    // 此刻正是那一次的状态：第二个房间要到多标签隔离那一段才登记进替身。
+    out.singleRoomNoTabStrip = !byTestId("db-room-tabs") && allByTestId("db-room-tab").length === 0;
     snap();
 
     // 铺 2 条实时弹幕 + 互动 + 系统（step3 需要历史行与实时行同时在场）
@@ -2327,6 +2397,69 @@ const MOCK = (theme) => `(function () {
       return toolLabels.indexOf(t) >= 0;
     }) && toolLabels.indexOf("最近") < 0;
 
+    // ---- 文档本身**永不滚动**（键盘 / 面板只许挤压内部滚动区，不许把整个界面顶走；docs/ui.md §9.3）
+    //      为什么钉这条：安卓上键盘避让只有一条机制 —— 原生把「系统栏 ∪ 键盘」的高度下发成
+    //      --safe-bottom，body 用它让出底部空间，窗口**不**为键盘 resize（AndroidManifest 里
+    //      windowSoftInputMode=adjustNothing）。这条链子一旦被谁再叠一次（平台又替我们 resize
+    //      了一次视口、或内部某一层比容器高），多出来的那一截就会把 **document** 变成一个可滚容器：
+    //      手指在弹幕列表上滑到底之后会**接力**滚它，整个界面（含房间顶栏）被顶上去、底边露出画布色
+    //      （用户 2026-09-16 报的就是这个）。无头里没有 IME，所以这里验的是这条链子的**布局那一半**：
+    //      ① 常态 ② 面板展开（固定高度的兄弟最多、最容易把外壳撑破的一档）③ 把 --safe-bottom 换成
+    //      键盘高度（原生在键盘弹出时就是换这个值）三种状态下，文档都不可滚，且「body 铺满视口、
+    //      #root 恰好短掉 body 的上下内边距（= 让开系统栏 / 键盘）」这条链子成立。
+    //      IME 那一半（系统会不会额外 resize / 平移窗口）只能在设备上看，见 docs/ui.md §9.3。
+    function docBox() {
+      var se = document.scrollingElement;
+      var bodyStyle = getComputedStyle(document.body);
+      return {
+        overflow: se.scrollHeight - se.clientHeight,
+        scrollTop: se.scrollTop,
+        bodyH: document.body.getBoundingClientRect().height,
+        rootH: document.getElementById("root").getBoundingClientRect().height,
+        viewH: window.innerHeight,
+        // body 的上下内边距 = 让开系统栏 / 键盘的那两条（--safe-top / --safe-bottom）。
+        // #root 的高度以百分比写在 body 上，解析的是 body 的**内容盒** —— 键盘那一档
+        // 因此短掉内边距那么多，这不是漏让开，正是让开本身（见下面那条断言的说明）。
+        padTop: Number.parseFloat(bodyStyle.paddingTop) || 0,
+        padBottom: Number.parseFloat(bodyStyle.paddingBottom) || 0,
+      };
+    }
+    var docIdle = docBox();
+    if (!byTestId("db-panel")) { clickTool("表情"); await sleep(400); }
+    var docPanel = docBox();
+    if (byTestId("db-panel")) { clickTool("表情"); await sleep(400); }
+    var rootStyle = document.documentElement.style;
+    var prevSafeBottom = rootStyle.getPropertyValue("--safe-bottom");
+    rootStyle.setProperty("--safe-bottom", "336px");
+    await sleep(250);
+    var docInset = docBox();
+    var composerBox = rect(document.querySelector("textarea"));
+    var composerVisible = !!composerBox && composerBox.top >= -1 &&
+      composerBox.bottom <= window.innerHeight + 1 && composerBox.height > 0;
+    // 令牌用完立刻复原：后面的断言还按正常视口量
+    if (prevSafeBottom) rootStyle.setProperty("--safe-bottom", prevSafeBottom);
+    else rootStyle.removeProperty("--safe-bottom");
+    await sleep(200);
+    out.docLayouts = { idle: docIdle, panel: docPanel, keyboardInset: docInset };
+    out.docNeverScrollable = [docIdle, docPanel, docInset].every(function (d) {
+      return d.overflow <= 1 && d.scrollTop === 0;
+    });
+    // body 是「整屏那一层」（border-box = 动态视口高），#root 的高度是**可用区** ——
+    // 它以百分比写在 body 上、解析的是 body 的**内容盒**，所以正好等于「视口 − 上下内边距
+    // （--safe-top / --safe-bottom）」。键盘那一档因此是设计意图，不是实现漂了：
+    // 实测 idle / panel 两档 rootH = 900 = 视口高（两条内边距在桌面上都是 0），
+    // keyboardInset 一档 rootH = 564 = 900 − 336（原生在键盘弹出时下发的就是 336px，
+    // 见 docs/ui.md §9.3 与 index.css 顶上那段「界面自补内边距」）。
+    // 旧写法要求 rootH 也 = 视口高，等于要求「让开键盘这件事不发生」。新写法钉住的是这条链子
+    // 本身：body 铺满视口（不让开就没有那一截），root 恰好短掉 body 的内边距（谁把
+    // height:100% / box-sizing 改坏都立刻红），三档一起成立才过。
+    out.docHeightsMatchViewport = [docIdle, docPanel, docInset].every(function (d) {
+      return Math.abs(d.bodyH - d.viewH) <= 1 &&
+        Math.abs(d.rootH - (d.viewH - d.padTop - d.padBottom)) <= 1;
+    });
+    out.docComposerVisibleWithKeyboardInset = composerVisible;
+    out.docSafeBottomRestored = rootStyle.getPropertyValue("--safe-bottom") === prevSafeBottom;
+
     // ---- layout 弹幕列表是唯一生长区；面板向上展开不遮挡最新弹幕
     var scroller = byTestId("db-chat-scroll");
     var before = rect(scroller);
@@ -2365,12 +2498,22 @@ const MOCK = (theme) => `(function () {
     // 不写死 8px：它属于排版令牌（app.module.css），RowRedesign 调它时断言自动跟着走。
     out.layoutScrollerPaddingBottomPx =
       Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
-    // 贴底时的呼吸空间：末行底边 ↔ 面板（= 滚动容器）顶边的间距必须 == 那个内边距
+    // 贴底时的呼吸空间：末行底边 ↔ **滚动容器（.scroller）自己的底边**的间距必须 == 那个内边距。
+    // 尺子为什么量容器而不是「面板顶边」（= 旧口径）：面板是**输入区**那一块里的弹出面板，
+    // 而弹幕区与输入区之间现在还夹着**上下分区**（issue #8：礼物栏与弹幕区共享高度、中间一条
+    // 8px 分割条；默认态礼物栏是折叠的，那一栏就是折叠头那么高）。于是旧口径量到的其实是
+    // 「内边距 + 折叠头 + 分割条」：实测 42.7 = 8（内边距）+ 26.6（折叠头）+ 8.1（分割条），
+    // 而它想验的从来不是这个和 —— 是「贴底时最新一条与它所在滚动区底边之间正好留着内边距」。
+    // 新尺子一点没放水：贴底（layoutScrollBottomGapPx = 0）时内边距被谁挤掉（末行顶到容器边）
+    // 或末行下方多出一截空隙，这条都会红。面板顶边那一份继续留在快照里（分割条口径的证据）。
     out.layoutNewestPanelGapPx = newestAfter
       ? Math.round((rect(panel).top - rect(newestAfter).bottom) * 10) / 10
       : null;
-    out.layoutNewestGapIsPadding = out.layoutNewestPanelGapPx !== null &&
-      Math.abs(out.layoutNewestPanelGapPx - out.layoutScrollerPaddingBottomPx) <= 1;
+    out.layoutNewestContainerGapPx = newestAfter
+      ? Math.round((rect(scroller).bottom - rect(newestAfter).bottom) * 10) / 10
+      : null;
+    out.layoutNewestGapIsPadding = out.layoutNewestContainerGapPx !== null &&
+      Math.abs(out.layoutNewestContainerGapPx - out.layoutScrollerPaddingBottomPx) <= 1;
     // 贴底时的精确几何：为什么最新一条会紧贴容器底边（而不是留出容器下内边距）？
     // scrollHeight - scrollTop - clientHeight = 0 表示已经滚到物理最大位置；
     // 若此时末行底边仍在内容块底边之下（msgListBottomGapPx 为负），说明行高溢出了虚拟高度块。
@@ -2661,12 +2804,22 @@ const MOCK = (theme) => `(function () {
     //      面板与输入区是**兄弟**节点，只判输入区就会把面板内部的按下当成外面。
     //      复现必须补一次真实的「pointerdown」—— 「.click()」只发 click 事件、绕过那条监听，
     //      这正是它当初没被测出来的原因（真鼠标点 tab 一定先有 pointerdown）。
+    // ⚠ 抬起（pointerup）这一步**不能省**：只发 pointerdown 不是「按了一下」，是「按住不放」。
+    //    面板里那三处按下（tab 轨道 / 表情格）与弹幕列表都落在共享分区 .paneDanmaku 里，
+    //    于是 SplitPanes 的「长按 0.5s 换位」计时器被真的挂上：500ms 后它照常触发 —— 那一栏
+    //    进入换位拖拽态、document.body.userSelect 被置成 none，并在 window 上挂一个**吞掉
+    //    下一次 click** 的捕获监听器（600ms 兜底才摘）。实测代价：pressedOnly(弹幕列表) 之后
+    //    约 800ms 那一次 pressLike(通用 tab) 被它吞掉 —— 面板仍停在上一个分组，
+    //    panelBackOnCommon 因此长期为假（点的是「通用」，量到的还是「本房间」）。
+    //    真实用户的手势一定是「按下 + 抬起」，所以这里按 immTap 那条口径补齐抬起。
     var pressLike = function (el) {
       el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
       el.click();
     };
     var pressedOnly = function (el) {
       el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
     };
     var selectedKind = function () {
       var hit = [].slice.call(byTestId("db-panel").querySelectorAll('[data-testid="db-emote-tab"]'))
@@ -2699,9 +2852,32 @@ const MOCK = (theme) => `(function () {
     out.panelReopensAfterOutsidePress = !!byTestId("db-panel") &&
       selectedKind() === targetKind;
     // 复原到「通用」组：后面的表情格度量与它前面的口径一致
-    if (tabOf("common")) pressLike(tabOf("common"));
+    var kindsNow = function () {
+      var p = byTestId("db-panel");
+      return p ? [].slice.call(p.querySelectorAll('[data-testid="db-emote-tab"]')).map(function (b) {
+        return b.getAttribute("data-kind") + ":" + b.getAttribute("aria-selected");
+      }) : null;
+    };
+    var commonTab = tabOf("common");
+    out.panelBackOnCommonDiag = {
+      commonTab: !!commonTab,
+      kindsBefore: kindsNow(),
+      selectedBefore: byTestId("db-panel") ? selectedKind() : "panel-gone",
+      clicked: !!commonTab,
+    };
+    if (commonTab) pressLike(commonTab);
     await sleep(300);
-    out.panelBackOnCommon = selectedKind() === "common";
+    // 面板还在不在、还有哪些组、选中的是哪个 —— 快照里只留一个布尔的话，
+    // 「组没了」「面板被关了」「点了没生效」三种情形长得一模一样。
+    var panelAfterCommon = byTestId("db-panel");
+    out.panelBackOnCommonDiag.kindsAfter = kindsNow();
+    out.panelBackOnCommonDiag.selectedAfter = panelAfterCommon ? selectedKind() : "panel-gone";
+    out.panelBackOnCommonDiag.emptyText = panelAfterCommon &&
+      panelAfterCommon.querySelector('[class*="empty"]')
+      ? panelAfterCommon.querySelector('[class*="empty"]').innerText.trim() : null;
+    // 面板不在了（被谁关了）也是这条断言不成立的一种，不能让 selectedKind() 抛出去
+    // （抛出去就是场景当场死掉，见 admin 那一段的教训）。
+    out.panelBackOnCommon = !!panelAfterCommon && selectedKind() === "common";
 
     clickTool("表情");
     await sleep(300);
@@ -2721,9 +2897,15 @@ const MOCK = (theme) => `(function () {
       return box.bottom <= afterCloseBox.bottom + 1 && box.top >= afterCloseBox.top - 1;
     });
     var afterCloseLast = afterCloseRows[afterCloseRows.length - 1] || null;
-    out.layoutNewestGapNoPanelPx = afterCloseLast
+    // 与上面那条同一支尺子（见那处的说明）：面板收起后列表下面这一档，量的仍是
+    // 「末行 ↔ **滚动容器**底边 = 内边距」。输入区顶边那一份（旧口径）留在快照里做对照 ——
+    // 它与新的容器底边之间正好差着折叠头 + 分割条（实测 42.8 − 8.1 ≈ 34.7）。
+    out.layoutNewestGapComposerPx = afterCloseLast
       ? Math.round((rect(document.querySelector("textarea").parentElement).top -
           rect(afterCloseLast).bottom) * 10) / 10
+      : null;
+    out.layoutNewestGapNoPanelPx = afterCloseLast
+      ? Math.round((rect(afterCloseScroller).bottom - rect(afterCloseLast).bottom) * 10) / 10
       : null;
     out.layoutNewestGapIsPaddingNoPanel = out.layoutNewestGapNoPanelPx !== null &&
       Math.abs(out.layoutNewestGapNoPanelPx - out.layoutScrollerPaddingBottomPx) <= 1;
@@ -3177,18 +3359,7 @@ const MOCK = (theme) => `(function () {
     out.ownedEmoteSentOnClick = out.ownedEmoteSendUnique && out.ownedEmoteSendContent;
     out.ownedEmoteNoSecondStep = document.querySelector("textarea").value === "" &&
       !!byTestId("db-panel");
-    // 预览（「将发送」条）是**草稿**那一侧的功能：把表情名打进草稿仍会显示成图片
-    // （面板点选不再往草稿里插名字，这条路径与面板无关）。
-    typeIntoArea(document.querySelector("textarea"), ownedSample.text);
-    await sleep(250);
-    var sendPreview = byTestId("db-send-preview");
-    out.ownedEmotePreviewImage = !!sendPreview &&
-      [].slice.call(sendPreview.querySelectorAll("img")).some(function (img) {
-        return img.alt === ownedSample.text;
-      });
-    typeIntoArea(document.querySelector("textarea"), "");
-    await sleep(200);
-    // 面板**点选后不关**（上面那条断言），但后面几步要用满屏的列表，这里把它收起来。
+    // 面板点选**不关**（上面那条断言），但后面几步要用满屏的列表，这里把它收起来。
     clickTool("表情");
     await sleep(250);
     // 发送成功不再占一行说「上次发送：已发出」（用户 #4：没意义且不协调）——弹幕已经出现在列表里
@@ -3302,6 +3473,85 @@ const MOCK = (theme) => `(function () {
     }
     out.limitBlockRan = limitBlockRan;
 
+    // ---- ime 中文输入法组字时的回车（issue #2 第 3 条：macOS 实测「回车选词」会把弹幕直接发出去）。
+    //      场景里只能派发**合成事件**（同 pressKey 那段的说明：运行器没有把真实键盘 / IME 序列
+    //      送进来的通道），因此这里把「判据依赖的四种时序」逐条摆出来，判据只落在两件对外可观察
+    //      的事上：chat_send 有没有被调用、草稿还在不在。前三种都不许发，第四种**必须发**：
+    //        ① 组字中：compositionstart 之后、compositionend 之前的回车（真实 IME 选词就是这一次）；
+    //        ② 只有 isComposing 自报组字（Chromium 提交候选那次 keydown 的形态：不带
+    //           compositionstart 也自报）—— 与 ① 分开，免得「只看组字态」的实现蒙过去；
+    //        ③ WebKit 时序：compositionend **先**到，同一次按键的 keydown 随后到、带着
+    //           isComposing=false / keyCode=13 —— 这是 macOS 宿主引擎（WKWebView）上的真凶，
+    //           只看 ①② 会在这里变红；
+    //        ④ 隔了一轮任务之后用户自己按的回车 —— 守卫要是连它也吃，等于「修完发不出弹幕」。
+    //      ④ 与 ③ 靠得近是有意的：它证明守卫的窗口止于**一轮任务**，不是「一直等到下次按键」。
+    var imeBlockRan = false;
+    try {
+      var imeArea = document.querySelector("textarea");
+      var imeTexts = ["组字中样本", "自报组字样本", "提交候选样本", "组字后的回车样本"];
+      var imeSendCount = function () {
+        return window.__callsWithArgs.filter(function (c) { return c.cmd === "chat_send"; }).length;
+      };
+      // 每条时序都重新铺一遍草稿：前一条发没发过都不影响后一条（互不依赖）
+      var imeSeed = async function (text) {
+        typeIntoArea(imeArea, "");
+        await sleep(150);
+        typeIntoArea(imeArea, text);
+        await sleep(150);
+        return imeSendCount();
+      };
+      var imeKeydown = function (isComposing, keyCode) {
+        imeArea.focus();
+        imeArea.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter", code: "Enter", keyCode: keyCode, isComposing: isComposing,
+          bubbles: true, cancelable: true
+        }));
+      };
+      var imeCompose = function (type) {
+        imeArea.dispatchEvent(new CompositionEvent(type, { bubbles: true }));
+      };
+
+      // ① 组字中的回车
+      var imeBeforeComposing = await imeSeed(imeTexts[0]);
+      imeCompose("compositionstart");
+      imeKeydown(true, 229);
+      await sleep(400);
+      out.imeComposingEnterDoesNotSend = imeSendCount() === imeBeforeComposing;
+      out.imeComposingEnterKeepsDraft = imeArea.value === imeTexts[0];
+      imeCompose("compositionend");
+      await sleep(300);
+
+      // ② 没有 compositionstart，只有 isComposing 自报的那次回车
+      var imeBeforeFlag = await imeSeed(imeTexts[1]);
+      imeKeydown(true, 229);
+      await sleep(400);
+      out.imeIsComposingFlagDoesNotSend = imeSendCount() === imeBeforeFlag &&
+        imeArea.value === imeTexts[1];
+
+      // ③ compositionend 先到、keydown 后到（WebKit 时序）：两者**同一轮任务**里背靠背派发
+      var imeBeforeCommit = await imeSeed(imeTexts[2]);
+      imeCompose("compositionstart");
+      imeCompose("compositionend");
+      imeKeydown(false, 13);
+      await sleep(400);
+      out.imeCommitTailEnterDoesNotSend = imeSendCount() === imeBeforeCommit &&
+        imeArea.value === imeTexts[2];
+
+      // ④ 隔一轮任务之后的普通回车：必须发出去（并且清空草稿）
+      var imeBeforePlain = await imeSeed(imeTexts[3]);
+      await sleep(300);
+      imeKeydown(false, 13);
+      await sleep(500);
+      out.imeNextTaskEnterSends = imeSendCount() === imeBeforePlain + 1 && imeArea.value === "";
+      typeIntoArea(imeArea, "");
+      await sleep(200);
+      snap();
+      imeBlockRan = true;
+    } catch (e) {
+      out.imeBlockError = String((e && e.stack) || e);
+    }
+    out.imeBlockRan = imeBlockRan;
+
     // ---- 超时兜底（用户 2026-09-13：不要永远停在「发送中」）：这条**故意不回推**，
     //      看它在 SEND_CONFIRM_TIMEOUT_MS（8s）到点后是否被标成失败族的「未确认」。
     //      点击后那一瞬间它**不带任何标记**（与已确认行同款）——「发送中」那档已按用户
@@ -3326,57 +3576,227 @@ const MOCK = (theme) => `(function () {
     await sleep(300);
     var filterPanel = byTestId("db-panel");
     out.filterPanelShown = !!filterPanel;
-    // ---- 筛选面板重排（item 11）：只剩「消息类型」与「显示」两块 —— 关键词那一整块随 item 9
-    //      删除，主题下拉随 item 10 搬到列表页页头，因此面板里**没有**关键词、也没有主题控件。
+    // ---- 筛选面板重排（item 11 + issue 2609160959 第 3 / 4 条）：两块 ——「消息类型」与
+    //      「辅助功能」（关键词那一整块随 item 9 删除，主题下拉随 item 10 搬到列表页页头）。
+    //      两块的表单**同一形态**：两列勾选清单（第 3 条要的就是这个，第 4 条把
+    //      时间戳 / 互动消息自动消失 / 弹幕包含礼物 / 独立礼物栏四枚开关并进来）。
     out.filterPanelSections = filterPanel
       ? [].slice.call(filterPanel.querySelectorAll("h3")).map(function (h) { return h.innerText.trim(); })
       : [];
-    out.filterPanelTwoBlocks = out.filterPanelSections.join(",") === "消息类型,显示";
+    out.filterPanelTwoBlocks = out.filterPanelSections.join(",") === "消息类型,辅助功能";
     out.filterPanelNoKeywords = !!filterPanel && filterPanel.innerText.indexOf("关键词") < 0;
     out.filterPanelNoThemeSelect = !!filterPanel &&
       !filterPanel.querySelector('[data-testid="db-pref-theme"]');
-    // 两块的内容都还在（都按**各自的 section** 数，不拿整块的 label 当分母）：
-    // 「消息类型」6 枚芯片（契约 §8 的 kind 全集）、「显示」= 字号滑杆 + **四枚**开关
-    // （时间戳 / 互动消息自动消失 / 弹幕包含礼物 / 独立礼物栏）。
-    // 开关的**文案**由下面的 step4 / step6 / gift 三段用 clickLabelIn / setGiftSwitch 点到
-    // （点得到就说明文案在），这里只数控件并列出 label 文案，不解析 select 的 innerText。
-    var filterSections = filterPanel ? [].slice.call(filterPanel.querySelectorAll("section")) : [];
-    var kindsSection = filterSections[0] || null;
-    var displaySection = filterSections[1] || null;
-    out.filterPanelKindChips = kindsSection
-      ? [].slice.call(kindsSection.querySelectorAll("label")).map(function (l) {
-          return l.innerText.trim();
-        })
-      : [];
-    out.filterPanelKindChipsComplete = out.filterPanelKindChips.length === 6;
-    // 六枚芯片的**文案**（契约 §8 的 KIND_LABEL）：系统那一枚就在这里，step4 点它
-    out.filterPanelKindChipLabels =
-      out.filterPanelKindChips.join(",") === "弹幕,礼物,SC,互动,大航海,系统";
-    var displayHas = function (selector) {
-      return !!displaySection && !!displaySection.querySelector(selector);
+    // 两块各自按**稳定钩子**定位（不再靠 sections[0] / [1] 的下标）：db-filter-kinds /
+    // db-filter-aux 是本次新增的 data-testid（docs/ui.md §8.5）。
+    //      「消息类型」= 6 项（契约 §8 的 kind 全集）；「辅助功能」= 字号滑杆 + **六枚**复选框。
+    //      文案由下面的 step4 / step6 / gift / cheapgift 四段用 clickLabelIn / setGiftSwitch 点到
+    //      （点得到就说明文案在），这里只列文案并数控件，不解析 select 的 innerText。
+    var kindsSection = byTestId("db-filter-kinds");
+    var auxSection = byTestId("db-filter-aux");
+    var labelsOf = function (root) {
+      return root ? [].slice.call(root.querySelectorAll("label")) : [];
     };
-    // 「显示」块的控件清单：**旧的「礼物栏」下拉已随 issue 2609152029 第 1 条删除**
-    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），所以这里数的是四枚复选框，
-    // 并另外钉住「select 一个都不剩」——旧断言里的 giftMode: displayHas("select")
-    // 是**按已删控件写的**，改名不是可选项（那个控件已经不存在了）。
-    out.filterPanelDisplayLabels = displaySection
-      ? [].slice.call(displaySection.querySelectorAll("label")).map(function (l) {
-          return l.innerText.trim();
-        })
-      : [];
-    out.filterPanelDisplayControls = {
-      fontScale: displayHas('input[type="range"]'),
-      switches: displaySection
-        ? displaySection.querySelectorAll('input[type="checkbox"]').length : 0,
-      selects: displaySection ? displaySection.querySelectorAll("select").length : 0,
+    var kindLabels = labelsOf(kindsSection);
+    out.filterPanelKindItems = kindLabels.map(function (l) { return l.innerText.trim(); });
+    out.filterPanelKindItemsComplete = out.filterPanelKindItems.length === 6;
+    // 六项的**文案**（契约 §8 的 KIND_LABEL）：系统那一项就在这里，step4 点它。
+    // 字段名从 *KindChips 改成 *KindItems：那个形态（芯片）正是本批删掉的（第 3 条），
+    // 留着旧名字等于让快照撒谎。
+    out.filterPanelKindLabels =
+      out.filterPanelKindItems.join(",") === "弹幕,礼物,SC,互动,大航海,系统";
+    // 「辅助功能」块的控件清单：**旧的「礼物栏」下拉已随 issue 2609152029 第 1 条删除**
+    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），末两枚是低价礼物开关
+    // （issue 2609162056 第 3 / 4 条），所以这里数的是六枚复选框，并另外
+    // 钉住「select 一个都不剩」；字号滑杆仍在（它只是排布换成了整行）。
+    var auxLabels = labelsOf(auxSection).filter(function (l) {
+      return !!l.querySelector('input[type="checkbox"]');
+    });
+    out.filterPanelAuxLabels = auxLabels.map(function (l) { return l.innerText.trim(); });
+    out.filterPanelAuxControls = {
+      fontScale: !!auxSection && !!auxSection.querySelector('input[type="range"]'),
+      switches: auxLabels.length,
+      selects: auxSection ? auxSection.querySelectorAll("select").length : 0,
     };
-    out.filterPanelGiftSwitchesPresent =
-      out.filterPanelDisplayLabels.indexOf("弹幕包含礼物") >= 0 &&
-      out.filterPanelDisplayLabels.indexOf("独立礼物栏") >= 0;
-    out.filterPanelDisplayComplete = out.filterPanelDisplayControls.fontScale &&
-      out.filterPanelDisplayControls.switches === 4 &&
-      out.filterPanelDisplayControls.selects === 0 &&
-      out.filterPanelGiftSwitchesPresent;
+    out.filterPanelAuxSwitchesPresent =
+      out.filterPanelAuxLabels.indexOf("弹幕包含礼物") >= 0 &&
+      out.filterPanelAuxLabels.indexOf("独立礼物栏") >= 0 &&
+      out.filterPanelAuxLabels.indexOf("折叠低价礼物") >= 0 &&
+      out.filterPanelAuxLabels.indexOf("剔除低价礼物统计") >= 0;
+    out.filterPanelAuxComplete = !!out.filterPanelAuxControls.fontScale &&
+      out.filterPanelAuxControls.switches === 6 &&
+      out.filterPanelAuxControls.selects === 0 &&
+      out.filterPanelAuxSwitchesPresent;
+    // 字号滑杆那一行**仍占满整行**（横跨两列，滑杆贴右）：两列清单里唯一的例外，也是
+    // 最容易在改排布时被顺手压丢的一条（docs/ui.md §8.2 / §8.5）。
+    var rangeLabel = labelsOf(auxSection).filter(function (l) {
+      return !!l.querySelector('input[type="range"]');
+    })[0];
+    var rangeInput = rangeLabel ? rangeLabel.querySelector('input[type="range"]') : null;
+    out.filterPanelRangeSpansRow = !!rangeLabel && !!auxSection && !!rangeInput &&
+      rect(rangeLabel).width >= rect(auxSection).width - 2 &&
+      rect(rangeInput).width >= rect(rangeLabel).width / 2;
+    // ---- 两列清单的**几何**（第 3 / 4 条）：把一组 label 按**取整后的左边缘**分组 ——
+    //      恰好 2 组、各组成员数相同、纵向分层，就是「两列」这个形态（不看 CSS 类名）。
+    //      逐项落在哪一列（0 = 左 / 1 = 右）也记进快照：010101 = 按行铺（DOM 序 = 阅读序，
+    //      Tab 顺序与目视一致），000111 = 按列铺。两者都算两列，因此只记录、不当判据。
+    var columnGeometry = function (items) {
+      var cols = [];
+      items.forEach(function (el) {
+        var left = Math.round(rect(el).left);
+        var hit = null;
+        for (var i = 0; i < cols.length; i += 1) {
+          if (Math.abs(cols[i].left - left) < 2) hit = cols[i];
+        }
+        if (!hit) { hit = { left: left, items: [] }; cols.push(hit); }
+        hit.items.push(el);
+      });
+      cols.sort(function (a, b) { return a.left - b.left; });
+      var rows = [];
+      items.forEach(function (el) {
+        var top = Math.round(rect(el).top);
+        if (rows.indexOf(top) < 0) rows.push(top);
+      });
+      return {
+        columns: cols.length,
+        rows: rows.length,
+        perColumn: cols.map(function (c) { return c.items.length; }).join("/"),
+        order: items.map(function (el) {
+          return cols.length === 2 && Math.abs(rect(el).left - cols[1].left) < 2 ? 1 : 0;
+        }).join(""),
+      };
+    };
+    out.filterPanelKindGeom = columnGeometry(kindLabels);
+    out.filterPanelAuxGeom = columnGeometry(auxLabels);
+    var twoColumnsEven = function (geom, perColumn, order) {
+      return !!geom && geom.columns === 2 && geom.rows === order.length / 2 &&
+        geom.perColumn === perColumn && geom.order === order;
+    };
+    out.filterPanelKindsTwoColumns = twoColumnsEven(out.filterPanelKindGeom, "3/3", "010101");
+    // 辅助功能的六枚开关：三行两列（DOM 序 010101 —— 末一行是「折叠低价礼物 / 剔除低价礼物统计」）
+    out.filterPanelAuxTwoColumns = twoColumnsEven(out.filterPanelAuxGeom, "3/3", "010101");
+    out.filterPanelTwoColumnLists = out.filterPanelKindsTwoColumns && out.filterPanelAuxTwoColumns;
+    // ---- 「不要使用现在的按钮形式」（第 3 条）：清单里每一项都是**朴素的复选框 + 文字** ——
+    //      没有旧芯片那层底色与描边（旧样式给 label 上 --bg-input 底 + 1px 描边 + 胶囊圆角），
+    //      两块里也一个 button 都没有；两块的形态还必须**逐项一致**（第 4 条要的是同一形态）。
+    var labelForm = function (l) {
+      var lcs = getComputedStyle(l);
+      return [lcs.backgroundColor, lcs.borderTopWidth, lcs.borderBottomWidth, lcs.display].join("|");
+    };
+    out.filterPanelKindLabelBackground = kindLabels.length > 0
+      ? getComputedStyle(kindLabels[0]).backgroundColor : null;
+    var plain = function (list) {
+      return list.length > 0 && list.every(function (l) {
+        var lcs = getComputedStyle(l);
+        return lcs.backgroundColor === "rgba(0, 0, 0, 0)" &&
+          parseFloat(lcs.borderTopWidth) === 0 &&
+          !!l.querySelector('input[type="checkbox"]') &&
+          l.querySelectorAll("input").length === 1;
+      });
+    };
+    out.filterPanelPlainCheckboxList = plain(kindLabels) && plain(auxLabels);
+    out.filterPanelSameFormBothLists = kindLabels.length > 0 &&
+      kindLabels.concat(auxLabels).every(function (l) {
+        return labelForm(l) === labelForm(kindLabels[0]);
+      });
+    out.filterPanelNoButtons = !!filterPanel && filterPanel.querySelectorAll("button").length === 0;
+    // 两列清单不许把面板撑出横向滚动（窄屏 360 是这条的边界值，§9.1）
+    out.filterPanelNoHorizontalOverflow = !!filterPanel &&
+      filterPanel.scrollWidth <= filterPanel.clientWidth + 1;
+    // ---- 「默认勾选」（issue 2609160959 第 2 条）：本页跑在**干净环境**里 —— mock 的偏好
+    //      就是契约 §8 的默认值（ui.interact_auto_hide = true、ui.show_timestamp = false），
+    //      没有任何本机覆盖，因此这两枚复选框必须照实画成「互动消息自动消失 = 勾上 /
+    //      时间戳 = 未勾」。它们同时守住「复选框的形态与偏好值一致」这条渲染路径。
+    var auxBoxOf = function (label) {
+      var picked = auxLabels.filter(function (l) { return l.innerText.trim() === label; })[0];
+      return picked ? picked.querySelector('input[type="checkbox"]') : null;
+    };
+    var autoHideBox = auxBoxOf("互动消息自动消失");
+    var timestampBox = auxBoxOf("时间戳");
+    out.filterPanelAutoHideCheckedByDefault = !!autoHideBox && autoHideBox.checked &&
+      window.__prefs["ui.interact_auto_hide"] === true;
+    out.filterPanelTimestampUncheckedByDefault = !!timestampBox && !timestampBox.checked &&
+      window.__prefs["ui.show_timestamp"] === false;
+    // ---- 六枚辅助开关**逐枚真的能切**（第 4 条 + issue 2609162056 第 3 / 4 条）：点一下偏好跟着翻、
+    //      复选框跟着画，再点一下回到原值 —— 因此后面各段（时间戳 / step4 / step5 / step6 / gift
+    //      四种组合 / cheapgift）跑在**与改前完全相同的默认形态**上，切完行为不变这件事由那些
+    //      既有断言继续钉住。末两枚低价礼物开关的「默认关」与行为量值在 cheapgift 那一段。
+    var auxSpecs = [
+      { label: "时间戳", key: "ui.show_timestamp" },
+      { label: "互动消息自动消失", key: "ui.interact_auto_hide" },
+      { label: "弹幕包含礼物", key: "ui.gift_in_danmaku" },
+      { label: "独立礼物栏", key: "ui.gift_panel" },
+      { label: "折叠低价礼物", key: "ui.gift_collapse_cheap" },
+      { label: "剔除低价礼物统计", key: "ui.gift_exclude_cheap_stats" },
+    ];
+    var auxTogglesOk = true;
+    var auxToggleReport = [];
+    for (var ai = 0; ai < auxSpecs.length; ai += 1) {
+      var spec = auxSpecs[ai];
+      var box = auxBoxOf(spec.label);
+      if (!box) { auxTogglesOk = false; auxToggleReport.push(spec.label + ":missing"); continue; }
+      var before = window.__prefs[spec.key];
+      box.click();
+      await sleep(250);
+      var flippedOk = window.__prefs[spec.key] === !before && box.checked === !before;
+      box.click();
+      await sleep(250);
+      var restoredOk = window.__prefs[spec.key] === before && box.checked === before;
+      auxTogglesOk = auxTogglesOk && flippedOk && restoredOk;
+      auxToggleReport.push(spec.label + " " + String(before) + "->" + String(!before) + "->" +
+        String(before) + (flippedOk && restoredOk ? "" : " FAIL"));
+    }
+    out.filterPanelAuxToggles = auxTogglesOk;
+    out.filterPanelAuxToggleReport = auxToggleReport.join(" / ");
+    // ---- 两块标题的**视觉层级**（issue 2609162056 第 5 条：格式变更醒目一些）：标题要比
+    //      它自己的清单项醒目。只量视觉层级 —— 文案与结构由 filterPanelTwoBlocks（「消息类型,
+    //      辅助功能」逐字）与 filterPanelSections 钉着，这一组不碰它们。
+    //      四条判据：字号更大、字重 ≥ 700 且不轻于清单项、字色是正文色 --fg（改前是次级
+    //      --fg-dim）、底部有一条 ≥ 1px 的分隔线（清单项一条都没有）。
+    var cheapCssColorOf = function (name) {
+      var probe = document.createElement("span");
+      probe.style.color = "var(" + name + ")";
+      document.body.appendChild(probe);
+      var value = getComputedStyle(probe).color;
+      probe.parentNode.removeChild(probe);
+      return value;
+    };
+    var titleStyleOf = function (section, labelList) {
+      var h = section ? section.querySelector("h3") : null;
+      var first = labelList[0];
+      if (!h || !first) return null;
+      var hcs = getComputedStyle(h);
+      var lcs = getComputedStyle(first);
+      return {
+        text: h.innerText.trim(),
+        size: parseFloat(hcs.fontSize),
+        weight: parseInt(hcs.fontWeight, 10) || 0,
+        color: hcs.color,
+        borderBottom: parseFloat(hcs.borderBottomWidth) || 0,
+        labelSize: parseFloat(lcs.fontSize),
+        labelWeight: parseInt(lcs.fontWeight, 10) || 0,
+        labelColor: lcs.color,
+        labelBorderBottom: parseFloat(lcs.borderBottomWidth) || 0,
+      };
+    };
+    var kindTitleStyle = titleStyleOf(kindsSection, kindLabels);
+    var auxTitleStyle = titleStyleOf(auxSection, auxLabels);
+    out.filterPanelTitleStyles = { kinds: kindTitleStyle, aux: auxTitleStyle };
+    out.filterPanelTitlesProminent = !!kindTitleStyle && !!auxTitleStyle &&
+      kindTitleStyle.size > kindTitleStyle.labelSize &&
+      auxTitleStyle.size > auxTitleStyle.labelSize &&
+      kindTitleStyle.weight >= 700 && auxTitleStyle.weight >= 700 &&
+      kindTitleStyle.weight > kindTitleStyle.labelWeight &&
+      auxTitleStyle.weight > auxTitleStyle.labelWeight &&
+      kindTitleStyle.color === cheapCssColorOf("--fg") &&
+      auxTitleStyle.color === cheapCssColorOf("--fg") &&
+      kindTitleStyle.color !== cheapCssColorOf("--fg-dim") &&
+      auxTitleStyle.color !== cheapCssColorOf("--fg-dim") &&
+      kindTitleStyle.borderBottom >= 1 && auxTitleStyle.borderBottom >= 1 &&
+      kindTitleStyle.labelBorderBottom === 0 && auxTitleStyle.labelBorderBottom === 0;
+    out.filterPanelTitleCopyUnchanged = !!kindTitleStyle && !!auxTitleStyle &&
+      kindTitleStyle.text === "消息类型" && auxTitleStyle.text === "辅助功能";
+    snap();
     // ---- item 8：短语与筛选面板同样没有标题与关闭按钮（db-panel-close 钩子整个界面不再提供），
     //      高度与表情面板同源（--panel-h）——逐个数进快照，最后比三者相等。
     out.filterPanelCloseGone = !!filterPanel &&
@@ -3479,8 +3899,8 @@ const MOCK = (theme) => `(function () {
 
     // ---- step4 系统类白名单（语义不得改）：勾上「消息类型 → 系统」之后**新来**的系统行要出现。
     //      这里点的**不再是**「系统通知」那枚开关（ui.system_notice 已随 item 1 删除，两个门
-    //      盖的消息集合逐字相同）：显示块只剩「时间戳」「互动消息自动消失」，面板里没有第二条
-    //      label 含「系统」二字，因此点到的必然是「消息类型」里那一枚「系统」芯片。
+    //      盖的消息集合逐字相同）：辅助功能块只剩「时间戳」「互动消息自动消失」，面板里没有第二条
+    //      label 含「系统」二字，因此点到的必然是「消息类型」里那一项「系统」。
     //      这里不拿很早以前那条（它已滚出虚拟列表的渲染范围），改发一条新的，断言更硬。
     out.step4_toggledSystem = clickLabelIn(filterPanel, "系统");
     await sleep(400);
@@ -3537,55 +3957,85 @@ const MOCK = (theme) => `(function () {
     out.giftInDanmakuByDefault = !!rowWith("投喂 小心心") && !!rowWith("开通 舰长");
     var dock = byTestId("db-gift-dock");
     var composer = document.querySelector("textarea").closest('[class*="composer"]');
-    out.giftDockAfterComposer = !!dock && !!composer &&
-      (composer.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-    out.giftDockCollapsed = !!dock && !byTestId("db-gift-body");
+    // 位置（issue #8 起）：礼物折叠条现在在**共享分区**里 —— 弹幕区之下、输入区**之前**，
+    // 不再挂在输入区下方。判据因此从「在输入区之后」改成「在分区里 + 在弹幕区之后 + 在输入区之前」。
+    var panesEl = byTestId("db-panes");
+    out.giftDockInSharedRegion = !!dock && !!composer && !!panesEl && panesEl.contains(dock) &&
+      (byTestId("db-pane-danmaku").compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
+      (dock.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    out.giftDockCollapsed = !!dock && !byTestId("db-gift-area");
     out.giftDockFullWidth = !!dock && Math.abs(rect(dock).width - document.body.clientWidth) < 2;
     // 窄屏：折叠条只占一行，弹幕列表不被它挤掉
     put("giftDockCompact", !!dock && rect(dock).height <= 56);
     put("giftListKeptTall", rect(byTestId("db-chat-scroll")).height >= 200);
-    // 折叠态汇总**按 kind 分组**：三组各自带各自的单位，元与金瓜子绝不加到一起。
+    // 折叠态汇总**按 kind 分组**：三组各报各的合计，单位统一是元（金瓜子 ÷1000）。
     // 金额串一律用页面自己的 toLocaleString 拼（分组位数随浏览器 locale 变，断言不该把它写死）。
     var num = function (n) { return n.toLocaleString(); };
+    // amountText 的格式化是 toLocaleString(undefined, { maximumFractionDigits: 3 })：
+    // 整数元不带小数（138 元），非整数保留必要小数（0.1 元）。断言跟着它走。
+    var yuan = function (n) { return n.toLocaleString(undefined, { maximumFractionDigits: 3 }); };
     var giftSummary = (byTestId("db-gift-summary") || {}).innerText || "";
     out.giftDockSummaryText = giftSummary;
     out.giftDockSummaryGroupedByKind =
-      giftSummary.indexOf("礼物 3 · " + num(700) + " 瓜子") >= 0 &&
-      giftSummary.indexOf("SC 2 · " + num(1030) + " 元") >= 0 &&
-      giftSummary.indexOf("大航海 1 · " + num(138000) + " 瓜子") >= 0;
-    // 跨单位求和是红线：700 + 1030 + 138000 = 139730 这个数**一个写法都不许出现**
-    out.giftDockNoCrossUnitSum = giftSummary.indexOf(num(139730)) < 0 &&
+      giftSummary.indexOf("礼物 3 · " + yuan(0.7) + " 元") >= 0 &&
+      giftSummary.indexOf("SC 2 · " + yuan(1030) + " 元") >= 0 &&
+      giftSummary.indexOf("大航海 1 · " + yuan(138) + " 元") >= 0;
+    // 汇总不许自己另算一个总数：按 kind 分组的明细之外没有第二条合计。
+    // 两个「不是分组明细」的候选值都不许出现——① 三组元值相加 0.7 + 1030 + 138 = 1168.7；
+    // ② 把 SC 的元当金瓜子与另两组直接相加（139730 金瓜子）或换算后（139.73 元）。
+    out.giftDockNoCrossUnitSum = giftSummary.indexOf(yuan(1168.7)) < 0 &&
+      giftSummary.indexOf("1168.7") < 0 && giftSummary.indexOf("139.73") < 0 &&
       giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("140730") < 0;
-    buttonWith(dock, "礼物 / SC").click();
+    // db-gift-dock 现在**就是**那枚折叠头按钮（issue #8），不再是「容器里装着一枚按钮」
+    dock.click();
     await sleep(300);
-    out.giftDockExpands = !!byTestId("db-gift-body");
+    out.giftDockExpands = !!byTestId("db-gift-area");
     out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;
-    // ---- 一条一行：折叠后的行数（连击那两条合成 1 行）就是礼物栏的行数，body 的直接子元素
-    //      也只有这些行 —— 改前那段「金额排行 + 内容详情」的两段式结构已随本批删掉。
-    var giftBody = byTestId("db-gift-body");
-    var giftItems = allByTestId("db-gift-item");
+    // ---- 一条一行：折叠后的行数（连击那两条合成 1 行）就是礼物栏的行数 —— 改前那段
+    //      「金额排行 + 内容详情」的两段式结构已随 2609152029 第 5 条删掉。
+    //      **行现在是弹幕行的同一份实现**（用户 2026-09-16 第 2 条）：六条夹具 → 连击两条折叠
+    //      成一行 → 五行；行不再挂在 db-gift-area 的直接子层里，而在虚拟列表的高度块
+    //      db-gift-list 里（与弹幕区的 db-msg-list 同一个东西）。
+    var giftArea = byTestId("db-gift-area");
+    var giftItems = allByTestId("db-gift-row");
     out.giftDockItemCount = giftItems.length;
-    out.giftDockOneRowPerEvent = giftItems.length === 5 && !!giftBody &&
-      giftBody.children.length === giftItems.length;
+    out.giftDockOneRowPerEvent = giftItems.length === 5 && !!giftArea &&
+      allByTestId("db-gift-list").length === 1 && allByTestId("db-gift-scroll").length === 1;
     out.giftDockItemTexts = giftItems.map(function (item) {
       // 换行用 String.fromCharCode(10) 拼，**不写字面转义**：这一整段活在模板字符串里，
       // 反斜杠转义会先被模板吃掉（连注释里写一个都会变成真换行、把注释掰断）。
       return item.innerText.split(String.fromCharCode(10)).join(" ");
     });
-    out.giftDockItemSingleLine = giftItems.every(function (item) {
-      return rect(item) !== null && rect(item).height < 40;
+    // 行高记成实测值（旧版这里钉的是「必须 < 40px」的单行窄条，那是礼物栏**自己的**一套排版）；
+    // 现在行与弹幕行同款：身份行 + 正文行（+ 礼物 / 大航海的金额行），行高因此由内容决定。
+    out.giftDockRowHeights = giftItems.map(function (item) {
+      return rect(item) ? Math.round(rect(item).height * 10) / 10 : null;
     });
-    // ---- 金额格带单位（礼物 / 大航海 = 瓜子，SC = 元），且连击折叠后是整串的总额
+    out.giftDockRowsAreDanmakuRows = giftItems.length === 5 && giftItems.every(function (item) {
+      return !!item.querySelector('[data-testid="db-gift-avatar-col"]') &&
+        !!item.querySelector('[data-testid="db-gift-identity"]') &&
+        !!item.querySelector('[data-testid="db-gift-body"]');
+    });
+    // ---- 金额格带单位（三类都是元，金瓜子按 ÷1000 换算），且连击折叠后是整串的总额。
+    //      SC 的金额是**卡片规格的一部分**（db-gift-sc-amount，与弹幕区里那条 SC 同一格）；
+    //      礼物 / 大航海的金额行只在礼物栏这一份画（db-gift-amount，见 §4.1 / §5.3），
+    //      所以这里两种钩子一起取：一行恰有一个金额格。
     out.giftDockAmounts = giftItems.map(function (item) {
-      var el = item.querySelector('[data-testid="db-gift-amount"]');
+      var el = item.querySelector(
+        '[data-testid="db-gift-amount"], [data-testid="db-gift-sc-amount"]');
       return el ? el.innerText : "";
     });
     out.giftDockAmountsCarryUnits =
-      out.giftDockAmounts.indexOf(num(600) + " 瓜子") >= 0 &&
-      out.giftDockAmounts.indexOf(num(100) + " 瓜子") >= 0 &&
-      out.giftDockAmounts.indexOf(num(30) + " 元") >= 0 &&
-      out.giftDockAmounts.indexOf(num(1000) + " 元") >= 0 &&
-      out.giftDockAmounts.indexOf(num(138000) + " 瓜子") >= 0;
+      out.giftDockAmounts.indexOf(yuan(0.6) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(yuan(0.1) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(yuan(30) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(yuan(1000) + " 元") >= 0 &&
+      out.giftDockAmounts.indexOf(yuan(138) + " 元") >= 0;
+    // **差 1000 倍的红线**：金瓜子原值不许直接贴上「元」（600 / 100 / 138000 三档一个都不许出现）。
+    out.giftDockNoRawCoinDisplay = out.giftDockAmounts.every(function (t) {
+      return t.indexOf(yuan(600) + " 元") < 0 && t.indexOf(yuan(100) + " 元") < 0 &&
+        t.indexOf(yuan(138000) + " 元") < 0;
+    });
     // ---- 数量：礼物行恒有 ×N（折叠后是整串连击的次数），SC / 大航海没有折叠就不画 ×1
     var giftCounts = giftItems.map(function (item) {
       var el = item.querySelector('[data-testid="db-gift-count"]');
@@ -3598,9 +4048,14 @@ const MOCK = (theme) => `(function () {
     // ---- 头像（第 2 条）：**有源才画** —— 两条连击礼物（折叠后 1 行）与两条 SC 有 face，
     //      V1 礼物与大航海在上游没有头像字段（协议 §10.2 / §10.6 的字段表里都没有），
     //      因此礼物栏里这一个都不许出现（界面不画假图）。
-    var giftAvatars = [].slice.call(giftBody.querySelectorAll('[data-testid="db-msg-avatar"]'));
+    //      **头像列永远占位**（§4.2，与弹幕行同一口径）：有图没图都留一列，逐行才对得齐 ——
+    //      五个非 system 行各一列，其中三列有图。
+    var giftAvatars = [].slice.call(giftArea.querySelectorAll('[data-testid="db-gift-avatar"]'));
     out.giftDockAvatarCount = giftAvatars.length;
     out.giftDockAvatarsOnlyWhereSourced = giftAvatars.length === 3;
+    out.giftDockAvatarColCount = allByTestId("db-gift-avatar-col").length;
+    out.giftDockAvatarColAlwaysReserved = out.giftDockAvatarColCount === 5 &&
+      out.giftDockAvatarCount === 3;
     out.giftDockAvatarIsImage = giftAvatars.length > 0 && giftAvatars.every(function (el) {
       return el.tagName === "IMG";
     });
@@ -3609,11 +4064,21 @@ const MOCK = (theme) => `(function () {
     ] : null;
     out.giftDockAvatarSquare = giftAvatars.length > 0 &&
       Math.abs(rect(giftAvatars[0]).width - rect(giftAvatars[0]).height) < 1;
+    // 头像盒与弹幕行同一档（1.25 × 行盒）：两处不再各算一套尺寸
+    var chatAvatarEl = byTestId("db-msg-avatar");
+    out.giftDockAvatarSameBoxAsChat = !!chatAvatarEl && giftAvatars.length > 0 &&
+      Math.abs(rect(giftAvatars[0]).width - rect(chatAvatarEl).width) < 0.6 &&
+      Math.abs(rect(giftAvatars[0]).height - rect(chatAvatarEl).height) < 0.6;
     snap();
 
-    // ---- SC 卡片（第 2 条）：卡片背景 / 边框取自档位令牌，金额行低一档加粗、独占一行
-    var scLow = rowWith("这是脱敏的醒目留言正文");
-    var scHigh = rowWith("1000 元档的脱敏留言");
+    // ---- SC 卡片（第 2 条）：卡片背景 / 边框取自档位令牌，金额行低一档加粗、独占一行。
+    //      文本一律**从夹具读**，不在断言里写死：最低档那条的正文刻意写长（40 个汉字，
+    //      见 fixtures/gift-sc-guard-rows.json 里 superchat-low 的 why），它同时是下面
+    //      「SC 不许被截断」的断言件。
+    var scLowSpec = GIFT_ROWS.filter(function (r) { return r.key === "superchat-low"; })[0].message;
+    var scHighSpec = GIFT_ROWS.filter(function (r) { return r.key === "superchat-high"; })[0].message;
+    var scLow = rowWith(scLowSpec.content);
+    var scHigh = rowWith(scHighSpec.content);
     out.scCardTiers = [scLow, scHigh].map(function (r) {
       return r ? r.getAttribute("data-sc-tier") : null;
     });
@@ -3640,6 +4105,129 @@ const MOCK = (theme) => `(function () {
     out.scCardAmountOnOwnLine = !!scAmountStyle && scAmountStyle.display === "block";
     snap();
 
+    // ---- 用户 2026-09-16 第 2 条：「礼物区域的显示和弹幕区直接保持一致（一样的布局、
+    //      一样的背景颜色、一样的自动滚动）」。
+    //      做法是**同一份实现**（行 = MessageRow、列表 = MessageList，scope="gift"），
+    //      所以这一组量的是「同一条 SC 在两处逐项相等」——行盒 / 头像列 / 身份行 / 正文块 /
+    //      计算底色逐项比出来，不是「看起来差不多」。另一条腿是**SC 不许被截断**（用户报的
+    //      「sc 在礼物区域显示不全」）：正文块的 scrollWidth/scrollHeight 不许超过
+    //      clientWidth/clientHeight，也不许是 nowrap + ellipsis。
+    var partOf = function (row, id) {
+      return row ? row.querySelector('[data-testid="' + id + '"]') : null;
+    };
+    var giftScRow = giftItems.filter(function (r) {
+      return r.innerText.indexOf(scLowSpec.content) >= 0;
+    })[0];
+    var chatScRow = rowWith(scLowSpec.content);
+    var giftScBody = partOf(giftScRow, "db-gift-body");
+    var chatScBody = partOf(chatScRow, "db-msg-body");
+    var clipOf = function (el) {
+      if (!el) return null;
+      var st = getComputedStyle(el);
+      return {
+        x: Math.round((el.scrollWidth - el.clientWidth) * 10) / 10,
+        y: Math.round((el.scrollHeight - el.clientHeight) * 10) / 10,
+        whiteSpace: st.whiteSpace,
+        textOverflow: st.textOverflow
+      };
+    };
+    out.giftParityScRowFound = !!giftScRow && !!chatScRow;
+    // ① 布局：同一条 SC 的行盒几何与行内各格逐项相同
+    var giftScBox = rect(giftScRow), chatScBox = rect(chatScRow);
+    out.giftParityRowGeometry = !!giftScBox && !!chatScBox &&
+      Math.abs(giftScBox.height - chatScBox.height) < 0.6 &&
+      Math.abs(giftScBox.left - chatScBox.left) < 0.6 &&
+      Math.abs(giftScBox.width - chatScBox.width) < 0.6;
+    out.giftParityRowHeightPx = giftScBox ? Math.round(giftScBox.height * 10) / 10 : null;
+    var gCol = rect(partOf(giftScRow, "db-gift-avatar-col"));
+    var cCol = rect(partOf(chatScRow, "db-msg-avatar-col"));
+    out.giftParityAvatarCol = !!gCol && !!cCol &&
+      Math.abs(gCol.width - cCol.width) < 0.6 && Math.abs(gCol.height - cCol.height) < 0.6 &&
+      Math.abs(gCol.left - cCol.left) < 0.6;
+    var gIdent = rect(partOf(giftScRow, "db-gift-identity"));
+    var cIdent = rect(partOf(chatScRow, "db-msg-identity"));
+    out.giftParityIdentityRow = !!gIdent && !!cIdent &&
+      Math.abs(gIdent.height - cIdent.height) < 0.6 && Math.abs(gIdent.left - cIdent.left) < 0.6;
+    var gBodyBox = rect(giftScBody), cBodyBox = rect(chatScBody);
+    out.giftParityBodyBox = !!gBodyBox && !!cBodyBox &&
+      Math.abs(gBodyBox.width - cBodyBox.width) < 0.6 &&
+      Math.abs(gBodyBox.left - cBodyBox.left) < 0.6;
+    var gBodyStyle = giftScBody ? getComputedStyle(giftScBody) : null;
+    var cBodyStyle = chatScBody ? getComputedStyle(chatScBody) : null;
+    out.giftParityBodyFont = !!gBodyStyle && !!cBodyStyle &&
+      gBodyStyle.fontSize === cBodyStyle.fontSize &&
+      gBodyStyle.lineHeight === cBodyStyle.lineHeight;
+    // 行内各格一个不差：同一条 SC 在两处的 innerText 逐字相同（昵称 + 正文 + 金额行）
+    out.giftParityScRowText = !!giftScRow && !!chatScRow &&
+      giftScRow.innerText === chatScRow.innerText;
+    var gScAmount = partOf(giftScRow, "db-gift-sc-amount");
+    var cScAmount = partOf(chatScRow, "db-msg-sc-amount");
+    out.giftParityScAmountLine = !!gScAmount && !!cScAmount &&
+      gScAmount.innerText === cScAmount.innerText && gScAmount.innerText === yuan(30) + " 元";
+    // ② 背景色：两栏底色同一（.paneGift 不再另刷 --bg-elevated），同一行的计算底色与边框也相同
+    var paneGiftEl = byTestId("db-pane-gift");
+    var paneDanmakuEl = byTestId("db-pane-danmaku");
+    out.giftParityPaneBackground = !!paneGiftEl && !!paneDanmakuEl &&
+      getComputedStyle(paneGiftEl).backgroundColor ===
+      getComputedStyle(paneDanmakuEl).backgroundColor;
+    out.giftParityPaneBackgroundColor = paneGiftEl
+      ? getComputedStyle(paneGiftEl).backgroundColor : null;
+    out.giftParityRowBackground = !!giftScRow && !!chatScRow &&
+      getComputedStyle(giftScRow).backgroundColor ===
+      getComputedStyle(chatScRow).backgroundColor &&
+      getComputedStyle(giftScRow).borderTopColor === getComputedStyle(chatScRow).borderTopColor &&
+      getComputedStyle(giftScRow).borderTopWidth === getComputedStyle(chatScRow).borderTopWidth;
+    out.giftParityRowBackgroundColor = giftScRow
+      ? getComputedStyle(giftScRow).backgroundColor : null;
+    // ③ SC 不许被截断：两处都不许（现在这一条同时钉住弹幕区那一份，避免只修了礼物栏那一处）
+    out.giftScBodyClip = clipOf(giftScBody);
+    out.chatScBodyClip = clipOf(chatScBody);
+    out.giftScNotTruncated = !!out.giftScBodyClip &&
+      out.giftScBodyClip.x <= 1 && out.giftScBodyClip.y <= 1 &&
+      out.giftScBodyClip.whiteSpace === "pre-wrap" && out.giftScBodyClip.textOverflow === "clip";
+    out.chatScNotTruncated = !!out.chatScBodyClip &&
+      out.chatScBodyClip.x <= 1 && out.chatScBodyClip.y <= 1 &&
+      out.chatScBodyClip.whiteSpace === "pre-wrap" && out.chatScBodyClip.textOverflow === "clip";
+    out.giftScFullTextPresent = !!giftScBody &&
+      giftScBody.innerText.indexOf(scLowSpec.content) >= 0;
+    out.chatScFullTextPresent = !!chatScBody &&
+      chatScBody.innerText.indexOf(scLowSpec.content) >= 0;
+    // 礼物 / 大航海的金额**只在礼物栏画**（§4.1：弹幕流行内不塞金额；§5.3：礼物栏画）：
+    // 同一批"投喂 小心心"在两处各一行，礼物栏那行有金额行、弹幕流那行没有。
+    var chatGiftRow = rowWith("投喂 小心心");
+    var paneGiftRow = giftItems.filter(function (r) {
+      return r.innerText.indexOf("投喂 小心心") >= 0;
+    })[0];
+    out.giftAmountOnlyInPane = !!chatGiftRow && !!paneGiftRow &&
+      !partOf(chatGiftRow, "db-msg-amount") && !partOf(chatGiftRow, "db-msg-sc-amount") &&
+      !!partOf(paneGiftRow, "db-gift-amount") &&
+      partOf(paneGiftRow, "db-gift-amount").innerText === yuan(0.6) + " 元";
+    // ④ 自动滚动与「跟随 / 暂停 / 回到最新」与弹幕列表**同源**：同一套 8px 判据、同一条
+    //      scrollToIndex(align: "end") 贴底、同一枚「回到最新」控件 —— 只是另一份实例。
+    var giftScroll = byTestId("db-gift-scroll");
+    var giftGapNow = function () { return giftScroll ? bottomGap(giftScroll) : null; };
+    out.giftFollowPinnedToBottom = !!giftScroll && giftGapNow() < 8 && !byTestId("db-gift-anchor");
+    // 贴底的可观察面：最新一条真的在视口里（末行的底边不越过滚动容器的底边）
+    var lastGiftRow = giftItems[giftItems.length - 1];
+    var giftScrollBox = rect(giftScroll);
+    out.giftNewestRowVisible = !!lastGiftRow && !!giftScrollBox &&
+      rect(lastGiftRow).bottom <= giftScrollBox.bottom + 1;
+    // 用户自己往上滚 → 暂停跟随（判据与弹幕区同一条：离底 > 8px 且「回到最新」出现）
+    var chatGapBefore = bottomGap(byTestId("db-chat-scroll"));
+    giftScroll.scrollTop = 0;
+    await sleep(400);
+    out.giftPausedGapPx = giftGapNow();
+    out.giftPausedShowsJumpButton = !!byTestId("db-gift-anchor") && giftGapNow() > 8;
+    // 两处各自一份滚动位置与虚拟列表状态：滚礼物栏**不动**弹幕区
+    out.giftScrollIndependentOfChat =
+      Math.abs(bottomGap(byTestId("db-chat-scroll")) - chatGapBefore) < 1;
+    var giftAnchorBtn = byTestId("db-gift-anchor");
+    if (giftAnchorBtn) giftAnchorBtn.click();
+    await sleep(500);
+    out.giftJumpButtonReturnsToBottom = giftGapNow() < 8 && !byTestId("db-gift-anchor");
+    out.giftRowsStillRendered = allByTestId("db-gift-row").length === giftItems.length;
+    snap();
+
     // ---- 两枚开关的四种组合（第 4 条）：每一次都顺带验「切开关不丢消息」（同一批数据只换渲染位置）。
     //      点开关之前必须先把**筛选面板**开回来：上一步展开礼物栏那一下按「五者互斥」把面板收掉了
     //      （不是 bug，是 §2.3 的口径）。反过来，开面板也会收起礼物栏 —— 两件事分开验，不混在一起。
@@ -3649,12 +4237,12 @@ const MOCK = (theme) => `(function () {
     await sleep(350);
     out.giftPanelOffHidesDock = !byTestId("db-gift-dock");
     out.giftPanelOffKeepsStream = !!rowWith("投喂 小心心") &&
-      !!rowWith("这是脱敏的醒目留言正文");
+      !!rowWith(scLowSpec.content);
     out.giftSwitchInDanmakuOff = setGiftSwitch("弹幕包含礼物", false);
     await sleep(350);
     out.giftBothOffHidesDock = !byTestId("db-gift-dock");
     out.giftBothOffHidesStream = !rowWith("投喂 小心心") &&
-      !rowWith("这是脱敏的醒目留言正文") && !rowWith("开通 舰长");
+      !rowWith(scLowSpec.content) && !rowWith("开通 舰长");
     // 普通弹幕不受这两枚开关影响（它们只管礼物类三族）。判据现场推一条**新的**弹幕再找它：
     // 历史那条早已滚出虚拟列表的渲染窗口，拿它当锚会假失败（踩过一次）。
     window.__emit("danmubox://message", window.__mk("danmaku", "两枚开关都关时的普通弹幕", false, {
@@ -3666,9 +4254,11 @@ const MOCK = (theme) => `(function () {
     await sleep(350);
     out.giftPanelOnlyShowsDock = !!byTestId("db-gift-dock");
     out.giftPanelOnlyKeepsStreamOff = !rowWith("投喂 小心心");
-    buttonWith(byTestId("db-gift-dock"), "礼物 / SC").click();
+    // db-gift-dock 在 issue #8 之后是**礼物栏的折叠头**（礼物栏那一栏的根是 db-pane-gift），
+    // 它本身就是那枚按钮 —— 不再是「容器里有按钮」。
+    byTestId("db-gift-dock").click();
     await sleep(350);
-    out.giftPanelOnlyRendersAllRows = allByTestId("db-gift-item").length === 5;
+    out.giftPanelOnlyRendersAllRows = allByTestId("db-gift-row").length === 5;
     // 回到默认（两枚都开）：同样先开面板再点开关；开面板那一下已经把展开的礼物栏收起来了，
     // 因此这里不再点多一次（连点会把礼物栏又展开，下一段的「默认形态」就不是折叠态了）。
     // 后面几段（面板互斥 / 多标签）因此跑在**默认形态**上：筛选面板开着、礼物栏折叠着。
@@ -3676,7 +4266,7 @@ const MOCK = (theme) => `(function () {
     await sleep(300);
     out.giftSwitchBothBackOn = setGiftSwitch("弹幕包含礼物", true);
     await sleep(350);
-    out.giftRestoredToDefault = !!byTestId("db-gift-dock") && !byTestId("db-gift-body") &&
+    out.giftRestoredToDefault = !!byTestId("db-gift-dock") && !byTestId("db-gift-area") &&
       !!rowWith("投喂 小心心") && window.__prefs["ui.gift_in_danmaku"] === true &&
       window.__prefs["ui.gift_panel"] === true;
     snap();
@@ -3845,10 +4435,36 @@ const MOCK = (theme) => `(function () {
       out.tabIsolationDraftFreshInB = document.querySelector("textarea").value === "";
       out.tabIsolationFollowingReset = !byTestId("db-bottom-anchor") &&
         bottomGap(byTestId("db-chat-scroll")) < 8;
-      // B 间再开一次面板，切回 A 间时它同样必须收起（两个方向都判，不是单向巧合）
-      clickTool("表情");
+      // B 间再开一次面板，切回 A 间时它同样必须收起（两个方向都判，不是单向巧合）。
+      // **用「筛选」而不是「表情」**：夹具里的第二个房间（5555）刻意是「上游没给主播名与标题」
+      // 的形态、connected: false（见 mock 的 __addSecondRoom），而房间页把这当成「没有可发的东西」：
+      // 输入区整块与「表情 / 短语」两枚工具按钮都 disabled={disabled || !loggedIn}
+      // （docs/ui.md §6.1），**点一枚 disabled 的按钮不派发 click** —— 实测 clickTool("表情")
+      // 返回 true（按钮找得到、也真的点了）但面板永远开不出来，这条断言因此恒为假，而
+      // 它旁边的 tabIsolationPanelClosedBackInA 会**顺带变成恒真**（B 间根本没开过面板，
+      // 「切回 A 间时收起」也就无从谈起）。筛选手板不看连接状态（它只是显示偏好），
+      // 在 B 间照常打得开 —— 换它之后这对断言才恢复成「两个方向都真的开过、都真的收起」。
+      var bEmotesTool = buttonWith(byTestId("db-composer-tools"), "筛选");
+      out.tabIsolationBComposer = {
+        toolsRow: !!byTestId("db-composer-tools"),
+        filterTool: !!bEmotesTool,
+        emotesToolDisabled: (function () {
+          var b = buttonWith(byTestId("db-composer-tools"), "表情");
+          return b ? b.disabled === true : null;
+        })(),
+        textareaDisabled: document.querySelector("textarea")
+          ? document.querySelector("textarea").disabled === true : null,
+      };
+      out.tabIsolationBClickedTool = clickTool("筛选");
       await sleep(400);
       out.tabIsolationPanelOpenInB = !!byTestId("db-panel");
+      out.tabIsolationBPanelDiag = {
+        panel: !!byTestId("db-panel"),
+        emoteTabs: [].slice.call(document.querySelectorAll('[data-testid="db-emote-tab"]'))
+          .map(function (b) { return b.getAttribute("data-kind"); }),
+        options: byTestId("db-panel")
+          ? [].slice.call(byTestId("db-panel").querySelectorAll("button")).length : null,
+      };
       tabRoomA = tabFor(fixtureRoom.anchor_uname);
       tabRoomA.click();
       await sleep(900);
@@ -3865,7 +4481,299 @@ const MOCK = (theme) => `(function () {
     }
     out.tabsBlockRan = tabsBlockRan;
 
+    // ---- 沉浸模式（issue #1）：弹幕区**双击**收起标题栏与输入区，只留弹幕区与礼物 / SC 栏，
+    //      再双击恢复。判据是**指针事件**（鼠标双击与触屏点两下走同一条路，见 RoomView 顶部
+    //      的 TAP_MS）：两次「按下 → 抬起」都在 400ms 内、落点相距不超过 24px，且不落在
+    //      可交互元素上。这一段与 docs/ui.md 2.3.1 的「收起 / 保留」清单一一对应。
+    // 整块包一层（同上面几段的手法）：出岔子时让断言红（immersiveBlockRan），不卡死整个场景。
+    //
+    // ⚠ **沉浸态是唯一一个「块内出错会连带打死块外」的状态**：沉浸态里房间头 / 输入区都是
+    //   条件渲染（RoomView 的 {!immersive && …}），它们整个不在 DOM 里；块外的段落照旧
+    //   裸取 byTestId("db-header-more").click()（那是「进房间点 ⋯ 看菜单」的常规动作），
+    //   拿到 null 就是一个**未捕获的 TypeError** —— 场景当场死掉，跑脚本的那一头只能看到
+    //   「视口 wide 的场景未跑完（超时）」，root cause 全被 300s 的超时盖住（实测两引擎都栽在这）。
+    //   所以这里的 finally 是**必需**的：无论块内走到哪一步、抛了什么，先把沉浸态退出来，
+    //   让块外的世界回到它假设的样子；退出结果另记一条布尔（immersiveRestoredAfterBlock）。
+    var immersiveOff = async function () {
+      var root = document.documentElement;
+      if (root.getAttribute("data-immersive") !== "true") return true;
+      var el = document.querySelector('[data-testid="db-chat-wrap"]') ||
+        document.querySelector('[data-testid="db-chat-scroll"]');
+      if (!el) return false;
+      var box = el.getBoundingClientRect();
+      var x = Math.round(box.left + box.width / 2);
+      var y = Math.round(box.top + box.height / 2);
+      var base = {
+        bubbles: true, cancelable: true, composed: true, isPrimary: true,
+        button: 0, pointerId: 1, pointerType: "mouse", clientX: x, clientY: y,
+      };
+      // 两下「点」挨着发（判据看的是两次点的间隔 < 400ms，sleep 会被页面节流拉长，见块内说明）
+      for (var i = 0; i < 2; i += 1) {
+        el.dispatchEvent(new PointerEvent("pointerdown", Object.assign({}, base, { buttons: 1 })));
+        el.dispatchEvent(new PointerEvent("pointerup", Object.assign({}, base, { buttons: 0 })));
+      }
+      await sleep(320);
+      return root.getAttribute("data-immersive") !== "true";
+    };
+    var immersiveBlockRan = false;
+    try {
+      var immTap = function (el, x, y, pointerType) {
+        var base = {
+          bubbles: true, cancelable: true, composed: true, isPrimary: true,
+          button: 0, pointerId: 1, pointerType: pointerType, clientX: x, clientY: y,
+        };
+        el.dispatchEvent(new PointerEvent("pointerdown", Object.assign({}, base, { buttons: 1 })));
+        el.dispatchEvent(new PointerEvent("pointerup", Object.assign({}, base, { buttons: 0 })));
+      };
+      // 两下「点」**挨着发**（中间不 sleep）：判据量的是两次点的间隔，而 sleep 会被页面节流拉长
+      // —— 实测在被节流的页面里 sleep(60) 落成 **473ms** 的间隔，直接超出 400ms 窗口。
+      // 真实用户当然不会快到这个程度，这里要验的是**判据本身**，不是人手速；间隔为 0 必定在窗口内。
+      var immDoubleTap = async function (el, x, y, pointerType) {
+        immTap(el, x, y, pointerType);
+        immTap(el, x, y, pointerType);
+        await sleep(320);
+      };
+      // 「DOM 层面不可见」的两条路：条件渲染的那几块**不在 DOM 里**；标签条在 App 里
+      // （房间页的兄弟节点），走 CSS 的 display: none —— 仍在 DOM 里，但 getClientRects()
+      // 为空（既不占位、也不进 Tab 序）。
+      var immUnrendered = function (el) { return el == null || el.getClientRects().length === 0; };
+      var immAttr = function () { return document.documentElement.getAttribute("data-immersive"); };
+      // 垫场：这一步之前刚跑完「A 间 → B 间 → A 间」，而切回 A 间看到的是**这一间房间
+      // 重新回填的历史**（store 里 messages 只有一份、跟着当前房间走；每个房间自己的会话
+      // 缓冲在 Rust 那一头，切回来是靠再 query 一次历史看到的 —— 见 store 的 openRoom），
+      // 夹具那几条历史**撑不满一屏**：实测此刻 scrollHeight == clientHeight、scrollTop 恒 0，
+      // 下面「沉浸态里照样能往上翻历史」就没有了可观察面（不是功能坏了 —— 单独跑一段垫过场的
+      // 场景，进沉浸后滚到中段 scrollTop=765、离底 764px、「回到最新」如期出现且稳定）。
+      // 做法与 tabs 那一段的「隔离垫场」逐字同源。
+      for (var immPad = 0; immPad < 30; immPad += 1) {
+        window.__emit("danmubox://message", window.__mk("danmaku", "沉浸垫场" + immPad, false, {
+          uid: 88002, uname: "垫场观众"
+        }));
+      }
+      await sleep(700);
+      out.immersivePadRows = rows().length;
+      var immChat0 = rect(byTestId("db-chat-scroll"));
+      var immGift0 = rect(byTestId("db-gift-dock"));
+      var immTabs0 = rect(byTestId("db-room-tabs"));
+      var immHeader0 = rect(byTestId("db-room-header"));
+      // 输入区整块的高度**直接量输入区这一块**（RoomView 的 shell 里它是被收起的三块之一）。
+      // 旧写法拿「礼物栏顶边 − 弹幕区底边」推算，前提是「文档流里礼物栏与弹幕区紧挨着输入区的上下」
+      // —— 那是**上下分区（issue #8）之前**的结构：礼物栏搬进共享分区之后，那一段量到的是
+      // 弹幕区与礼物栏之间的**分割条**（实测 8.0px），输入区那块（100px 量级）根本不在这条缝里，
+      // 等式必然差一大截。这里改用与文件里其它段落同源的办法（closest('[class*="composer"]')）。
+      var immComposerEl = document.querySelector("textarea")
+        ? document.querySelector("textarea").closest('[class*="composer"]')
+        : null;
+      var immComposerH = immComposerEl ? Math.round(rect(immComposerEl).height * 10) / 10 : 0;
+      var immGiftHeadH = Math.round((immGift0 ? immGift0.height : 0) * 10) / 10;
+      out.immersiveRemovedBlocksPx = [
+        immTabs0 ? Math.round(immTabs0.height * 10) / 10 : null,
+        immHeader0 ? Math.round(immHeader0.height * 10) / 10 : null,
+        immComposerH,
+      ];
+      var immTextareas0 = document.querySelectorAll("textarea").length;
+      var immTapX = Math.round(immChat0.left + immChat0.width / 2);
+      var immTapY = Math.round(immChat0.top + immChat0.height / 2);
+      // ① 单击**不**切（判据是双击）：标签条 / 房间头 / 属性三处都还是原样
+      immTap(byTestId("db-chat-scroll"), immTapX, immTapY, "mouse");
+      await sleep(500);
+      out.immersiveSingleTapIgnored = immUnrendered(byTestId("db-room-tabs")) === false &&
+        byTestId("db-room-header") !== null && immAttr() === null;
+      // ② 双击弹幕区 → 进沉浸模式（鼠标指针）
+      await immDoubleTap(byTestId("db-chat-scroll"), immTapX, immTapY, "mouse");
+      var immChat1 = rect(byTestId("db-chat-scroll"));
+      var immGift1 = rect(byTestId("db-gift-dock"));
+      out.immersiveEnterOnChatDoubleTap = immAttr() === "true";
+      out.immersiveHidesHeader = immHeader0 !== null &&
+        byTestId("db-room-header") === null && byTestId("db-live-dot-box") === null;
+      out.immersiveHidesComposer = immTextareas0 === 1 &&
+        byTestId("db-composer-tools") === null && byTestId("db-input-count") === null &&
+        document.querySelector("textarea") === null;
+      out.immersiveHidesTabs = immTabs0 !== null && byTestId("db-room-tabs") !== null &&
+        immUnrendered(byTestId("db-room-tabs")) &&
+        getComputedStyle(byTestId("db-room-tabs")).display === "none";
+      out.immersiveChatGrewPx = Math.round((immChat1.height - immChat0.height) * 10) / 10;
+      // 弹幕区长高的**正好**是被收起来的那三块之和（标签条 + 房间头 + 输入区）：
+      // 既证明「收起」，也证明这几块腾出来的高度全归弹幕区，没有别的块被挤错。
+      out.immersiveChatGrewByRemovedBlocks = immTabs0 !== null && immHeader0 !== null &&
+        immComposerH > 0 && Math.abs(out.immersiveChatGrewPx -
+          (immTabs0.height + immHeader0.height + immComposerH)) < 1.5;
+      // 礼物 / SC 栏留在场上、高度一点没变；它与弹幕区之间**只隔着那条分割条**
+      // （弹幕区拿走收起腾出的全部高度，没有别的块被挤错）。旧写法要求「弹幕区底边紧贴礼物栏顶边」，
+      // 同样是上下分区之前的结构 —— 折叠态下礼物栏在弹幕区正下方，中间那一条 8px 就是分割条
+      // （实测 8.0），所以相邻性改成「弹幕区底边 = 分割条顶边、礼物栏顶边 = 分割条底边」。
+      var immSplit1 = rect(byTestId("db-pane-splitter"));
+      out.immersiveGiftHeightDeltaPx = immGift0 && immGift1
+        ? Math.round((immGift1.height - immGift0.height) * 10) / 10 : null;
+      out.immersiveKeepsGiftDock = byTestId("db-gift-dock") !== null && !!immGift0 &&
+        !!immGift1 && !!immSplit1 &&
+        // 折叠态（此刻它就是折叠的）在沉浸态里照旧折叠：高度仍然是折叠头那一个数
+        !byTestId("db-gift-area") &&
+        Math.abs(immGift1.height - immGift0.height) < 1 &&
+        Math.abs(immGift1.height - immGiftHeadH) < 1 &&
+        Math.abs(rect(byTestId("db-chat-scroll")).bottom - immSplit1.top) < 1 &&
+        Math.abs(immGift1.top - immSplit1.bottom) < 1;
+      snap();
+      // ③ 沉浸态里照样能往上翻历史、「回到最新」跟着出现、点了又贴底（虚拟列表重新量高）
+      var immScroll = byTestId("db-chat-scroll");
+      immScroll.scrollTop = Math.round((immScroll.scrollHeight - immScroll.clientHeight) * 0.5);
+      // 采样而不是只量一次：虚拟列表在沉浸态里会重新量高、MessageList 的 ResizeObserver
+      // 又会在「跟随中」时重新贴底 —— 「滚上去之后按钮没出现」到底是没滚成（scrollTop 为 0）、
+      // 还是滚了又被弹回底，采样数组一眼分得出来。
+      var immSamples = [];
+      for (var immStep = 0; immStep < 5; immStep += 1) {
+        await sleep(immStep === 0 ? 80 : 150);
+        var immNow = byTestId("db-chat-scroll");
+        immSamples.push({
+          top: immNow ? Math.round(immNow.scrollTop) : null,
+          gap: immNow ? bottomGap(immNow) : null,
+          anchor: !!byTestId("db-bottom-anchor"),
+        });
+      }
+      out.immersiveScrollSamples = immSamples;
+      out.immersiveScrollsWhenImmersive = immScroll.scrollTop > 0 &&
+        bottomGap(immScroll) > 8 && byTestId("db-bottom-anchor") !== null;
+      // 按钮不在就**不点**：这一步以前是裸取 .click()，沉浸块内一旦走到这里就抛 TypeError，
+      // 被 catch 吞掉之后沉浸态留在场上，块外的裸取（房间头那枚 ⋯）拿到 null → 未捕获异常 →
+      // 整个场景死掉（实测两引擎都栽在这，跑脚本那头只看到「场景未跑完（超时）」）。
+      if (byTestId("db-bottom-anchor")) byTestId("db-bottom-anchor").click();
+      await sleep(400);
+      out.immersiveJumpToLatestWhenImmersive = byTestId("db-bottom-anchor") === null &&
+        bottomGap(immScroll) < 8;
+      // ④ 沉浸态里滚到中段再展开：**当前阅读位置不许被弹走**（与 layoutPanelScrollStable 同款量法）
+      immScroll.scrollTop = Math.round((immScroll.scrollHeight - immScroll.clientHeight) * 0.45);
+      await sleep(400);
+      // 锚定「当前正在读的那一行」= **视口里最靠上的那一行**（按 data-index 认它）。
+      // 旧写法取 rows()[4]（第 5 个**渲染出来**的格子）：虚拟列表的窗口带 12 行 overscan，
+      // 45% 处那个窗口是从列表开头开始的，于是 rows()[4] 落在视口**上方**（top 为负、用户
+      // 根本看不见）—— 它随「上方各行的实测落账」而动是本分，拿它当阅读位置量错了对象。
+      // 实测同一次退出：视口里那一行位移 **0.0px**，而 overscan 里那个第 5 格位移 88.1px。
+      // 旧数值仍然记进快照（immersiveAnchorSlotIndex / ...SlotDeltaPx）当对照。
+      var immScrollBox = rect(byTestId("db-chat-scroll"));
+      var immVisibleRow = immScrollBox
+        ? rows().filter(function (r) { return rect(r).bottom > immScrollBox.top + 1; })[0] || null
+        : null;
+      var immAnchorSlot = rows()[4];
+      var immAnchorSlotWrap = immAnchorSlot ? immAnchorSlot.closest("[data-index]") : null;
+      var immAnchorSlotIndex = immAnchorSlotWrap
+        ? immAnchorSlotWrap.getAttribute("data-index") : null;
+      var immAnchorSlotTop = immAnchorSlot
+        ? Math.round(rect(immAnchorSlot).top * 10) / 10 : null;
+      var immAnchor = immVisibleRow || immAnchorSlot;
+      var immAnchorTop = immAnchor ? Math.round(rect(immAnchor).top * 10) / 10 : null;
+      // 认的是**这一条消息**，不是「第 5 个渲染出来的格子」：虚拟列表渲染的是窗口里那几行，
+      // 视口一变窗口就挪（退出沉浸时弹幕区矮回去 193px，窗口里换一批行），rows()[4]
+      // 指向的已经不是同一条了 —— 实测差值 88.1px ≈ 一整行（81.1px），量的是「换了一条」。
+      // 行的外层包装上有 data-index（MessageList 用虚拟项的 index 打的那一枚），
+      // 记下它就能在退出之后把**同一条消息**找回来；比按下标取更硬，不是放水。
+      var immAnchorWrap = immAnchor ? immAnchor.closest("[data-index]") : null;
+      var immAnchorIndex = immAnchorWrap ? immAnchorWrap.getAttribute("data-index") : null;
+      var rowByIndex = function (index) {
+        var wrap = index === null ? null : document.querySelector('[data-index="' + index + '"]');
+        return wrap ? wrap.querySelector('[data-testid="db-msg-row"]') : null;
+      };
+      // 顺带钉住「不跟双击选词打架」：选中一段正文（双击选词的等价物），
+      // 进出沉浸模式都不许把它清掉，正文本身也不许变成不可选。
+      var immBody = immAnchor ? immAnchor.querySelector('[data-testid="db-msg-body"]') : null;
+      var immSelected = "";
+      var immSelectable = false;
+      if (immBody) {
+        var immRange = document.createRange();
+        immRange.selectNodeContents(immBody);
+        var immSel = window.getSelection();
+        immSel.removeAllRanges();
+        immSel.addRange(immRange);
+        immSelected = immSel.toString();
+        immSelectable = getComputedStyle(immBody).userSelect !== "none";
+      }
+      out.immersiveSelectionProbe = { selected: immSelected.length, selectable: immSelectable };
+      // ⑤ 触屏双击（pointerType = touch）退出：鼠标与触摸走的是同一条指针判据
+      await immDoubleTap(byTestId("db-chat-scroll"), immTapX, immTapY, "touch");
+      var immChat2 = rect(byTestId("db-chat-scroll"));
+      // 用 data-index 把**同一条消息**找回来（见上面 immAnchorIndex 的说明）
+      var immAnchorAfter = rowByIndex(immAnchorIndex);
+      var immAnchorTopAfter = immAnchorAfter
+        ? Math.round(rect(immAnchorAfter).top * 10) / 10 : null;
+      out.immersiveAnchorIndex = immAnchorIndex;
+      out.immersiveAnchorFoundAfter = !!immAnchorAfter;
+      // 对照：同一个场景里那个 overscan 格子（旧锚点）的位移 —— 它动不代表阅读位置动了。
+      var immAnchorSlotAfter = rowByIndex(immAnchorSlotIndex);
+      out.immersiveAnchorSlotIndex = immAnchorSlotIndex;
+      out.immersiveAnchorSlotDeltaPx = immAnchorSlotTop !== null && immAnchorSlotAfter
+        ? Math.round((Math.round(rect(immAnchorSlotAfter).top * 10) / 10 - immAnchorSlotTop) * 10) / 10
+        : null;
+      out.immersiveExitOnTouchDoubleTap = immAttr() === null;
+      out.immersiveRestoresLayout = byTestId("db-room-header") !== null &&
+        byTestId("db-composer-tools") !== null &&
+        immUnrendered(byTestId("db-room-tabs")) === false &&
+        Math.abs(immChat2.height - immChat0.height) < 1.5;
+      out.immersiveExitKeepsReadingPositionPx = immAnchorTop !== null && immAnchorTopAfter !== null
+        ? Math.round((immAnchorTopAfter - immAnchorTop) * 10) / 10 : null;
+      out.immersiveExitKeepsReadingPosition = immAnchorTop !== null &&
+        immAnchorTopAfter !== null && Math.abs(out.immersiveExitKeepsReadingPositionPx) < 8 &&
+        byTestId("db-bottom-anchor") !== null && bottomGap(byTestId("db-chat-scroll")) > 8;
+      out.immersiveKeepsTextSelection = immSelected.length > 0 && immSelectable &&
+        window.getSelection().toString() === immSelected;
+      // ⑥ 落在可交互元素上的双击**不**切（判据的另一半）。两个探针，都是真的落在 button 上的双击：
+      //    ① 临时插一枚**稳定的**按钮进弹幕区（挂完就用，用完即摘）—— 它没有任何 click 处理，
+      //       所以这一对「点」必然被完整判据看到：判据里少了「排除可交互元素」这一条，这里就会翻进沉浸态。
+      //    ② 真实的「回到最新」按钮（此刻不在跟随，它在场）—— 同一个判据在真实控件上的实例。
+      //    断言只认「没翻进去、房间页没被拆」，不去认那枚按钮还在不在：万一某个引擎给派发的指针事件
+      //    补一个 click，②里的按钮会被点掉（跟随恢复），那与「双击不切沉浸」是两件事。
+      var immProbe = document.createElement("button");
+      immProbe.setAttribute("type", "button");
+      immProbe.setAttribute("data-testid", "db-immersive-probe");
+      immProbe.style.cssText = "position:absolute;left:8px;top:8px;width:40px;height:40px;z-index:9";
+      byTestId("db-chat-wrap").appendChild(immProbe);
+      await immDoubleTap(immProbe, Math.round(rect(immProbe).left + 20),
+        Math.round(rect(immProbe).top + 20), "mouse");
+      var immAfterProbe = immAttr();
+      var immJump = byTestId("db-bottom-anchor");
+      var immJumpBox = rect(immJump);
+      if (immJumpBox) {
+        await immDoubleTap(immJump, Math.round(immJumpBox.left + immJumpBox.width / 2),
+          Math.round(immJumpBox.top + immJumpBox.height / 2), "mouse");
+      }
+      immProbe.remove();
+      out.immersiveButtonDoubleTapIgnored = immAfterProbe === null && immAttr() === null &&
+        byTestId("db-room-header") !== null && byTestId("db-immersive-probe") === null;
+      out.immersiveButtonProbe = {
+        attrAfterProbe: immAfterProbe,
+        attrAfterJump: immAttr(),
+        jumpStillThere: byTestId("db-bottom-anchor") !== null,
+      };
+      // 复原成「跟随最新」：后面的段落依赖它（顺手清掉刚才那段落选择）
+      window.getSelection().removeAllRanges();
+      immScroll = byTestId("db-chat-scroll");
+      immScroll.scrollTop = immScroll.scrollHeight;
+      await sleep(500);
+      out.immersiveRestoredPinned = byTestId("db-bottom-anchor") === null &&
+        bottomGap(immScroll) < 8 && immAttr() === null;
+      snap();
+      immersiveBlockRan = true;
+    } catch (e) {
+      out.immersiveBlockError = String((e && e.stack) || e);
+    } finally {
+      // 无论成败都退出沉浸态（见块上那段说明），并把「退出来了没有」记进快照 ——
+      // 快照是判官拿到的唯一证据，出错那一条（immersiveBlockError）也必须落进去，
+      // 否则现场只剩「场景未跑完（超时）」一句话。
+      out.immersiveRestoredAfterBlock = await immersiveOff();
+      snap();
+    }
+    out.immersiveBlockRan = immersiveBlockRan;
+    snap();
+
+
+
     // ---- admin 房管（issue #3）：权限前置、写操作二次确认、面板三块与错误原样展示
+    // 整段包一层（同 tabs / immersive 段的手法：try/catch + xxxBlockRan）—— 这一段里有 5 处
+    // **裸取** byTestId("db-header-more").click()、db-admin-close 之类的常规动作，「进房间点 ⋯」
+    // 的前置状态一旦被谁弄坏（历史教训：沉浸态泄漏时房间头整个不在 DOM 里），裸取就是未捕获异常，
+    // 场景当场死掉、跑脚本那一头只看到「场景未跑完（超时）」。包起来之后这一段最多红一片，
+    // 后面的段落照跑。缩进保持原样不动：这一段的注释与断言排布本来就按「段」读，
+    // 为了多一层缩进把 500 行重排一遍，只会把这次的改动淹在空白差异里。
+    var adminBlockRan = false;
+    try {
     out.adminIdentityFetched = calls.indexOf("room_session") >= 0;
     // **预载**（issue #4/第 5 条：连接上就有房管权限的房间时把数据加载好）：身份就绪之后
     // **不打开面板**也已经拉过三块名单 —— 数 IPC 调用即可（一次都没有 = 打开面板才拉，慢半拍）。
@@ -4106,19 +5014,43 @@ const MOCK = (theme) => `(function () {
     out.adminPanelTabLabels = out.adminPanelSections.join(",") === "禁言,黑名单,屏蔽词";
     // 键盘：←→ 换 tab、Home / End 跳首尾，焦点跟着选中项走（WAI-ARIA tabs 口径）。
     // 键事件派发在**已聚焦的那一枚 tab** 上，轨道自身的 keydown 因此收到它 —— 与真实按键同一条路径。
+    // ⚠ 先**点回「禁言」**把起点定下来：轨道上的方向键是**相对当前选中的那一枚**算的
+    //   （current = TAB_ORDER.indexOf(tab)），而上面那次 adminWalk() 巡完三个 tab 之后
+    //   停在「屏蔽词」上。不点回起点的话，第一步「在禁言上按 →」实际是在**屏蔽词**上按 →
+    //   走到「禁言」（0 的下一个），于是 adminTabKeyboardFollows 恒为假 ——
+    //   实测（9-15 两引擎 × 四档全红）每一步的现场都记在 adminTabKeyboardSteps 里：
+    //   第一步 expected=blacklist 而 selected=silent、焦点也还在 silent 上，正是「起点不对」。
+    if (adminTabOf("silent")) adminTabOf("silent").click();
+    await sleep(280);
+    var adminKeySteps = [];
     var adminKeyStep = async function (fromKind, key, expectKind) {
       var fromEl = adminTabOf(fromKind);
       if (!fromEl) return false;
       pressKey(fromEl, key);
       await sleep(280);
-      return adminSelectedKind() === expectKind &&
-        document.activeElement === adminTabOf(expectKind);
+      // 每一步的现场都记账：只看最后那个布尔，失败时分不清是「选中项没跟着走」还是
+      // 「选中了但焦点没挪过去」（两者的修法完全不同）。
+      var focused = document.activeElement;
+      var step = {
+        key: key,
+        from: fromKind,
+        expect: expectKind,
+        selected: adminSelectedKind(),
+        focusKind: focused && focused.getAttribute
+          ? focused.getAttribute("data-kind") : null,
+        focusTestId: focused && focused.getAttribute
+          ? focused.getAttribute("data-testid") : null,
+        focusTag: focused ? focused.tagName : null,
+      };
+      adminKeySteps.push(step);
+      return step.selected === expectKind && step.focusKind === expectKind;
     };
     var adminKeyOk = await adminKeyStep("silent", "ArrowRight", "blacklist");
     adminKeyOk = (await adminKeyStep("blacklist", "ArrowLeft", "silent")) && adminKeyOk;
     adminKeyOk = (await adminKeyStep("silent", "End", "keywords")) && adminKeyOk;
     adminKeyOk = (await adminKeyStep("keywords", "Home", "silent")) && adminKeyOk;
     out.adminTabKeyboardFollows = adminKeyOk;
+    out.adminTabKeyboardSteps = adminKeySteps;
     // 房管面板是最高的一个（窄屏撞 45vh 上限），它展开时最能暴露「跟随被悄悄关掉」：
     // 修复前这里实测离底 398px，最新一条落在面板下方 318px 处。
     out.layoutAdminBottomGap = bottomGap(byTestId("db-chat-scroll"));
@@ -4150,7 +5082,7 @@ const MOCK = (theme) => `(function () {
     //      最后把两枚开关都还原成默认值，礼物栏因此折叠着在场）。
     var openPanelCount = function () {
       return (byTestId("db-panel") ? 1 : 0) + (byTestId("db-admin-panel") ? 1 : 0) +
-        (byTestId("db-gift-body") ? 1 : 0);
+        (byTestId("db-gift-area") ? 1 : 0);
     };
     // 房管面板的开/关都只有一条路：⋯ 菜单里那一项（面板内没有开关自己的按钮）
     var toggleAdminFromHeader = async function () {
@@ -4164,7 +5096,7 @@ const MOCK = (theme) => `(function () {
     clickTool("表情");
     await sleep(450);
     out.panelExclusiveEmoteClosesAdmin = !!byTestId("db-panel") &&
-      !byTestId("db-admin-panel") && !byTestId("db-gift-body") && openPanelCount() === 1;
+      !byTestId("db-admin-panel") && !byTestId("db-gift-area") && openPanelCount() === 1;
     clickTool("短语");
     await sleep(350);
     out.panelExclusivePhraseReplacesEmote = allByTestId("db-panel").length === 1 &&
@@ -4173,15 +5105,16 @@ const MOCK = (theme) => `(function () {
     await sleep(350);
     out.panelExclusiveFilterReplacesPhrase = allByTestId("db-panel").length === 1 &&
       !byTestId("db-phrase-add") && openPanelCount() === 1;
-    var exclusiveDockHead = byTestId("db-gift-dock")
-      ? byTestId("db-gift-dock").querySelector("button") : null;
+    // db-gift-dock 现在就是**那枚折叠头按钮**本身（issue #8 把礼物栏搬进共享分区后，
+    // 它的根是 db-pane-gift、折叠头是它的第一个子元素），所以直接点它。
+    var exclusiveDockHead = byTestId("db-gift-dock");
     if (exclusiveDockHead) exclusiveDockHead.click();
     await sleep(450);
-    out.panelExclusiveGiftDockClosesPanel = !!byTestId("db-gift-body") &&
+    out.panelExclusiveGiftDockClosesPanel = !!byTestId("db-gift-area") &&
       !byTestId("db-panel") && !byTestId("db-admin-panel") && openPanelCount() === 1;
     await toggleAdminFromHeader();
     out.panelExclusiveAdminClosesGiftDock = !!byTestId("db-admin-panel") &&
-      !byTestId("db-panel") && !byTestId("db-gift-body") && openPanelCount() === 1;
+      !byTestId("db-panel") && !byTestId("db-gift-area") && openPanelCount() === 1;
 
     // ---- 上游拒绝**原样展示**（code + message）：三块各自留痕、互不清空，面板留在原地。
     //      这一档必须在**有权限**时测 —— 入口只对房管存在，身份被撤销时面板会直接收起（见下）。
@@ -4346,6 +5279,12 @@ const MOCK = (theme) => `(function () {
     document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     await sleep(200);
     out.adminPanelStaysClosed = !byTestId("db-admin-panel");
+    snap();
+    adminBlockRan = true;
+    } catch (e) {
+      out.adminBlockError = String((e && e.stack) || e);
+    }
+    out.adminBlockRan = adminBlockRan;
     snap();
 
     // ---- 滚到顶部时第一条不被头部压住（头部是文档流里的一行，不是 sticky/fixed 浮层）。
@@ -4750,8 +5689,955 @@ const MOCK = (theme) => `(function () {
     out.tabDotSizeUnchanged = !!firstTabDot &&
       Math.abs(rect(firstTabDot).width - cssLengthOf("--live-dot")) < 0.6 &&
       Math.abs(rect(firstTabDot).width - 8) < 0.6;
+    // ---- issue #1（本批追加第 6 条）：标签条**拖动排序 + 横向滚动**（docs/ui.md §2.3）。
+    //      用**真实指针事件**驱动（pointerdown → 越过阈值的 pointermove → pointerup），
+    //      判的全是对外可观察的东西：DOM 顺序、data-active / data-dragging、房间头标题、
+    //      rooms_connect 调用次数、计算样式、scrollWidth / clientWidth。
+    //      边界逐条落到断言上：阈值以下的位移仍是点击、触摸横滑是滚动而按住才是拖、
+    //      拖动中被拖的房间被关掉则整次作废、只有一个房间时根本没有标签条（另见 step2）。
+    // 整块包一层（同上面几段的手法）：出岔子时让断言红（tabDragBlockRan），不把场景卡到超时。
+    var tabDragBlockRan = false;
+    try {
+      var stripEl = byTestId("db-room-tabs");
+      // 这一段接在别的切片后面跑：标签条得**真的在画面上**（别的切片可能把房间页留在
+      // 沉浸模式 / 列表页里）—— 那样的话这里整段作废，但要说清原因，不能给一堆假几何。
+      if (!stripEl || getComputedStyle(stripEl).display === "none" || rect(stripEl).width < 1) {
+        throw new Error("标签条不可见（房间页没停在可见状态：沉浸模式没退出？）");
+      }
+      var pe = function (type, target, x, y, pointerType) {
+        var init = {
+          bubbles: true, cancelable: true, pointerId: 7, isPrimary: true,
+          pointerType: pointerType || "mouse", clientX: x, clientY: y,
+        };
+        if (type === "pointerdown") { init.button = 0; init.buttons = 1; }
+        if (type === "pointerup") { init.button = 0; init.buttons = 0; }
+        target.dispatchEvent(new PointerEvent(type, init));
+      };
+      var tabNames = function () {
+        return allByTestId("db-room-tab").map(function (t) { return t.innerText.trim(); });
+      };
+      var roomIds = function () {
+        return allByTestId("db-room-tab").map(function (t) { return t.getAttribute("data-room-id"); });
+      };
+      /** 当前激活那一枚的房间号（标签上只有一个 data-active=true，取不到就是 null）。 */
+      var activeRoomId = function () {
+        var on = allByTestId("db-room-tab").filter(function (t) {
+          return t.getAttribute("data-active") === "true";
+        });
+        return on.length === 1 ? on[0].getAttribute("data-room-id") : null;
+      };
+      var connectCalls = function () {
+        return callsWithArgs.filter(function (c) { return c.cmd === "rooms_connect"; }).length;
+      };
+      var lastConnectRoom = function () {
+        var all = callsWithArgs.filter(function (c) { return c.cmd === "rooms_connect"; });
+        return all.length > 0 ? all[all.length - 1].args.roomId : null;
+      };
+      /** 点房间头 ⋯ 菜单里的某一项（菜单按文案找，与用户在菜单里点同一条路）。 */
+      var menuPick = async function (label) {
+        byTestId("db-header-more").click();
+        await sleep(250);
+        var item = buttonWith(byTestId("db-context-menu"), label);
+        if (item) item.click();
+        await sleep(1000);
+        return !!item;
+      };
+      /**
+       * 按住第 index 枚标签拖到 x，返回**拖拽中途**量到的那几个数（拖拽态 / 被拖项 /
+       * 插入指示条 / 容器计算样式）。
+       * holdMs 有值 = 触摸那条路：先按住这么久再动（触摸的横滑归容器滚动）。
+       */
+      var dragTab = async function (index, toX, pointerType, holdMs) {
+        var tab = allByTestId("db-room-tab")[index];
+        var box = rect(tab);
+        var y = box.top + box.height / 2;
+        pe("pointerdown", tab, box.left + 10, y, pointerType);
+        if (holdMs) await sleep(holdMs);
+        else {
+          pe("pointermove", window, box.left + 50, y, pointerType);
+          await sleep(90);
+        }
+        var mid = {
+          dragging: stripEl.getAttribute("data-dragging"),
+          dragged: allByTestId("db-room-tab").filter(function (t) {
+            return t.getAttribute("data-dragging") === "true";
+          }).length,
+          markers: allByTestId("db-tab-drop").length,
+          touchAction: getComputedStyle(stripEl).touchAction,
+          overscroll: getComputedStyle(stripEl).overscrollBehaviorX,
+        };
+        pe("pointermove", window, toX, y, pointerType);
+        await sleep(90);
+        pe("pointerup", window, toX, y, pointerType);
+        await sleep(150);
+        return mid;
+      };
+      var farRight = function () {
+        var tabs = allByTestId("db-room-tab");
+        return rect(tabs[tabs.length - 1]).right + 40;
+      };
+
+      var restTouchAction = getComputedStyle(stripEl).touchAction;
+      var orderBefore = roomIds();
+      var activeBefore = activeRoomId();
+      var headerBefore = byTestId("db-room-title").getAttribute("title");
+      var connectsBefore = connectCalls();
+
+      // ---- ① 拖动排序：把**当前激活的那一枚**（第 0 枚）拖到最右
+      var dragMid = await dragTab(0, farRight());
+      // 拖拽中的视觉反馈：被拖项自己半透明（data-dragging）、目标位有一枚插入指示条
+      out.tabDragStateShown = dragMid.dragging === "true" && dragMid.dragged === 1 &&
+        dragMid.markers === 1;
+      // 拖拽态下容器不再滚（touch-action 收到自己手里、越界链就地截断）；
+      // 静止时是 pan-x：触摸的横滑 = 滚标签条
+      out.tabDragSuppressesScroll = dragMid.touchAction === "none" &&
+        dragMid.overscroll === "contain" && restTouchAction === "pan-x";
+      // 「第 0 枚挪到末尾」= 整体左移一位（与前面几段留下的顺序无关，任何长度都成立）
+      var orderAfterDrag = roomIds();
+      out.tabDragReorders = orderBefore.length >= 2 &&
+        orderAfterDrag.length === orderBefore.length &&
+        orderAfterDrag.every(function (id, index) {
+          return id === orderBefore[(index + 1) % orderBefore.length];
+        }) && orderAfterDrag.join("|") !== orderBefore.join("|");
+      // 拖动**只改顺序**：激活项没换（还是同一枚房间号）、房间头报的还是同一个房间、
+      // 一次 rooms_connect 都没发（没顺手切房间）
+      out.tabDragKeepsActive = !!activeBefore && activeRoomId() === activeBefore &&
+        byTestId("db-room-title").getAttribute("title") === headerBefore &&
+        connectCalls() === connectsBefore;
+      // 拖完指示条收掉（不留一根挂在那儿的竖条）
+      out.tabDragClearedAfterDrop = stripEl.getAttribute("data-dragging") === "false" &&
+        allByTestId("db-tab-drop").length === 0;
+
+      // ---- ② 拖完之后重拉一次 rooms_list（⋯ → 刷新连接）：**顺序必须留住**
+      //      （本票的口径是「会话内有效」，而切房间本身就会重拉一次 rooms_list）
+      await menuPick("刷新连接");
+      out.tabOrderKeepsAcrossReload = roomIds().join("|") === orderAfterDrag.join("|");
+
+      // ---- ③ 反向拖回来：最后一枚拖到最前，顺序恢复原样
+      var backMid = await dragTab(allByTestId("db-room-tab").length - 1,
+        rect(allByTestId("db-room-tab")[0]).left - 20);
+      out.tabDragBackRestores = backMid.markers === 1 &&
+        roomIds().join("|") === orderBefore.join("|");
+
+      // ---- ④ 阈值以下 = 点击：3px 的位移不进入拖拽态，松手后的那一下照旧切房间。
+      //      目标挑**不是当前激活的那一枚**：切没切房间从 data-active 与 rooms_connect
+      //      的参数上直接看得出来（与前面几段留下的状态无关）。
+      var clickTarget = allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") !== activeBefore;
+      })[0];
+      var clickRoomId = clickTarget.getAttribute("data-room-id");
+      var clickBox = rect(clickTarget);
+      pe("pointerdown", clickTarget, clickBox.left + 10, clickBox.top + clickBox.height / 2);
+      pe("pointermove", window, clickBox.left + 13, clickBox.top + clickBox.height / 2);
+      await sleep(90);
+      out.tabPressUnderThresholdNoDrag =
+        stripEl.getAttribute("data-dragging") === "false" &&
+        allByTestId("db-tab-drop").length === 0;
+      pe("pointerup", window, clickBox.left + 13, clickBox.top + clickBox.height / 2);
+      await sleep(60);
+      // 同一枚元素上「按下并松开」之后浏览器自己会发的那一下 click
+      clickTarget.click();
+      await sleep(1000);
+      out.tabClickStillSwitches = activeRoomId() === clickRoomId &&
+        lastConnectRoom() === Number(clickRoomId);
+      // 切回来（后面几段按「激活项仍是原来那一枚」继续）
+      allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === activeBefore;
+      })[0].click();
+      await sleep(1000);
+      out.tabClickSwitchesBackOnMouse = activeRoomId() === activeBefore &&
+        lastConnectRoom() === Number(activeBefore);
+
+      // ---- ⑤ 触摸：横滑 = 滚标签条（不排序）；**按住**再动才是拖动排序
+      var orderBeforeTouch = roomIds();
+      var swipeMid = await dragTab(0, farRight(), "touch");
+      out.tabTouchSwipeNotDrag = swipeMid.dragging === "false" && swipeMid.markers === 0 &&
+        roomIds().join("|") === orderBeforeTouch.join("|");
+      var holdMid = await dragTab(0, farRight(), "touch", 500);
+      out.tabTouchHoldDrags = holdMid.dragging === "true" && holdMid.markers === 1;
+      // 按住之后的那一次是**真的拖动了**（同样左移一位）
+      var orderAfterHold = roomIds();
+      out.tabTouchHoldReorders = orderAfterHold.join("|") !== orderBeforeTouch.join("|") &&
+        orderAfterHold.every(function (id, index) {
+          return id === orderBeforeTouch[(index + 1) % orderBeforeTouch.length];
+        });
+
+      // ---- ⑤b 触摸下「手势归谁」的对外可观察面：拿起来之后，容器上的 touchmove 必须被
+      //      preventDefault（滚动收走），没拿起来时**不许**拦（横划是「看更多标签」的正路）。
+      //      这两条是本次修复的回归闸：旧实现只靠 CSS 的 touch-action + pointermove
+      //      上的 preventDefault，两个都拦不住滚动 —— 浏览器在 **touchstart 那一刻**就把
+      //      touch-action 快照给手势识别器了。真机实测（Android WebView Chrome/124，
+      //      CDP 注入真实触摸）：按住 400ms 拿起来后的**第一次** pointermove 就收到
+      //      pointercancel，排序一次都没成过；而合成 PointerEvent 绕开了浏览器的手势管线，
+      //      所以旧的真机故障在冒烟里一直照不出来 —— 这条断言量的是那条管线上的约定。
+      var touchMoveProbe = function (target) {
+        try {
+          var ev = new TouchEvent("touchmove", { bubbles: true, cancelable: true });
+          target.dispatchEvent(ev);
+          return ev.defaultPrevented;
+        } catch (e) {
+          return "throw:" + e.message;
+        }
+      };
+      var stripFirstTab = allByTestId("db-room-tab")[0];
+      var stripFirstBox = rect(stripFirstTab);
+      var stripFirstY = stripFirstBox.top + stripFirstBox.height / 2;
+      out.tabTouchMoveFreeWhenIdle = touchMoveProbe(stripFirstTab) === false;
+      pe("pointerdown", stripFirstTab, stripFirstBox.left + 10, stripFirstY, "touch");
+      await sleep(500); // > TAB_HOLD_MS：已经拿起来了（拖拽态在画面上）
+      out.tabTouchLiftedForProbe = stripEl.getAttribute("data-dragging") === "true";
+      out.tabTouchMoveOwnedWhenLifted = touchMoveProbe(stripFirstTab) === true;
+      pe("pointerup", stripFirstTab, stripFirstBox.left + 10, stripFirstY, "touch");
+      await sleep(250);
+
+      // ---- ⑤c 触摸**原地长按再松手**（慢点）= 仍然是点击：那一下 click 不许吞。
+      //      旧实现只要越过 TAB_HOLD_MS 就举「吞 click」的旗，于是慢点一次都切不了房间
+      //      （实测真机：click 事件照发，data-active 一动不动 —— 用户说「点了没反应」）。
+      var slowTarget = allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") !== activeRoomId();
+      })[0];
+      var slowRoomId = slowTarget.getAttribute("data-room-id");
+      var slowBox = rect(slowTarget);
+      var slowY = slowBox.top + slowBox.height / 2;
+      var connectsBeforeSlowTap = connectCalls();
+      pe("pointerdown", slowTarget, slowBox.left + 12, slowY, "touch");
+      await sleep(500);
+      out.tabSlowTouchTapLifted = stripEl.getAttribute("data-dragging") === "true";
+      pe("pointerup", slowTarget, slowBox.left + 12, slowY, "touch");
+      await sleep(80);
+      // 按下与松开落在同一枚上时，浏览器自己会补的那一下 click
+      slowTarget.click();
+      await sleep(900);
+      out.tabSlowTouchTapSwitches = activeRoomId() === slowRoomId &&
+        lastConnectRoom() === Number(slowRoomId) &&
+        connectCalls() > connectsBeforeSlowTap;
+      // 切回来：后面几段按「激活项还是原来那一枚」继续
+      var backToActiveTab = allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === activeBefore;
+      })[0];
+      backToActiveTab.click();
+      await sleep(1000);
+      out.tabSlowTouchTapSwitchesBack = activeRoomId() === activeBefore;
+
+      // ---- ⑤d 触摸**真的拖动过**之后：松手补发的那一下 click 必须吞掉（拖的是顺序，不是切房间）。
+      //      这一段在同一栏里挪 90px（落点还是自己那一枚 = 顺序不动），随后手动补一发 click：
+      //      它被吞掉的表现就是「一次 rooms_connect 都没发、激活项没变」。
+      var dragAwayTab = allByTestId("db-room-tab")[0];
+      var dragAwayBox = rect(dragAwayTab);
+      var dragAwayY = dragAwayBox.top + dragAwayBox.height / 2;
+      var connectsBeforeTouchDrag = connectCalls();
+      var activeBeforeTouchDrag = activeRoomId();
+      pe("pointerdown", dragAwayTab, dragAwayBox.left + 10, dragAwayY, "touch");
+      await sleep(500);
+      pe("pointermove", window, dragAwayBox.left + 100, dragAwayY, "touch");
+      await sleep(90);
+      pe("pointerup", dragAwayTab, dragAwayBox.left + 100, dragAwayY, "touch");
+      await sleep(80);
+      dragAwayTab.click();
+      await sleep(700);
+      out.tabTouchDragSwallowsFollowUpClick =
+        connectCalls() === connectsBeforeTouchDrag && activeRoomId() === activeBeforeTouchDrag;
+
+      // ---- ⑤e 阈值边界：**没到** TAB_DRAG_THRESHOLD_PX（5px）不算拖（4px 不行、6px 行）。
+      //      上一条只量了 3px 那一侧（tabPressUnderThresholdNoDrag），这里把另一侧也钉住，
+      //      阈值本身就成了对外可观察的行为而不是一个常量。
+      var edgeTab = allByTestId("db-room-tab")[0];
+      var edgeBox = rect(edgeTab);
+      var edgeY = edgeBox.top + edgeBox.height / 2;
+      pe("pointerdown", edgeTab, edgeBox.left + 10, edgeY, "mouse");
+      pe("pointermove", window, edgeBox.left + 14, edgeY, "mouse");
+      await sleep(90);
+      out.tabBelowThresholdNoDrag = stripEl.getAttribute("data-dragging") === "false" &&
+        allByTestId("db-tab-drop").length === 0;
+      pe("pointermove", window, edgeBox.left + 16, edgeY, "mouse");
+      await sleep(90);
+      out.tabAboveThresholdDrags = stripEl.getAttribute("data-dragging") === "true";
+      pe("pointerup", window, edgeBox.left + 16, edgeY, "mouse");
+      await sleep(250);
+      // 这一拖是**真的拖过**（越过阈值、也 move 过）：它举起了「吞下一发 click」的旗。
+      // 点**当前这一枚**把它消费掉（原地重开一次、不换房间、顺序也不动），
+      // 免得后面几段里第一次点标签被它吃掉（④ 那段同样的道理）。
+      allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === activeRoomId();
+      })[0].click();
+      await sleep(250);
+
+      // ---- ⑥ 开 20 个房间：标签条**横向滚动**，每枚标签**不被压缩**（各保自己的最小宽度）
+      window.__addRooms(20);
+      await menuPick("刷新连接");
+      var tabsNow = allByTestId("db-room-tab");
+      var widths = tabsNow.map(function (t) { return rect(t).width; });
+      var minTabW = cssLengthOf("--tab-min-w");
+      out.tabMinWidthPx = Math.round(minTabW * 10) / 10;
+      out.tabStripScrolls = tabsNow.length >= 20 &&
+        getComputedStyle(stripEl).overflowX === "auto" && minTabW > 0 &&
+        stripEl.scrollWidth > stripEl.clientWidth + 1;
+      out.tabWidthsNotSqueezed = widths.length === tabsNow.length && minTabW > 0 &&
+        Math.min.apply(null, widths) >= minTabW - 0.6;
+      // 「没挤在一起」的另一半：它们是真的溢出去了，而不是被压回容器宽度里
+      out.tabWidthsSumOverflowsStrip =
+        widths.reduce(function (sum, w) { return sum + w; }, 0) > stripEl.clientWidth;
+      // 滚到末尾：最后一枚完整可见（开再多也拿得到）
+      stripEl.scrollLeft = stripEl.scrollWidth;
+      await sleep(250);
+      var lastTabNow = allByTestId("db-room-tab").slice(-1)[0];
+      out.tabStripScrollsToEnd = stripEl.scrollLeft > 0 &&
+        rect(lastTabNow).right <= rect(stripEl).right + 1 &&
+        rect(lastTabNow).left >= rect(stripEl).left - 1;
+
+      // ---- ⑥b 标签条**不画滚动条**（用户 2026-09-16 第 1 条：「顶部 tab 滚动的时候不要有滑块，
+      //      会挡住，能隐藏掉吗」），但横向照旧能滚。
+      //      判「滚动条有没有占位」不能用 clientHeight === offsetHeight：这个容器的高度是**由标签
+      //      撑开**的（没有固定高度 + 只横向滚），占位式滚动条会把容器一并撑高，两者的差始终只剩
+      //      那 1px 底边框。真正的判据是「标签底边 → 容器内底边」那一段：不画滚动条时恒为 0，
+      //      画了占位式横向滚动条时正好是一条滚动条的厚度。
+      var stripStyle = getComputedStyle(stripEl);
+      var stripBorderBottom = parseFloat(stripStyle.borderBottomWidth) || 0;
+      var tabsBottomEdge = Math.max.apply(null, allByTestId("db-room-tab").map(function (t) {
+        return rect(t).bottom;
+      }));
+      out.tabStripScrollbarThicknessPx =
+        Math.round((rect(stripEl).bottom - stripBorderBottom - tabsBottomEdge) * 10) / 10;
+      out.tabStripNoScrollbarSpace = out.tabStripScrollbarThicknessPx <= 0.5 &&
+        stripStyle.getPropertyValue("scrollbar-width").trim() === "none";
+      // （scrollbar-width 取的是**引擎算出来的**值（走 getPropertyValue，不看 JS 侧有没有这个
+      //   属性名）：覆盖式滚动条的引擎本来就不占位，只靠几何量不出「滑块还会不会飘到标签上」，
+      //   这条是它唯一的可观察面。）
+      stripEl.scrollLeft = 0;
+      await sleep(150);
+      out.tabStripScrollsWithHiddenScrollbar = stripEl.scrollLeft === 0 &&
+        (function () {
+          stripEl.scrollLeft = Math.round((stripEl.scrollWidth - stripEl.clientWidth) / 2);
+          return stripEl.scrollLeft > 0;
+        })();
+      stripEl.scrollLeft = 0;
+      await sleep(150);
+
+      // ---- ⑦ 拖动中被拖的那个房间被**关掉**（上游快照不再包含它）：整次拖动作废 ——
+      //      指示条收掉、顺序不动，松手也不落位。
+      stripEl.scrollLeft = 0;
+      await sleep(250);
+      var orderBeforeKill = tabNames();
+      var victimName = "房间 6004";
+      var victimIndex = orderBeforeKill.indexOf(victimName);
+      var victim = allByTestId("db-room-tab")[victimIndex];
+      if (!victim) throw new Error("找不到被关掉的样本标签 " + victimName + "（__addRooms 没生效？）");
+      var victimBox = rect(victim);
+      pe("pointerdown", victim, victimBox.left + 10, victimBox.top + victimBox.height / 2);
+      pe("pointermove", window, victimBox.left + 60, victimBox.top + victimBox.height / 2);
+      await sleep(150);
+      out.tabKillDragLifted = victimIndex >= 0 &&
+        stripEl.getAttribute("data-dragging") === "true";
+      window.__dropRoom(6004);
+      await menuPick("刷新连接");
+      out.tabDragAbortsWhenRoomClosed = victimIndex >= 0 &&
+        stripEl.getAttribute("data-dragging") === "false" &&
+        allByTestId("db-tab-drop").length === 0 &&
+        tabNames().indexOf(victimName) < 0 &&
+        tabNames().join("|") === orderBeforeKill.filter(function (n) {
+          return n !== victimName;
+        }).join("|");
+      pe("pointerup", window, victimBox.left + 60, victimBox.top + victimBox.height / 2);
+      await sleep(200);
+      out.tabDragAbortKeepsOrder = tabNames().join("|") === orderBeforeKill.filter(function (n) {
+        return n !== victimName;
+      }).join("|");
+
+      // 收尾仍停在**未连接（灰）**那一档（同上一条尾注）：这一段点过标签、刷过连接，
+      // 连接态会被替身推成 connected，这里显式复位，最后那张截图仍然看得到灰点。
+      // （当前激活那个房间号从 data-active 上取 —— 不假设是哪一间。）
+      [Number(activeRoomId()), fixtureRoom.room_id, 5555].forEach(function (id) {
+        if (!id) return;
+        window.__emit("danmubox://status", { room_id: id, state: "disconnected", detail: "" });
+        window.__emit("danmubox://room", {
+          room_id: id, live_status: fixtureRoom.live_status, connected: false,
+        });
+      });
+      await sleep(300);
+      snap();
+      tabDragBlockRan = true;
+    } catch (e) {
+      out.tabDragBlockError = String((e && e.stack) || e);
+    }
+    out.tabDragBlockRan = tabDragBlockRan;
+
     // 收尾就停在**未连接（灰）**那一档：最后那张截图因此看得到灰点（两处都是灰的）。
     snap();
+
+    // ================= 共享分区：分割条与长按换位（issue #8，用户 2026-09-16）=================
+    //
+    // 这一段的两条手势都是**指针事件**（鼠标与触摸走同一条路，见 SplitPanes.tsx），场景里按真实
+    // 序列派发：pointerdown →（长按 0.5s）pointermove → pointerup。派发目标是「按下落在那一栏 /
+    // 分割条上（React 的 onPointerDown 就挂在它们身上），之后的 move / up 落在 window（组件在
+    // 拖动期间挂的就是 window 级监听）」—— 与真手指走出的是同一批监听器。运行器只送 click 与
+    // 取快照，没有真实指针通道，所以这是页面内能给出的最接近的一次（与既有 pointerdown 断言同一手法）。
+    // 注意这一整段活在模板字符串里：**反引号与反斜杠转义都不能写**（见文件头的维护约定）。
+    var firePointer = function (target, type, x, y, kind) {
+      target.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 77, pointerType: kind || "touch",
+        clientX: Math.round(x), clientY: Math.round(y),
+      }));
+    };
+    // 量出来的**份额**：礼物栏高度 / 可用高度（分区高度减去分割条）。这就是「指针意图」落在
+    // 屏幕上的那一份，用它跟落盘的值对账。
+    var shownRatio = function () {
+      var panesBox = rect(byTestId("db-panes"));
+      var splitBox = rect(byTestId("db-pane-splitter"));
+      if (!panesBox || !splitBox) return null;
+      return Math.round((rect(byTestId("db-pane-gift")).height / (panesBox.height - splitBox.height)) * 1000) / 1000;
+    };
+    var splitterMid = function () {
+      var box = rect(byTestId("db-pane-splitter"));
+      return box ? box.top + box.height / 2 : 0;
+    };
+    // 这一下就是「点面板外面」那条路：把可能还开着的面板收掉，免得分区被面板压着、几何不干净
+    if (byTestId("db-panel")) {
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      await sleep(300);
+    }
+    // 归一形态：礼物栏折叠（点折叠头收起；它顺带收起别的面板）
+    if (byTestId("db-gift-area")) {
+      byTestId("db-gift-dock").click();
+      await sleep(350);
+    }
+    var panesBox0 = rect(byTestId("db-panes"));
+    var splitBox0 = rect(byTestId("db-pane-splitter"));
+    var giftBox0 = rect(byTestId("db-pane-gift"));
+    var danmakuBox0 = rect(byTestId("db-pane-danmaku"));
+    var headBox0 = rect(byTestId("db-gift-dock"));
+    var ratioAtEntry = window.__prefs["ui.gift_pane_ratio"];
+    var splitX = panesBox0.left + panesBox0.width / 2;
+
+    out.splitterPresent = !!splitBox0 && !!giftBox0 && !!danmakuBox0 &&
+      byTestId("db-panes").getAttribute("data-gift") === "on";
+    out.splitterHitAreaPx = Math.round(splitBox0.height * 10) / 10;
+    out.splitterHitAreaAtLeast8 = splitBox0.height >= 8;
+    // 默认顺序：弹幕在上、礼物在下（契约 §8 的默认值 = 与改前一致的那个形态）
+    out.splitterDefaultOrderGiftBelow =
+      danmakuBox0.bottom <= splitBox0.top + 1 && splitBox0.bottom <= giftBox0.top + 1;
+    // 折叠态：礼物栏只有折叠头那么高（「礼物栏不小于它的折叠头」这条约束的常态）
+    out.splitterCollapsedGiftIsHeadHeight = !byTestId("db-gift-area") &&
+      Math.abs(giftBox0.height - headBox0.height) <= 1;
+    out.splitterDefaultRatioPref = ratioAtEntry;
+    out.splitterDefaultOnTopPref = window.__prefs["ui.gift_pane_on_top"] === false;
+
+    // ---- 拖动分割条（鼠标指针这一路）：实时改比例、折叠态下「拖开就展开」、松手才落盘 ----
+    firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid(), "mouse");
+    firePointer(window, "pointermove", splitX, splitterMid() - 100, "mouse");
+    // 折叠态下的这一次移动会顺手把礼物栏**展开**（onExpand → setState），展开要等 React 重渲染
+    // 之后才看得见；同步读几何会读到展开前的那一帧（页面内派发没有真实输入那一趟往返）。
+    await sleep(80);
+    var midGiftBox = rect(byTestId("db-pane-gift"));
+    out.splitterDragLiveGrewPx = Math.round(midGiftBox.height - giftBox0.height);
+    out.splitterDragLiveExpandsPane = !!byTestId("db-gift-area");
+    out.splitterDragLiveGrew = midGiftBox.height > giftBox0.height + 80;
+    // 拖动中**一帧都不写 store**：磁盘上还是进来时那一份
+    out.splitterDragLiveWithoutStore = window.__prefs["ui.gift_pane_ratio"] === ratioAtEntry;
+    firePointer(window, "pointerup", splitX, splitterMid() - 100, "mouse");
+    await sleep(450);
+    var draggedRatio = shownRatio();
+    out.splitterDraggedRatioShown = draggedRatio;
+    out.splitterDragPersistsRatio = !!draggedRatio &&
+      Math.abs(window.__prefs["ui.gift_pane_ratio"] - draggedRatio) < 0.02;
+    // 「涨了」要比**当时屏幕上的那一份**：折叠态下这一栏只有折叠头那么高（份额约 0.04），
+    // 而 ratioAtEntry 是「上次拖到哪儿」的意图、折叠时并没有落到屏幕上（0.35 那个数在
+    // 折叠态下看不见），拿它当基准会把「确实长大了」判成没长。
+    var shownAtEntry = giftBox0.height / (panesBox0.height - splitBox0.height);
+    out.splitterDragGrewOnScreen = !!draggedRatio && draggedRatio > shownAtEntry + 0.05;
+    snap();
+
+    // ---- 切到另一个房间标签再切回来：RoomView 的**本地状态**复位（room_id 那条 effect：
+    //      礼物栏回到折叠、面板收起…），输入区那份比例落在 prefs 上、因此原样保持。
+    // ⚠ 判据不能要求「标签条上正好两枚」：这一段跑在**标签条拖动那一段之后**，
+    //   那一段用 __addRooms(n) 又开了好几个房间，标签数早就不是 2 了 ——
+    //   旧写法（length === 2）于是恒为假，三条件一起红，还把「本地状态复位」这条口径
+    //   悄悄跳过（实测两引擎 × 两个视口全红）。改成**按标签自己的 data-active 找当前房间**，
+    //   再挑一枚别的房间，与标签数无关。
+    var tabsForRemount = allByTestId("db-room-tab");
+    var activeTabForRemount = tabsForRemount.filter(function (t) {
+      return t.getAttribute("data-active") === "true";
+    })[0];
+    var otherTabForRemount = tabsForRemount.filter(function (t) {
+      return t !== activeTabForRemount;
+    })[0];
+    var remountAvailable = !!activeTabForRemount && !!otherTabForRemount;
+    var tabByRoomId = function (roomId) {
+      return allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === roomId;
+      })[0];
+    };
+    if (remountAvailable) {
+      var remountRoomId = activeTabForRemount.getAttribute("data-room-id");
+      var otherRoomId = otherTabForRemount.getAttribute("data-room-id");
+      // ⚠ 先点一次**当前这一枚**标签，把标签条的「吞掉这一下 click」标志消费掉：标签条拖动
+      //    那一段（排在文件里本段之前）用真实指针事件做了好几次拖动排序，而真实浏览器在
+      //    pointerup 之后**还会补一发 click**（App 的 swallowClick 就是为它准备的：拖完不许
+      //    顺手切房间），场景里没有补那一发，于是那个标志一直挂着 true，会把**紧接着的第一次**
+      //    标签点击吞掉 —— 本段第一次点「别的房间」正好撞上。实测：activeAfterOther 仍是 5440，
+      //    房间根本没换，下面两条断言（折叠态 / 比例保持）跟着一起红。点自己这一枚不换房间，
+      //    正好当消费；标志为假时它也只是原地重开一次，无副作用。
+      activeTabForRemount.click();
+      await sleep(250);
+      var remountProbe = {
+        activeBefore: remountRoomId,
+        other: otherRoomId,
+        giftBodyBefore: !!byTestId("db-gift-area"),
+        giftHeightBefore: Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10,
+        headHeightBefore: Math.round(headBox0.height * 10) / 10,
+        ratioPrefBefore: window.__prefs["ui.gift_pane_ratio"],
+      };
+      otherTabForRemount.click();
+      await sleep(700);
+      remountProbe.activeAfterOther = (function () {
+        var t = allByTestId("db-room-tab").filter(function (x) {
+          return x.getAttribute("data-active") === "true";
+        })[0];
+        return t ? t.getAttribute("data-room-id") : null;
+      })();
+      remountProbe.giftBodyAfterOther = !!byTestId("db-gift-area");
+      tabByRoomId(remountRoomId).click();
+      await sleep(900);
+      remountProbe.activeAfterBack = (function () {
+        var t = allByTestId("db-room-tab").filter(function (x) {
+          return x.getAttribute("data-active") === "true";
+        })[0];
+        return t ? t.getAttribute("data-room-id") : null;
+      })();
+      remountProbe.giftBodyAfterBack = !!byTestId("db-gift-area");
+      remountProbe.giftHeightAfterBack = byTestId("db-pane-gift")
+        ? Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10 : null;
+      remountProbe.ratioPrefAfterBack = window.__prefs["ui.gift_pane_ratio"];
+      out.splitterRemountProbe = remountProbe;
+    }
+    // 切房那一趟做得出来才算数（标签条上至少要有两枚、且能认出当前那一枚）；
+    // 做不出就是夹具的事，明着写出来，不把它悄悄放过 —— 与 tabs 那一段的 tabsRendered 同一条口径。
+    out.splitterRemountAvailable = remountAvailable;
+    out.splitterCollapsedAfterRemount = remountAvailable && !byTestId("db-gift-area") &&
+      Math.abs(rect(byTestId("db-pane-gift")).height - headBox0.height) <= 1;
+    byTestId("db-gift-dock").click();
+    await sleep(400);
+    var remountedRatio = shownRatio();
+    out.splitterRatioSurvivesRemount = remountAvailable && !!remountedRatio && !!draggedRatio &&
+      Math.abs(remountedRatio - draggedRatio) < 0.02 &&
+      Math.abs(remountedRatio - window.__prefs["ui.gift_pane_ratio"]) < 0.02;
+    snap();
+
+    // ---- 拖到极限（向上）：弹幕区不小于 **3 行**、整块不溢出 ----
+    var rowHeights = rows().map(function (r) { return rect(r).height; });
+    var minRow = Math.min.apply(null, rowHeights);
+    var panesBox1 = rect(byTestId("db-panes"));
+    firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid());
+    firePointer(window, "pointermove", splitX, panesBox1.top - 300);
+    firePointer(window, "pointerup", splitX, panesBox1.top - 300);
+    await sleep(450);
+    var upDanmaku = rect(byTestId("db-pane-danmaku"));
+    var upGift = rect(byTestId("db-pane-gift"));
+    var upSplit = rect(byTestId("db-pane-splitter"));
+    out.splitterMinRowHeightPx = Math.round(minRow * 10) / 10;
+    out.splitterExtremeUpKeepsThreeRows = upDanmaku.height >= 3 * minRow - 8;
+    out.splitterExtremeUpNoOverflow =
+      Math.abs(upGift.height + upSplit.height + upDanmaku.height - panesBox1.height) <= 1;
+    out.splitterExtremeUpClampedRatio = window.__prefs["ui.gift_pane_ratio"] === 0.9;
+
+    // ---- 拖到极限（向下）：礼物栏不小于它的折叠头 ----
+    firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid());
+    firePointer(window, "pointermove", splitX, panesBox1.bottom + 300);
+    firePointer(window, "pointerup", splitX, panesBox1.bottom + 300);
+    await sleep(450);
+    var downGift = rect(byTestId("db-pane-gift"));
+    var downHead = rect(byTestId("db-gift-dock"));
+    out.splitterExtremeDownKeepsHead = downGift.height >= downHead.height - 1 && downHead.height > 0;
+    out.splitterExtremeDownClampedRatio = window.__prefs["ui.gift_pane_ratio"] === 0.1;
+
+    // ---- 键盘可达：分割条可聚焦，↑↓ 每次微调 0.02，连按只有最后一次落盘 ----
+    var splitterEl = byTestId("db-pane-splitter");
+    out.splitterIsSeparator = splitterEl.getAttribute("role") === "separator" &&
+      splitterEl.getAttribute("tabindex") === "0" &&
+      splitterEl.getAttribute("aria-orientation") === "horizontal" &&
+      splitterEl.getAttribute("aria-valuenow") !== null;
+    var ratioBeforeKeys = window.__prefs["ui.gift_pane_ratio"];
+    pressKey(splitterEl, "ArrowUp");
+    pressKey(splitterEl, "ArrowUp");
+    await sleep(900);
+    out.splitterKeyboardAdjustsRatio =
+      Math.abs(window.__prefs["ui.gift_pane_ratio"] - (ratioBeforeKeys + 0.04)) < 0.001;
+    out.splitterKeyboardReflectsOnScreen =
+      Math.abs(shownRatio() - window.__prefs["ui.gift_pane_ratio"]) < 0.02;
+    snap();
+
+    // ---- 长按换位（触摸指针这一路）：按住 0.62s → 该栏半透明跟随指针 → 拖过另一栏松手 = 互换 ----
+    var giftBoxSwap = rect(byTestId("db-pane-gift"));
+    var danmakuBoxSwap = rect(byTestId("db-pane-danmaku"));
+    var ratioBeforeSwap = window.__prefs["ui.gift_pane_ratio"];
+    var giftHeightBeforeSwap = giftBoxSwap.height;
+    firePointer(byTestId("db-pane-danmaku"), "pointerdown", splitX, danmakuBoxSwap.top + 30);
+    await sleep(620);
+    out.swapDragArmed = byTestId("db-pane-danmaku").getAttribute("data-swap-drag") === "true";
+    firePointer(window, "pointermove", splitX, giftBoxSwap.bottom - 4);
+    await sleep(80); // 落点提示（data-swap-over）是 setState 换出来的，要等一次重渲染
+    var draggedStyle = getComputedStyle(byTestId("db-pane-danmaku"));
+    out.swapDragTranslucentFollowing = draggedStyle.transform !== "none" &&
+      parseFloat(draggedStyle.opacity) < 1;
+    out.swapDropTargetHinted = byTestId("db-pane-gift").getAttribute("data-swap-over") === "true";
+    firePointer(window, "pointerup", splitX, giftBoxSwap.bottom - 4);
+    await sleep(450);
+    var afterSwapGift = rect(byTestId("db-pane-gift"));
+    var afterSwapSplit = rect(byTestId("db-pane-splitter"));
+    var afterSwapDanmaku = rect(byTestId("db-pane-danmaku"));
+    out.swapByLongPress = window.__prefs["ui.gift_pane_on_top"] === true &&
+      afterSwapGift.bottom <= afterSwapSplit.top + 1 &&
+      afterSwapSplit.bottom <= afterSwapDanmaku.top + 1;
+    // 换位**不改比例**：礼物栏高度一个像素都不变，只是挪到了上面（契约 §8 / ui.md §5.4 的口径）
+    out.swapKeepsRatio = window.__prefs["ui.gift_pane_ratio"] === ratioBeforeSwap &&
+      Math.abs(afterSwapGift.height - giftHeightBeforeSwap) <= 2;
+    snap();
+
+    // ---- 三种「不算长按」/「取消」的路：短按、按住前就移动（在滚列表）、ESC ----
+    firePointer(byTestId("db-pane-gift"), "pointerdown", splitX, rect(byTestId("db-pane-gift")).top + 6);
+    await sleep(300);
+    firePointer(window, "pointermove", splitX, rect(byTestId("db-pane-danmaku")).bottom - 20);
+    firePointer(window, "pointerup", splitX, rect(byTestId("db-pane-danmaku")).bottom - 20);
+    await sleep(350);
+    out.swapIgnoresShortPress = byTestId("db-pane-gift").getAttribute("data-swap-drag") === null &&
+      window.__prefs["ui.gift_pane_on_top"] === true;
+
+    firePointer(byTestId("db-pane-gift"), "pointerdown", splitX, rect(byTestId("db-pane-gift")).top + 6);
+    firePointer(window, "pointermove", splitX, rect(byTestId("db-pane-gift")).top + 60);
+    await sleep(700);
+    out.swapIgnoresMoveBeforeHold = byTestId("db-pane-gift").getAttribute("data-swap-drag") === null;
+    firePointer(window, "pointerup", splitX, rect(byTestId("db-pane-gift")).top + 60);
+    await sleep(300);
+    out.swapStillDefaultAfterIgnoredGestures = window.__prefs["ui.gift_pane_on_top"] === true;
+
+    firePointer(byTestId("db-pane-gift"), "pointerdown", splitX, rect(byTestId("db-pane-gift")).top + 6);
+    await sleep(620);
+    var escArmed = byTestId("db-pane-gift").getAttribute("data-swap-drag") === "true";
+    firePointer(window, "pointermove", splitX, rect(byTestId("db-pane-danmaku")).top + 40);
+    pressEscape();
+    await sleep(200);
+    out.swapCancelsOnEscape = escArmed &&
+      byTestId("db-pane-gift").getAttribute("data-swap-drag") === null &&
+      byTestId("db-pane-danmaku").getAttribute("data-swap-over") === null;
+    firePointer(window, "pointerup", splitX, rect(byTestId("db-pane-danmaku")).top + 40);
+    await sleep(350);
+    out.swapStaysCancelled = window.__prefs["ui.gift_pane_on_top"] === true;
+    snap();
+
+    // ---- 「触摸上手势归谁」的对外可观察面（本次修复的回归闸）：拿起来之后，区块上的
+    //      touchmove 必须被 preventDefault（滚动收走），没拿起来时**不许**拦
+    //      （弹幕列表照旧滚）。旧实现只靠 CSS 的 touch-action 与 pointermove.preventDefault()，
+    //      两个都拦不住滚动 —— 浏览器在 **touchstart 那一刻**就把 touch-action 快照走了。
+    //      真机实测（Android WebView Chrome/124，CDP 注入真实触摸）：按住 560ms 进入换位态后
+    //      第一次 pointermove 就收到 pointercancel，换位一次都没成过；而合成 PointerEvent
+    //      绕开了浏览器的手势管线，所以这个真机故障在冒烟里一直照不出来。
+    var paneTouchMoveProbe = function (target) {
+      try {
+        var ev = new TouchEvent("touchmove", { bubbles: true, cancelable: true });
+        target.dispatchEvent(ev);
+        return ev.defaultPrevented;
+      } catch (e) {
+        return "throw:" + e.message;
+      }
+    };
+    var danmakuProbeEl = byTestId("db-pane-danmaku");
+    var danmakuProbeBox = rect(danmakuProbeEl);
+    out.swapTouchMoveFreeWhenIdle = paneTouchMoveProbe(danmakuProbeEl) === false;
+    var dockBoxBeforeNextTap = rect(byTestId("db-gift-dock"));
+    var giftBodyBeforeNextTap = !!byTestId("db-gift-body");
+    firePointer(danmakuProbeEl, "pointerdown", splitX, danmakuProbeBox.top + 30);
+    await sleep(620);
+    out.swapTouchMoveOwnedWhenArmed = paneTouchMoveProbe(danmakuProbeEl) === true;
+    // 同一栏里挪一小段（不越过分割条 = 不换位），松手
+    firePointer(window, "pointermove", splitX, danmakuProbeBox.top + 60);
+    await sleep(80);
+    firePointer(window, "pointerup", splitX, danmakuProbeBox.top + 60);
+    // ---- 紧接着（旧实现 600ms 兜底窗口**之内**）真的按一下礼物折叠头：它必须照旧开合。
+    //      旧实现用一个 600ms 的全局捕获定时器去猜「那一下 click 来没来」，这段时间里
+    //      任何一处点击都会被吃掉（冒烟里的 panelBackOnCommon 就是这么假失败的）。
+    //      这里按下 -> 抬起 -> click 三步齐全，与用户真按一次完全同形。
+    await sleep(120);
+    firePointer(byTestId("db-gift-dock"), "pointerdown",
+      dockBoxBeforeNextTap.left + dockBoxBeforeNextTap.width / 2,
+      dockBoxBeforeNextTap.top + dockBoxBeforeNextTap.height / 2);
+    firePointer(byTestId("db-gift-dock"), "pointerup",
+      dockBoxBeforeNextTap.left + dockBoxBeforeNextTap.width / 2,
+      dockBoxBeforeNextTap.top + dockBoxBeforeNextTap.height / 2);
+    byTestId("db-gift-dock").click();
+    await sleep(400);
+    out.swapDoesNotEatNextTap = !!byTestId("db-gift-body") !== giftBodyBeforeNextTap;
+    snap();
+
+    // ---- 关掉独立礼物栏：分区退化为弹幕区全高、分割条与礼物栏一起消失、换位随之停用 ----
+    var giftSwitchOff = setGiftSwitch("独立礼物栏", false);
+    if (!giftSwitchOff) {
+      // 面板可能关着、也可能开着别的那个：先点面板外收干净，再明确开筛选面板重来一次
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      await sleep(300);
+      clickTool("筛选");
+      await sleep(350);
+      giftSwitchOff = setGiftSwitch("独立礼物栏", false);
+    }
+    if (!giftSwitchOff) {
+      // 还是没摸到那枚开关：把现场留下来（值字段，不是断言），免得只剩一个 false 无从判断
+      var panelNow = byTestId("db-panel");
+      var toolsNow = byTestId("db-composer-tools");
+      out.splitterGiftSwitchDiag = {
+        panel: !!panelNow,
+        labels: panelNow
+          ? [].slice.call(panelNow.querySelectorAll("label")).map(function (l) { return l.innerText.trim(); })
+          : [],
+        tools: toolsNow
+          ? [].slice.call(toolsNow.querySelectorAll("button")).map(function (b) { return b.innerText.trim(); })
+          : [],
+      };
+    }
+    await sleep(450);
+    var offPanes = rect(byTestId("db-panes"));
+    var offDanmaku = rect(byTestId("db-pane-danmaku"));
+    out.splitterGiftSwitchOffTouched = giftSwitchOff;
+    out.splitterGoneWhenGiftPanelOff = !byTestId("db-pane-splitter") && !byTestId("db-pane-gift");
+    out.splitterRegionGivesAllToDanmaku = !!offPanes && !!offDanmaku &&
+      Math.abs(offDanmaku.height - offPanes.height) <= 1;
+    // 没有另一栏可换：长按下去不该有任何动静（也不该抛）
+    firePointer(byTestId("db-pane-danmaku"), "pointerdown", splitX, offDanmaku.top + 30);
+    await sleep(620);
+    out.splitterSwapInertWithoutGiftPane =
+      byTestId("db-pane-danmaku").getAttribute("data-swap-drag") === null;
+    firePointer(window, "pointerup", splitX, offDanmaku.bottom - 20);
+    await sleep(300);
+    out.splitterNoCrashWithoutGiftPane = !!byTestId("db-room-header");
+
+    // ---- 收尾：礼物栏开回来，并把两枚键恢复默认（份额 0.35、礼物在下）----
+    if (!byTestId("db-panel")) {
+      clickTool("筛选");
+      await sleep(350);
+    }
+    var giftSwitchBackOn = setGiftSwitch("独立礼物栏", true);
+    if (!giftSwitchBackOn) {
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      await sleep(250);
+      clickTool("筛选");
+      await sleep(350);
+      giftSwitchBackOn = setGiftSwitch("独立礼物栏", true);
+    }
+    out.splitterGiftSwitchBackOn = giftSwitchBackOn;
+    await sleep(450);
+    out.splitterRestoredPane = !!byTestId("db-pane-splitter") && !!byTestId("db-pane-gift") &&
+      window.__prefs["ui.gift_panel"] === true;
+    if (window.__prefs["ui.gift_pane_on_top"] === true) {
+      var giftBoxBack = rect(byTestId("db-pane-gift"));
+      firePointer(byTestId("db-pane-gift"), "pointerdown", splitX, giftBoxBack.top + 6);
+      await sleep(620);
+      firePointer(window, "pointermove", splitX, rect(byTestId("db-pane-danmaku")).bottom - 20);
+      firePointer(window, "pointerup", splitX, rect(byTestId("db-pane-danmaku")).bottom - 20);
+      await sleep(450);
+    }
+    var panesBoxEnd = rect(byTestId("db-panes"));
+    var splitBoxEnd = rect(byTestId("db-pane-splitter"));
+    var targetY = panesBoxEnd.top + splitBoxEnd.height / 2 +
+      (panesBoxEnd.height - splitBoxEnd.height) * (1 - 0.35);
+    firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid());
+    firePointer(window, "pointermove", splitX, targetY);
+    firePointer(window, "pointerup", splitX, targetY);
+    await sleep(450);
+    out.splitterRestoredRatio = Math.abs(window.__prefs["ui.gift_pane_ratio"] - 0.35) < 0.02;
+    out.splitterRestoredOrder = window.__prefs["ui.gift_pane_on_top"] === false;
+    out.splitterRestoredShownRatio = Math.abs(shownRatio() - 0.35) < 0.02;
+    snap();
+
+    // ==== cheapgift 低价礼物两枚开关（issue 2609162056 第 3 / 4 条，契约 §8、docs/ui.md §5.3）
+    //
+    // ui.gift_collapse_cheap = 礼物栏里把单个价值 ≤ 0.1 元的礼物合并成**一条**；
+    // ui.gift_exclude_cheap_stats = 把这批礼物从折叠头的**统计**里剔除（展示照旧）。两枚默认都关。
+    //
+    // ⚠ 为什么换到**空会话的新房间**里量：礼物栏的行由与弹幕区同一套（虚拟）列表渲染，只有
+    //   「全部落在渲染窗口里」时行数才等于条目数 —— 房间 5440 里前面已经堆了六条礼物类夹具与
+    //   几十条弹幕，量出来的行数会随窗口大小浮动，差值是假的。新房间只推我这几条，行数才可判。
+    // ⚠ 为什么本段排在**场景最末**：新房间会让标签条多一枚、房间页布局随之变化，插在中间会把
+    //   后面各段的几何断言一起带偏。
+    // ⚠ 行钩子 db-gift-row 来自同批的礼物栏票（礼物栏改用与弹幕区同一套列表渲染；旧实现的
+    //   行钩子是 db-gift-item）。两票合入后以 db-gift-row 为准 —— 它一枚都找不到时，
+    //   cheapGiftRowsBeforeFold 会是 0，失败点一眼能看见。
+    var CHEAP_ROOM = 5555;
+    window.__addSecondRoom();
+    await sleep(200);
+    var cheapTabFor = function (roomId) {
+      return allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === roomId;
+      })[0];
+    };
+    var cheapActiveRoomId = function () {
+      var t = allByTestId("db-room-tab").filter(function (x) {
+        return x.getAttribute("data-active") === "true";
+      })[0];
+      return t ? t.getAttribute("data-room-id") : null;
+    };
+    // 先点一次**当前**这一枚标签，把标签条「拖完吞掉下一发 click」的标志消费掉（同 splitter 段）
+    var cheapHomeId = cheapActiveRoomId();
+    if (cheapHomeId) {
+      cheapTabFor(cheapHomeId).click();
+      await sleep(250);
+    }
+    var cheapTab = cheapTabFor(CHEAP_ROOM);
+    out.cheapGiftFreshRoomTab = !!cheapTab;
+    if (cheapTab) cheapTab.click();
+    await sleep(900);
+    out.cheapGiftFreshRoomActive = cheapActiveRoomId() === String(CHEAP_ROOM);
+
+    var cheapPush = function (kind, content, amount, extra) {
+      window.__emit("danmubox://message", window.__mk(kind, content, false,
+        Object.assign({ room_id: CHEAP_ROOM, amount: amount }, extra || {})));
+    };
+    var cheapRowCount = function () { return allByTestId("db-gift-row").length; };
+    var cheapPaneText = function () {
+      var el = byTestId("db-pane-gift");
+      return el ? el.innerText : "";
+    };
+    var cheapSummary = function () {
+      var el = byTestId("db-gift-summary");
+      return el ? el.innerText.trim() : null;
+    };
+    var cheapDockText = function () {
+      var el = byTestId("db-gift-dock");
+      return el ? el.innerText : "";
+    };
+    var cheapPanelOpen = function () { return !!byTestId("db-panel"); };
+    var cheapSetPanel = async function (open) {
+      if (cheapPanelOpen() !== open) {
+        clickTool("筛选");
+        await sleep(400);
+      }
+      return cheapPanelOpen() === open;
+    };
+    // 礼物栏折叠头的开合走 aria-expanded（它本来就是这枚按钮的语义钩子，礼物栏票沿用）
+    var cheapPaneExpanded = function () {
+      var dock = byTestId("db-gift-dock");
+      return !!dock && dock.getAttribute("aria-expanded") === "true";
+    };
+    var cheapSetPane = async function (open) {
+      if (cheapPaneExpanded() !== open && byTestId("db-gift-dock")) {
+        byTestId("db-gift-dock").click();
+        await sleep(500);
+      }
+      return cheapPaneExpanded() === open;
+    };
+    var cheapBoxOf = function (label) {
+      var panel = byTestId("db-panel");
+      if (!panel) return null;
+      var picked = [].slice.call(panel.querySelectorAll("label")).filter(function (l) {
+        return l.innerText.trim() === label;
+      })[0];
+      return picked ? picked.querySelector('input[type="checkbox"]') : null;
+    };
+
+    // ---- ① 默认关：干净房间里两枚开关都没勾着、偏好也都是 false（契约 §8）
+    var cheapPanelForDefaults = await cheapSetPanel(true);
+    var cheapFoldBox0 = cheapBoxOf("折叠低价礼物");
+    var cheapExcludeBox0 = cheapBoxOf("剔除低价礼物统计");
+    out.cheapGiftSwitchesDefaultOff = cheapPanelForDefaults &&
+      window.__prefs["ui.gift_collapse_cheap"] === false &&
+      window.__prefs["ui.gift_exclude_cheap_stats"] === false &&
+      !!cheapFoldBox0 && !cheapFoldBox0.checked &&
+      !!cheapExcludeBox0 && !cheapExcludeBox0.checked;
+    await cheapSetPanel(false);
+
+    // ---- ② 折叠：0.09 元 / 0.10 元（两条低价）与 0.11 元（不是低价）各一条 —— 礼物栏条目数
+    //         只该因为两条低价合成一条而 -1，折叠头那份**统计**逐字不动（折叠只管形状）。
+    cheapPush("gift", "投喂 铅笔", 90);
+    cheapPush("gift", "投喂 铅笔屑", 100);
+    cheapPush("gift", "投喂 橡皮", 110);
+    await sleep(800);
+    var cheapPaneBefore = await cheapSetPane(true);
+    out.cheapGiftRowsBeforeFold = cheapRowCount();
+    out.cheapGiftPaneExpandedBeforeFold = cheapPaneBefore;
+    out.cheapGiftSummaryBeforeFold = cheapSummary();
+    out.cheapGiftThreeRowsSeparate = cheapRowCount() === 3 &&
+      cheapPaneText().indexOf("投喂 铅笔") >= 0 &&
+      cheapPaneText().indexOf("投喂 铅笔屑") >= 0 &&
+      cheapPaneText().indexOf("投喂 橡皮") >= 0 &&
+      cheapSummary() === "本场 礼物 3 · 0.3 元";
+    await cheapSetPanel(true);
+    out.cheapGiftFoldToggled = setGiftSwitch("折叠低价礼物", true);
+    await sleep(400);
+    await cheapSetPanel(false);
+    await cheapSetPane(true);
+    out.cheapGiftRowsAfterFold = cheapRowCount();
+    out.cheapGiftFoldMergesRows = out.cheapGiftRowsBeforeFold === 3 && cheapRowCount() === 2;
+    // 合并行的身份取桶里**第一条**（投喂 铅笔）、数量与金额是整桶合计（×2 / 0.19 元）；
+    // 第二条低价礼物不再单独成行，0.11 元那条与它无关、照旧一行。
+    out.cheapGiftBucketRowText = cheapPaneText();
+    out.cheapGiftBucketRow = cheapPaneText().indexOf("投喂 铅笔") >= 0 &&
+      cheapPaneText().indexOf("投喂 铅笔屑") < 0 &&
+      cheapPaneText().indexOf("×2") >= 0 &&
+      cheapPaneText().indexOf("0.19 元") >= 0;
+    out.cheapGiftNonCheapRowStays = cheapPaneText().indexOf("投喂 橡皮") >= 0;
+    out.cheapGiftFoldKeepsStats = cheapSummary() === out.cheapGiftSummaryBeforeFold;
+    // 界面侧「存得住」：面板关掉再开，复选框画的仍是那枚偏好（真落盘见 prefs.rs 的 roundtrip 用例）
+    await cheapSetPanel(true);
+    var cheapFoldBox1 = cheapBoxOf("折叠低价礼物");
+    out.cheapGiftFoldPersists = window.__prefs["ui.gift_collapse_cheap"] === true &&
+      !!cheapFoldBox1 && cheapFoldBox1.checked;
+
+    // ---- ③ 剔除统计：折叠关回去、剔除打开 —— 礼物栏**条目数不变**（展示不动），折叠头的
+    //         条数与金额只算剩下的那一条 0.11 元。
+    out.cheapGiftExcludeToggled = setGiftSwitch("折叠低价礼物", false) &&
+      setGiftSwitch("剔除低价礼物统计", true);
+    await sleep(400);
+    await cheapSetPanel(false);
+    await cheapSetPane(true);
+    out.cheapGiftRowsWithExcludeCount = cheapRowCount();
+    out.cheapGiftExcludeKeepsRowCount = out.cheapGiftRowsWithExcludeCount === 3;
+    out.cheapGiftSummaryAfterExclude = cheapSummary();
+    out.cheapGiftExcludeKeepsDisplay = cheapPaneText().indexOf("投喂 铅笔") >= 0 &&
+      cheapPaneText().indexOf("投喂 铅笔屑") >= 0 &&
+      cheapPaneText().indexOf("投喂 橡皮") >= 0;
+    out.cheapGiftExcludeChangesStats =
+      out.cheapGiftSummaryAfterExclude === "本场 礼物 1 · 0.11 元" &&
+      cheapDockText().indexOf("（1）") >= 0 &&
+      out.cheapGiftSummaryAfterExclude !== out.cheapGiftSummaryBeforeFold;
+
+    // ---- ④ 边界：0 元（上游没给价）不是低价、SC 与大航海两边都不进这枚键的口径。
+    //        剔除仍开着：礼物组只剩「没给价」那一条、它的金额格本来就不画 —— 若把 0 当低价，
+    //        这一组会整组消失（连「礼物 1」都不会有），因此这一条断言正好钉住那个边界。
+    cheapPush("gift", "投喂 尺子", 0);
+    cheapPush("superchat", "脱敏的边界样本留言", 30);
+    cheapPush("guard", "开通 舰长 ×1", 138000, { guard_level: 3 });
+    await sleep(800);
+    await cheapSetPane(true);
+    out.cheapGiftSummaryBoundary = cheapSummary();
+    out.cheapGiftZeroPriceNotCheap =
+      out.cheapGiftSummaryBoundary === "本场 礼物 1 / SC 1 · 30 元 / 大航海 1 · 138 元";
+    var cheapScGuardTail = function (txt) {
+      var at = txt ? txt.indexOf("SC ") : -1;
+      return at >= 0 ? txt.slice(at) : null;
+    };
+    var cheapScGuardExcludeOnly = cheapScGuardTail(out.cheapGiftSummaryBoundary);
+    // 两枚都开：统计口径与「只开剔除」逐字相同（折叠不改统计），SC / 大航海两组也逐字相同。
+    await cheapSetPanel(true);
+    var cheapFoldOnAgain = setGiftSwitch("折叠低价礼物", true);
+    await sleep(400);
+    await cheapSetPanel(false);
+    await cheapSetPane(true);
+    out.cheapGiftBothOnSummary = cheapSummary();
+    out.cheapGiftBothOnStatsUnchanged = cheapFoldOnAgain &&
+      cheapSummary() === out.cheapGiftSummaryBoundary;
+    out.cheapGiftScGuardUntouched = cheapScGuardExcludeOnly === "SC 1 · 30 元 / 大航海 1 · 138 元" &&
+      cheapScGuardTail(cheapSummary()) === cheapScGuardExcludeOnly;
+
+    // ---- 收尾：两枚开关恢复默认（false）、面板收起、回到原来的房间
+    await cheapSetPanel(true);
+    var cheapRestoreFold = setGiftSwitch("折叠低价礼物", false);
+    var cheapRestoreExclude = setGiftSwitch("剔除低价礼物统计", false);
+    await sleep(400);
+    await cheapSetPanel(false);
+    out.cheapGiftRestoredDefaults = cheapRestoreFold && cheapRestoreExclude &&
+      window.__prefs["ui.gift_collapse_cheap"] === false &&
+      window.__prefs["ui.gift_exclude_cheap_stats"] === false;
+    if (cheapHomeId) {
+      cheapTabFor(cheapHomeId).click();
+      await sleep(800);
+    }
+    out.cheapGiftHomeRoomRestored = !!cheapHomeId && cheapActiveRoomId() === cheapHomeId;
 
     out.done = true;
     snap();

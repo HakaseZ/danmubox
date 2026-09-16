@@ -295,8 +295,59 @@ export function Composer({
     setDraft(next);
   };
 
+  /**
+   * 组字（IME）状态：`compositionstart` 置位、`compositionend` 之后**还剩本轮任务**没走完。
+   *
+   * 自己记状态而不是只看 `event.isComposing`，是因为「提交候选的那次回车」在两个引擎里的
+   * 时序不一样（下面 `isImeEnter` 有完整口径）：Chromium 的 keydown 在 `compositionend`
+   * **之前**（那次 keydown 自带 `isComposing`），WebKit 的在**之后**（那次 keydown 的
+   * `isComposing` 已经回到 false）—— 只看 `isComposing` 会在宿主引擎上继续走漏。
+   */
+  const composingRef = useRef(false);
+  const imeCommitTailRef = useRef(false);
+  const imeCommitTailTimerRef = useRef<number | null>(null);
+
+  const onCompositionStart = () => {
+    composingRef.current = true;
+  };
+
+  const onCompositionEnd = () => {
+    composingRef.current = false;
+    // 「组字刚结束」这个窗口只开到**本轮任务结束**（setTimeout 0）：同一次按键里随后到来的
+    // 那个 keydown 仍在窗口内，而用户之后自己按的回车（一定是新的一轮任务）不会被吃掉 ——
+    // 用「下一次 keydown 就清掉」的一次性标志会让「鼠标选词、再按回车发送」失灵。
+    imeCommitTailRef.current = true;
+    if (imeCommitTailTimerRef.current !== null) window.clearTimeout(imeCommitTailTimerRef.current);
+    imeCommitTailTimerRef.current = window.setTimeout(() => {
+      imeCommitTailRef.current = false;
+      imeCommitTailTimerRef.current = null;
+    }, 0);
+  };
+
+  /**
+   * 这一次回车是不是**输入法要的那一次**（正在组字 / 刚提交完候选）。是就别当回车用：
+   * 既不发送、也不 `preventDefault`（那个回车的默认动作属于输入法与浏览器）。
+   *
+   * 三条判据缺一不可：
+   * ① `composingRef`：`compositionstart` 到 `compositionend` 之间。
+   * ② `isComposing` / `keyCode === 229`：浏览器自报的组字态。Chromium（Electron、Chrome for
+   *    Testing 都是它）提交候选的那次回车就是 `isComposing === true`，且 `compositionend`
+   *    排在它**之后**；`229` 是「IME 正在处理这个键」的老口径（个别 IME 只给这个数）。
+   * ③ `imeCommitTailRef`：WebKit（macOS 上 Tauri 用的 WKWebView 就是它）的同一次回车会
+   *    **先** `compositionend`、**再**一次 `isComposing === false`、`keyCode === 13` 的 keydown
+   *    —— ①② 都拦不住它，这正是「中文输入法下回车选词把弹幕直接发出去」在 macOS 上的成因。
+   *
+   * 冒烟 `ime*` 那组断言把这个口径钉在**行为**上：组字中的回车不发、`compositionend` 紧跟的
+   * 那次回车也不发，而隔了一轮之后用户自己按的回车必须发（证明守卫没有滥杀）。
+   */
+  const isImeEnter = (event: ReactKeyboardEvent<HTMLElement>) =>
+    composingRef.current
+    || event.nativeEvent.isComposing
+    || event.nativeEvent.keyCode === 229
+    || imeCommitTailRef.current;
+
   // 接口给的包（`emotes_list` 的按房间包 + 主站「我的表情」）是**唯一**的来源：
-  // 面板分组与「将发送」预览都走这一份。同一个 `emoticon_unique` 只保留先来的那条
+  // 面板分组走这一份。同一个 `emoticon_unique` 只保留先来的那条
   // （顺序是 `emotes` 在前、`ownedEmotes` 在后，因此同名时接口包优先）。
   const panelEmotes = useMemo(() => {
     const known = new Set<string>();
@@ -369,35 +420,6 @@ export function Composer({
       ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
       [next]?.focus();
   };
-
-  // 输入区预览：把草稿里能对上的表情名换成图片，让用户看清「这条发出去长什么样」。
-  const preview = useMemo(() => {
-    if (draft.length === 0 || panelEmotes.length === 0) return null;
-    // 长名优先，避免短名吃掉长名的前缀。
-    const candidates = panelEmotes
-      .filter((emote) => emote.text.length > 0 && emote.url.length > 0)
-      .sort((a, b) => b.text.length - a.text.length);
-    const parts: { text: string; emote?: Emote }[] = [];
-    let buffer = "";
-    let matched = 0;
-    for (let i = 0; i < draft.length; ) {
-      const hit = candidates.find((emote) => draft.startsWith(emote.text, i));
-      if (hit) {
-        if (buffer.length > 0) {
-          parts.push({ text: buffer });
-          buffer = "";
-        }
-        parts.push({ text: hit.text, emote: hit });
-        matched += 1;
-        i += hit.text.length;
-      } else {
-        buffer += draft[i];
-        i += 1;
-      }
-    }
-    if (buffer.length > 0) parts.push({ text: buffer });
-    return matched > 0 ? parts : null;
-  }, [draft, panelEmotes]);
 
   /** 在光标处插入（面板点选与 @ 都走这里），插完把光标放到插入内容之后。 */
   const insertAtCaret = (text: string) => {
@@ -523,10 +545,6 @@ export function Composer({
     }
   };
 
-  // 「将发送」预览是**弹幕行长什么样**的预览，所以它跟弹幕区一起缩放；三个面板不跟
-  // （用户 2609140651：字号只控制弹幕区，不改面板区）。
-  const previewFont = { fontSize: `${prefs["ui.font_scale"]}em` };
-
   return (
     <>
       {panel === "emotes" && (
@@ -648,8 +666,10 @@ export function Composer({
               value={newPhrase}
               placeholder="新短语，回车添加"
               onChange={(event) => setNewPhrase(event.target.value)}
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={onCompositionEnd}
               onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
+                if (event.key !== "Enter" || isImeEnter(event)) return;
                 event.preventDefault();
                 if (commitPhrase(newPhrase)) setNewPhrase("");
               }}
@@ -683,8 +703,10 @@ export function Composer({
                     onChange={(event) =>
                       setEditingPhrase({ index, text: event.target.value })
                     }
+                    onCompositionStart={onCompositionStart}
+                    onCompositionEnd={onCompositionEnd}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") {
+                      if (event.key === "Enter" && !isImeEnter(event)) {
                         event.preventDefault();
                         renamePhrase(index, editingPhrase.text);
                         setEditingPhrase(null);
@@ -724,7 +746,7 @@ export function Composer({
           ref={panelRef}
         >
           {/* 同样没有面板头与关闭按钮（用户 item 8）：面板本体就是 FilterBar 的两块
-              （消息类型 / 显示），收起靠再点一次「筛选」或点面板外。
+              （消息类型 / 辅助功能），收起靠再点一次「筛选」或点面板外。
               字号**不跟** `ui.font_scale`（用户 2609140651：字号只控制弹幕区）——三个面板都
               吃 body 的基准字号，`--panel-h` 那套 em 定高因此也是常数，三者必然同高。 */}
           <FilterBar prefs={prefs} onChange={onPrefs} />
@@ -758,25 +780,6 @@ export function Composer({
         </div>
       )}
 
-      {preview && (
-        <div className={styles.preview} data-testid="db-send-preview" style={previewFont}>
-          <span className={styles.previewLabel}>将发送</span>
-          {preview.map((part, index) =>
-            part.emote ? (
-              <img
-                key={`${index}-${part.text}`}
-                className={styles.previewEmote}
-                src={part.emote.url}
-                alt={part.text}
-                title={part.text}
-              />
-            ) : (
-              <span key={`${index}-${part.text}`}>{part.text}</span>
-            ),
-          )}
-        </div>
-      )}
-
       {/* 发送失败的**浮动提示**：排在弹幕列表与输入区之间（文档流里的一张浮片），
           矩形因此与弹幕列表区域不相交；`pointer-events: none` 让提示期间弹幕照常滚。 */}
       {toast !== null && (
@@ -799,8 +802,12 @@ export function Composer({
           placeholder={loggedIn ? "说点什么…" : "未登录，只能看弹幕"}
           disabled={disabled || !loggedIn}
           onChange={(event) => applyDraft(event.target.value)}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            // 组字中 / 刚提交候选的那次回车是**输入法的**：不发送、也不拦默认动作
+            // （中文输入法下「回车选词」被当成发送就是这个判断缺失造成的，见 isImeEnter）。
+            if (event.key === "Enter" && !event.shiftKey && !isImeEnter(event)) {
               event.preventDefault();
               void submit();
             }

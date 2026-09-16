@@ -116,7 +116,7 @@ graph LR
 | `http` | 共用 HTTP 客户端：房间号 / 短号 / URL 解析、`buvid3`、WBI 密钥缓存、`getDanmuInfo`、上游 HTTP 心跳 | —（被 `ws` 与其余发请求的模块使用） |
 | `wbi` | WBI 置换表与 `w_rid` / `wts` 签名，全仓唯一一处 | —（被 `http` 使用） |
 | `asset` | 上游静态资源地址规范化：表情图 `http://` 统一升级为 `https://` | —（被 `emote` 使用） |
-| `ws` | 连接与重连状态机：认证包、WS 心跳（首包 60s / 之后每 30s）、`op=8` 认证回应、退避与抖动 | `LiveSource` |
+| `ws` | 连接与重连状态机：认证包、WS 心跳（认证成功即发首包、之后每 30s）、认证超时（10s 无 `op=8`）、`op=8` 认证回应、僵死判定（90s 无任何入站帧）、连续认证失败上限（3 次停在 `Failed`、停止自动重连等人工）、节点轮换（同节点连续失败 2 次换 `host_list` 下一项）、退避与抖动 | `LiveSource` |
 | `history` | 进场回填：取最近 10 条弹幕（`LiveSource::recent`） | —（被 `ws` 使用） |
 | `auth` | 账号列表与 `nav` 求证、扫码、切换 / 登出 / 删除，凭据落盘 | `AuthProvider` |
 | `send` | 发弹幕：本地节流、请求拼装、被吞判定与 `SendOutcome` 归一化 | `DanmakuSender` |

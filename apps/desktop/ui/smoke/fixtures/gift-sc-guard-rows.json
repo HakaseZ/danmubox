@@ -13,7 +13,7 @@
       "via": "docs/protocol.md §10.2（protobuf，载荷在 `data.pb`）",
       "fields": {
         "content": "tag 18 `action`（样本「投喂」）+ tag 2 `gift_name`",
-        "amount": "tag 7 `total_coin`（本次总瓜子数，金额优先用它）",
+        "amount": "tag 7 `total_coin`（本次总金瓜子数，金额优先用它；展示 `÷1000` = 元，见 docs/contract.md §5）",
         "face": "顶层 `face`（`crates/danmubox-bili/src/pb.rs` 的 `GiftV2` 顶层字段，与 uid / uname 同层）",
         "combo_id": "tag 12 `batch_combo_id`（会话内聚合用）",
         "upstream_id": "tag 9 `tid`（订单号）"
@@ -26,7 +26,7 @@
       "via": "docs/protocol.md §10.2（V1，JSON；字段名按社区文档核对，**仍未实测**）",
       "fields": {
         "content": "`data.giftName` / `data.gift_name` + `data.num`（`cmd.rs::gift` 拼成「投喂 <礼物名> ×<数量>」）",
-        "amount": "`data.price`（金瓜子）× `data.num`",
+        "amount": "`data.price`（金瓜子）× `data.num`（展示 `÷1000` = 元）",
         "face": "**无源**：§10.2 的 V1 字段表里没有用户信息结构，`cmd.rs::gift` 也只取 uid / uname / num / giftName / price —— 因此 `Message.face` 留空串，界面不画假图（同 docs/ui.md §4.1「空串不渲染」）"
       }
     },
@@ -36,7 +36,7 @@
       "via": "docs/protocol.md §10.3（**已实测**：10 分钟采集到 1 条）",
       "fields": {
         "content": "`data.message`",
-        "amount": "`data.price`，**单位是元**（实测样本 30，正是 B 站 SC 的最低档；同载荷的 `rate = 1000` 未经逐项核验，本实现不做换算）",
+        "amount": "`data.price`，**单位是元**（实测样本 30，正是 B 站 SC 的最低档；同载荷的 `rate = 1000` 与礼物侧的金瓜子口径一致，见 `docs/protocol.md` §10.3）",
         "face": "`data.uinfo.base.face`（与已消费的 `data.uinfo.base.name` 同层）",
         "upstream_id": "`data.id`"
       }
@@ -47,7 +47,7 @@
       "via": "docs/protocol.md §10.6（字段名按社区文档核对，**仍未实测**——这类事件在 10 分钟采集里零条，见附录 A33）",
       "fields": {
         "content": "`data.gift_name` / `role_name` 缺失时按等级补名（`cmd.rs::guard` 拼成「开通 <名称> ×<数量>」）",
-        "amount": "`data.price`（原金瓜子标价，CNY × 1000）",
+        "amount": "`data.price`（原金瓜子标价，CNY × 1000；展示 `÷1000` = 元 —— 舰长 138000 ↔ 官方标价 138 元）",
         "guard_level": "1 总督 / 2 提督 / 3 舰长",
         "face": "**无源**：§10.6 的字段表里没有头像字段，`USER_TOAST_MSG` 甚至可能只带昵称 —— 留空串，界面不画假图"
       }
@@ -72,7 +72,7 @@
     {
       "key": "gift-v2-b",
       "source": "gift-v2",
-      "why": "连击的第 2 条（同一 combo_id、相邻）：折叠成一行后 count = 2、amount = 600。",
+      "why": "连击的第 2 条（同一 combo_id、相邻）：折叠成一行后 count = 2、amount = 600（金瓜子 → `600 / 1000` = 0.6 元）。",
       "message": {
         "kind": "gift",
         "uid": 7101,
@@ -87,7 +87,7 @@
     {
       "key": "gift-v1",
       "source": "gift-v1",
-      "why": "单条礼物（金额 100 瓜子），且**没有头像源** —— 这一条同时是「礼物栏里没头像就不画假图」的对照。",
+      "why": "单条礼物（金额 100 金瓜子 = 0.1 元，界面按元显示），且**没有头像源** —— 这一条同时是「礼物栏里没头像就不画假图」的对照。",
       "message": {
         "kind": "gift",
         "uid": 7102,
@@ -102,12 +102,12 @@
     {
       "key": "superchat-low",
       "source": "superchat",
-      "why": "SC 最低档（30 元）：SC 卡片 + 金额行「30 元」+ 第 1 档配色。",
+      "why": "SC 最低档（30 元）：SC 卡片 + 金额行「30 元」+ 第 1 档配色。正文**刻意写长**（40 个汉字）：360 宽下它在弹幕行的正文列里必然折成两行，因此在旧礼物栏那一行（`white-space: nowrap` + `text-overflow: ellipsis`）里会被截断——这条样本就是「SC 在礼物区域显示不全」的复现件，也是「两处都不许截断」的断言件。",
       "message": {
         "kind": "superchat",
         "uid": 7103,
         "uname": "醒目留言者",
-        "content": "这是脱敏的醒目留言正文",
+        "content": "这条醒目留言刻意写得很长：它必须整段看得见，不许被省略号吃掉，也不许只剩一行。",
         "amount": 30,
         "combo_id": "",
         "upstream_id": "<redacted>",
@@ -132,7 +132,7 @@
     {
       "key": "guard",
       "source": "guard",
-      "why": "大航海开通（舰长）：礼物栏里三类各自一组、各自带单位的那第三组；同样没有头像源。",
+      "why": "大航海开通（舰长，138000 金瓜子 → 138 元）：礼物栏里三类各自一组的那第三组；同样没有头像源。",
       "message": {
         "kind": "guard",
         "uid": 7105,

@@ -235,13 +235,9 @@ impl BiliLive {
             "type": 2,
             "key": info.token,
         });
-        tracing::debug!(
-            room_id,
-            uid,
-            logged_in = uid != 0,
-            host = %chosen_host,
-            "发送认证包"
-        );
+        // 认证包的 uid 不进日志（`AGENT.md` §8 第 1 条，uid 即 `DedeUserID`）：
+        // 「登录态还是游客态」这一条信息由 `logged_in` 承载就够了。
+        tracing::debug!(room_id, logged_in = uid != 0, host = %chosen_host, "发送认证包");
         write
             .send(WsMessage::Binary(
                 proto::build_packet(

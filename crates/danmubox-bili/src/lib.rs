@@ -18,6 +18,7 @@ pub mod send;
 pub mod wallet;
 pub mod wbi;
 
+mod redact;
 mod ws;
 
 pub use admin::BiliAdmin;

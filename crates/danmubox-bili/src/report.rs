@@ -97,9 +97,10 @@ pub fn outcome_from_report(value: &Value) -> Result<()> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     // code 缺失时用 `None` 明确暴露，不折算成任何编造的错误码。
-    Err(Error::Upstream(format!(
+    // `message` 是上游原话，可能把请求（含 uid / 昵称）回显出来，因此过一遍脱敏。
+    Err(Error::Upstream(crate::redact::redact(&format!(
         "举报失败 code={code:?} message={message}"
-    )))
+    ))))
 }
 
 pub struct BiliReporter {

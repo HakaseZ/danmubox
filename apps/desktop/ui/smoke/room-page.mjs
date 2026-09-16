@@ -6368,7 +6368,16 @@ const MOCK = (theme) => `(function () {
     var danmakuProbeBox = rect(danmakuProbeEl);
     out.swapTouchMoveFreeWhenIdle = paneTouchMoveProbe(danmakuProbeEl) === false;
     var dockBoxBeforeNextTap = rect(byTestId("db-gift-dock"));
-    var giftBodyBeforeNextTap = !!byTestId("db-gift-body");
+    // 「折叠头开合」的量法 = 这一栏自己那两枚钩子：列表根 db-gift-area（**展开才在场上**，
+    // 见 docs/ui.md §5.3）与折叠头的 aria-expanded。**不能**拿 db-gift-body 当折叠状态：
+    // 那是**行内**的正文格（MessageRow 的 t("body")，同 §5.3 的钩子表），只有「本来就有礼物行」
+    // 时才存在；本段跑在送礼那几段之后、当前房间里礼物列表已空，开合两态都取不到它 ——
+    // 断言于是恒为 false（本轮首次真跑就是这么红的：swapDoesNotEatNextTap=false，
+    // 与「那一下 click 有没有被吞」无关）。
+    var giftFoldBeforeNextTap = [
+      !!byTestId("db-gift-area"),
+      byTestId("db-gift-dock").getAttribute("aria-expanded"),
+    ];
     firePointer(danmakuProbeEl, "pointerdown", splitX, danmakuProbeBox.top + 30);
     await sleep(620);
     out.swapTouchMoveOwnedWhenArmed = paneTouchMoveProbe(danmakuProbeEl) === true;
@@ -6389,7 +6398,8 @@ const MOCK = (theme) => `(function () {
       dockBoxBeforeNextTap.top + dockBoxBeforeNextTap.height / 2);
     byTestId("db-gift-dock").click();
     await sleep(400);
-    out.swapDoesNotEatNextTap = !!byTestId("db-gift-body") !== giftBodyBeforeNextTap;
+    out.swapDoesNotEatNextTap = (!!byTestId("db-gift-area") !== giftFoldBeforeNextTap[0]) &&
+      (byTestId("db-gift-dock").getAttribute("aria-expanded") !== giftFoldBeforeNextTap[1]);
     snap();
 
     // ---- 关掉独立礼物栏：分区退化为弹幕区全高、分割条与礼物栏一起消失、换位随之停用 ----
@@ -6487,8 +6497,13 @@ const MOCK = (theme) => `(function () {
     window.__addSecondRoom();
     await sleep(200);
     var cheapTabFor = function (roomId) {
+      // data-room-id 取出来是**字符串**，而这里的入参两种都有：从属性上取回来的那一份是
+      // 字符串，CHEAP_ROOM 是**数字**。少了这层归一化，用数字找标签永远找不到 —— 本轮
+      // 首次真跑就是这么红的：cheapGiftFreshRoomTab=false，标签根本没点下去，下面整段
+      // 全量在旧房间（5440）上量，11 条断言一起假失败。
+      var want = String(roomId);
       return allByTestId("db-room-tab").filter(function (t) {
-        return t.getAttribute("data-room-id") === roomId;
+        return t.getAttribute("data-room-id") === want;
       })[0];
     };
     var cheapActiveRoomId = function () {

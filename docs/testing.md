@@ -238,9 +238,30 @@ graph TD
 3. **解析不在冒烟这一层**：`SEND_GIFT_V2` 的载荷是 protobuf，冒烟不解 `data.pb`（那是 Rust 侧的
    `cargo test`）；冒烟注入的是归一化后的 `Message`，验的是「字段到手之后画得对不对」。
 
+### 9.2 冒烟与证据的四条常驻规矩（用户 2026-09-16 定）
+
+| 规矩 | 内容 | 落点 |
+|---|---|---|
+| ① **子 agent 不跑冒烟** | 全量无头冒烟由**主流程**在集成收尾时统一跑一次；子 agent 只跑**不启浏览器**的秒级闸（`npx tsc -b` / `npm run build` / `node --check` / `run-headless.mjs --precheck`）与自己改动相关的机制级验证，并在交付里**明写「冒烟未跑」** | `AGENT.md` §9 DoD 的前两条；`docs/ui.md` §15 运行纪律第 2 条 |
+| ② **冒烟不再串行** | 每个 agent 各起**独立**无头浏览器、并行跑，不抢锁（旧的「同一台机上必须串行」**作废**） | `docs/ui.md` §15 运行纪律第 1 条 |
+| ③ **产物来源标记** | 被当作证据的产物必须能自证「属于本次运行」——见下表 | `docs/ui.md` §15 运行纪律第 3 条 |
+| ④ **每 worktree 本地 `target`** | `CARGO_TARGET_DIR=$PWD/target`，**不得共享**（共享会让不同 worktree 的构建产物互相覆盖 → 假绿 / 假红） | `AGENT.md` §3 / §9；`docs/ui.md` §15 运行纪律第 7 条 |
+
+③ 的执行口径（本仓库的产物命名与落点）：
+
+| 类型 | 命名 / 路径 | 说明 |
+|---|---|---|
+| 前端冒烟截图 | `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，文件 `danmubox-ui[-narrow]-<theme>-<场景>.png` | **主题后缀必须有**；同目录被两次运行共用时深浅两遍会互相覆盖（`ui.md` §15「产物」行） |
+| 前端冒烟日志 | `.android-env/verify/<票名>-<engine>.log` | 已用实例：`splitter-chromium.log` / `splitter-webkit.log`、`tabstrip-webkit-light.log`、`filtergrid-chromium.log` |
+| Android 探针 | `.android-env/verify/<票名>-*.png` / `*.txt` / `*.log` | 已用实例：保活 `ka-*`、返回手势 `back-*`、脱敏对照 `redact-*.log`（出处 `operations.md` §5.3） |
+| Rust 新增用例自证 | `cargo test -- --list \| grep <新用例名>` | 证明用例真的会被跑到（而不是被 `cfg` 掉或写错名字） |
+| 桌面端运行日志 | `.android-env/verify/desktop-run*.log` | 启动存活 / panic 那一条的留证（`AGENT.md` §9） |
+
+> `.android-env/` 整体**未跟踪**，且 `scripts/android-env.sh clean` 会连它一起删 —— 需要长期留存的证据先拷出去（`operations.md` §5.12）。
+
 ## 10. 三端手工冒烟清单
 
-每步都可执行，且都给出预期结果；执行时逐步勾选并留证（截图或终端输出）。三端共用的前置条件：已构建产物、能访问网络、准备一个正在开播的真实直播间，以及一个可用于登录的账号。构建产物、签名 / 安装与工具链前置条件见 [`operations.md`](operations.md)（命令出处见 `README.md` §8，交付门槛见 `AGENT.md` §9）；本节只列验收步骤，不重复它们。
+每步都可执行，且都给出预期结果；执行时逐步勾选并留证（截图或终端输出）。留证按 §9.2 的口径命名（截图走独立 `SMOKE_SHOT_DIR`、日志落 `.android-env/verify/<票名>-<engine>.log`），**一份证据要能自证是哪次运行产出的**。三端共用的前置条件：已构建产物、能访问网络、准备一个正在开播的真实直播间，以及一个可用于登录的账号。构建产物、签名 / 安装与工具链前置条件见 [`operations.md`](operations.md)（命令出处见 `README.md` §8，交付门槛见 `AGENT.md` §9）；本节只列验收步骤，不重复它们。
 
 ### 10.1 共用步骤
 
@@ -304,14 +325,14 @@ graph TD
 | 构建出带签名的通用 APK | 产物路径与体积见 `operations.md` §5.3；`apksigner verify` 为 `Verifies`（v2 签名） |
 | 安装 | `adb install` 成功（**未签名的包会失败**：`INSTALL_PARSE_FAILED_NO_CERTIFICATES`） |
 | 启动 | `adb shell am start -W -n dev.kksk.danmubox/.MainActivity`：COLD `TotalTime` **1013ms**、`Displayed +1s13ms` |
-| 无崩溃 | `adb logcat` 全程零 crash / panic |
+| 无崩溃 | **有例外，此处按 2026-09-16 日志审计的实测改写**：启动 / 进房 / 前台运行的窗口内 `adb logcat` 无 crash、无 panic；但**用户点返回退出应用**的那次优雅退出会在 teardown 阶段命中 `--------- beginning of crash` + `F libc: FORTIFY: pthread_mutex_lock called on a destroyed mutex`（已核到 3 份退出日志各一次：`back-logcat.txt:899-905`、`logcat-v2.txt:1500-1506`、`v2-repro-backexit.log:341-347`），其后紧跟 `Zygote: Process … exited cleanly (0)` 与 `ActivityManager: … has died`；`force-stop` 那一档（`v2-repro-forcestop.log`）**没有**命中。**旧文写的「全程零 crash」不成立**；成因未查（登记为待办，见本节末），从现象看它发生在退出路径上、不影响退出结果与已落盘数据 |
 | 数据目录落点 | 点主题按钮后设备上出现 `/data/user/0/dev.kksk.danmubox/prefs.json`（`-rw-------`，内容 `{ "ui.theme": "light" }`）——即外壳注入的 `DANMUBOX_HOME` 生效（注入前 core 会落到 `$HOME/.local/share/danmubox`，而设备上连 `/.local` 都没有） |
 | 出网与进房 | 进公开测试房间 `1` 成功，HTTPS 出网正常（能拿到真实直播标题） |
 | 系统栏避让（A-2 的前半） | 提交 `32dcefc` 前后逐值实测：顶栏文本 `y=68..116` → `196..244`、主题按钮 `74..114` → `202..242`、房间页顶栏底 `0` → `128`、房间页标题 `52..88` → `180..216`、房间页输入区白底 `2399` → `2338`（= 手势栏上沿 2337），状态栏图标仍在 47..80、互不相交。**动的是页面排版，不是窗口**：应用窗口修复前后都是 `[0,0][1080,2400]`，系统栏本身也没变（状态栏仍 `[0,0][1080,128]`、手势栏仍 `[0,2337][1080,2400]`）；`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL（数字与做法见 [`operations.md`](operations.md) §5.3） |
 | 软键盘（列表页输入框） | 键盘弹起时页面内容止于键盘上沿、无「pan + inset 双位移」——**只在小列表页的输入框上验过**；房间页那一档见下表 |
 | 系统返回手势（A-8） | 手势导航的 AVD 上逐档实测：**左右边缘侧滑都回房间列表**，进程全程不退（`pidof` 3660 → 3660 / 4198 → 4198）；**面板开着时侧滑只关面板、仍停在房间页**（筛选面板，左右两边各一次；DOM 断言 `db-room-header` 真、`db-list-page` 假、`db-panel` 假）；根页面 `input keyevent 4` 后 `pidof` 为空、`dumpsys activity activities` 里 danmubox 的 `ActivityRecord` 8 → 0（焦点回 launcher）；`logcat` 无 `FATAL` / panic。**边缘那一条是系统手势区**（原生下发的 `--gesture-left` / `--gesture-right`，实测两侧各 29.7 CSS px）：从边缘起手的返回会先把 DOWN 发给页面（实测 `down(0,457)` → `cancel(31,457)`），页面的「点面板外关面板」因此要放过这一条，否则一次侧滑会变成「关面板 + 又退一级」两件事（见 [`ui.md`](ui.md) §2.6）。截图与 logcat 落在 `.android-env/verify/back-0*.png` / `back-logcat.txt` |
 | 界面目视 | 启动页 / 账号面板 / 房间页截图落在 `.android-env/verify/`（**该目录随 `clean` 一起删**，需要留存先拷出去） |
-| **后台保活（A-9 / A-10）** | AVD 上逐档实测（`ka-*` 前缀的原始输出与截图在 `.android-env/verify/`；口径与结论见 [`operations.md`](operations.md) §2.8）：退到后台 200 秒后进程在、`KeepAliveService` 是 `isForeground=true foregroundId=1 types=0x00000001`、常驻通知在 `dumpsys notification` 里、到 443 的 ESTABLISHED 还有 2 条、logcat 全程只有成对的「前台服务已启动/已停止」且 0 条 `FATAL EXCEPTION`；拉长到 7.2 分钟时进程与服务仍在、通知仍在；点通知回前台后服务与通知都消失、pid 不变；**A-10 两档都为空**（没房间、根页面按返回退出）；通知权限的冷启动弹窗与 Android 15 `onTimeout`（把 6 小时额度缩成 60 秒）也各实测一次 |
+| **后台保活（A-9 / A-10）** | AVD 上逐档实测（`ka-*` 前缀的原始输出与截图在 `.android-env/verify/`；口径与结论见 [`operations.md`](operations.md) §2.8）：退到后台 200 秒后进程在、`KeepAliveService` 是 `isForeground=true foregroundId=1 types=0x00000001`、常驻通知在 `dumpsys notification` 里、到 443 的 ESTABLISHED 还有 2 条、logcat 全程只有成对的「前台服务已启动/已停止」且 0 条 `FATAL EXCEPTION`（**指保活那个观测窗口内**；退出应用那一刻的 FORTIFY 见上表「无崩溃」行的更正）；拉长到 7.2 分钟时进程与服务仍在、通知仍在；点通知回前台后服务与通知都消失、pid 不变；**A-10 两档都为空**（没房间、根页面按返回退出）；通知权限的冷启动弹窗与 Android 15 `onTimeout`（把 6 小时额度缩成 60 秒）也各实测一次 |
 
 **必须真机（或目前根本验不了）**：
 
@@ -329,6 +350,13 @@ graph TD
 
 工具链本身也可无痕清除后再重建（`scripts/android-env.sh clean` / `bootstrap`，见 [`operations.md`](operations.md) §5.12），因此「换一台开发机重来一遍」这件事不需要真机即可走完到 A-1。
 
+**本轮日志审计登记的两条遗留（均未修、也还没开票，写在 `CHANGELOG.md` 的 Unreleased 里）**：
+
+| 遗留 | 现象与证据 | 状态 |
+|---|---|---|
+| 退出应用时的 `FORTIFY: pthread_mutex_lock called on a destroyed mutex` | 见上表「无崩溃」那一行的三条证据（3 份退出日志各命中一次，进程随后 `exited cleanly (0)`） | **未修**：成因未查（疑似 Rust 侧某个在 teardown 阶段已被销毁却仍被触碰的锁），不属本批范围，需另开票；也不得再写成「零 crash」 |
+| Android 侧**没有可开启的业务日志入口** | 设备上应用自身的业务日志**零覆盖**，排查只能靠 `adb logcat`（系统日志）；`DANMUBOX_LOG=debug` 目前只影响 Rust 侧的 stdout | **未做**：建议加一个可开关的调试日志入口（能落在设备上可取的位置），先把「看得见」解决掉 |
+
 ## 13. 明确不测的边界
 
 | 不测对象 | 原因 | 替代手段 |
@@ -337,7 +365,7 @@ graph TD
 | 举报 / 表情 / 关注列表 / 电池余额的上游端点行为 | 未实测、依赖登录态 | fixture 契约测试 + 阶段 3 / 阶段 4 手工冒烟 |
 | 直播视频流解码 | 非目标功能 | 不实现，故不测 |
 | iOS 端与 Fold8 / 折叠屏 | 后期 enhancement，本期不纳入范围（折叠屏只做了可行性研究，见 [`foldable.md`](foldable.md)，**未实现**） | 触发后单独设计验收；折叠屏的验证路径与「只能真机拍板」的缺口清单见 `foldable.md` §6 |
-| 系统级悬浮弹幕层、后台保活、通知推送 | 非目标功能 | 不实现，故不测 |
+| 系统级悬浮弹幕层、通知推送 | 非目标功能 | 不实现，故不测。**后台保活已不在这一行**：`issue` 2609160959 #10 已实现（前台服务 + 常驻通知，见 [`operations.md`](operations.md) §2.8），验证边界见 §10.5 —— **模拟器已验、真机未验**；推送仍未做 |
 | Tauri 框架本体与系统 WebView 渲染引擎 | 第三方实现 | 以最小冒烟覆盖「能启动、能渲染」 |
 | UI 像素级视觉回归、跨平台字体渲染差异 | 自用项目，收益低 | 保留结构化渲染断言与人工目视 |
 | 真实网络抖动与风控限流触发 | 不可复现 | 用可注入时钟测退避序列；现象记录进校准表 |

@@ -1444,6 +1444,122 @@
 > 新增的三个 frontend 夹具 `smoke/fixtures/gift-sc-guard-rows.json` 是**按协议文档字段表构造**的
 > （不是真实抓包派生：`AGENT.md` §8 第 16 条禁止为测试发送礼物 / SC / 大航海），出处与约束记在 `docs/testing.md` §9.1。
 
+### Added
+
+- **弹幕区与礼物栏共享一块上下分区：可拖分割条 + 长按拖拽换位**（`issue` 2609160959 #8，表述经用户 2026-09-16 确认）。
+  独立礼物栏从「输入区下方」搬进**房间头与输入区之间**的共享分区，新增组件 `apps/desktop/ui/src/components/SplitPanes.tsx`：
+  两栏按份额分配高度（`flex-basis: 0` + 两枚 `flex-grow` 之和恒为 1），中间一条**常驻可拖分割条**（热区 ≥ 8px、焦点态 ↑↓ 微调 0.02），
+  拖动中只写 DOM、松手才回写偏好；长按任一栏 **0.5s** 进入换位拖拽态（半透明 + 跟随指针），拖过分割条松手即上下互换
+  （短按 / 按住前移动 / ESC 三条路都取消）；换位只翻 `flex-direction`（不搬节点，弹幕列表的滚动位置与虚拟列表状态原样保留），
+  比例跟面板走、不因换位而变。`ui.gift_panel` 关掉时分区退化为弹幕区全高、分割条与长按换位一并停用。
+  **输入区下方那段独立礼物栏已移入分区，不再重复渲染**。规格 `docs/ui.md` §5.4 / §2.3，冒烟 `splitter*` / `swap*` 断言族。
+  **已实测**：本票自己的两档引擎冒烟（`.android-env/verify/splitter-chromium.log` / `splitter-webkit.log`）+ 秒级三道闸。
+  **未实测**：合并进 `dev` 后的**两引擎全量冒烟由主流程在集成收尾统一跑**，本轮未复跑。
+- **两枚新偏好键 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`**（同上；`0.x` 期新增，不破坏存量文件）：
+  上下顺序与高度份额都持久化，重开应用保持。契约先行：`docs/contract.md` §8（`bool` 默认 `false`；`0.10–0.90` 默认 `0.35`，
+  非法值回落口径）+ §9 溯源行 → `crates/danmubox-core/src/prefs.rs` 的 SPECS、`docs/ipc.md` 的 `PrefsSnapshot`、前端 `types.ts` 四层。
+  **已实测**：`prefs.rs` 的单测（默认值 / 非法值 / 落盘往返 / 越界回落）随 `cargo test --workspace` 全绿（见文末口径）。
+- **弹幕区双击进 / 出沉浸模式**（#9）。在 `db-chat-wrap` 上双击收起**房间头、房间标签条、输入区**（含输入区上方三个面板），
+  只留弹幕区与礼物 / SC 栏；再双击恢复。判据是指针事件（鼠标双击与触屏点两下同一条路）：两次「按下 → 抬起」都在 400ms 内、
+  落点相距 ≤ 24px，且不落在自带双击语义的可交互元素上；**不** `preventDefault`、**不**改 `user-select`（仍可照常选词）。
+  状态是 store 的**会话内瞬态**（`immersive`，**不进** `prefs.json`；切房间 / 关房间即回到非沉浸态）；房间标签条渲染在 `App.tsx`
+  （房间页的兄弟节点），由 `<html data-immersive>` + `app.module.css` 一条规则收起；系统返回手势在沉浸态里**先退沉浸**、不关房间页；
+  行右键菜单与「回到最新」悬浮钮在沉浸态里照旧可用。规格 `docs/ui.md` §2.3.1，冒烟 `immersive*` 断言族。
+  **已实测**：秒级三道闸（`node --check` / `--precheck` / `npm run build`）。**未实测**：两引擎全量冒烟（主流程跑）。
+- **Android 后台保活：前台服务 + 常驻通知**（#10）。`MainActivity.onStop` 且**页面还有活跃连接**时起一枚 `dataSync` 类型的前台服务
+  （`KeepAliveService` + 一枚点它回应用的常驻通知），`onStart` 即停；没连接、用户主动退出（`isFinishing`）、把任务从最近任务划掉
+  （`onTaskRemoved`）都不保活。服务本身**不做事**（不轮询、不上报、不持唤醒锁、不碰网络）——它只把进程顶到前台档，连接仍然只跑在 Rust 侧。
+  「有没有活跃连接」走与返回手势同一套 JS 桥（`window.__danmuboxHasActiveConnection`），前端 `ui/src/keepalive.ts` 只读地复用 store 里已有的连接状态、
+  不新增任何状态。Android 15 起 `dataSync` 每 24 小时只有 6 小时额度：实现 `Service.onTimeout()` 自停，额度耗尽后再起被拒时接住
+  `ForegroundServiceStartNotAllowedException` 只记一条 logcat、不崩。文档：`docs/operations.md` §2.8、`README.md` §2.2、`docs/testing.md` §10.4（A-9 / A-10）。
+  **已实测（模拟器 AVD android-35，原始输出 `.android-env/verify/ka-*`）**：退到后台 200 秒后进程在、`isForeground=true foregroundId=1 types=0x00000001`、
+  常驻通知在、到 443 的 ESTABLISHED 还有 2 条；点通知回前台后服务与通知都消失、pid 不变；不该起的两档（没房间 / 根页面按返回退出）实测为空；
+  A/B 旧包同一档连接归零。**未实测**：真机收益（省电策略、厂商 ROM 的后台管理、Cached Apps Freezer 的时机），见 `docs/testing.md` §10.5。
+
+### Changed
+
+- **筛选面板两块改成两列勾选清单**（#3 / #4）。「消息类型」的六个 kind 从按钮样芯片改成**等宽两列勾选清单**
+  （按行铺：左列 1/3/5、右列 2/4/6，DOM 序即阅读序）；「时间戳 / 互动消息自动消失 / 弹幕包含礼物 / 独立礼物栏」四枚开关并成同款两列清单，
+  块名由「显示」改为「辅助功能」，字号滑杆仍在（横跨两列、占满整行）。**`filter.kinds` 的语义一字未动**（全选 = 不过滤、至少留一项），
+  `docs/contract.md` 本批**零改动**。规格 `docs/ui.md` §8.5；冒烟字段族随形态改名（`*KindChips` → `*KindItems`、`*Display*` → `*Aux*`，
+  定位钩子改用 `db-filter-kinds` / `db-filter-aux`），本票引擎日志 `filtergrid-*.log`。**未实测**：两引擎全量冒烟（主流程跑）。
+  同批登记一条**判定结论**（#2「互动消息自动消失默认勾选」）：`ui.interact_auto_hide` 的代码默认值**本来就是 `true`**，
+  界面上没勾上是**本机 `prefs.json` 写了显式覆盖**（该文件只存显式改过的键）——因此**不改语义、不动契约**。
+- **房间标签条支持拖动排序与横向滚动**（`issue` 批次 `2609152029` 交付后追加的第 6 条；上批因此未做，**不是实现丢失**，归属本批）。
+  横向滚动：`flex: 0 0 auto` 关掉收缩 + 每枚标签最小宽度 `--tab-min-w`（96px）+ `overflow-x: auto`（`scrollbar-gutter: stable`、
+  `overscroll-behavior-x: contain`）；指针拖动排序（鼠标与触摸同一套）：5px 阈值进拖拽态、被拖项半透明 + 插入位指示条，松开重排 `store.rooms`
+  （新增 `moveRoom`），`activeRoomId` 不变；触摸下横滑 = 滚标签条（`touch-action: pan-x`），按住 400ms 才拿起。顺序是**会话态**、
+  不新增偏好键（`rooms_list` 落地只改集合，`mergeRoomOrder` 保序）。规格 `docs/ui.md` §2.3；冒烟新增 21 条断言（四档引擎日志 `tabstrip-*.log`）。
+  **未实测**：两引擎全量冒烟（主流程跑）。
+- **连接健壮性：按 `docs/protocol.md` 补齐三条护栏，并修掉两处实现偏差**（`issue` 2609160959 #7 方向①/② + 第 5 条日志审查的产出）。
+  ① **认证超时**：发出 `op=7` 后 10 秒内没有 `op=8` → 计一次认证失败、走退避（§7.3）；② **僵死判定**：维护「最后一次入站帧时刻」，
+  90 秒内没有任何入站帧 → 主动断开重连（`warn` 里带 `idle_ms` 与阈值，判定依据可追溯，§8.1）；③ **认证失败上限**：连续 3 次 → 取消定时器、
+  停在原地等人工（§13.1 的 `Failed`，按 §13.3 步骤 6 报 `ConnState::Error` + `detail`），手动重连（`rooms_reconnect`）取消本次连接后重新调 `stream()`，
+  计数与退避归零并**跳过退避**。顺带修：**首包心跳不再等 60 秒**（认证回应一到就发；§8.1 的「60 秒内」是上界，等满会让一部分候选节点一直不下发弹幕）、
+  **节点轮换**（同一节点连续失败 2 次换 `host_list` 下一项，越界取模即「轮完一轮回到首项」，§15.3）。护栏参数收进 `Limits`（生产值逐条对应文档，
+  单测注入毫秒级阈值）；**新增 6 条单测**覆盖上述五条行为（含「有入站帧不误判僵死」与「手动重连重置计数」）。`ConnState` 不新增取值，
+  前端与 IPC 契约不变。**未实测**：`docs/protocol.md` 附录 A **A46** 记的仍是未验证事项 —— 服务端对重复 `Cookie` 头的容忍度、
+  以及「重复头 / 握手口径」是否就是「连上了却收不到弹幕」的成因，**需要受影响的账号 + 可复现房间**才能判死。
+- **日志与错误文案里的用户标识统一脱敏**（`AGENT.md` §8 第 1 条）。`DANMUBOX_LOG=debug` 下 `relation/followings?vmid=<自身 DedeUserID>`、
+  `get_status_info_by_uids?uids[]=<关注的人…>`、黑名单的 `anchor_id=<主播 uid>` 此前会**原样进日志**（实测旧样本：2 行 `vmid` + 90 个 `uids[]`）。
+  规则收敛到 `crates/danmubox-bili/src/redact.rs`，出口只有两个：`http.rs` 的 `log_request`（GET/POST 的 URL 日志）与 `upstream`
+  （上游错误文案——`reqwest::Error` 的 Display 自带完整 URL），回显上游 `message` 的 admin/send/report 也走同一个函数。占位符固定 `***`
+  （uid 只有 10 位，短哈希可被暴力反推），键名匹配要求**词边界**，`roomid=` / `room_id=` 等排障主键不受影响；结构化日志里直接打印的 uid 字段
+  （ws 认证包 / cmd 归一化 / core 去重）改为不打印，只保留 `logged_in` 之类的布尔事实。规格 `docs/operations.md` §3。
+  **已实测**：脱敏前后的真实 debug 日志对照（`.android-env/verify/redact-*.log`）+ 新增 5 条 `redact::tests` 单测。
+- **四条常驻工程规矩固化进仓库文档**（用户 2026-09-16 对话，两次强调「以后都这样」）：① **子 agent 不跑冒烟** —— 全量无头冒烟由主流程在集成收尾
+  统一跑一次，子 agent 只跑不启浏览器的秒级闸（`tsc -b` / `npm run build` / `node --check` / `--precheck`）并在交付里明写「冒烟未跑」；
+  ② **冒烟不再串行** —— 每个 agent 各起独立无头浏览器并行跑、不抢锁（旧的「同一台机上必须串行」**作废**）；
+  ③ **产物来源标记** —— 被当作证据的产物必须能自证属于本次运行（截图独立 `SMOKE_SHOT_DIR=/tmp/<票名>-shots`、日志落
+  `.android-env/verify/<票名>-<engine>.log`、Rust 侧 `cargo test -- --list | grep <新用例名>`）；
+  ④ **每个 worktree 用本地 `CARGO_TARGET_DIR=$PWD/target`**，不得共享（实测共享会让不同 worktree 的构建产物互相覆盖 → 假绿 / 假红）。
+  落点：`AGENT.md` §3（target 口径）与 §9 DoD、`docs/ui.md` §15 运行纪律、`docs/testing.md` §9.2 / §10.1；台账 `docs/requests.md` §2 新增 E14 / E15
+  并改掉 E6 的串行口径。
+- **纠正 `docs/testing.md` §10.5 的一处假绿说法**（2026-09-16 日志审计的产出）。原文写「Android 侧 `adb logcat` **全程零 crash / panic**」，
+  与实测矛盾：**至少三份退出日志各命中一次** `--------- beginning of crash` + `F libc: FORTIFY: pthread_mutex_lock called on a destroyed mutex`
+  （`.android-env/verify/back-logcat.txt:899-905`、`logcat-v2.txt:1500-1506`、`v2-repro-backexit.log:341-347`），都发生在**用户点返回退出应用**
+  的那次优雅退出（其后紧跟 `Zygote: Process … exited cleanly (0)`）；force-stop 那一档（`v2-repro-forcestop.log`）没有命中。
+  现已按事实改写该行，并把「崩在哪、为什么不影响功能、怎么复现」写清。同一批顺带更正 `docs/testing.md` §13 里「后台保活 属非目标功能、不实现故不测」
+  这一行 —— 保活本批已实现并实测到模拟器那一档（见上），§13 只保留「系统级悬浮弹幕层 / 通知推送」为非目标。
+- **`docs/testing.md` §9.2 / §10.1、`docs/ui.md` §15 与 `AGENT.md` §9 按上面四条常驻规矩改齐**（并列的新增小节只写规矩本身，
+  不重复各票的实现细节）。
+
+### Fixed
+
+- **`getDanmuInfo` 出门带两条 `Cookie` 头**（`issue` 2609160959 #7 的方向②/③）。`get_with_cookie` 已按 Cookie 来源设过一条 `Cookie`，
+  `danmu_info` 又 `.header(COOKIE, "buvid3=…")` 追加一条 —— `RequestBuilder::header` 是 **append** 语义，请求因此带两条 `Cookie` 头出门。
+  B 站按身份三要素（`uid` / `buvid` / 换 token 的凭据）**同源**认身份，认证包里的 `buvid` 必须与换 token 那次请求一致。改成先拼好一条再一次性设头
+  （`merge_cookie`）：账号字段在前、`buvid3` 追加在末尾；账号 Cookie 自带 `buvid3` 时以入参（即进认证包的那个值）为准，不留两枚同名键。
+  `get_request` 从此是唯一设 `Cookie` 的地方，`post_form` 也照此只设一次。**已实测**：桩服务器记录原始请求头，**新增 3 条用例**断言
+  「只有一条 `Cookie` 头」「同名键不重复」与 `merge_cookie` 的表驱动用例；把 `danmu_info` 改回 append 形态它们立刻变红。
+- **集成收尾修掉三处合并失误（其中一处让 `tsc -b` / `vite build` 直接红）**。`feat/2609160959-immersive` × `feat/2609160959-splitter` 合并时
+  手工解冲突留下三处残渣，与任一方的功能无关：① `RoomView.tsx` 房间头 ⋯ 菜单上方那条 JSX 注释的收尾写成了 `*/` 而不是 `*/}` —— `{` 因此永不闭合，
+  解析器从那一刻起落在表达式 / 对象字面量里，这就是 `tsc` 报 1068 行「Property assignment expected」却指向 `{!immersive && headerMenu && (` 的**真正原因**
+  （**报错点不在失配处，而在它的下游**）；② `app.module.css` 与 ③ `docs/ui.md` 各残留一行孤立的 `>>>>>>> feat/2609160959-splitter`（CSS 那行直接让
+  postcss 解析失败）。修法是逐段对照两侧分支后补回 `}` 并删掉孤立标记 —— **SplitPanes 的分区与沉浸模式两方功能一件未删**（弹幕槽仍是 `.chatWrap` 包 `MessageList`、
+  礼物槽仍是折叠头 + 列表、两枚偏好键都在；输入区下方那段独立礼物栏**没有**回来）。**已实测**：`tsc -b` 0 错、`npm run build` 通过、
+  `node --check` + `--precheck` 通过、`styles.*` 用到的 176 个类在 `app.module.css` 里全有定义（未丢规则）。
+
+### Calibration
+
+- **附录 A 新增 A46**（`docs/protocol.md`）：服务端对**重复 `Cookie` 头**的容忍度、以及它是否就是「连上了却收不到弹幕」的成因 —— **未实测**，
+  A46 写了核对方法（用受影响的账号抓 `getDanmuInfo` 的原始请求头，再对照同账号在网页端的表现）。判死还需要**受影响的账号 + 可复现房间**（只读即可）。
+- **日志审计的两条遗留登记为待办（均未修、未开票）**：① Android **优雅退出**时的 `FORTIFY: pthread_mutex_lock called on a destroyed mutex`
+  （见上「Changed」里那条纠正；现象稳定复现、不影响退出结果与已有数据，成因未查）；② Android 侧**没有可开启的业务日志入口** —— 应用自身的业务日志
+  在设备上零覆盖，排障只能靠 logcat，建议后续加一个可开关的调试日志入口。
+
+> 本批（`dev/2609160959` 集成收尾）的验证口径，如实记录：Rust 侧跑的是**干净**的一遍 ——
+> `cargo clean -p danmubox-core -p danmubox-bili -p danmubox-desktop` 后 `cargo test --workspace`，
+> **0 failed**（`danmubox-bili` 179 passed / `danmubox-core` 49 passed / `danmubox-desktop` 6 passed / `danmubox-cli` 0 / 四个 crate 的 doc-tests 各 0，合计 **234 passed**）；
+> `cargo clippy --workspace --all-targets -- -D warnings` **零告警**；本批三票 fix 的新用例都自证在跑
+> （`http::tests::danmu_info_sends_single_merged_cookie_header`、`redact::tests::*` 5 条、
+> `ws::tests::auth_timeout_is_a_failure_and_backs_off` / `node_rotation_switches_after_two_consecutive_failures` /
+> `stale_connection_is_dropped_and_never_counts_as_auth_failure` / `first_heartbeat_goes_out_right_after_verify`）。**未跑**：`cargo fmt`（存量不通过，见 `AGENT.md` §9 备注）。
+> 前端四道闸**全绿**：`npx tsc -b`、`npm run build`、`node --check smoke/room-page.mjs`、`node smoke/run-headless.mjs --precheck`。
+> **未跑**：两引擎全量无头冒烟 —— 按用户 2026-09-16 定的规矩「子 agent 不跑冒烟」，它由主流程在集成收尾统一跑（本地 `dev/2609160959` 上尚未跑）。
+> **也不含** `issue` 2609160959 #6（安卓键盘避让）：那一票仍在另一个 worktree 里开发、**未合入本批**，因此 `dev → main` 的 PR 暂缓开，
+> 等它合进来一次带全。三端手工冒烟（`docs/testing.md` §10）本批未跑。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

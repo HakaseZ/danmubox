@@ -2327,6 +2327,52 @@ const MOCK = (theme) => `(function () {
       return toolLabels.indexOf(t) >= 0;
     }) && toolLabels.indexOf("最近") < 0;
 
+    // ---- 文档本身**永不滚动**（键盘 / 面板只许挤压内部滚动区，不许把整个界面顶走；docs/ui.md §9.3）
+    //      为什么钉这条：安卓上键盘避让只有一条机制 —— 原生把「系统栏 ∪ 键盘」的高度下发成
+    //      --safe-bottom，body 用它让出底部空间，窗口**不**为键盘 resize（AndroidManifest 里
+    //      windowSoftInputMode=adjustNothing）。这条链子一旦被谁再叠一次（平台又替我们 resize
+    //      了一次视口、或内部某一层比容器高），多出来的那一截就会把 **document** 变成一个可滚容器：
+    //      手指在弹幕列表上滑到底之后会**接力**滚它，整个界面（含房间顶栏）被顶上去、底边露出画布色
+    //      （用户 2026-09-16 报的就是这个）。无头里没有 IME，所以这里验的是这条链子的**布局那一半**：
+    //      ① 常态 ② 面板展开（固定高度的兄弟最多、最容易把外壳撑破的一档）③ 把 --safe-bottom 换成
+    //      键盘高度（原生在键盘弹出时就是换这个值）三种状态下，文档都不可滚、body/#root 高度 = 视口高。
+    //      IME 那一半（系统会不会额外 resize / 平移窗口）只能在设备上看，见 docs/ui.md §9.3。
+    function docBox() {
+      var se = document.scrollingElement;
+      return {
+        overflow: se.scrollHeight - se.clientHeight,
+        scrollTop: se.scrollTop,
+        bodyH: document.body.getBoundingClientRect().height,
+        rootH: document.getElementById("root").getBoundingClientRect().height,
+        viewH: window.innerHeight,
+      };
+    }
+    var docIdle = docBox();
+    if (!byTestId("db-panel")) { clickTool("表情"); await sleep(400); }
+    var docPanel = docBox();
+    if (byTestId("db-panel")) { clickTool("表情"); await sleep(400); }
+    var rootStyle = document.documentElement.style;
+    var prevSafeBottom = rootStyle.getPropertyValue("--safe-bottom");
+    rootStyle.setProperty("--safe-bottom", "336px");
+    await sleep(250);
+    var docInset = docBox();
+    var composerBox = rect(document.querySelector("textarea"));
+    var composerVisible = !!composerBox && composerBox.top >= -1 &&
+      composerBox.bottom <= window.innerHeight + 1 && composerBox.height > 0;
+    // 令牌用完立刻复原：后面的断言还按正常视口量
+    if (prevSafeBottom) rootStyle.setProperty("--safe-bottom", prevSafeBottom);
+    else rootStyle.removeProperty("--safe-bottom");
+    await sleep(200);
+    out.docLayouts = { idle: docIdle, panel: docPanel, keyboardInset: docInset };
+    out.docNeverScrollable = [docIdle, docPanel, docInset].every(function (d) {
+      return d.overflow <= 1 && d.scrollTop === 0;
+    });
+    out.docHeightsMatchViewport = [docIdle, docPanel, docInset].every(function (d) {
+      return Math.abs(d.bodyH - d.viewH) <= 1 && Math.abs(d.rootH - d.viewH) <= 1;
+    });
+    out.docComposerVisibleWithKeyboardInset = composerVisible;
+    out.docSafeBottomRestored = rootStyle.getPropertyValue("--safe-bottom") === prevSafeBottom;
+
     // ---- layout 弹幕列表是唯一生长区；面板向上展开不遮挡最新弹幕
     var scroller = byTestId("db-chat-scroll");
     var before = rect(scroller);

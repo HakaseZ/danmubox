@@ -1634,6 +1634,17 @@
   于是内容驱动的那块**正好高 1px**（实测宽屏 表情 **169.1** / 筛选 **168.1** / 短语 **168.1**），与用户 item 8「展开高度看齐表情界面」的口径不符。
   公式改为 `calc(var(--emote-grid-h) + var(--panel-pad-y) * 2 + 1px)`（注释写明这 1px 的来由），`docs/ui.md` §6.1 / §6.3 / §9.1 / §9.2 同步。**已实测**：冒烟 `panelHeightsMatch`（容差 `< 1`，口径未放松）在两引擎 × 两视口 × 两主题四组合全绿，三块逐块 **169.1 / 169.1 / 169.1**。
 
+> **本轮（`dev/2609161236` = 批次 `2609160959` + `2609161236` + `2609161352` + CI）的验证口径**，如实记录：
+> **Rust** —— `cargo clean -p danmubox-core -p danmubox-bili -p danmubox-desktop` 之后 `cargo test --workspace`：**234 passed / 0 failed**（179 + 49 + 6）；
+> `cargo clippy --workspace --all-targets -- -D warnings` **零告警**。**未跑** `cargo fmt`（存量不通过，见 `AGENT.md` §9）。
+> **前端四道闸**全绿：`npx tsc -b` / `npm run build` / `node --check smoke/room-page.mjs` / `node smoke/run-headless.mjs --precheck`。
+> **两引擎无头冒烟第一次真跑**（Chromium + WebKit × 宽 1440×900 / 窄 360×844 × 深 / 浅 = 8 个视口）：**8 个视口全部 `done: true`**。
+> 起点是**两引擎在 wide 视口就死于一个未捕获抛错**（场景跑不完 → 300s 超时）+ **10 条断言红**；收敛过程 = **12 处按实测只重量法、一条强度都没放松**，其中 **1 条是真 bug**（三块弹出面板差整整 1px，修的是 `--panel-h` 公式，见上一条 Fixed）。
+> **残留 1 条已知红**：`immersiveExitKeepsReadingPosition`（退出沉浸后阅读位置漂 **88.1px ≈ 一行**，只在非跟随态出现，两引擎 × 四组合数值逐位一致）—— 断言**保留不放松**，机制与去向登记在 `docs/testing.md` §10.6，另开一票修。
+> **产物**（自用）：macOS `danmubox_0.1.0_aarch64.dmg`（含独立可执行，前端已内嵌）与 Android `danmubox_0.1.0_universal-release.apk`（四 ABI，**已签名**）；构建方式与签名口径见 `docs/operations.md` §5.3 / §5.7 / §5.13。
+> **未验证**：三端手工冒烟清单（`docs/testing.md` §10）、真机 macOS / Android 观感、Android 键盘避让的内核那一半（WebView < M139 造不出复现）、`docs/protocol.md` A46（受影响账号 + 可复现房间）、送礼 / SC / 大航海的真实载荷逐条对照。
+> **CI**：`.github/workflows/ci.yml` 随本批落地，`check` job 已在本 PR 上真跑（首轮结果回填在 `docs/requests.md` E16）。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

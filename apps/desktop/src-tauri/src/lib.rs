@@ -22,6 +22,8 @@ use danmubox_core::{
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
+mod diagnose;
+
 /// 事件总线容量（`docs/architecture.md` §4.3）。
 const BUS_CAPACITY: usize = 1024;
 
@@ -61,6 +63,11 @@ pub struct AppState {
     counters: Arc<Counters>,
     prefs: Mutex<Prefs>,
     rooms: Mutex<Rooms>,
+    /// 前端在**开始采集**时交上来的渲染引擎标识（`navigator.userAgent`）。
+    ///
+    /// 内核版本只有页面自己知道，而白屏一类问题同时取决于它：因此诊断开始时存下来，
+    /// 导出时写进报告头（`docs/operations.md` §2.9）。
+    engine: Mutex<String>,
 }
 
 impl AppState {
@@ -72,6 +79,7 @@ impl AppState {
             counters: Arc::new(Counters::default()),
             prefs: Mutex::new(Prefs::load(&prefs_path())),
             rooms: Mutex::new(Rooms::default()),
+            engine: Mutex::new(String::new()),
         })
     }
 }
@@ -846,6 +854,111 @@ fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus) {
     });
 }
 
+// ---------------------------------------------------------------- 一键诊断
+
+/// `diagnose_start` 的返回值（`docs/ipc.md` §3）：采集窗口的两端。
+#[derive(Serialize)]
+pub struct DiagnoseStart {
+    pub started_ms: i64,
+    /// 窗口截止时刻：界面按它倒计时，到点自动收工。
+    pub ends_ms: i64,
+}
+
+/// `diagnose_export` 的返回值（`docs/ipc.md` §3）。
+#[derive(Serialize)]
+pub struct DiagnoseExport {
+    /// 给用户看的位置（Android 上是 `/sdcard/Download/<名字>`，桌面端是绝对路径）。
+    pub path: String,
+    pub name: String,
+    pub bytes: usize,
+    /// 报告里带了几条连接尝试、几行日志（界面拿它显示「导出了什么」）。
+    pub attempts: usize,
+    pub logs: usize,
+    pub started_ms: Option<i64>,
+    pub ends_ms: Option<i64>,
+}
+
+/// 报告里**不许出现**的数字：本机已知的房间号 / 短号 / 主播 uid。
+///
+/// 为什么按值抹而不是按键名认：房间号出现的形状不止一种 —— 日志里是 `room_id=…`
+/// （键名能认出来），`getDanmuInfo` 的查询串是 `?id=…`（`id=` 不可能进键名白名单，
+/// 别的接口也用它），错误文案里还可能是一个裸数字。把已知值交给脱敏层逐值抹，
+/// 比再猜一套键名可靠（`danmubox_bili::diagnose::render_report` 的第二个参数）。
+///
+/// 0 不进名单：上游没给短号 / 主播 uid 时结构体里就是 0，放进去会把报告里所有的 0
+/// 一起抹掉。
+fn secret_numbers(rooms: &Rooms) -> Vec<i64> {
+    let mut numbers: Vec<i64> = rooms
+        .meta
+        .values()
+        .flat_map(|room| [room.room_id, room.short_id, room.anchor_uid])
+        .filter(|value| *value > 0)
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
+}
+
+/// 开始一次诊断采集（`docs/ipc.md` §3）。同步命令：只写窗口起点与截止时刻，
+/// 不碰 IO、不占 runtime，因此可以在主线程上直接调用。
+#[tauri::command]
+fn diagnose_start(state: State<'_, AppState>, engine: String) -> DiagnoseStart {
+    *state.engine.lock().expect("engine poisoned") = engine;
+    let window = danmubox_core::diagnose::shared()
+        .begin_window(danmubox_core::now_ms(), danmubox_core::diagnose::WINDOW_MS);
+    tracing::info!(
+        started_ms = window.started_ms,
+        ends_ms = window.ends_ms,
+        "一键诊断：开始采集（不会自动发送任何数据）"
+    );
+    DiagnoseStart {
+        started_ms: window.started_ms,
+        ends_ms: window.ends_ms,
+    }
+}
+
+/// 导出诊断报告并结束采集（`docs/ipc.md` §3）。
+///
+/// 一次调用**恰好产出一个文件**：文本在这一条命令里渲染完、脱敏完，然后由
+/// `diagnose::write_report` 一次写成（桌面端直接写目标路径，Android 往 MediaStore
+/// 插一条）。导出之后采集窗口立刻关闭并清空内存里的采集内容。
+#[tauri::command]
+async fn diagnose_export(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> ApiResult<DiagnoseExport> {
+    let now = danmubox_core::now_ms();
+    let diag = danmubox_core::diagnose::shared();
+    let snapshot = diag.snapshot(now);
+    let env = diagnose::shell_env(&app, &state.engine.lock().expect("engine poisoned"));
+    let secret_numbers = {
+        let rooms = state.rooms.lock().expect("rooms poisoned");
+        secret_numbers(&rooms)
+    };
+
+    let text = danmubox_bili::diagnose::render_report(&snapshot, &env, &secret_numbers);
+    let name = diagnose::file_name(now);
+    let path = diagnose::write_report(&app, &name, &text)
+        .await
+        .map_err(|message| ApiError {
+            code: "INTERNAL".to_string(),
+            message,
+        })?;
+    // 文件已经落地，内存里那份没有留着的理由（含最近几次连接的事实）。
+    diag.reset();
+    tracing::info!(path = %path, bytes = text.len(), "一键诊断：报告已导出");
+
+    Ok(DiagnoseExport {
+        path,
+        name,
+        bytes: text.len(),
+        attempts: snapshot.attempts.len(),
+        logs: snapshot.logs.len(),
+        started_ms: snapshot.window.map(|window| window.started_ms),
+        ends_ms: snapshot.window.map(|window| window.ends_ms),
+    })
+}
+
 /// 前端把 `console.error` / `console.warn` 与未捕获错误转发到这里，
 /// 使 Rust 侧一份日志就能覆盖前后端（配合 `DANMUBOX_LOG=debug`）。
 #[tauri::command]
@@ -907,6 +1020,8 @@ const CONSOLE_BRIDGE: &str = r#"
 
 /// 把 `tracing` 的日志行桥接成 `danmubox://log` 事件（`docs/ipc.md` §4）。
 mod log_bridge {
+    /// 逐条上游原始载荷的日志 target（`docs/protocol.md` 附录 B.1）：**不进**诊断报告。
+    const RAW_TARGET: &str = "danmubox::raw";
     use tokio::sync::broadcast;
     use tracing::field::{Field, Visit};
     use tracing_subscriber::layer::{Context, Layer};
@@ -922,18 +1037,42 @@ mod log_bridge {
         }
     }
 
+    /// 一次事件里我们要的两样东西：给人读的文案，与判据所在的字段。
+    ///
+    /// 字段必须单独收（而不是并进文案）：诊断报告要的 `idle_ms` / `code` /
+    /// `room_id` 这些量**只活在字段里**，message 文案里根本没有
+    /// （`docs/operations.md` §2.9：报告要能回答「卡在哪一环」，靠的就是它们）。
+    /// 界面上的日志面板仍旧只看文案，格式一字未变。
     #[derive(Default)]
-    struct MessageVisitor(String);
+    struct MessageVisitor {
+        message: String,
+        fields: Vec<String>,
+    }
+
+    impl MessageVisitor {
+        /// 诊断报告里那一行：文案在前、字段在后（先读结论，再对数字）。
+        fn line(&self) -> String {
+            if self.fields.is_empty() {
+                return self.message.clone();
+            }
+            format!("{} {}", self.message, self.fields.join(" "))
+        }
+    }
 
     impl Visit for MessageVisitor {
         fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
             if field.name() == "message" {
-                self.0 = format!("{value:?}");
+                self.message = format!("{value:?}");
+            } else {
+                // 整数 / 布尔没单独实现 `record_*` 时会落到这里，`{:?}` 打出来即可。
+                self.fields.push(format!("{}={value:?}", field.name()));
             }
         }
         fn record_str(&mut self, field: &Field, value: &str) {
             if field.name() == "message" {
-                self.0 = value.to_string();
+                self.message = value.to_string();
+            } else {
+                self.fields.push(format!("{}={value}", field.name()));
             }
         }
     }
@@ -945,11 +1084,25 @@ mod log_bridge {
         fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
             let mut visitor = MessageVisitor::default();
             event.record(&mut visitor);
-            if visitor.0.is_empty() {
+            if visitor.message.is_empty() {
                 return;
             }
-            let line = format!("{} {}", event.metadata().level(), visitor.0);
-            let _ = self.tx.send(line);
+            let level = event.metadata().level();
+            let target = event.metadata().target();
+            let _ = self.tx.send(format!("{level} {}", visitor.message));
+            // 一键诊断另存一份：只在采集窗口内，且**不收** `danmubox::raw`。
+            //
+            // 挡掉 raw 的理由是脱敏，不是体积：那一条按设计打的是**逐条上游原始载荷**
+            // （`docs/protocol.md` 附录 B.1），里面的 uid 与昵称是**位置**上的裸值，
+            // 脱敏规则（只认「键名 + 分隔符 + 值」）对它无能为力 —— 报告是要发出去的。
+            if target != RAW_TARGET {
+                let diag = danmubox_core::diagnose::shared();
+                let now = danmubox_core::now_ms();
+                // 先看那个原子量：没在采集时连时钟都不取（日志行是热路径）。
+                if diag.recording_at(now) {
+                    diag.log_line(now, &level.to_string(), target, &visitor.line());
+                }
+            }
         }
     }
 }
@@ -1008,6 +1161,9 @@ pub fn run() {
     // 因此只在 Android 上挂官方 opener 插件（见 `open_url`）：桌面构建一字不变。
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_opener::init());
+    // 一键诊断在 Android 上要把报告写进**公共下载目录**，那只能走原生（见 `diagnose`）。
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(diagnose::android::plugin());
 
     builder
         // 白屏排查的入口：这里没有输出就说明 webview 根本没导航成功。
@@ -1092,6 +1248,8 @@ pub fn run() {
             open_url,
             prefs_get,
             prefs_set,
+            diagnose_start,
+            diagnose_export,
             frontend_log
         ])
         .run(tauri::generate_context!())

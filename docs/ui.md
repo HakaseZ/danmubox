@@ -162,7 +162,7 @@
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item` / `db-diagnose` / `db-diagnose-path` / `db-diagnose-finish`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
 
 ### 2.3.1 沉浸模式（issue #1）
 
@@ -270,7 +270,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 标题 / 房间号 | 房间元信息（`follow_list` / `rooms_list` / `getRoomPlayInfo` 解析结果）；**紧跟状态点右侧、同一排**，不再独占一排。放不下时**循环滚动**（marquee，见下），不再用省略号截断；完整标题始终在 `title` 属性里 |
 | 观众数 | 当前在线（`ONLINE_RANK_COUNT` 的 `online_count`）与累计看过（`WATCHED_CHANGE` 的 `num`），两个都显示（用户 2026-09-12 / 2026-09-13：电池挪走后这两个占顶栏）；上游还没给过的一侧不显示，不用 `—` 或 `0` 顶替。人气值不再展示 |
 | 电池 | **不在顶栏**（用户 2026-09-13：「电池数量挪到底部发送按钮左侧」）：它是输入区工具行里、发送按钮左侧的一枚控件，且**不是圆形**（见 §6.4） |
-| `⋯` 菜单 | **圆形按钮**，动作收在右键菜单里：房管面板 / 刷新连接 / 断开连接 / 显示·隐藏日志（见 §3.2、§3.4、§3.5） |
+| `⋯` 菜单 | **圆形按钮**，动作收在右键菜单里：房管面板 / 刷新连接 / 断开连接 / 显示·隐藏日志 / 一键诊断（见 §3.2、§3.4、§3.5） |
 
 **标题的循环滚动**（用户 2026-09-13：「如果放不下就循环滚动显示」）：
 
@@ -336,6 +336,25 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 无活跃会话 | 后端返回该房间的**全零身份而不报错**（与 `history_query` 同风格）。界面把「拿不到身份」当**无权限**处理，绝不先放行再等服务端报错 |
 | 与登录态区分 | `danmubox://session` 这一个事件名上同时走登录态（`SessionState`，带 `logged_in`）与房内身份（带 `is_admin`）；界面按判别字段分派，**身份载荷不得覆盖登录态**（`ipc.md` 的事件表待补载荷判别说明） |
 | 生命周期 | 会话级、不落盘；关标签 / 移除房间 / **断开连接**即丢弃（断开即这次会话结束，身份不再成立）；**切房保留** —— 房间并没有断，切回来还是同一次会话，房管入口因此不会白闪一下；会话重建（断开后再连 / 刷新重建）时由引擎重取经 `danmubox://session` 覆盖（`ipc.md` §8.1） |
+
+### 3.5 「一键诊断」（`⋯` 菜单最后一项）
+
+用途：把「连上了却收不到弹幕」这类一时说不清的问题**变成一份能发出去的文件**
+（命令 `diagnose_start` / `diagnose_export`，契约 §4.4；读法见 `operations.md` §2.9）。
+
+| 项 | 规则 |
+|---|---|
+| 位置 | 房间头 `⋯` 菜单的**最后一项**，文案「一键诊断」；采集中改成「诊断采集中…」并**置灰**（第二次点击只会重置倒计时，让人误以为在重连） |
+| 触发 | `invoke('diagnose_start', { engine: navigator.userAgent })`。`engine` 是渲染引擎标识：内核版本只有页面自己知道，报告头要用它（桌面端 = WKWebView / WebView2，Android = 系统 WebView） |
+| 窗口 | **固定 180 秒**（契约 §4.4）。后端返回 `{ started_ms, ends_ms }`，界面按 `ends_ms` 每秒倒计时；到点**自动**调 `diagnose_export` —— 用户不必守着，也不会有「采完忘了导出」这一档 |
+| 提前结束 | 面板上的「提前结束并导出」：立即调 `diagnose_export`（与到点自动收工同一条路）；「放弃」则不导出、直接清掉本次采集的本地状态（后端窗口到点自行失效，因此不会留下「永远在采」的状态） |
+| 状态区 | 页面底部一块（与日志块同款位置，沉浸态一并收起，`data-testid="db-diagnose"`）：采集中显示倒计时与「**不会自动发送任何数据**」（本仓无遥测，这句是给用户看的承诺）；导出后显示 `path` +「复制路径」 |
+| 隐私措辞 | 采集中那一行必须写明「只在本机采集连接信息，**不会自动发送任何数据**；导出后发给谁由你决定」——用户要的是「排障可交」，不是「悄悄上报」 |
+| 一次一个文件 | 一次诊断恰好产生一个文件（`contract.md` §4.4）；界面不缓存、不重写、不生成第二个。重复点菜单项不会产生第二个文件（采集中该项置灰） |
+| 文件位置 | 桌面端 `~/Downloads/danmubox-diagnose-<UTC 时间戳>.txt`；Android 公共下载目录 `/sdcard/Download/` 下的同名文件。文案只展示后端返回的 `path`（界面**不自己拼路径**，各平台规则只有一处实现） |
+| 与日志块的分工 | 「显示日志」是**现场看**（进程内最近 200 行，`ipc.md` §8）；「一键诊断」是**交出去**（脱敏后落盘、含字段与连接事实）。两者共用同一份 `tracing` 输出，不各记一套 |
+| 生命周期 | 采集窗口与导出结果都是房间页的临时状态；**切标签不重置**（采集的是这个进程的连接，与在看哪个房间无关），返回房间列表则随组件卸载消失（此时不会产生文件） |
+| 稳定钩子 | `db-diagnose` / `db-diagnose-status` / `db-diagnose-path` / `db-diagnose-finish` / `db-diagnose-abort` / `db-diagnose-copy` / `db-diagnose-close` |
 
 ---
 

@@ -89,6 +89,7 @@ danmubox/
 | 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android 应用私有目录——**实现口径**：由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，不是其下的 `files/` 子目录），`danmubox-core` 保持平台无关、不写死平台路径 |
 | 凭据文件 | `config.toml`，权限 **0600**，见 §4.1 |
 | 偏好文件 | `prefs.json`，见 §4.2 |
+| 诊断导出文件 | `danmubox-diagnose-YYYYMMDD-HHMMSS.txt`（UTC）；桌面写主目录下的 `Downloads`（不存在则回退主目录），Android 经 MediaStore 写公共 `Download`；**一次诊断恰好一个文件**，见 §4.4 |
 | 弹幕内存缓冲 | 单次房内会话内 5000 条环形缓冲，离开房间即销毁，见 §4.3 |
 | WS 心跳 | 30 秒（op=2）；连接后首包 60 秒内发出，收到 op=3 回应后重置为 30 秒 |
 | HTTP 心跳 | 60 秒一次，见 §6 |
@@ -158,6 +159,21 @@ sessdata = ""
 - 输入草稿与「最近发送记录」同样只存在**会话内内存**中：不落盘、不写 `prefs.json`（REQUIREMENTS.md §2.2）。
 - 若将来需要跨会话历史，方案是**追加式 JSONL 文件**（按天分片），不引入数据库；届时另立 ADR。
 - **不引入数据库**（[`decisions/0005-no-local-database.md`](decisions/0005-no-local-database.md)）：落库相关的字段与机制（`dedup_key`、`raw` 保留、`user_version` 迁移、索引、WAL、单写者 actor、保留天数、行数上限清理）不存在，文档与代码中不得出现。
+
+### 4.4 一键诊断的导出文件（规范性）
+
+需求直接来源：用户 2026-09-16 追加（非 `REQUIREMENTS.md` 原文）——「连上了却收不到弹幕」这条问题要能闭环，
+得让用户把连接诊断**交得出来**；同一条口径也把 `docs/testing.md` §10.5 那条遗留（Android 侧没有可打开的业务日志入口）一并解决。
+
+- **一次诊断恰好一个文件**：文件名 `danmubox-diagnose-YYYYMMDD-HHMMSS.txt`，时间取 **UTC**（与报告头一致，全仓不引入本地时区换算）。
+- **位置**：macOS / Windows / Linux 写**用户主目录下的 `Downloads`**（该目录不存在时回退到主目录）；Android 经 **MediaStore** 写**公共 `Download`**（API 29+ 不需要任何权限，本应用只声明 `INTERNET`）。
+  **不写**应用私有目录、不写这两个位置之外的任何地方；跑完不留临时文件。
+- **采集窗口固定 180 秒**（可提前结束）；窗口内收集连接事实与日志行，窗口到点或提前结束时导出。
+- **文件必须可安全发给别人**：凭据 / uid / 昵称按 §4.1 的安全红线与 `crates/danmubox-bili/src/redact.rs` 的口径抹成 `***`；
+  **房间号也抹掉**——日志里房间号是刻意保留的排障主键，这份要外发的文件不是（`operations.md` §3）。
+- **导出后立即清空**内存里的采集内容（含最近几次连接的事实）。
+- 与 §4.3 **不冲突**：§4.3 禁的是**弹幕内容**的落库 / 回看 / 导出；本文件不含弹幕原文
+  （`danmubox::raw` 那条逐条原始载荷的 debug 日志不进文件），只有连接事实与脱敏后的日志行。
 
 ## 5. 领域模型（规范性）
 
@@ -378,6 +394,8 @@ Frontend → Rust 命令（`invoke`）。本节是**命令名索引**，与 `app
 | `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持 |
 | `prefs_get` | 读偏好生效值全集（默认值已合并，见 §8） |
 | `prefs_set` | 写偏好补丁；未知键或非法值 → `BAD_REQUEST`，成功返回合并后的生效值全集 |
+| `diagnose_start` | 一键诊断：开始采集连接诊断（窗口 180 秒，见 §4.4）。同步命令：只写窗口的起止时刻，不碰 IO |
+| `diagnose_export` | 一键诊断：渲染并写出**恰好一个**报告文件（§4.4 的位置与命名）、结束采集并清空采集内容。返回 `{ path, name, bytes, attempts, logs, started_ms, ends_ms }`：`path` 是给用户看的位置（桌面端绝对路径、Android 为 `/sdcard/Download/…`） |
 | `frontend_log` | 前端控制台桥上报：`level` 为 `error` / `warn`（其余按 debug），`target = "danmubox::ui"`。页面 `console.error` / `console.warn` 与未捕获错误经它并入 Rust 侧同一份日志；同一告警 1 秒内只上报一次，防「渲染 → 告警 → 日志 → 重渲染」反馈环（`DANMUBOX_LOG` 见 §4） |
 
 Rust → Frontend 事件：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
@@ -474,6 +492,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 草稿与最近发送记录（会话内） | §4.3 |
 | bundle id 变更 | §1 |
 | 前端日志并入后端日志（控制台桥） | §7 `frontend_log`、§4 `DANMUBOX_LOG` |
+| 一键诊断：导出连接诊断文件（用户 2026-09-16 追加，非 REQUIREMENTS.md 原文；同时解决 `testing.md` §10.5 的「Android 没有可打开的业务日志入口」） | §4.4、§7 `diagnose_start` / `diagnose_export`、`ui.md` §3.6、`operations.md` §2.9 |
 
 > 已移除需求的历史清单见 [`../CHANGELOG.md`](../CHANGELOG.md) 的 Removed 段。
 

@@ -12,10 +12,12 @@
 //! 外加**节点轮换**（§15.3）：同一节点连续失败 2 次就换 `host_list` 下一项。
 
 use std::future::Future;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use danmubox_core::diagnose::{self, Attempt as DiagAttempt};
 use danmubox_core::ports::LiveSource;
 use danmubox_core::{
     Cancel, ConnState, Counters, Error, Message, MessageSink, Result, Room, RoomSession,
@@ -104,16 +106,45 @@ struct Attempt {
     /// 本次实际接入的候选节点下标（`host_list` 内的下标）；一个都没接上时是**起始候选**
     /// 的下标（它同样算一次失败，§15.3），`host_list` 都没取到时是 `None`。
     host: Option<usize>,
+    /// 本次尝试在诊断采集器里的那条记录（一键诊断，`docs/operations.md` §2.9）。
+    ///
+    /// 放在这里而不是另开一条信道：重连循环要在收场之后补上「退避多久、连续失败几次」，
+    /// 而那两件事是循环算出来的 —— 顺着收场结果带出来，比再传一个句柄更不容易丢。
+    diag: Arc<DiagAttempt>,
 }
 
 impl Attempt {
-    fn new(end: End, verified: bool, host: Option<usize>) -> Self {
+    fn new(diag: &Arc<DiagAttempt>, end: End, verified: bool, host: Option<usize>) -> Self {
         Self {
             end,
             verified,
             host,
+            diag: Arc::clone(diag),
         }
     }
+}
+
+/// [`End`] 说成一句人话，进诊断报告（`docs/operations.md` §2.9）。
+///
+/// 原样搬运连接层自己的判定，不额外解释：报告里要能看见「是认证失败、僵死、还是
+/// 对端关的」，而不是一个笼统的「连接失败」。
+fn end_reason(end: &End) -> String {
+    match end {
+        End::Live => "认证成功后收场（对端关闭或本次会话结束）".into(),
+        End::AuthFailed(reason) => reason.clone(),
+        End::Failed(reason) => reason.clone(),
+        End::Cancelled => "本次连接被取消（离开房间 / 手动刷新）".into(),
+    }
+}
+
+/// 业务载荷的 `cmd` 主干名（`DANMU_MSG:4:0:2:2:2:0` → `DANMU_MSG`）。
+///
+/// 与 `cmd::dispatch` 取主干的那一步同口径（那边是 `cmd.split(':').next()`）：
+/// 一键诊断的「未识别命令名单」要与 `Counters.unknown_cmd` 的分类对得上，
+/// 名字就不能带后缀。三行重复好过把 bili 的命令表复制第二份。
+fn cmd_name(value: &Value) -> String {
+    let raw = value.get("cmd").and_then(Value::as_str).unwrap_or_default();
+    raw.split(':').next().unwrap_or(raw).to_string()
 }
 
 /// WS 心跳包体：字面量，见 `docs/protocol.md` §8.1。
@@ -257,17 +288,24 @@ impl BiliLive {
         cancel: &Cancel,
         limits: &Limits,
         node_start: usize,
+        diag: &Arc<DiagAttempt>,
     ) -> Attempt {
         let buvid3 = match self.buvid3().await {
             Ok(buvid3) => buvid3,
             Err(err) => {
-                return Attempt::new(End::Failed(format!("取 buvid3 失败: {err}")), false, None)
+                return Attempt::new(
+                    diag,
+                    End::Failed(format!("取 buvid3 失败: {err}")),
+                    false,
+                    None,
+                )
             }
         };
-        let info = match self.http.danmu_info(room_id, &buvid3).await {
+        let info = match self.http.danmu_info(room_id, &buvid3, diag).await {
             Ok(info) => info,
             Err(err) => {
                 return Attempt::new(
+                    diag,
                     End::Failed(format!("getDanmuInfo 失败: {err}")),
                     false,
                     None,
@@ -275,7 +313,7 @@ impl BiliLive {
             }
         };
         if info.hosts.is_empty() {
-            return Attempt::new(End::Failed("host_list 为空".into()), false, None);
+            return Attempt::new(diag, End::Failed("host_list 为空".into()), false, None);
         }
 
         // `host_list` 就是候选节点表：**从 `node_start` 起**逐个尝试（游标可能已经绕过
@@ -291,6 +329,7 @@ impl BiliLive {
             let mut request = match format!("wss://{host}/sub").into_client_request() {
                 Ok(request) => request,
                 Err(err) => {
+                    diag.dial_failed();
                     last_error = format!("构造 WS 请求失败: {err}");
                     continue;
                 }
@@ -306,14 +345,18 @@ impl BiliLive {
             {
                 Ok(Ok((stream, _response))) => {
                     tracing::debug!(room_id, index, host = %host, "WS 握手完成");
+                    diag.node(index, Some(host));
+                    diag.dialed(danmubox_core::now_ms());
                     connected = Some((index, host.clone(), stream));
                     break;
                 }
                 Ok(Err(err)) => {
+                    diag.dial_failed();
                     tracing::warn!(room_id, index, host = %host, %err, "节点连接失败，尝试下一个");
                     last_error = format!("{host} 连接失败: {err}");
                 }
                 Err(_) => {
+                    diag.dial_failed();
                     tracing::warn!(
                         room_id,
                         index,
@@ -327,7 +370,8 @@ impl BiliLive {
         }
         let Some((host_index, chosen_host, stream)) = connected else {
             // 整个候选表都没接上：这次尝试在**起始候选**上收场（它同样算一次失败，§15.3）。
-            return Attempt::new(End::Failed(last_error), false, Some(first));
+            diag.node(first, None);
+            return Attempt::new(diag, End::Failed(last_error), false, Some(first));
         };
         let (mut write, mut read) = stream.split();
 
@@ -365,11 +409,14 @@ impl BiliLive {
             .await
         {
             return Attempt::new(
+                diag,
                 End::Failed(format!("发送认证包失败: {err}")),
                 false,
                 Some(host_index),
             );
         }
+        // 认证包确实写出去了才算「已发出」（§7.3 的 10 秒从这一刻起算）。
+        diag.auth_sent(danmubox_core::now_ms());
 
         // 本次会话的心跳作用域，任何退出路径都会停掉两个心跳任务。
         let session = Cancel::new();
@@ -404,7 +451,7 @@ impl BiliLive {
         };
 
         let outcome = self
-            .read_loop(room_id, sink, cancel, &verify, limits, &mut read)
+            .read_loop(room_id, sink, cancel, &verify, limits, &mut read, diag)
             .await;
 
         session.cancel();
@@ -429,6 +476,7 @@ impl BiliLive {
         verify: &Notify,
         limits: &Limits,
         read: &mut S,
+        diag: &Arc<DiagAttempt>,
     ) -> Attempt
     where
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
@@ -448,7 +496,7 @@ impl BiliLive {
             tokio::select! {
                 _ = cancel.cancelled() => {
                     let end = if verified { End::Live } else { End::Cancelled };
-                    return Attempt::new(end, verified, None);
+                    return Attempt::new(diag, end, verified, None);
                 }
                 _ = tokio::time::sleep_until(deadline) => {
                     if verified {
@@ -463,6 +511,7 @@ impl BiliLive {
                             limits.inbound_stale.as_millis()
                         );
                         return Attempt::new(
+                            diag,
                             End::Failed(format!(
                                 "僵死：距上次入站帧 {}ms（阈值 {}ms）",
                                 idle.as_millis(),
@@ -478,6 +527,7 @@ impl BiliLive {
                         "发出认证包后未在超时内收到 op=8，按认证失败处理"
                     );
                     return Attempt::new(
+                        diag,
                         End::AuthFailed(format!(
                             "认证超时：{}ms 内未收到 op=8",
                             limits.auth_timeout.as_millis()
@@ -490,6 +540,7 @@ impl BiliLive {
                     let message = match incoming {
                         None => {
                             return Attempt::new(
+                                diag,
                                 End::Failed("连接已被对端关闭".into()),
                                 verified,
                                 None,
@@ -497,6 +548,7 @@ impl BiliLive {
                         }
                         Some(Err(err)) => {
                             return Attempt::new(
+                                diag,
                                 End::Failed(format!("读取失败: {err}")),
                                 verified,
                                 None,
@@ -507,6 +559,9 @@ impl BiliLive {
                     // 任何入站帧都把「最后一次入站」往前推：判据是「未收到**任何**入站帧」，
                     // `op=3` / `op=5` / `op=8` 之外的控制帧同样算它活着。
                     last_inbound = tokio::time::Instant::now();
+                    // 同一个时刻进诊断采集器：护栏判死用的是这里，报告里要能对上（§2.9）。
+                    let inbound_at = danmubox_core::now_ms();
+                    diag.inbound(inbound_at);
                     match message {
                         WsMessage::Binary(bytes) => {
                             let mut decoded = Vec::new();
@@ -514,6 +569,21 @@ impl BiliLive {
                             for item in decoded {
                                 match item {
                                     Decoded::Business(value) => {
+                                        // 首条业务载荷到达的时刻 = 「有没有在喂弹幕」的判据
+                                        // （一键诊断，`docs/operations.md` §2.9）。
+                                        diag.business(inbound_at);
+                                        // 未识别命令的**名单**在这里补：`cmd::dispatch` 只累加
+                                        // 计数（`Counters.unknown_cmd`），它的已知命令表是私有的；
+                                        // 这里不重复一份表，改成看这次调用有没有把计数推上去。
+                                        // 平时（没在采集）连那两次原子读都不做。
+                                        let unknown_probe = diagnose::shared()
+                                            .recording_at(inbound_at)
+                                            .then(|| {
+                                                (
+                                                    cmd_name(&value),
+                                                    self.counters.unknown_cmd.load(Ordering::Relaxed),
+                                                )
+                                            });
                                         // 观众数走单独支路：它不进会话缓冲，只更新界面数字。
                                         match cmd::dispatch(room_id, &value, &self.counters) {
                                             Some(cmd::Dispatch::Message(message)) => {
@@ -524,6 +594,12 @@ impl BiliLive {
                                                 watched,
                                             }) => sink.publish_room_stats(room_id, online, watched),
                                             None => {}
+                                        }
+                                        if let Some((name, before)) = unknown_probe {
+                                            if self.counters.unknown_cmd.load(Ordering::Relaxed) > before
+                                            {
+                                                diagnose::shared().note_unknown_cmd(inbound_at, &name);
+                                            }
                                         }
                                     }
                                     Decoded::Popularity(value) => {
@@ -536,6 +612,7 @@ impl BiliLive {
                                             .get("code")
                                             .and_then(Value::as_i64)
                                             .unwrap_or(-1);
+                                        diag.auth_reply(inbound_at, Some(code));
                                         if code == 0 {
                                             verified = true;
                                             // 认证成功 = 可以发心跳了：放行心跳任务的**首包**
@@ -560,6 +637,7 @@ impl BiliLive {
                                                 "op=8 原始 body"
                                             );
                                             return Attempt::new(
+                                                diag,
                                                 End::AuthFailed(format!("认证失败 code={code}")),
                                                 verified,
                                                 None,
@@ -577,6 +655,7 @@ impl BiliLive {
                         }
                         WsMessage::Close(frame) => {
                             return Attempt::new(
+                                diag,
                                 End::Failed(format!("对端发送关闭帧: {frame:?}")),
                                 verified,
                                 None,
@@ -667,6 +746,11 @@ where
 
         let started = Instant::now();
         let outcome = attempt(node_start).await;
+        // 收场先记账再判取消：一键诊断要看到**每一次**尝试的结局，
+        // 包括「还没认证就被取消」那一档（`docs/operations.md` §2.9）。
+        outcome
+            .diag
+            .ended(danmubox_core::now_ms(), &end_reason(&outcome.end), outcome.verified);
         if cancel.is_cancelled() {
             return Ok(());
         }
@@ -747,6 +831,10 @@ where
             node_start,
             "退避等待"
         );
+        // 退避与连续失败次数是重连历史的两根坐标，跟着这一次尝试一起进报告。
+        outcome
+            .diag
+            .backoff(wait.as_millis() as u64, auth_failures);
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = tokio::time::sleep(wait) => {}
@@ -798,8 +886,21 @@ impl LiveSource for BiliLive {
         let limits = Limits::default();
         // 每次 `stream()` 调用都是一个**新的重连周期**（§14：手动重连取消当前连接、
         // 重新调到这里），因此连续认证失败计数与节点游标都从这里重新开始。
-        reconnect_loop(room_id, &sink, &cancel, &limits, |node_start| {
-            self.run_once(room_id, &sink, &cancel, &limits, node_start)
+        //
+        // 一键诊断：本周期用的那份协议计数交给采集器（报告里要的是「这一段连接」
+        // 收了多少包、丢了多少，而不是进程开机以来的总数）。
+        diagnose::shared().note_counters(Arc::clone(&self.counters));
+        // 先把这两个借用取出来：下面的 `async move` 要按值捕获（每次尝试一条新记录），
+        // 直接捕获 `sink` / `cancel` 会被理解成「把会话本身搬进闭包」，`FnMut` 搬不动。
+        let (sink, cancel) = (&sink, &cancel);
+        reconnect_loop(room_id, sink, cancel, &limits, |node_start| {
+            // 每次尝试各开一条诊断记录：一个重连周期里可能有好几次尝试，
+            // 报告要按次给出「票据 / 认证 / 首帧 / 结束原因 / 退避」。
+            let diag = diagnose::shared().begin_attempt(danmubox_core::now_ms());
+            async move {
+                self.run_once(room_id, sink, cancel, &limits, node_start, &diag)
+                    .await
+            }
         })
         .await
     }
@@ -1060,6 +1161,12 @@ mod tests {
         }
     }
 
+    /// 测试用的一条诊断记录：只为了满足 `Attempt` / `read_loop` 的签名，
+    /// 断言都落在收场结果上（诊断采集器自己另有用例）。
+    fn test_diag() -> Arc<DiagAttempt> {
+        danmubox_core::diagnose::Diagnoser::new().begin_attempt(0)
+    }
+
     fn frame(op: u32, body: &[u8]) -> WsMessage {
         WsMessage::Binary(proto::build_packet(op, proto::PROTOVER_HEARTBEAT, body).into())
     }
@@ -1136,6 +1243,7 @@ mod tests {
                 times.lock().expect("lock poisoned").push(Instant::now());
                 async move {
                     Attempt::new(
+                        &test_diag(),
                         End::AuthFailed("认证超时：40ms 内未收到 op=8".into()),
                         false,
                         Some(node_start),
@@ -1158,7 +1266,7 @@ mod tests {
         let mut stream = Box::pin(futures_util::stream::iter(items));
 
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => {
@@ -1192,7 +1300,7 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "认证成功后应保持运行直到被取消");
@@ -1226,7 +1334,7 @@ mod tests {
         >>());
         let started = Instant::now();
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut silent)
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut silent, &test_diag())
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => assert!(reason.contains("op=8"), "只描述事实：{reason}"),
@@ -1326,7 +1434,7 @@ mod tests {
             Box::pin(futures_util::stream::iter(items).chain(futures_util::stream::pending()));
         let started = Instant::now();
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
             .await;
         let End::Failed(reason) = &outcome.end else {
             panic!("一直没有入站帧必须判死，实际 {:?}", outcome.end);
@@ -1358,6 +1466,7 @@ mod tests {
                     times.lock().expect("lock poisoned").push(Instant::now());
                     async move {
                         Attempt::new(
+                            &test_diag(),
                             End::Failed("僵死：距上次入站帧 120ms（阈值 120ms）".into()),
                             true,
                             Some(node_start),
@@ -1408,7 +1517,7 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "有入站帧就不得判僵死");
@@ -1487,7 +1596,7 @@ mod tests {
                     // 传输层失败：认证失败会让连续认证失败计数先到上限而停在 Failed，
                     // 那不是本用例要看的轴。
                     async move {
-                        Attempt::new(End::Failed("模拟掉线".into()), false, Some(index))
+                        Attempt::new(&test_diag(), End::Failed("模拟掉线".into()), false, Some(index))
                     }
                 })
                 .await

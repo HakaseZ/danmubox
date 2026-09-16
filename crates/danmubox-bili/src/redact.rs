@@ -50,6 +50,13 @@ const SECRET_KEYS: [&str; 20] = [
     "buvid4",
 ];
 
+/// **导出文件**额外要抹的键名（见 [`redact_for_export`]）：房间号在日志里刻意保留，
+/// 在要外发的诊断文件里必须消失。
+///
+/// `room` 也在列：`room=5440` 这种写法在错误文案里出现过；`room_id` 比它长，
+/// 同一位置按最长键名优先，因此 `room_id=5440` 不会被短键名截成两半。
+const EXPORT_KEYS: [&str; 3] = ["room_id", "roomid", "room"];
+
 /// 值的结束符（属于值之外的第一个字符就能收尾）。
 fn is_value_end(ch: char) -> bool {
     matches!(
@@ -67,8 +74,8 @@ fn is_value_end(ch: char) -> bool {
 ///   `gethistory?roomid=…` 被 `mid` 误伤）。
 /// - 同一位置命中多个键名时取**最长**的那个：`dedeuserid__ckmd5` 把 `dedeuserid` 包在里面，
 ///   `uids[]` 把 `uid` 包在里面。位置优先于长度，所以 `vmid=` 不会被里面的 `mid=` 抢走。
-fn next_secret_key(lowered: &str, from: usize) -> Option<(usize, &'static str)> {
-    SECRET_KEYS
+fn next_secret_key(lowered: &str, from: usize, keys: &[&'static str]) -> Option<(usize, &'static str)> {
+    keys
         .iter()
         .filter_map(|key| {
             let mut search = from;
@@ -90,11 +97,17 @@ fn next_secret_key(lowered: &str, from: usize) -> Option<(usize, &'static str)> 
 /// 只认「键名 + 分隔符 + 值」三种成分齐全的位置：上游原话 `CSRF 校验失败` 里的键名之后
 /// 没有分隔符，不能被改写——错误信息里保留上游原话才有诊断价值。
 pub(crate) fn redact(text: &str) -> String {
+    redact_keys(text, &SECRET_KEYS)
+}
+
+/// [`redact`] 的键名可变版：导出链路要按更严的一档再抹一遍（见 [`redact_for_export`]），
+/// 规则本身仍然只写在这里。
+fn redact_keys(text: &str, keys: &[&'static str]) -> String {
     let lowered = text.to_ascii_lowercase();
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
     let mut search = 0;
-    while let Some((at, key)) = next_secret_key(&lowered, search) {
+    while let Some((at, key)) = next_secret_key(&lowered, search, keys) {
         let after_key = at + key.len();
         match secret_value(&text[after_key..]) {
             Some((value_at, value_len)) => {
@@ -111,6 +124,53 @@ pub(crate) fn redact(text: &str) -> String {
         }
     }
     out.push_str(&text[copied..]);
+    out
+}
+
+/// 导出的诊断文件（一键诊断，`docs/operations.md` §2.9）的**更严一档**脱敏。
+///
+/// 与日志口径的差别只有一处：**房间号也抹掉**。日志里房间号是刻意保留的
+/// （排障主键，见本模块顶部），但这份文件是**要发给别人**的 —— 房间与主播的关联
+/// 公开可查，留着等于把「谁在用、在哪个房间」一起送出去。
+///
+/// 两层都做，缺一不可：
+///
+/// - 先按日志口径 [`redact`]（凭据 / uid / 昵称），再抹房间号的**键名形态**
+///   （`room_id=` / `roomid=` / `room=`，日志与错误文案里的写法）；
+/// - 再按 `secret_numbers` 逐值抹**裸数字**：`getDanmuInfo` 的查询串是 `?id=5440`，
+///   `id=` 不在键名白名单里（别的接口也用它），靠键名认不出来；调用方把本机已知的
+///   房间号 / 短号 / 主播 uid 传进来，报告里这些数字一律消失。
+pub(crate) fn redact_for_export(text: &str, secret_numbers: &[i64]) -> String {
+    let text = redact_keys(text, &SECRET_KEYS);
+    let text = redact_keys(&text, &EXPORT_KEYS);
+    if secret_numbers.is_empty() {
+        return text;
+    }
+    mask_numbers(&text, secret_numbers)
+}
+
+/// 把整段数字里**等于**给定值的那些换成占位符（`15440` 这种更长的一串不动）。
+fn mask_numbers(text: &str, numbers: &[i64]) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if !bytes[index].is_ascii_digit() {
+            let ch = text[index..].chars().next().expect("下标在字符边界上");
+            out.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        let run = &text[start..index];
+        match run.parse::<i64>() {
+            Ok(value) if numbers.contains(&value) => out.push_str(PLACEHOLDER),
+            _ => out.push_str(run),
+        }
+    }
     out
 }
 
@@ -147,6 +207,24 @@ fn secret_value(rest: &str) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ③ 导出文件的更严一档：房间号也抹掉，且覆盖「键名形态」与「裸数字」两种，
+    /// 凭据 / uid / 昵称照旧（日志口径那一层不能因为叠了一层就漏）。
+    #[test]
+    fn export_redaction_also_removes_room_numbers() {
+        let text = "GET /getDanmuInfo?id=5440&type=0 room_id=5440 roomid=5440 \
+                    room=5440 DedeUserID=7654321 uname=某主播 观看 15440 人";
+        let out = redact_for_export(text, &[5440]);
+        assert_eq!(
+            out,
+            "GET /getDanmuInfo?id=***&type=0 room_id=*** roomid=*** room=*** \
+             DedeUserID=*** uname=*** 观看 15440 人",
+            "键名形态与裸数字都要抹，更长的一串数字（15440）不许误伤"
+        );
+        // 没给房间号时只走键名那一层，裸数字保持原样（调用方负责把已知值传全）。
+        let keys_only = redact_for_export("id=5440", &[]);
+        assert_eq!(keys_only, "id=5440");
+    }
 
     /// ① 实测泄漏样本的形状：`relation/followings?vmid=<自己>` 与批量状态接口的 `uids[]`
     /// 都不许留下数字。`vmid` 就是本机的 `DedeUserID`（`docs/contract.md` §4.1）。

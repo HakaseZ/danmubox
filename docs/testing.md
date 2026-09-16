@@ -312,6 +312,7 @@ graph TD
 | A-7 | 反向确认没有多余权限 | 系统「设置 → 应用 → danmubox → 权限」里**看不到相机、位置、通讯录、存储**这类项；`aapt2 dump badging` 的 `uses-permission` 只应有四枚：`INTERNET`、`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_DATA_SYNC`（后台保活的三枚，见 A-9；**声明即得，没有弹窗**）与 `POST_NOTIFICATIONS`（Android 13+ 唯一的运行时权限，冷启动问一次） |
 | A-8 | **系统返回手势**：房间页里从屏幕左边缘侧滑（`adb shell input swipe 0 <y> 600 <y>`，`y` 取屏中），再换右边缘（`1080 <y>` → `480 <y>`）；然后先开一个面板（如「筛选」）再侧滑；最后回到**根页面**（房间列表页、无面板）按返回 | 侧滑 → 回房间列表（**不**退出应用）；面板开着时侧滑 → 面板关掉、**不**跳页；根页面按返回 → 应用退出（`pidof dev.kksk.danmubox` 为空）。**左右边缘都要试**：返回手势归系统管，两侧是否都能返回由系统设置决定，界面只负责消费它。三级顺序见 [`ui.md`](ui.md) §2.6 |
 | A-9 | **后台保活（有连接那一档）**：装好包后先给通知权限（`adb shell pm grant dev.kksk.danmubox android.permission.POST_NOTIFICATIONS`，等价于首启点「允许」）；进房间（如公开测试房间 `1`）等连接成功；按 HOME 退到后台，**等 ≥3 分钟**；期间查四项 —— ① 进程还在：`adb shell pidof dev.kksk.danmubox`；② 到 443 的长连还在：`/proc/<pid>/fd` 的 socket inode → `/proc/net/tcp{,6}` 里状态 `01`（ESTABLISHED）、远端端口 `01BB`；③ 通知在：`adb shell dumpsys notification --noredact` 里能看到渠道 `danmubox-keepalive` 与那条通知；④ `adb logcat` 无 `FATAL`、无反复重连刷屏。最后点通知回前台 | 四项都在；点通知回到应用后（= 走到 `onStart`）再查一遍：`dumpsys activity services` 里 `KeepAliveService` 消失、`dumpsys notification` 里那条通知消失、进程与连接**不受影响**（服务本身不碰网络）。行为与平台限制见 [`operations.md`](operations.md) §2.8 |
+| A-11 | **一键诊断（导出到公共下载目录）**：进一个房间，点房间头 `⋯` →「一键诊断」，等倒计时（或点「提前结束并导出」）；然后 `adb shell ls -l /sdcard/Download` 与 `adb pull /sdcard/Download/danmubox-diagnose-*.txt` | ① 目录里**恰好一个** `danmubox-diagnose-<UTC 时间戳>.txt`（没有临时文件、没有第二个）；② 面板上显示的就是该路径（点「复制路径」能粘贴出来）；③ `adb pull` 出来的文件可读、含「结论速览 / 连接尝试 / 协议计数 / 采集窗口内的日志」，且凭据、uid、昵称、**房间号**都是 `***`（口径 `contract.md` §4.4、`operations.md` §2.9） |
 | A-10 | **后台保活（不该起的那两档）**：① 不打开任何房间（停在房间列表页）→ 按 HOME；② 开着房间，但在**根页面按返回**退出应用（A-8 的最后一档） | 两档都**不该**出现 `KeepAliveService`，通知抽屉里也不该有那条常驻通知（① 没连接；② `isFinishing`，用户是主动退出）。检查方式同 A-9 的 ③ |
 
 ### 10.5 Android：无真机时的验证边界
@@ -355,7 +356,7 @@ graph TD
 | 遗留 | 现象与证据 | 状态 |
 |---|---|---|
 | 退出应用时的 `FORTIFY: pthread_mutex_lock called on a destroyed mutex` | 见上表「无崩溃」那一行的三条证据（3 份退出日志各命中一次，进程随后 `exited cleanly (0)`） | **未修**：成因未查（疑似 Rust 侧某个在 teardown 阶段已被销毁却仍被触碰的锁），不属本批范围，需另开票；也不得再写成「零 crash」 |
-| Android 侧**没有可开启的业务日志入口** | 设备上应用自身的业务日志**零覆盖**，排查只能靠 `adb logcat`（系统日志）；`DANMUBOX_LOG=debug` 目前只影响 Rust 侧的 stdout | **未做**：建议加一个可开关的调试日志入口（能落在设备上可取的位置），先把「看得见」解决掉 |
+| Android 侧**没有可开启的业务日志入口** | 设备上应用自身的业务日志**零覆盖**，排查只能靠 `adb logcat`（系统日志）；`DANMUBOX_LOG=debug` 目前只影响 Rust 侧的 stdout | **已解决（2026-09-21，一键诊断）**：房间头 `⋯` →「一键诊断」采集 3 分钟后把报告写到**公共下载目录**（`/sdcard/Download/danmubox-diagnose-<UTC 时间戳>.txt`），里面有连接事实与**采集窗口内那一段业务日志**（带字段、已脱敏），用户自己能打开、自己决定发不发（口径 `operations.md` §2.9、`contract.md` §4.4）。本条按新形态验收：模拟器上 `adb shell ls /sdcard/Download` 恰好一个文件、`adb pull` 出来内容与脱敏都对 —— 见 §10.4 的 A-11 |
 
 ### 10.6 无头冒烟的已知偏差（**保留断言、不放松**）
 

@@ -111,6 +111,21 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // 已删除；存量迁移见 [`LEGACY_GIFT_PANEL_MODE`]。
         spec("ui.gift_in_danmaku", Ty::Bool, json!(true), None, None, None),
         spec("ui.gift_panel", Ty::Bool, json!(true), None, None, None),
+        // 礼物栏与弹幕区**共享一块上下分区**时的顺序与份额（issue #8，用户 2026-09-16）：
+        // 默认 `false` / `0.35` 是改前的形态（礼物在下、弹幕吃掉绝大部分高度）。
+        // 两者都只在 `ui.gift_panel` 为真时有意义；关掉那一枚时共享区域退化为弹幕区全高。
+        // 比例的含义 = 礼物栏占**共享分区**高度的份额，与它在上还是在下无关（换位不改比例）；
+        // 落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 其折叠头 / 弹幕区 ≥ 3 行），
+        // 因此这里存的是**指针意图**而不是实测像素 —— 同一窗口尺寸下重开必然得到同一画面。
+        spec("ui.gift_pane_on_top", Ty::Bool, json!(false), None, None, None),
+        spec(
+            "ui.gift_pane_ratio",
+            Ty::Num,
+            json!(0.35),
+            Some(0.10),
+            Some(0.90),
+            None,
+        ),
         // 互动/进场消息：默认「显示一会儿就淡出」，关掉则常驻（需求 §2.4）。
         spec(
             "ui.interact_auto_hide",
@@ -483,6 +498,12 @@ mod tests {
         assert_eq!(prefs.get("ui.theme").unwrap(), json!("system"));
         assert_eq!(prefs.get("ui.gift_in_danmaku").unwrap(), json!(true));
         assert_eq!(prefs.get("ui.gift_panel").unwrap(), json!(true));
+        assert_eq!(
+            prefs.get("ui.gift_pane_on_top").unwrap(),
+            json!(false),
+            "默认礼物在下、弹幕在上（与改前一致，契约 §8）"
+        );
+        assert_eq!(prefs.get("ui.gift_pane_ratio").unwrap(), json!(0.35));
         assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
         assert_eq!(prefs.get("history.buffer_rows").unwrap(), json!(5000));
         assert_eq!(prefs.buffer_rows(), 5000);
@@ -544,6 +565,13 @@ mod tests {
             json!({ "ui.theme": "neon" }),
             json!({ "ui.auto_scroll": "yes" }),
             json!({ "ui.interact_auto_hide": 1 }),
+            // 共享分区的两枚键（契约 §8）：顺序只能是布尔、份额只能是 0.10–0.90 的数
+            json!({ "ui.gift_pane_on_top": "yes" }),
+            json!({ "ui.gift_pane_on_top": 1 }),
+            json!({ "ui.gift_pane_ratio": "0.35" }),
+            json!({ "ui.gift_pane_ratio": 0.0 }),
+            json!({ "ui.gift_pane_ratio": 1.0 }),
+            json!({ "ui.gift_pane_ratio": 1.5 }),
             json!({ "filter.kinds": ["danmaku", "notice"] }),
             json!({ "filter.uids": [1, "2"] }),
             json!({ "history.buffer_rows": 5 }),
@@ -559,6 +587,49 @@ mod tests {
                 "应拒绝 {bad}"
             );
         }
+    }
+
+    /// 共享分区的两枚键（issue #8）：份额的两端**闭区间**收，越界写不进去；
+    /// 文件里被手写坏的值按非法值忽略、回落到默认（契约 §4.2：只忽略、不炸）。
+    #[test]
+    fn split_pane_prefs_bounds_and_file_fallback() {
+        for ok in [0.10, 0.35, 0.90] {
+            let mut prefs = Prefs::new();
+            prefs
+                .set_patch(&json!({ "ui.gift_pane_ratio": ok }))
+                .unwrap_or_else(|e| panic!("0.35 档里 {ok} 应被接受：{e}"));
+            assert_eq!(prefs.get("ui.gift_pane_ratio").unwrap(), json!(ok));
+        }
+
+        let mut prefs = Prefs::new();
+        prefs
+            .set_patch(&json!({
+                "ui.gift_pane_on_top": true,
+                "ui.gift_pane_ratio": 0.5,
+            }))
+            .unwrap();
+        let effective = prefs.effective();
+        assert_eq!(effective["ui.gift_pane_on_top"], json!(true));
+        assert_eq!(effective["ui.gift_pane_ratio"], json!(0.5));
+
+        let loaded = load_temp(
+            "pane-bad",
+            r#"{"ui.gift_pane_on_top":true,"ui.gift_pane_ratio":2.5}"#,
+        );
+        assert_eq!(
+            loaded.get("ui.gift_pane_on_top").unwrap(),
+            json!(true),
+            "合法的那一枚照常生效"
+        );
+        assert_eq!(
+            loaded.get("ui.gift_pane_ratio").unwrap(),
+            json!(0.35),
+            "越界的份额回落默认值"
+        );
+        assert!(
+            loaded.overrides().get("ui.gift_pane_ratio").is_none(),
+            "非法值不该进 overrides（下次落盘即清掉）"
+        );
     }
 
     #[test]

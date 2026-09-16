@@ -2048,11 +2048,23 @@
   min-width: 0;
 }
 
+/* 两块的标题（本批第 5 条：标题格式要**醒目一些**）。只动视觉层级 —— 字号 / 字重 / 字色 /
+   分隔线 / 间距；**文案与信息结构一字不动**（两块仍是「标题 + 清单」）。
+   - 字号：`--fs-2`（在 .filterGrid 的 0.86em 之上再乘 0.86 ≈ 正文字号的 0.74 倍）提到
+     `--fs-6`（≈ 1 倍正文）—— 改前标题比它自己的清单项还小，层级是反的；
+   - 字重 700 + 字色 `--fg`（正文，深色 15.8:1 / 浅色 15.5:1；改前是 600 + `--fg-dim` 次级灰）；
+   - 底部一条发丝分隔线（`--border`，只作分隔、不作组件边界）：一块的起点看得见。
+   三项都不改横向盒模型：标题只占自己那一行，窄屏 360 下两列仍是每列 ≈ 160px、
+   面板仍不许横向滚动（§9.1）；面板高度还是 `--panel-h` 那个定值，多出来的一点高度由
+   面板内部滚动吸收（§6.1）。 */
 .filterSection h3 {
   margin: 0;
-  font-size: var(--fs-2);
-  font-weight: 600;
-  color: var(--fg-dim);
+  font-size: var(--fs-6);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--fg);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
 }
 
 .filterSection label,

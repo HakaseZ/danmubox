@@ -101,6 +101,12 @@ export interface DisplayRow {
   message: Message;
   /** 礼物连击折叠了几条（1 表示未折叠）；只有礼物连击会 > 1。 */
   count: number;
+  /**
+   * 这一行是**低价礼物桶**（`ui.gift_collapse_cheap` 折叠出来的那一条，见
+   * `collapseCheapGiftRows`）：`count` 与 `amount` 都是整桶合计。
+   * 只有礼物栏的那一条合并行带它，其余行（含未折叠的单条低价礼物）都没有。
+   */
+  cheap?: boolean;
 }
 
 /** 关注列表每页条数（需求 §2.11 的分页；前端分页，后端一次拉全）。 */
@@ -255,9 +261,14 @@ export function splitGiftRows(
   rows: DisplayRow[],
   prefs: Prefs,
 ): { chatRows: DisplayRow[]; giftRows: DisplayRow[] } {
-  const giftRows = prefs["ui.gift_panel"]
+  // 礼物栏那一头还要过一道**低价礼物桶**（`ui.gift_collapse_cheap`，见 `collapseCheapGiftRows`）：
+  // 桶只改礼物栏的分组形状 —— 弹幕流那一头（chatRows）与统计口径（`giftStatRows`）都不经过它。
+  const panelRows = prefs["ui.gift_panel"]
     ? rows.filter((row) => GIFT_KINDS.includes(row.message.kind))
     : [];
+  const giftRows = prefs["ui.gift_collapse_cheap"]
+    ? collapseCheapGiftRows(panelRows)
+    : panelRows;
   const chatRows = prefs["ui.gift_in_danmaku"]
     ? rows
     : rows.filter((row) => !GIFT_KINDS.includes(row.message.kind));
@@ -289,6 +300,85 @@ export function amountText(amount: number, kind: MessageKind): string {
   if (!Number.isFinite(amount) || amount <= 0) return "";
   const yuan = kind === "superchat" ? amount : amount / COINS_PER_YUAN;
   return `${yuan.toLocaleString(undefined, { maximumFractionDigits: 3 })} 元`;
+}
+
+/**
+ * 低价礼物的门槛：单个价值 ≤ 0.1 **元**（契约 §8 两枚键的共同判据）。
+ *
+ * 单位口径照 `amountText`：一律先换算成元再比，`COINS_PER_YUAN` = 1000，因此门槛恰好是
+ * **100 金瓜子** —— 冒烟夹具里那条「投喂 辣条」（100 金瓜子）就落在边界上、算低价。
+ */
+export const CHEAP_GIFT_YUAN = 0.1;
+
+/**
+ * 这条消息算不算「低价礼物」（契约 §8 的口径表）：
+ *
+ * ① 只有 `kind === "gift"` 参与 —— SC 最低档 30 元、舰长 138 元，两枚开关**不碰**它们；
+ * ② 单个价值 ≤ 0.1 元（0.09 与 0.1 算低价，0.11 不算）；
+ * ③ `amount <= 0` **不算低价**：协议 §10.2 / §10.6 的口径是「上游没给价、不得猜测」
+ *    （界面也不画金额格），不是「免费」—— 折进低价桶等于替上游猜价。这一条同时管住 `0` 那一档。
+ */
+export function isCheapGift(message: Message): boolean {
+  return (
+    message.kind === "gift" &&
+    message.amount > 0 &&
+    message.amount / COINS_PER_YUAN <= CHEAP_GIFT_YUAN
+  );
+}
+
+/**
+ * 低价礼物桶（`ui.gift_collapse_cheap`，docs/ui.md §5.3）：礼物栏里的低价礼物合并成**一条**。
+ *
+ * 它与礼物连击折叠（`toDisplayRows`）**不是同一件事，别把两者并到一处**：
+ * - 连击折叠折的是**同一个动作的重复**（`combo_id` 相同且相邻），取**最新**一条的身份，
+ *   行的位置跟着连击走 —— 连击有天然的顺序与边界；
+ * - 低价礼物桶折的是**一段时间里所有人的零钱礼物**，彼此无关。它取桶里**第一条**的身份与
+ *   **位置**：新礼物进来只改这一行的 `×N` 与金额，行本身不跳位（React key = 第一条的
+ *   `local_id` 也不变），虚拟列表的锚点因此稳定。
+ *
+ * 两者叠加时（低价礼物本身也在连击）顺序是**先连击、后成桶**：桶里的 `count` 已是连击折叠后的
+ * 次数，与礼物栏「数量与弹幕行同口径」那条一致。桶里只有一条时原样返回（本来就是一条）。
+ *
+ * `cheap` 标记只在这一处置位：合并行的 `amount` 是整桶合计，早就超过 100 金瓜子了，
+ * 单看金额认不出它是低价（`giftStatRows` 靠这个标记整桶剔除）。
+ */
+export function collapseCheapGiftRows(rows: DisplayRow[]): DisplayRow[] {
+  const bucket = rows.filter((row) => isCheapGift(row.message));
+  if (bucket.length <= 1) return rows;
+  const head = bucket[0];
+  const merged: DisplayRow = {
+    message: {
+      ...head.message,
+      amount: bucket.reduce((sum, row) => sum + row.message.amount, 0),
+    },
+    count: bucket.reduce((sum, row) => sum + row.count, 0),
+    cheap: true,
+  };
+  const out: DisplayRow[] = [];
+  let placed = false;
+  for (const row of rows) {
+    if (!isCheapGift(row.message)) {
+      out.push(row);
+      continue;
+    }
+    if (!placed) {
+      out.push(merged);
+      placed = true;
+    }
+  }
+  return out;
+}
+
+/**
+ * 参与**折叠汇总 / 统计**的礼物行（`ui.gift_exclude_cheap_stats`，契约 §8）：
+ * 开时把低价礼物（含折叠后那一条桶）整条剔除，关时原样返回。
+ *
+ * **只改统计**：礼物栏的条目（`splitGiftRows` 的 giftRows）与弹幕流的分支都不经过这里 ——
+ * 「不影响它们作为消息的展示」就是这枚键的定义（契约 §8）。
+ */
+export function giftStatRows(rows: DisplayRow[], prefs: Prefs): DisplayRow[] {
+  if (!prefs["ui.gift_exclude_cheap_stats"]) return rows;
+  return rows.filter((row) => !row.cheap && !isCheapGift(row.message));
 }
 
 /**

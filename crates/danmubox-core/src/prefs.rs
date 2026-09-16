@@ -126,6 +126,19 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             Some(0.90),
             None,
         ),
+        // 低价礼物（单个价值 ≤ 0.1 元 = 100 金瓜子）的两枚开关（issue 2609162056 第 3、4 条）。
+        // **默认都是 false**：多数人现有效果不该被这两条辅助开关改掉 —— 折叠会改礼物栏的分组形状、
+        // 剔除会改折叠头的统计口径，两者都是「用户自己要才生效」的显示偏好。
+        // 判定口径（门槛、`amount <= 0` 不算低价、只认 kind = "gift"）在契约 §8 与 ui.md §5.3。
+        spec("ui.gift_collapse_cheap", Ty::Bool, json!(false), None, None, None),
+        spec(
+            "ui.gift_exclude_cheap_stats",
+            Ty::Bool,
+            json!(false),
+            None,
+            None,
+            None,
+        ),
         // 互动/进场消息：默认「显示一会儿就淡出」，关掉则常驻（需求 §2.4）。
         spec(
             "ui.interact_auto_hide",
@@ -504,6 +517,16 @@ mod tests {
             "默认礼物在下、弹幕在上（与改前一致，契约 §8）"
         );
         assert_eq!(prefs.get("ui.gift_pane_ratio").unwrap(), json!(0.35));
+        assert_eq!(
+            prefs.get("ui.gift_collapse_cheap").unwrap(),
+            json!(false),
+            "低价礼物折叠默认关：默认形态必须与改前一致（契约 §8）"
+        );
+        assert_eq!(
+            prefs.get("ui.gift_exclude_cheap_stats").unwrap(),
+            json!(false),
+            "低价礼物剔除统计默认关：默认形态必须与改前一致（契约 §8）"
+        );
         assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
         assert_eq!(prefs.get("history.buffer_rows").unwrap(), json!(5000));
         assert_eq!(prefs.buffer_rows(), 5000);
@@ -657,17 +680,35 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("danmubox-prefs-{}", std::process::id()));
         let path = dir.join("prefs.json");
         let mut prefs = Prefs::new();
+        // 两枚低价礼物开关写进这一趟落盘 / 读回：它们的白名单与默认值由 `spec_table_matches_contract_keys`
+        // 与 `defaults_are_the_documented_ones` 把住，这里补的是「改过的值真的落进 prefs.json 并读得回来」
+        // —— 契约 §8 两枚键的默认都是 `false`，所以「读回来是 true」正是用户勾过的那件事。
         prefs
-            .set_patch(&json!({ "ui.font_scale": 1.14, "filter.uids": [7] }))
+            .set_patch(&json!({
+                "ui.font_scale": 1.14,
+                "filter.uids": [7],
+                "ui.gift_collapse_cheap": true,
+                "ui.gift_exclude_cheap_stats": true,
+            }))
             .unwrap();
         prefs.save(&path).unwrap();
 
         let raw: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(raw.as_object().unwrap().len(), 2);
+        assert_eq!(raw.as_object().unwrap().len(), 4);
 
         let loaded = Prefs::load(&path);
         assert_eq!(loaded.get("ui.font_scale").unwrap(), json!(1.14));
         assert_eq!(loaded.get("ui.theme").unwrap(), json!("system"));
+        assert_eq!(
+            loaded.get("ui.gift_collapse_cheap").unwrap(),
+            json!(true),
+            "折叠低价礼物勾上之后要读得回来（契约 §8）"
+        );
+        assert_eq!(
+            loaded.get("ui.gift_exclude_cheap_stats").unwrap(),
+            json!(true),
+            "剔除低价礼物统计勾上之后要读得回来（契约 §8）"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

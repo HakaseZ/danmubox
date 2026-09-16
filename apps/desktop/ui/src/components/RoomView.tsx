@@ -12,6 +12,7 @@ import {
   amountText,
   formatCount,
   GIFT_KINDS,
+  giftStatRows,
   splitGiftRows,
   type DisplayRow,
 } from "../filtering";
@@ -535,19 +536,47 @@ export function RoomView({
    *
    * 条数取连击折叠后的**次数之和**（`DisplayRow.count`），金额取折叠后累加的 `message.amount`
    * —— 与 `toDisplayRows` 同源，不另立一套口径。空组不出现（没有 SC 就不显示 SC 那一格）。
+   *
+   * 输入是 `giftStatRows(giftRows, prefs)` 而不是 `giftRows`：`ui.gift_exclude_cheap_stats`
+   * 打开时低价礼物整条桶**不进统计**（issue 2609162056 第 4 条）。这枚键只改这一处的口径 ——
+   * 礼物栏的条目由 `giftRows` 渲染，与它无关；「礼物 / SC（N）」那个 N 也跟着这里走
+   * （它数的就是这份汇总的条数，不是礼物栏的行数）。
    */
-  const giftGroups = GIFT_KINDS.map((kind) => {
-    const group = giftRows.filter((row) => row.message.kind === kind);
-    return {
-      kind,
-      label: KIND_LABEL[kind],
-      count: group.reduce((sum, row) => sum + row.count, 0),
-      amount: amountText(
-        group.reduce((sum, row) => sum + row.message.amount, 0),
+  const giftStat = giftStatRows(giftRows, prefs);
+  const giftGroups = GIFT_KINDS
+    .map((kind) => {
+      const group = giftStat.filter((row) => row.message.kind === kind);
+      return {
         kind,
-      ),
-    };
-  }).filter((group) => group.count > 0);
+        label: KIND_LABEL[kind],
+        count: group.reduce((sum, row) => sum + row.count, 0),
+        amount: amountText(
+          group.reduce((sum, row) => sum + row.message.amount, 0),
+          kind,
+        ),
+      };
+    })
+    .filter((group) => group.count > 0);
+
+  /**
+   * 折叠头的汇总文本（docs/ui.md §5.3），三种形态：
+   * - 统计集非空 → 按 kind 分组的「本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 / …」；
+   * - 统计集空、但礼物栏里**还有条目** → 「本场 低价礼物已剔除」：`ui.gift_exclude_cheap_stats`
+   *   把低价礼物整条剔出统计，而它们在展开区里照常可见 —— 这时写「本场暂无礼物」是自相矛盾；
+   * - 统计集空且礼物栏也是空的 → 「本场暂无礼物」（原口径）。
+   */
+  const giftSummaryText =
+    giftGroups.length > 0
+      ? `本场 ${giftGroups
+          .map((group) =>
+            group.amount.length > 0
+              ? `${group.label} ${group.count} · ${group.amount}`
+              : `${group.label} ${group.count}`,
+          )
+          .join(" / ")}`
+      : giftRows.length > 0
+        ? "本场 低价礼物已剔除"
+        : "本场暂无礼物";
 
   const copyText = async (text: string) => {
     try {
@@ -862,17 +891,10 @@ export function RoomView({
                 <span className={styles.giftDockTitle}>
                   礼物 / SC（{giftGroups.reduce((sum, group) => sum + group.count, 0)}）
                 </span>
-                {/* 折叠态汇总**按 kind 分组**：三组单位已统一为元（契约 §5）—— 分组结构保留，是否合并成一条合计待用户拍板（§5.3） */}
+                {/* 折叠态汇总**按 kind 分组**：三组单位已统一为元（契约 §5）—— 分组结构保留，是否合并成一条合计待用户拍板（§5.3）。
+                    文本本体在 `giftSummaryText`（本组件上方，与统计集同源）：`ui.gift_exclude_cheap_stats` 剔掉低价后，「本场暂无礼物」不再成立。 */}
                 <span className={styles.giftDockSummary} data-testid="db-gift-summary">
-                  {giftGroups.length === 0
-                    ? "本场暂无礼物"
-                    : `本场 ${giftGroups
-                        .map((group) =>
-                          group.amount.length > 0
-                            ? `${group.label} ${group.count} · ${group.amount}`
-                            : `${group.label} ${group.count}`,
-                        )
-                        .join(" / ")}`}
+                  {giftSummaryText}
                 </span>
                 <span className={styles.giftDockToggle}>{giftOpen ? "收起" : "展开"}</span>
               </button>

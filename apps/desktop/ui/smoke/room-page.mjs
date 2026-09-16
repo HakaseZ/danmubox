@@ -31,8 +31,10 @@
 //   step5  互动行 8 秒后自动消失
 //   step6  关掉自动消失后互动行常驻
 //   filter 筛选面板的两块表单是**两列勾选清单**（issue 2609160959 第 3 / 4 条）：消息类型 6 项
-//          与辅助功能 4 枚开关都是按行铺满的两列（列/行几何 + 不许横向滚动 + 不再是芯片样），
-//          四枚辅助开关逐枚点开再点回（偏好与复选框同步翻）；辅助功能 = 字号滑杆（整行）+ 四枚开关
+//          与辅助功能 6 枚开关都是按行铺满的两列（列/行几何 + 不许横向滚动 + 不再是芯片样），
+//          六枚辅助开关逐枚点开再点回（偏好与复选框同步翻）；辅助功能 = 字号滑杆（整行）+ 六枚开关；
+//          两块标题（消息类型 / 辅助功能）的视觉层级比清单项醒目（issue 2609162056 第 5 条：
+//          字号 / 字重 / 字色 / 分隔线，文案与结构一字不动）
 //   layout 弹幕列表是唯一生长区；面板向上展开时列表上弹且最新一条不被遮挡；表情尺寸分级；
 //          内容不足视口时整体贴底；头像列永远占位（昵称三列纵向对齐）；粉丝牌真彩色与兜底色；
 //          回复关系可见；舰长标只认本房间的 guard_level；「回到最新」是**圆形图标钮**（下箭头，
@@ -64,6 +66,11 @@
 //          短按 / 按住前就移动（在滚列表）/ ESC 三条路都不换位；换位不改比例（只挪位置）；
 //          ui.gift_panel 关掉后分区退化为弹幕区全高、分割条与礼物栏一起消失、换位停用。
 //          两条手势各走一条指针链（拖分割条用 mouse、长按换位用 touch）。
+//   cheapgift 低价礼物两枚开关（issue 2609162056 第 3 / 4 条）：`ui.gift_collapse_cheap` 只改
+//          礼物栏的分组形状（≤0.1 元的礼物合并成一条）、`ui.gift_exclude_cheap_stats` 只改
+//          折叠头的统计口径（礼物 / SC（N）与三组明细），两枚**默认都关**、互相独立；
+//          边界按「0.09 / 0.10 算低价、0.11 不算、0 元（上游没给价）不算」逐条量；SC 与大航海
+//          在两枚开关的四种组合下逐字不变。夹具放在**空会话的新房间**里量（见那一段的说明）。
 //   admin  房管权限前置（**有房管身份才有入口**；不是房管时菜单里没有这一项）、写操作二次确认与
 //          请求形状、身份就绪即预载三块名单、面板三块收成三个 tab（roving tabindex + ←→/Home/End，
 //          tab 文案只有名单名、不带计数）、单点动作走行右键菜单、批量一次确认按序执行、
@@ -449,6 +456,9 @@ const MOCK = (theme) => `(function () {
     // 替身里必须与 prefs_get 同形（真实命令返回的是**合并过默认值的全集**），否则界面拿到的
     // 是 undefined、断言也就量不到「默认值」这件事。
     "ui.gift_pane_on_top": false, "ui.gift_pane_ratio": 0.35,
+    // 低价礼物两枚开关（issue 2609162056 第 3 / 4 条，契约 §8）：**默认都是 false**（改前的
+    // 形态就是「不折叠、不剔除」）。替身里必须与 prefs_get 同形，界面才量得到「默认关」这件事。
+    "ui.gift_collapse_cheap": false, "ui.gift_exclude_cheap_stats": false,
     "ui.show_timestamp": false,
     // 键清单照抄契约 §8：ui.system_notice 随「系统类只由 filter.kinds 把关」
     // 一起删掉（两个门盖的消息集合逐字相同），关键词命中那三键随 item 9 一起删掉了，
@@ -3579,9 +3589,9 @@ const MOCK = (theme) => `(function () {
       !filterPanel.querySelector('[data-testid="db-pref-theme"]');
     // 两块各自按**稳定钩子**定位（不再靠 sections[0] / [1] 的下标）：db-filter-kinds /
     // db-filter-aux 是本次新增的 data-testid（docs/ui.md §8.5）。
-    // 「消息类型」= 6 项（契约 §8 的 kind 全集）；「辅助功能」= 字号滑杆 + **四枚**复选框。
-    // 文案由下面的 step4 / step6 / gift 三段用 clickLabelIn / setGiftSwitch 点到
-    // （点得到就说明文案在），这里只列文案并数控件，不解析 select 的 innerText。
+    //      「消息类型」= 6 项（契约 §8 的 kind 全集）；「辅助功能」= 字号滑杆 + **六枚**复选框。
+    //      文案由下面的 step4 / step6 / gift / cheapgift 四段用 clickLabelIn / setGiftSwitch 点到
+    //      （点得到就说明文案在），这里只列文案并数控件，不解析 select 的 innerText。
     var kindsSection = byTestId("db-filter-kinds");
     var auxSection = byTestId("db-filter-aux");
     var labelsOf = function (root) {
@@ -3596,7 +3606,8 @@ const MOCK = (theme) => `(function () {
     out.filterPanelKindLabels =
       out.filterPanelKindItems.join(",") === "弹幕,礼物,SC,互动,大航海,系统";
     // 「辅助功能」块的控件清单：**旧的「礼物栏」下拉已随 issue 2609152029 第 1 条删除**
-    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），所以这里数的是四枚复选框，并另外
+    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），末两枚是低价礼物开关
+    // （issue 2609162056 第 3 / 4 条），所以这里数的是六枚复选框，并另外
     // 钉住「select 一个都不剩」；字号滑杆仍在（它只是排布换成了整行）。
     var auxLabels = labelsOf(auxSection).filter(function (l) {
       return !!l.querySelector('input[type="checkbox"]');
@@ -3609,9 +3620,11 @@ const MOCK = (theme) => `(function () {
     };
     out.filterPanelAuxSwitchesPresent =
       out.filterPanelAuxLabels.indexOf("弹幕包含礼物") >= 0 &&
-      out.filterPanelAuxLabels.indexOf("独立礼物栏") >= 0;
+      out.filterPanelAuxLabels.indexOf("独立礼物栏") >= 0 &&
+      out.filterPanelAuxLabels.indexOf("折叠低价礼物") >= 0 &&
+      out.filterPanelAuxLabels.indexOf("剔除低价礼物统计") >= 0;
     out.filterPanelAuxComplete = !!out.filterPanelAuxControls.fontScale &&
-      out.filterPanelAuxControls.switches === 4 &&
+      out.filterPanelAuxControls.switches === 6 &&
       out.filterPanelAuxControls.selects === 0 &&
       out.filterPanelAuxSwitchesPresent;
     // 字号滑杆那一行**仍占满整行**（横跨两列，滑杆贴右）：两列清单里唯一的例外，也是
@@ -3660,7 +3673,8 @@ const MOCK = (theme) => `(function () {
         geom.perColumn === perColumn && geom.order === order;
     };
     out.filterPanelKindsTwoColumns = twoColumnsEven(out.filterPanelKindGeom, "3/3", "010101");
-    out.filterPanelAuxTwoColumns = twoColumnsEven(out.filterPanelAuxGeom, "2/2", "0101");
+    // 辅助功能的六枚开关：三行两列（DOM 序 010101 —— 末一行是「折叠低价礼物 / 剔除低价礼物统计」）
+    out.filterPanelAuxTwoColumns = twoColumnsEven(out.filterPanelAuxGeom, "3/3", "010101");
     out.filterPanelTwoColumnLists = out.filterPanelKindsTwoColumns && out.filterPanelAuxTwoColumns;
     // ---- 「不要使用现在的按钮形式」（第 3 条）：清单里每一项都是**朴素的复选框 + 文字** ——
     //      没有旧芯片那层底色与描边（旧样式给 label 上 --bg-input 底 + 1px 描边 + 胶囊圆角），
@@ -3703,14 +3717,17 @@ const MOCK = (theme) => `(function () {
       window.__prefs["ui.interact_auto_hide"] === true;
     out.filterPanelTimestampUncheckedByDefault = !!timestampBox && !timestampBox.checked &&
       window.__prefs["ui.show_timestamp"] === false;
-    // ---- 四枚辅助开关**逐枚真的能切**（第 4 条）：点一下偏好跟着翻、复选框跟着画，再点一下
-    //      回到原值 —— 因此后面各段（时间戳 / step4 / step5 / step6 / gift 四种组合）跑在
-    //      **与改前完全相同的默认形态**上，切完行为不变这件事由那些既有断言继续钉住。
+    // ---- 六枚辅助开关**逐枚真的能切**（第 4 条 + issue 2609162056 第 3 / 4 条）：点一下偏好跟着翻、
+    //      复选框跟着画，再点一下回到原值 —— 因此后面各段（时间戳 / step4 / step5 / step6 / gift
+    //      四种组合 / cheapgift）跑在**与改前完全相同的默认形态**上，切完行为不变这件事由那些
+    //      既有断言继续钉住。末两枚低价礼物开关的「默认关」与行为量值在 cheapgift 那一段。
     var auxSpecs = [
       { label: "时间戳", key: "ui.show_timestamp" },
       { label: "互动消息自动消失", key: "ui.interact_auto_hide" },
       { label: "弹幕包含礼物", key: "ui.gift_in_danmaku" },
       { label: "独立礼物栏", key: "ui.gift_panel" },
+      { label: "折叠低价礼物", key: "ui.gift_collapse_cheap" },
+      { label: "剔除低价礼物统计", key: "ui.gift_exclude_cheap_stats" },
     ];
     var auxTogglesOk = true;
     var auxToggleReport = [];
@@ -3731,6 +3748,54 @@ const MOCK = (theme) => `(function () {
     }
     out.filterPanelAuxToggles = auxTogglesOk;
     out.filterPanelAuxToggleReport = auxToggleReport.join(" / ");
+    // ---- 两块标题的**视觉层级**（issue 2609162056 第 5 条：格式变更醒目一些）：标题要比
+    //      它自己的清单项醒目。只量视觉层级 —— 文案与结构由 filterPanelTwoBlocks（「消息类型,
+    //      辅助功能」逐字）与 filterPanelSections 钉着，这一组不碰它们。
+    //      四条判据：字号更大、字重 ≥ 700 且不轻于清单项、字色是正文色 --fg（改前是次级
+    //      --fg-dim）、底部有一条 ≥ 1px 的分隔线（清单项一条都没有）。
+    var cheapCssColorOf = function (name) {
+      var probe = document.createElement("span");
+      probe.style.color = "var(" + name + ")";
+      document.body.appendChild(probe);
+      var value = getComputedStyle(probe).color;
+      probe.parentNode.removeChild(probe);
+      return value;
+    };
+    var titleStyleOf = function (section, labelList) {
+      var h = section ? section.querySelector("h3") : null;
+      var first = labelList[0];
+      if (!h || !first) return null;
+      var hcs = getComputedStyle(h);
+      var lcs = getComputedStyle(first);
+      return {
+        text: h.innerText.trim(),
+        size: parseFloat(hcs.fontSize),
+        weight: parseInt(hcs.fontWeight, 10) || 0,
+        color: hcs.color,
+        borderBottom: parseFloat(hcs.borderBottomWidth) || 0,
+        labelSize: parseFloat(lcs.fontSize),
+        labelWeight: parseInt(lcs.fontWeight, 10) || 0,
+        labelColor: lcs.color,
+        labelBorderBottom: parseFloat(lcs.borderBottomWidth) || 0,
+      };
+    };
+    var kindTitleStyle = titleStyleOf(kindsSection, kindLabels);
+    var auxTitleStyle = titleStyleOf(auxSection, auxLabels);
+    out.filterPanelTitleStyles = { kinds: kindTitleStyle, aux: auxTitleStyle };
+    out.filterPanelTitlesProminent = !!kindTitleStyle && !!auxTitleStyle &&
+      kindTitleStyle.size > kindTitleStyle.labelSize &&
+      auxTitleStyle.size > auxTitleStyle.labelSize &&
+      kindTitleStyle.weight >= 700 && auxTitleStyle.weight >= 700 &&
+      kindTitleStyle.weight > kindTitleStyle.labelWeight &&
+      auxTitleStyle.weight > auxTitleStyle.labelWeight &&
+      kindTitleStyle.color === cheapCssColorOf("--fg") &&
+      auxTitleStyle.color === cheapCssColorOf("--fg") &&
+      kindTitleStyle.color !== cheapCssColorOf("--fg-dim") &&
+      auxTitleStyle.color !== cheapCssColorOf("--fg-dim") &&
+      kindTitleStyle.borderBottom >= 1 && auxTitleStyle.borderBottom >= 1 &&
+      kindTitleStyle.labelBorderBottom === 0 && auxTitleStyle.labelBorderBottom === 0;
+    out.filterPanelTitleCopyUnchanged = !!kindTitleStyle && !!auxTitleStyle &&
+      kindTitleStyle.text === "消息类型" && auxTitleStyle.text === "辅助功能";
     snap();
     // ---- item 8：短语与筛选面板同样没有标题与关闭按钮（db-panel-close 钩子整个界面不再提供），
     //      高度与表情面板同源（--panel-h）——逐个数进快照，最后比三者相等。
@@ -6083,6 +6148,200 @@ const MOCK = (theme) => `(function () {
     out.splitterRestoredOrder = window.__prefs["ui.gift_pane_on_top"] === false;
     out.splitterRestoredShownRatio = Math.abs(shownRatio() - 0.35) < 0.02;
     snap();
+
+    // ==== cheapgift 低价礼物两枚开关（issue 2609162056 第 3 / 4 条，契约 §8、docs/ui.md §5.3）
+    //
+    // ui.gift_collapse_cheap = 礼物栏里把单个价值 ≤ 0.1 元的礼物合并成**一条**；
+    // ui.gift_exclude_cheap_stats = 把这批礼物从折叠头的**统计**里剔除（展示照旧）。两枚默认都关。
+    //
+    // ⚠ 为什么换到**空会话的新房间**里量：礼物栏的行由与弹幕区同一套（虚拟）列表渲染，只有
+    //   「全部落在渲染窗口里」时行数才等于条目数 —— 房间 5440 里前面已经堆了六条礼物类夹具与
+    //   几十条弹幕，量出来的行数会随窗口大小浮动，差值是假的。新房间只推我这几条，行数才可判。
+    // ⚠ 为什么本段排在**场景最末**：新房间会让标签条多一枚、房间页布局随之变化，插在中间会把
+    //   后面各段的几何断言一起带偏。
+    // ⚠ 行钩子 db-gift-row 来自同批的礼物栏票（礼物栏改用与弹幕区同一套列表渲染；旧实现的
+    //   行钩子是 db-gift-item）。两票合入后以 db-gift-row 为准 —— 它一枚都找不到时，
+    //   cheapGiftRowsBeforeFold 会是 0，失败点一眼能看见。
+    var CHEAP_ROOM = 5555;
+    window.__addSecondRoom();
+    await sleep(200);
+    var cheapTabFor = function (roomId) {
+      return allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === roomId;
+      })[0];
+    };
+    var cheapActiveRoomId = function () {
+      var t = allByTestId("db-room-tab").filter(function (x) {
+        return x.getAttribute("data-active") === "true";
+      })[0];
+      return t ? t.getAttribute("data-room-id") : null;
+    };
+    // 先点一次**当前**这一枚标签，把标签条「拖完吞掉下一发 click」的标志消费掉（同 splitter 段）
+    var cheapHomeId = cheapActiveRoomId();
+    if (cheapHomeId) {
+      cheapTabFor(cheapHomeId).click();
+      await sleep(250);
+    }
+    var cheapTab = cheapTabFor(CHEAP_ROOM);
+    out.cheapGiftFreshRoomTab = !!cheapTab;
+    if (cheapTab) cheapTab.click();
+    await sleep(900);
+    out.cheapGiftFreshRoomActive = cheapActiveRoomId() === String(CHEAP_ROOM);
+
+    var cheapPush = function (kind, content, amount, extra) {
+      window.__emit("danmubox://message", window.__mk(kind, content, false,
+        Object.assign({ room_id: CHEAP_ROOM, amount: amount }, extra || {})));
+    };
+    var cheapRowCount = function () { return allByTestId("db-gift-row").length; };
+    var cheapPaneText = function () {
+      var el = byTestId("db-pane-gift");
+      return el ? el.innerText : "";
+    };
+    var cheapSummary = function () {
+      var el = byTestId("db-gift-summary");
+      return el ? el.innerText.trim() : null;
+    };
+    var cheapDockText = function () {
+      var el = byTestId("db-gift-dock");
+      return el ? el.innerText : "";
+    };
+    var cheapPanelOpen = function () { return !!byTestId("db-panel"); };
+    var cheapSetPanel = async function (open) {
+      if (cheapPanelOpen() !== open) {
+        clickTool("筛选");
+        await sleep(400);
+      }
+      return cheapPanelOpen() === open;
+    };
+    // 礼物栏折叠头的开合走 aria-expanded（它本来就是这枚按钮的语义钩子，礼物栏票沿用）
+    var cheapPaneExpanded = function () {
+      var dock = byTestId("db-gift-dock");
+      return !!dock && dock.getAttribute("aria-expanded") === "true";
+    };
+    var cheapSetPane = async function (open) {
+      if (cheapPaneExpanded() !== open && byTestId("db-gift-dock")) {
+        byTestId("db-gift-dock").click();
+        await sleep(500);
+      }
+      return cheapPaneExpanded() === open;
+    };
+    var cheapBoxOf = function (label) {
+      var panel = byTestId("db-panel");
+      if (!panel) return null;
+      var picked = [].slice.call(panel.querySelectorAll("label")).filter(function (l) {
+        return l.innerText.trim() === label;
+      })[0];
+      return picked ? picked.querySelector('input[type="checkbox"]') : null;
+    };
+
+    // ---- ① 默认关：干净房间里两枚开关都没勾着、偏好也都是 false（契约 §8）
+    var cheapPanelForDefaults = await cheapSetPanel(true);
+    var cheapFoldBox0 = cheapBoxOf("折叠低价礼物");
+    var cheapExcludeBox0 = cheapBoxOf("剔除低价礼物统计");
+    out.cheapGiftSwitchesDefaultOff = cheapPanelForDefaults &&
+      window.__prefs["ui.gift_collapse_cheap"] === false &&
+      window.__prefs["ui.gift_exclude_cheap_stats"] === false &&
+      !!cheapFoldBox0 && !cheapFoldBox0.checked &&
+      !!cheapExcludeBox0 && !cheapExcludeBox0.checked;
+    await cheapSetPanel(false);
+
+    // ---- ② 折叠：0.09 元 / 0.10 元（两条低价）与 0.11 元（不是低价）各一条 —— 礼物栏条目数
+    //         只该因为两条低价合成一条而 -1，折叠头那份**统计**逐字不动（折叠只管形状）。
+    cheapPush("gift", "投喂 铅笔", 90);
+    cheapPush("gift", "投喂 铅笔屑", 100);
+    cheapPush("gift", "投喂 橡皮", 110);
+    await sleep(800);
+    var cheapPaneBefore = await cheapSetPane(true);
+    out.cheapGiftRowsBeforeFold = cheapRowCount();
+    out.cheapGiftPaneExpandedBeforeFold = cheapPaneBefore;
+    out.cheapGiftSummaryBeforeFold = cheapSummary();
+    out.cheapGiftThreeRowsSeparate = cheapRowCount() === 3 &&
+      cheapPaneText().indexOf("投喂 铅笔") >= 0 &&
+      cheapPaneText().indexOf("投喂 铅笔屑") >= 0 &&
+      cheapPaneText().indexOf("投喂 橡皮") >= 0 &&
+      cheapSummary() === "本场 礼物 3 · 0.3 元";
+    await cheapSetPanel(true);
+    out.cheapGiftFoldToggled = setGiftSwitch("折叠低价礼物", true);
+    await sleep(400);
+    await cheapSetPanel(false);
+    await cheapSetPane(true);
+    out.cheapGiftRowsAfterFold = cheapRowCount();
+    out.cheapGiftFoldMergesRows = out.cheapGiftRowsBeforeFold === 3 && cheapRowCount() === 2;
+    // 合并行的身份取桶里**第一条**（投喂 铅笔）、数量与金额是整桶合计（×2 / 0.19 元）；
+    // 第二条低价礼物不再单独成行，0.11 元那条与它无关、照旧一行。
+    out.cheapGiftBucketRowText = cheapPaneText();
+    out.cheapGiftBucketRow = cheapPaneText().indexOf("投喂 铅笔") >= 0 &&
+      cheapPaneText().indexOf("投喂 铅笔屑") < 0 &&
+      cheapPaneText().indexOf("×2") >= 0 &&
+      cheapPaneText().indexOf("0.19 元") >= 0;
+    out.cheapGiftNonCheapRowStays = cheapPaneText().indexOf("投喂 橡皮") >= 0;
+    out.cheapGiftFoldKeepsStats = cheapSummary() === out.cheapGiftSummaryBeforeFold;
+    // 界面侧「存得住」：面板关掉再开，复选框画的仍是那枚偏好（真落盘见 prefs.rs 的 roundtrip 用例）
+    await cheapSetPanel(true);
+    var cheapFoldBox1 = cheapBoxOf("折叠低价礼物");
+    out.cheapGiftFoldPersists = window.__prefs["ui.gift_collapse_cheap"] === true &&
+      !!cheapFoldBox1 && cheapFoldBox1.checked;
+
+    // ---- ③ 剔除统计：折叠关回去、剔除打开 —— 礼物栏**条目数不变**（展示不动），折叠头的
+    //         条数与金额只算剩下的那一条 0.11 元。
+    out.cheapGiftExcludeToggled = setGiftSwitch("折叠低价礼物", false) &&
+      setGiftSwitch("剔除低价礼物统计", true);
+    await sleep(400);
+    await cheapSetPanel(false);
+    await cheapSetPane(true);
+    out.cheapGiftRowsWithExcludeCount = cheapRowCount();
+    out.cheapGiftExcludeKeepsRowCount = out.cheapGiftRowsWithExcludeCount === 3;
+    out.cheapGiftSummaryAfterExclude = cheapSummary();
+    out.cheapGiftExcludeKeepsDisplay = cheapPaneText().indexOf("投喂 铅笔") >= 0 &&
+      cheapPaneText().indexOf("投喂 铅笔屑") >= 0 &&
+      cheapPaneText().indexOf("投喂 橡皮") >= 0;
+    out.cheapGiftExcludeChangesStats =
+      out.cheapGiftSummaryAfterExclude === "本场 礼物 1 · 0.11 元" &&
+      cheapDockText().indexOf("（1）") >= 0 &&
+      out.cheapGiftSummaryAfterExclude !== out.cheapGiftSummaryBeforeFold;
+
+    // ---- ④ 边界：0 元（上游没给价）不是低价、SC 与大航海两边都不进这枚键的口径。
+    //        剔除仍开着：礼物组只剩「没给价」那一条、它的金额格本来就不画 —— 若把 0 当低价，
+    //        这一组会整组消失（连「礼物 1」都不会有），因此这一条断言正好钉住那个边界。
+    cheapPush("gift", "投喂 尺子", 0);
+    cheapPush("superchat", "脱敏的边界样本留言", 30);
+    cheapPush("guard", "开通 舰长 ×1", 138000, { guard_level: 3 });
+    await sleep(800);
+    await cheapSetPane(true);
+    out.cheapGiftSummaryBoundary = cheapSummary();
+    out.cheapGiftZeroPriceNotCheap =
+      out.cheapGiftSummaryBoundary === "本场 礼物 1 / SC 1 · 30 元 / 大航海 1 · 138 元";
+    var cheapScGuardTail = function (txt) {
+      var at = txt ? txt.indexOf("SC ") : -1;
+      return at >= 0 ? txt.slice(at) : null;
+    };
+    var cheapScGuardExcludeOnly = cheapScGuardTail(out.cheapGiftSummaryBoundary);
+    // 两枚都开：统计口径与「只开剔除」逐字相同（折叠不改统计），SC / 大航海两组也逐字相同。
+    await cheapSetPanel(true);
+    var cheapFoldOnAgain = setGiftSwitch("折叠低价礼物", true);
+    await sleep(400);
+    await cheapSetPanel(false);
+    await cheapSetPane(true);
+    out.cheapGiftBothOnSummary = cheapSummary();
+    out.cheapGiftBothOnStatsUnchanged = cheapFoldOnAgain &&
+      cheapSummary() === out.cheapGiftSummaryBoundary;
+    out.cheapGiftScGuardUntouched = cheapScGuardExcludeOnly === "SC 1 · 30 元 / 大航海 1 · 138 元" &&
+      cheapScGuardTail(cheapSummary()) === cheapScGuardExcludeOnly;
+
+    // ---- 收尾：两枚开关恢复默认（false）、面板收起、回到原来的房间
+    await cheapSetPanel(true);
+    var cheapRestoreFold = setGiftSwitch("折叠低价礼物", false);
+    var cheapRestoreExclude = setGiftSwitch("剔除低价礼物统计", false);
+    await sleep(400);
+    await cheapSetPanel(false);
+    out.cheapGiftRestoredDefaults = cheapRestoreFold && cheapRestoreExclude &&
+      window.__prefs["ui.gift_collapse_cheap"] === false &&
+      window.__prefs["ui.gift_exclude_cheap_stats"] === false;
+    if (cheapHomeId) {
+      cheapTabFor(cheapHomeId).click();
+      await sleep(800);
+    }
+    out.cheapGiftHomeRoomRestored = !!cheapHomeId && cheapActiveRoomId() === cheapHomeId;
 
     out.done = true;
     snap();

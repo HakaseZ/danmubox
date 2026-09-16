@@ -400,6 +400,16 @@ export interface Prefs {
    * （礼物栏 ≥ 折叠头、弹幕区 ≥ 3 行），所以存的是指针意图而不是实测像素。
    */
   "ui.gift_pane_ratio": number;
+  /**
+   * **礼物栏**里把单个价值 ≤ 0.1 元的礼物合并成一条（契约 §8，默认 `false` = 一条一行不变）。
+   * 只作用礼物栏：弹幕流的分支不受影响，SC / 大航海不在其列（docs/ui.md §5.3「低价礼物桶」）。
+   */
+  "ui.gift_collapse_cheap": boolean;
+  /**
+   * 把 ≤ 0.1 元的礼物从**折叠汇总 / 统计**里剔除（契约 §8，默认 `false` = 统计与展示一致）。
+   * 只改统计口径：这些礼物作为消息的展示（礼物栏条目、弹幕流分支）不受影响。
+   */
+  "ui.gift_exclude_cheap_stats": boolean;
   /** 互动/进场消息显示一会儿后自动消失；关掉则常驻。 */
   "ui.interact_auto_hide": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */

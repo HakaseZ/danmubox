@@ -108,6 +108,21 @@ export function MessageList({
   // 首个滚动事件没有可比的上一次（`null`），按「不在底部就算暂停」处理。
   const prevScrollTopRef = useRef<number | null>(null);
 
+  /* 冻结视口时记下**滚动容器自己的顶边**（屏幕坐标）：布局变化里有一部分是「容器自己挪了」
+     —— 进出沉浸模式把它整个下移 88.1px（房间头 57 + 房间标签条 31.1 回到弹幕区**上方**），
+     而容器里面的内容一动不动（实测：`scrollTop` 不变、锚点行的内容坐标不变、它相对容器顶边的
+     偏移 1px → 1px）。容器挪了多少就把 `scrollTop` 补回多少，用户在读的那一行才留在原来的
+     屏幕位置上（docs/ui.md §7.3 第 5 行、§2.3.1「沉浸态里滚到中段再展开，当前位置不被弹回」）。
+
+     **只认容器自己的位移，不认「锚点行的屏幕位移」**（后者试过、行不通）：把锚点行的屏幕位移
+     当差值补，等于把**虚拟列表自己刚做完的修正**再补一次 —— 礼物栏展开时列表刚挂载、那次贴底
+     落在还没量准的内容高度上（261），量准之后的修正把它带到真实底部（437），锚点行相对记账
+     时刻正好差了 176px，补回去又把它推回 261：列表停在离底 176px、「回到最新」一直挂着
+     （冒烟 `giftFollowPinnedToBottom` / `giftNewestRowVisible` 当场转红）。
+     容器**内**的那一部分（锚点上方各行重算偏移）本来就由虚拟列表按 item 尺寸变化自己补
+     （`shouldAdjustScrollPositionOnItemSizeChange` 的默认行为）—— 两边各管一段，互不打架。 */
+  const scrollerTopRef = useRef<number | null>(null);
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollerRef.current,
@@ -138,14 +153,27 @@ export function MessageList({
   // 跟随模式下必须重新贴底，否则最新弹幕会被面板推出视口（issue #8 末条）。
   // 两个元素都要观察：外层容器（面板/礼物栏开合改可视高度）与内层高度块
   // （虚拟列表先估后测，实测修正同样会改内容高度），否则都会让「贴底」悄悄失效。
+  // 冻结视口时不贴底，改为**按容器自己的位移补 `scrollTop`**（见 `scrollerTopRef` 的说明）：
+  // 容器顶边也会挪（进出沉浸模式：房间头 57 + 房间标签条 31.1 = 88.1px），不补的话
+  // 整块内容会跟着容器一起挪 —— 用户在读的那一行于屏幕上就下移了一行。
   useEffect(() => {
     const el = scrollerRef.current;
     const content = listRef.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
       const { following: pinned, count } = stateRef.current;
-      if (!pinned || count === 0) return;
-      pinToBottom(virtualizer, count);
+      // 容器自己的顶边挪了多少 = 这一轮要补回的差值（上一次落定时记的值 → 现在）。
+      // 先把账翻到当前值再用：补完不迭代，下一轮以这次的落点为准（反复逼近会在子像素上抖）。
+      const top = el.getBoundingClientRect().top;
+      const previousTop = scrollerTopRef.current;
+      scrollerTopRef.current = top;
+      if (pinned) {
+        if (count > 0) pinToBottom(virtualizer, count);
+        return;
+      }
+      if (previousTop !== null && Math.abs(top - previousTop) >= 0.5) {
+        el.scrollTop += top - previousTop;
+      }
     });
     observer.observe(el);
     if (content) observer.observe(content);

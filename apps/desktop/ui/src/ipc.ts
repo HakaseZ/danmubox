@@ -11,6 +11,8 @@ import type {
   AdminUser,
   ApiError,
   AppInfo,
+  DiagnoseExport,
+  DiagnoseStart,
   ChatSendResult,
   Emote,
   EmoteToken,
@@ -150,6 +152,17 @@ export const api = {
 
   prefsGet: () => call<Prefs>("prefs_get"),
   prefsSet: (patch: Partial<Prefs>) => call<Prefs>("prefs_set", { patch }),
+
+  /**
+   * 一键诊断：开始采集（契约 §7）。
+   *
+   * `engine` 是渲染引擎标识（`navigator.userAgent`）：内核版本只有页面自己知道，
+   * 报告头要用它（桌面端是 WKWebView / WebView2，Android 是系统 WebView）。
+   */
+  diagnoseStart: (engine: string) =>
+    invoke<DiagnoseStart>("diagnose_start", { engine }),
+  /** 一键诊断：导出报告并结束采集。一次调用恰好一个文件。 */
+  diagnoseExport: () => invoke<DiagnoseExport>("diagnose_export"),
 };
 
 export interface EventHandlers {

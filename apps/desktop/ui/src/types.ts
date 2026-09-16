@@ -376,6 +376,32 @@ export interface AppInfo {
   logged_in: boolean;
 }
 
+/**
+ * 一键诊断：一次采集窗口（契约 §7 `diagnose_start`）。
+ *
+ * 两端都是 UTC 毫秒；界面按 `ends_ms` 倒计时，到点自动收工（`docs/ui.md` §3.6）。
+ */
+export interface DiagnoseStart {
+  started_ms: number;
+  ends_ms: number;
+}
+
+/**
+ * 一键诊断的导出结果（契约 §7 `diagnose_export`）。
+ *
+ * `path` 是**给用户看的位置**：桌面端是 `~/Downloads/danmubox-diagnose-….txt`，
+ * Android 是 `/sdcard/Download/danmubox-diagnose-….txt`。一次诊断只产生这一个文件。
+ */
+export interface DiagnoseExport {
+  path: string;
+  name: string;
+  bytes: number;
+  attempts: number;
+  logs: number;
+  started_ms: number | null;
+  ends_ms: number | null;
+}
+
 export interface Prefs {
   "ui.font_scale": number;
   "ui.theme": "system" | "dark" | "light";

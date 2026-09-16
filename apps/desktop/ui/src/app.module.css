@@ -2366,6 +2366,65 @@
   background: var(--bg-input);
 }
 
+/* --------------------------------------------------------------------------
+   一键诊断（Diagnose 票，docs/ui.md §3.6）：采集中 / 刚导出两块都落在这里。
+   与 .logs 同款位置（房间页底部、沉浸态一并收起），因此沿用同一套排版口径；
+   进程里可能还有别的 agent 在改这个文件，本段只属于本票。
+   -------------------------------------------------------------------------- */
+.diagnose {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-input);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+
+.diagnoseLine {
+  color: var(--fg);
+}
+
+/* 路径可能要换行（Android 上是 /sdcard/Download/…），用等宽体便于肉眼核对。 */
+.diagnosePath {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+  user-select: text;
+}
+
+.diagnoseNote {
+  color: var(--fg-dim);
+  line-height: 1.4;
+}
+
+.diagnoseActions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+/* 小按钮沿用现有口径：`--bg-elevated` 底、发丝线边、`--r-3` 圆角
+   （与 .followItem / .toast 同一套令牌，见 docs/ui.md §9.2）。 */
+.diagnoseButton {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  padding: var(--sp-1) var(--sp-3);
+  cursor: pointer;
+}
+
+.diagnoseButton:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.diagnoseButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ==========================================================================
    窄屏（竖屏是**默认形态**；断点取窗口最小宽度 360，宽到 520 都算窄屏）
 

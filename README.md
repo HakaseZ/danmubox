@@ -168,7 +168,7 @@ danmubox/
 | 偏好文件 | `prefs.json`，只存被显式改过的界面偏好，不含任何凭据 |
 | 弹幕缓冲 | 仅内存环形缓冲，上限 5000 条（`history.buffer_rows`）；生命周期 = 一次房内会话，离开房间即销毁清空，重进是新会话 |
 | 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android **应用私有目录**——由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，**不是**其下的 `files/` 子目录；实测模拟器 android-35 上为 `/data/user/0/dev.kksk.danmubox`），core 侧保持平台无关、不写死平台路径 |
-| 是否落盘 | 除 `config.toml` 与 `prefs.json` 外不落盘；无数据库、无历史文件、无导出 |
+| 是否落盘 | 常规运行只写 `config.toml` 与 `prefs.json`；无数据库、无历史文件、无弹幕导出。**唯一例外**是你主动点过「一键诊断」之后的那个报告文件：桌面端落在 `~/Downloads/danmubox-diagnose-<UTC 时间戳>.txt`，Android 经 MediaStore 落在公共 `Download` 目录 —— 一次诊断只有一个文件、内容已脱敏（凭据 / uid / 昵称 / 房间号都是 `***`），想删随时删（`docs/operations.md` §2.9） |
 | 遥测 | 无。不上报崩溃、不埋点、不回传任何使用数据 |
 
 安全红线：`SESSDATA`、`bili_jct`、`DedeUserID` **不得**出现在日志、前端明文、仓库、崩溃上报中；

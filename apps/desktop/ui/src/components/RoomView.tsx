@@ -6,6 +6,7 @@ import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
 import { SplitPanes } from "./SplitPanes";
 import { BACK_PRIORITY, registerBackHandler } from "../back";
+import { api, describeError } from "../ipc";
 import { useApp } from "../store";
 import {
   amountText,
@@ -22,6 +23,7 @@ import {
   MUTE_HOURS,
   type AdminAction,
   type ConnState,
+  type DiagnoseExport,
   type Emote,
   type Message,
   type Prefs,
@@ -117,6 +119,12 @@ const TAP_SLOP_PX = 24;
 /** 自带双击语义的元素：落在这上面的双击不切沉浸模式。 */
 const TAP_IGNORE = "button, a, input, textarea, select, [role='button'], [contenteditable='true']";
 
+/** 倒计时写法：`2:59`（不足一分钟也补零，免得宽度跳动）。 */
+function countdown(ms: number): string {
+  const total = Math.ceil(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 /**
  * 房间页。从左到右、从上到下只有一条生长轴（issue #8 的重排）：
  *
@@ -142,6 +150,7 @@ const TAP_IGNORE = "button, a, input, textarea, select, [role='button'], [conten
  * 房间标签条不在本组件里（它在 `App` 里、是本页的兄弟），由 `<html data-immersive>` +
  * 一条 CSS 规则收起（见下面的 effect）。状态本体是 store 的 `immersive`（会话内瞬态）。
  */
+
 export function RoomView({
   room,
   rows,
@@ -163,6 +172,13 @@ export function RoomView({
   onNotice,
 }: Props) {
   const [showLogs, setShowLogs] = useState(false);
+  // 一键诊断（用户 #4，docs/ui.md §3.6）：`diag` = 采集窗口，`diagResult` = 刚导出完那一次。
+  // 它是本页唯一**不随切房间重置**的临时状态：采集的是「这个进程的连接」，
+  // 与当前在看哪个房间无关（切标签不该把倒计时清掉）。
+  const [diag, setDiag] = useState<{ startedMs: number; endsMs: number } | undefined>();
+  const [diagResult, setDiagResult] = useState<DiagnoseExport | undefined>();
+  const [diagBusy, setDiagBusy] = useState(false);
+  const [diagNow, setDiagNow] = useState(() => Date.now());
   const [headerMenu, setHeaderMenu] = useState<MenuPoint | null>(null);
   const [messageMenu, setMessageMenu] = useState<{ at: MenuPoint; message: Message } | null>(null);
   const [reportTarget, setReportTarget] = useState<Message>();
@@ -425,6 +441,54 @@ export function RoomView({
       }),
     [],
   );
+
+  // 倒计时：只在采集期间跑（不采集时没必要一秒一次重渲染）。
+  useEffect(() => {
+    if (diag === undefined) return;
+    setDiagNow(Date.now());
+    const timer = window.setInterval(() => setDiagNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [diag]);
+
+  const diagRemainMs = diag === undefined ? 0 : Math.max(0, diag.endsMs - diagNow);
+
+  const finishDiagnose = useCallback(async () => {
+    setDiagBusy(true);
+    try {
+      const result = await api.diagnoseExport();
+      setDiagResult(result);
+      onNotice("诊断报告已导出");
+    } catch (error) {
+      onNotice(`导出诊断报告失败：${describeError(error)}`);
+    } finally {
+      setDiag(undefined);
+      setDiagBusy(false);
+    }
+  }, [onNotice]);
+
+  // 固定窗口到点**自动收工**：用户不必守着，也不会有「采完忘了导出」这一档。
+  // （提前结束走面板上那颗键，两者最终都只调一次 `diagnose_export`。）
+  useEffect(() => {
+    if (diag === undefined || diagBusy || diagRemainMs > 0) return;
+    void finishDiagnose();
+  }, [diag, diagBusy, diagRemainMs, finishDiagnose]);
+
+  const startDiagnose = useCallback(async () => {
+    if (diag !== undefined || diagBusy) return;
+    setDiagBusy(true);
+    try {
+      // `navigator.userAgent` 是**渲染引擎**的唯一来源（报告头要用它：白屏一类问题
+      // 同时取决于内核版本）。
+      const started = await api.diagnoseStart(navigator.userAgent);
+      setDiagResult(undefined);
+      setDiag({ startedMs: started.started_ms, endsMs: started.ends_ms });
+      onNotice("诊断采集中：这段时间不会自动发送任何数据");
+    } catch (error) {
+      onNotice(`诊断启动失败：${describeError(error)}`);
+    } finally {
+      setDiagBusy(false);
+    }
+  }, [diag, diagBusy, onNotice]);
 
   // 切房间（多标签）时把本页的**临时界面状态**清干净（用户 2026-09-13 第 2 条）：
   // 多标签只是切渲染，`RoomView` 的组件实例被 React 复用，本地状态不显式清就会串台 ——
@@ -721,6 +785,17 @@ export function RoomView({
       label: showLogs ? "隐藏日志" : "显示日志",
       onSelect: () => setShowLogs((value) => !value),
     },
+    // 一键诊断（用户 #4）：采一段时间连接诊断、导出一个文件（docs/ui.md §3.6）。
+    // 采集中这一项置灰 —— 第二次点击只会把倒计时重置，反而让人以为在重连。
+    {
+      label: diag === undefined ? "一键诊断" : "诊断采集中…",
+      disabled: diag !== undefined || diagBusy,
+      hint:
+        diag === undefined
+          ? "采集 3 分钟连接信息，导出成一个可外发的文件"
+          : "正在采集，可在下方面板提前结束",
+      onSelect: () => void startDiagnose(),
+    },
   ];
 
   return (
@@ -931,6 +1006,71 @@ export function RoomView({
           {logs.length === 0
             ? "（暂无日志）"
             : logs.map((line, index) => <div key={index}>{line}</div>)}
+        </div>
+      )}
+
+      {/* 一键诊断（docs/ui.md §3.6）：采集中 / 刚导出两个状态共用页面底部这一块
+          （与日志块同款：入口在房间头 ⋯ 菜单里，沉浸态一并收起）。 */}
+      {!immersive && diag !== undefined && (
+        <div className={styles.diagnose} data-testid="db-diagnose">
+          <div className={styles.diagnoseLine} data-testid="db-diagnose-status">
+            诊断采集中：还剩 {countdown(diagRemainMs)}（到点自动导出，也可以提前结束）
+          </div>
+          <div className={styles.diagnoseNote}>
+            只在本机采集连接信息，<b>不会自动发送任何数据</b>；导出后发给谁由你决定。
+          </div>
+          <div className={styles.diagnoseActions}>
+            <button
+              className={styles.diagnoseButton}
+              data-testid="db-diagnose-finish"
+              disabled={diagBusy}
+              onClick={() => void finishDiagnose()}
+            >
+              提前结束并导出
+            </button>
+            <button
+              className={styles.diagnoseButton}
+              data-testid="db-diagnose-abort"
+              disabled={diagBusy}
+              onClick={() => {
+                setDiag(undefined);
+                onNotice("已放弃本次诊断，不会生成文件");
+              }}
+            >
+              放弃
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!immersive && diag === undefined && diagResult !== undefined && (
+        <div className={styles.diagnose} data-testid="db-diagnose">
+          <div className={styles.diagnoseLine}>
+            诊断报告已导出：
+            <span className={styles.diagnosePath} data-testid="db-diagnose-path">
+              {diagResult.path}
+            </span>
+          </div>
+          <div className={styles.diagnoseNote}>
+            一次诊断只生成这一个文件（{diagResult.attempts} 次连接尝试、{diagResult.logs} 行日志）；
+            凭据、uid、昵称、房间号都已抹掉，可以直接发给别人。
+          </div>
+          <div className={styles.diagnoseActions}>
+            <button
+              className={styles.diagnoseButton}
+              data-testid="db-diagnose-copy"
+              onClick={() => void copyText(diagResult.path)}
+            >
+              复制路径
+            </button>
+            <button
+              className={styles.diagnoseButton}
+              data-testid="db-diagnose-close"
+              onClick={() => setDiagResult(undefined)}
+            >
+              关闭
+            </button>
+          </div>
         </div>
       )}
 

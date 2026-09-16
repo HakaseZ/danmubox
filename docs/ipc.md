@@ -120,7 +120,7 @@ type Message = {
   medal_guard_level: number;   // 粉丝牌自身所属房间的舰长标记；只用于牌面样式，不画舰长标
   is_admin: boolean;           // 发送者是否房管
   is_history: boolean;         // 是否来自进场回填；实时推送恒为 false
-  amount: number;              // 礼物金瓜子或 SC 金额，非交易类为 0
+  amount: number;              // 金额：礼物与大航海是金瓜子、SC 是元；界面一律按元展示（金瓜子 ÷1000，contract §5）
   combo_id: string;            // 礼物连击标识（上游 batch_combo_id），非连击为空串
   emote: EmoteRef | null;      // 表情弹幕的整份表情信息；非表情为 null
   reply_to_uid: number;        // 被回复者 uid；0 = 不是回复

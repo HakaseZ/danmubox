@@ -28,6 +28,12 @@ import styles from "../app.module.css";
  * 3. **折叠优先于份额**：礼物栏折叠着时它只有折叠头那么高（弹幕区拿走剩下的全部），
  *    但分割条仍在、仍可拖 —— 折叠态下拖动 / 微调就是「把这一栏拖开」，与点「展开」同一条路。
  *
+ * **触摸下这三条手势谁说了算**（2026-09-21 实测重写，细节见下面那个 `useEffect`）：
+ * 浏览器在 touchstart 那一刻就把 `touch-action` 快照给手势识别器了，之后 JS 再改它、
+ * 或在 `pointermove` 上 `preventDefault()`，都拦不住已经开跑的滚动。所以「拿起来之后」
+ * 这一场手势是靠**挂载时就挂上**的一条非 passive `touchmove` 抢回来的；分割条自己没有
+ * 这条问题 —— 它的 `touch-action: none` 是**静态**写在元素上的，touchstart 那一刻就已生效。
+ *
  * 拖动中**一帧都不写 store**：份额直接写在分区的两个自定义属性上（`--gift-share` /
  * `--danmaku-share`），松手（或键盘停下 350ms）才回写一次偏好。房间页会因为新弹幕
  * 随时重渲染，而 React 会把 inline style 按**已落盘的**份额写回去，所以每次提交后再补
@@ -109,6 +115,14 @@ export function SplitPanes({
   const liveRef = useRef<number | null>(null);
   /** 键盘微调的落盘定时器。 */
   const commitTimer = useRef<number | null>(null);
+  /**
+   * 换位拖拽是否已经「拿起来」（长按成立）。
+   * 挂载时那条非 passive 的 `touchmove` 要读它，所以它必须是 ref 而不是 state
+   * （state 一变就要重挂监听器，而那正是最不该发生的事）。
+   */
+  const armedRef = useRef(false);
+  /** 换位拖拽之后紧跟着的那一下 `click` / `contextmenu` 该不该吞（见 `releaseRef` 的收尾）。 */
+  const swallowClick = useRef(false);
   /** 一次按下（长按计时 / 拖拽）的全部收尾动作 —— 同一时刻只允许一次。 */
   const releaseRef = useRef<(() => void) | null>(null);
   /** 正在跟随指针的那一栏（长按之后才非空）。 */
@@ -170,7 +184,60 @@ export function SplitPanes({
     [],
   );
 
-  /** 拖动分割条：指针事件（触摸与鼠标同一条路），热区由 `.splitter` 保证 ≥ 8px。 */
+  /**
+   * 触摸换位的两条常驻监听（**挂载时挂一次，一辈子不重挂**）：
+   *
+   * ① 区块上一条**非 passive** 的 `touchmove`，只在「已经拿起来」时 `preventDefault()`。
+   *    为什么非它不可：浏览器在 **touchstart 那一刻**就把 `touch-action` 快照给了自己的
+   *    手势识别器 —— 拿起来之后再改 CSS（`touch-action: none`）对这场手势**无效**，
+   *    而在 `pointermove` 上 `preventDefault()` 也拦不住滚动（滚动不是它的默认动作）。
+   *    实测（2026-09-21，Android WebView Chrome/124 + 桌面 Chrome 153，CDP 注入真实触摸）：
+   *    按住 560ms 进入换位态后，第一次 `pointermove` 就收到 `pointercancel`，换位一次都没成过；
+   *    改成这条非 passive 监听后 `pointercancel` 0 次、换位落位正常，而未拿起来时的列表
+   *    滚动量与什么都不做的基线逐像素相同（非 passive 只让浏览器多问主线程一句，
+   *    不 preventDefault 时滚动照旧）。React 的 `onTouchMove` 不行：它在根容器上是 passive 的。
+   *
+   * ② `window` 上两条捕获监听（`click` / `contextmenu`）：吞掉换位拖拽松手之后浏览器补发的
+   *    那一下（否则会顺手点到行里的东西 / 把礼物折叠头开合一次）。举旗在 `releaseRef` 的收尾，
+   *    **放旗在「下一次真的按下 / 按键」**（另两条捕获监听）：那一下是另一次操作，它的 click
+   *    与自己无关 —— 绝不像旧实现那样用一个 600ms 定时器去猜「那一下 click 来没来」，
+   *    那个窗口里任何一处点击都会被吃掉（2026-09-21 实测：长按弹幕栏拖一小段再松手，
+   *    紧接着真的按一下礼物折叠头 —— 旧实现在**同一份探针**里 `toggledByNextTap=false`，
+   *    即那一下点击被整个吞掉；而「没有按下那一步」的合成 click 在两个版本里都照样被吞，
+   *    说明差别就在「下一次按下会不会放旗」这件事本身）。
+   */
+  useEffect(() => {
+    const region = regionRef.current;
+    const onTouchMove = (event: TouchEvent) => {
+      if (armedRef.current) event.preventDefault();
+    };
+    const swallow = (event: Event) => {
+      if (!swallowClick.current) return;
+      swallowClick.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const disarm = (event: Event) => {
+      // 新的按下 / 新的按键 = 新的一次操作：这一下 click 与刚才那次换位拖拽无关，不能吞。
+      // （键盘那条也要放旗：焦点在按钮上按 Enter 一样会派发 click，而它前面没有 pointerdown。）
+      if (event.type === "pointerdown" || event.type === "keydown") swallowClick.current = false;
+    };
+    region?.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("click", swallow, true);
+    window.addEventListener("contextmenu", swallow, true);
+    window.addEventListener("pointerdown", disarm, true);
+    window.addEventListener("keydown", disarm, true);
+    return () => {
+      region?.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("click", swallow, true);
+      window.removeEventListener("contextmenu", swallow, true);
+      window.removeEventListener("pointerdown", disarm, true);
+      window.removeEventListener("keydown", disarm, true);
+    };
+  }, []);
+
+  /** 拖动分割条：指针事件（触摸与鼠标同一条路）。热区由 `.splitter` 保证 ≥ 8px（桌面）；
+   *  触摸设备上 CSS 的 `@media (pointer: coarse)` 把它撑到 24px（依据见 app.module.css）。 */
   const onSplitterDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     const region = regionRef.current;
@@ -268,7 +335,9 @@ export function SplitPanes({
    * 拖回原位 / 按 ESC = 取消。**与另外两条手势的分界**：
    * - 与「拖动分割条」：分割条不在两栏里（它是分区的另一个子元素），按下走的是分割条自己的那条路；
    * - 与「在列表里滚动 / 点选」：0.5s 之前移动超过 `PRESS_SLOP` 就放弃（触摸滚动会先动，
-   *   于是根本不会进换位态），长按成立之后再移动则 `preventDefault` 抢在滚动之前。
+   *   于是根本不会进换位态）；拿起来之后的滚动由**区块上那条非 passive 的 `touchmove`**
+   *   拦掉（见上面 useEffect —— `pointermove` 的 `preventDefault()` 拦不住滚动，
+   *   这里保留它只是为了顺带压掉选字）。
    */
   const onPaneDown = (pane: "danmaku" | "gift") => (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -289,20 +358,6 @@ export function SplitPanes({
     let timer = 0;
     let fired = false;
     let over = false;
-    /** 吞 click 那几个监听器的兜底摘除定时器（见 teardown）。 */
-    let safety = 0;
-
-    const swallow = (swallowEvent: Event) => {
-      swallowEvent.preventDefault();
-      swallowEvent.stopPropagation();
-      // click 在 pointerup **之后**才派发（它是另一个任务）：所以这两个监听器不能跟着
-      // teardown 一起摘 —— 一摘就吞不到那一下，长按礼物折叠条松手会顺手把它开/关一次。
-      // 吞到就撤；没有 click 过来的情形由下面那个兜底定时器收起。
-      window.removeEventListener("click", swallow, true);
-      window.removeEventListener("contextmenu", swallow, true);
-      if (safety !== 0) window.clearTimeout(safety);
-      safety = 0;
-    };
 
     const track = (next: boolean) => {
       if (next === over) return;
@@ -360,32 +415,32 @@ export function SplitPanes({
       window.removeEventListener("keydown", key);
       el.style.transform = "";
       if (!fired) return;
+      fired = false;
+      armedRef.current = false;
       document.body.style.userSelect = "";
       setSwapPane(null);
       setSwapOver(false);
-      // 吞 click 的那两个监听器**留到那一下 click 真的派发过**为止（它在 pointerup 之后
-      // 才来）。兜底：万一根本没来（松手落在别处 / 这一下是取消），600ms 后也摘掉，
-      // 不让一个全局捕获监听器永远挂着。
-      if (safety === 0) {
-        safety = window.setTimeout(() => {
-          safety = 0;
-          window.removeEventListener("click", swallow, true);
-          window.removeEventListener("contextmenu", swallow, true);
-        }, 600);
-      }
+      // 换位拖拽之后浏览器照发的那一下 `click` / `contextmenu` 要吞掉（松手会顺手点到
+      // 行里的东西、把礼物折叠头开合一次）。它在 pointerup **之后**才派发，所以只能在这里
+      // **举旗**，由挂载时那两条常驻捕获监听器去吞（见上面的 useEffect）：
+      // 吞到就放旗，而**下一次真的按下 / 按键也放旗** —— 那是另一次操作，它的 click 与自己无关。
+      // 旧实现是「举旗 + 600ms 兜底定时器收监听」，那个窗口里任何一处点击都会被吃掉
+      // （本票实测：长按弹幕栏拖一小段再松手、紧接着真的按一下礼物折叠头，
+      // 旧实现那一下点击被整个吞掉 —— 与冒烟里 `panelBackOnCommon` 记的是同一件事）。
+      swallowClick.current = true;
     };
 
     timer = window.setTimeout(() => {
       timer = 0;
       fired = true;
+      // 触摸这条路上「已经拿起来」= 全场手势归我：挂载时那条非 passive 的 touchmove
+      // 靠这个标志决定要不要 preventDefault（见上面 useEffect 的说明）。
+      armedRef.current = true;
       setSwapPane(pane);
       // 换位拖拽期间**全局**禁掉选字：拖到另一栏（那是一大片可选的弹幕正文）时，
       // Chrome 会把这一下判成「开始选字」并直接发 pointercancel，换位当场夭折
       // （实测：按住 0.65s 成功进入换位态，一往下拖就被 cancel）。拖完立刻还原。
       document.body.style.userSelect = "none";
-      // 长按成立之后的这一下 click / contextmenu 要吞掉：松手顺手点到行里别的东西就不对了
-      window.addEventListener("click", swallow, true);
-      window.addEventListener("contextmenu", swallow, true);
     }, LONG_PRESS_MS);
     window.addEventListener("pointermove", move, { passive: false });
     window.addEventListener("pointerup", up);

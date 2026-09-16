@@ -5645,6 +5645,106 @@ const MOCK = (theme) => `(function () {
           return id === orderBeforeTouch[(index + 1) % orderBeforeTouch.length];
         });
 
+      // ---- ⑤b 触摸下「手势归谁」的对外可观察面：拿起来之后，容器上的 touchmove 必须被
+      //      preventDefault（滚动收走），没拿起来时**不许**拦（横划是「看更多标签」的正路）。
+      //      这两条是本次修复的回归闸：旧实现只靠 CSS 的 touch-action + pointermove
+      //      上的 preventDefault，两个都拦不住滚动 —— 浏览器在 **touchstart 那一刻**就把
+      //      touch-action 快照给手势识别器了。真机实测（Android WebView Chrome/124，
+      //      CDP 注入真实触摸）：按住 400ms 拿起来后的**第一次** pointermove 就收到
+      //      pointercancel，排序一次都没成过；而合成 PointerEvent 绕开了浏览器的手势管线，
+      //      所以旧的真机故障在冒烟里一直照不出来 —— 这条断言量的是那条管线上的约定。
+      var touchMoveProbe = function (target) {
+        try {
+          var ev = new TouchEvent("touchmove", { bubbles: true, cancelable: true });
+          target.dispatchEvent(ev);
+          return ev.defaultPrevented;
+        } catch (e) {
+          return "throw:" + e.message;
+        }
+      };
+      var stripFirstTab = allByTestId("db-room-tab")[0];
+      var stripFirstBox = rect(stripFirstTab);
+      var stripFirstY = stripFirstBox.top + stripFirstBox.height / 2;
+      out.tabTouchMoveFreeWhenIdle = touchMoveProbe(stripFirstTab) === false;
+      pe("pointerdown", stripFirstTab, stripFirstBox.left + 10, stripFirstY, "touch");
+      await sleep(500); // > TAB_HOLD_MS：已经拿起来了（拖拽态在画面上）
+      out.tabTouchLiftedForProbe = stripEl.getAttribute("data-dragging") === "true";
+      out.tabTouchMoveOwnedWhenLifted = touchMoveProbe(stripFirstTab) === true;
+      pe("pointerup", stripFirstTab, stripFirstBox.left + 10, stripFirstY, "touch");
+      await sleep(250);
+
+      // ---- ⑤c 触摸**原地长按再松手**（慢点）= 仍然是点击：那一下 click 不许吞。
+      //      旧实现只要越过 TAB_HOLD_MS 就举「吞 click」的旗，于是慢点一次都切不了房间
+      //      （实测真机：click 事件照发，data-active 一动不动 —— 用户说「点了没反应」）。
+      var slowTarget = allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") !== activeRoomId();
+      })[0];
+      var slowRoomId = slowTarget.getAttribute("data-room-id");
+      var slowBox = rect(slowTarget);
+      var slowY = slowBox.top + slowBox.height / 2;
+      var connectsBeforeSlowTap = connectCalls();
+      pe("pointerdown", slowTarget, slowBox.left + 12, slowY, "touch");
+      await sleep(500);
+      out.tabSlowTouchTapLifted = stripEl.getAttribute("data-dragging") === "true";
+      pe("pointerup", slowTarget, slowBox.left + 12, slowY, "touch");
+      await sleep(80);
+      // 按下与松开落在同一枚上时，浏览器自己会补的那一下 click
+      slowTarget.click();
+      await sleep(900);
+      out.tabSlowTouchTapSwitches = activeRoomId() === slowRoomId &&
+        lastConnectRoom() === Number(slowRoomId) &&
+        connectCalls() > connectsBeforeSlowTap;
+      // 切回来：后面几段按「激活项还是原来那一枚」继续
+      var backToActiveTab = allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === activeBefore;
+      })[0];
+      backToActiveTab.click();
+      await sleep(1000);
+      out.tabSlowTouchTapSwitchesBack = activeRoomId() === activeBefore;
+
+      // ---- ⑤d 触摸**真的拖动过**之后：松手补发的那一下 click 必须吞掉（拖的是顺序，不是切房间）。
+      //      这一段在同一栏里挪 90px（落点还是自己那一枚 = 顺序不动），随后手动补一发 click：
+      //      它被吞掉的表现就是「一次 rooms_connect 都没发、激活项没变」。
+      var dragAwayTab = allByTestId("db-room-tab")[0];
+      var dragAwayBox = rect(dragAwayTab);
+      var dragAwayY = dragAwayBox.top + dragAwayBox.height / 2;
+      var connectsBeforeTouchDrag = connectCalls();
+      var activeBeforeTouchDrag = activeRoomId();
+      pe("pointerdown", dragAwayTab, dragAwayBox.left + 10, dragAwayY, "touch");
+      await sleep(500);
+      pe("pointermove", window, dragAwayBox.left + 100, dragAwayY, "touch");
+      await sleep(90);
+      pe("pointerup", dragAwayTab, dragAwayBox.left + 100, dragAwayY, "touch");
+      await sleep(80);
+      dragAwayTab.click();
+      await sleep(700);
+      out.tabTouchDragSwallowsFollowUpClick =
+        connectCalls() === connectsBeforeTouchDrag && activeRoomId() === activeBeforeTouchDrag;
+
+      // ---- ⑤e 阈值边界：**没到** TAB_DRAG_THRESHOLD_PX（5px）不算拖（4px 不行、6px 行）。
+      //      上一条只量了 3px 那一侧（tabPressUnderThresholdNoDrag），这里把另一侧也钉住，
+      //      阈值本身就成了对外可观察的行为而不是一个常量。
+      var edgeTab = allByTestId("db-room-tab")[0];
+      var edgeBox = rect(edgeTab);
+      var edgeY = edgeBox.top + edgeBox.height / 2;
+      pe("pointerdown", edgeTab, edgeBox.left + 10, edgeY, "mouse");
+      pe("pointermove", window, edgeBox.left + 14, edgeY, "mouse");
+      await sleep(90);
+      out.tabBelowThresholdNoDrag = stripEl.getAttribute("data-dragging") === "false" &&
+        allByTestId("db-tab-drop").length === 0;
+      pe("pointermove", window, edgeBox.left + 16, edgeY, "mouse");
+      await sleep(90);
+      out.tabAboveThresholdDrags = stripEl.getAttribute("data-dragging") === "true";
+      pe("pointerup", window, edgeBox.left + 16, edgeY, "mouse");
+      await sleep(250);
+      // 这一拖是**真的拖过**（越过阈值、也 move 过）：它举起了「吞下一发 click」的旗。
+      // 点**当前这一枚**把它消费掉（原地重开一次、不换房间、顺序也不动），
+      // 免得后面几段里第一次点标签被它吃掉（④ 那段同样的道理）。
+      allByTestId("db-room-tab").filter(function (t) {
+        return t.getAttribute("data-room-id") === activeRoomId();
+      })[0].click();
+      await sleep(250);
+
       // ---- ⑥ 开 20 个房间：标签条**横向滚动**，每枚标签**不被压缩**（各保自己的最小宽度）
       window.__addRooms(20);
       await menuPick("刷新连接");
@@ -6004,6 +6104,50 @@ const MOCK = (theme) => `(function () {
     firePointer(window, "pointerup", splitX, rect(byTestId("db-pane-danmaku")).top + 40);
     await sleep(350);
     out.swapStaysCancelled = window.__prefs["ui.gift_pane_on_top"] === true;
+    snap();
+
+    // ---- 「触摸上手势归谁」的对外可观察面（本次修复的回归闸）：拿起来之后，区块上的
+    //      touchmove 必须被 preventDefault（滚动收走），没拿起来时**不许**拦
+    //      （弹幕列表照旧滚）。旧实现只靠 CSS 的 touch-action 与 pointermove.preventDefault()，
+    //      两个都拦不住滚动 —— 浏览器在 **touchstart 那一刻**就把 touch-action 快照走了。
+    //      真机实测（Android WebView Chrome/124，CDP 注入真实触摸）：按住 560ms 进入换位态后
+    //      第一次 pointermove 就收到 pointercancel，换位一次都没成过；而合成 PointerEvent
+    //      绕开了浏览器的手势管线，所以这个真机故障在冒烟里一直照不出来。
+    var paneTouchMoveProbe = function (target) {
+      try {
+        var ev = new TouchEvent("touchmove", { bubbles: true, cancelable: true });
+        target.dispatchEvent(ev);
+        return ev.defaultPrevented;
+      } catch (e) {
+        return "throw:" + e.message;
+      }
+    };
+    var danmakuProbeEl = byTestId("db-pane-danmaku");
+    var danmakuProbeBox = rect(danmakuProbeEl);
+    out.swapTouchMoveFreeWhenIdle = paneTouchMoveProbe(danmakuProbeEl) === false;
+    var dockBoxBeforeNextTap = rect(byTestId("db-gift-dock"));
+    var giftBodyBeforeNextTap = !!byTestId("db-gift-body");
+    firePointer(danmakuProbeEl, "pointerdown", splitX, danmakuProbeBox.top + 30);
+    await sleep(620);
+    out.swapTouchMoveOwnedWhenArmed = paneTouchMoveProbe(danmakuProbeEl) === true;
+    // 同一栏里挪一小段（不越过分割条 = 不换位），松手
+    firePointer(window, "pointermove", splitX, danmakuProbeBox.top + 60);
+    await sleep(80);
+    firePointer(window, "pointerup", splitX, danmakuProbeBox.top + 60);
+    // ---- 紧接着（旧实现 600ms 兜底窗口**之内**）真的按一下礼物折叠头：它必须照旧开合。
+    //      旧实现用一个 600ms 的全局捕获定时器去猜「那一下 click 来没来」，这段时间里
+    //      任何一处点击都会被吃掉（冒烟里的 panelBackOnCommon 就是这么假失败的）。
+    //      这里按下 -> 抬起 -> click 三步齐全，与用户真按一次完全同形。
+    await sleep(120);
+    firePointer(byTestId("db-gift-dock"), "pointerdown",
+      dockBoxBeforeNextTap.left + dockBoxBeforeNextTap.width / 2,
+      dockBoxBeforeNextTap.top + dockBoxBeforeNextTap.height / 2);
+    firePointer(byTestId("db-gift-dock"), "pointerup",
+      dockBoxBeforeNextTap.left + dockBoxBeforeNextTap.width / 2,
+      dockBoxBeforeNextTap.top + dockBoxBeforeNextTap.height / 2);
+    byTestId("db-gift-dock").click();
+    await sleep(400);
+    out.swapDoesNotEatNextTap = !!byTestId("db-gift-body") !== giftBodyBeforeNextTap;
     snap();
 
     // ---- 关掉独立礼物栏：分区退化为弹幕区全高、分割条与礼物栏一起消失、换位随之停用 ----

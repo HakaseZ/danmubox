@@ -1,0 +1,236 @@
+# danmubox · GitHub Actions CI
+#
+# 刻意只做两件事（不做矩阵、不做发布流程）：
+#
+#   check     仓库既有的检查：Rust 的 fmt / clippy / test + 前端的 tsc -b + vite build。
+#             触发：push 到 main、任何 pull_request、手动 workflow_dispatch。
+#   artifacts 出两个产物并上传：macOS .dmg 与**已签名的** Android release APK。
+#             触发：仅 workflow_dispatch 与 v* tag —— 每次 push 都出包太贵。
+#
+# 两个 job 都跑在 macos-14（Apple Silicon）：
+#   * 与开发机同平台 —— check 不必在 Linux 上补 WebKitGTK 那一套系统依赖，
+#     命令与 AGENT.md §3 / docs/operations.md §5 里本机验证过的完全一致；
+#   * artifacts 产出的因此天然是 arm64 产物，与 §5.5 的 macOS 口径一致。
+#
+# 命令与版本的事实源：AGENT.md §3（构建 / 测试 / lint）、docs/operations.md §5（三端出包与签名）、
+# scripts/android-env.sh（Android 工具链的版本与包名）。这里的每条命令都以上面三处为准，不照抄网上教程。
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# 同一个 ref 上的新一轮推送取消上一轮未完成的运行（省 runner 时间）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: 检查（fmt / clippy / test / 前端构建）
+    runs-on: macos-14
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      # macOS runner 自带 rustup + stable；rust-toolchain.toml 声明 channel = "stable" 与
+      # components = ["rustfmt", "clippy"]，这里补装两枚组件（幂等）。
+      - name: Rust 组件（rustfmt / clippy）
+        run: rustup component add rustfmt clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/ui/package-lock.json
+
+      - name: 缓存 cargo（registry + target）
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: 前端依赖
+        working-directory: apps/desktop/ui
+        run: npm ci
+
+      - name: 前端类型检查 + 构建（npm run build = tsc -b && vite build）
+        working-directory: apps/desktop/ui
+        run: npm run build
+
+      # 存量不通过：AGENT.md §9 备注记的就是这件事（HEAD 上 fmt 本身就有大面积差异，宿主与项目两套
+      # 工具链结果相同）。本分支（dev/2609161236 之上）实测 `cargo fmt --all -- --check` 退出码 1、
+      # 81 处 / 14 文件差异，且没有一处属于本次改动。所以这一步只当**观察哨**：红了不拦 CI。
+      # 等专门那一票把全仓格式化掉之后，再摘掉 continue-on-error 让它变成提交门。
+      - name: cargo fmt（存量不通过，仅报告）
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  artifacts:
+    name: 产物（macOS dmg + Android APK）
+    # 只在手动触发或 v* tag 上跑：出包很贵，不该每次 push 都跑。
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-14
+    env:
+      CARGO_TERM_COLOR: always
+      # 显式钉住产物目录，下面的产物路径（target/release/bundle/dmg/）以此为准
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust 组件与 Android target
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt clippy
+          # 四个 ABI，与 scripts/android-env.sh 的 DANMUBOX_RUST_TARGETS 一致
+          # （通用 APK 含 arm64-v8a / armeabi-v7a / x86 / x86_64，四个 target 缺一不可）
+          rustup target add \
+            aarch64-linux-android \
+            armv7-linux-androideabi \
+            i686-linux-android \
+            x86_64-linux-android
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/ui/package-lock.json
+
+      - name: 缓存 cargo（registry）
+        # 不缓存 target：这里要出 release + 四个 ABI 的安卓产物，体积远超缓存收益；
+        # 也不缓存 Gradle（近 GB 级，恢复比重新下载慢）。本 job 只在手动 / 打 tag 时跑。
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-artifacts-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-artifacts-
+
+      # JDK 17：与本机 scripts/android-env.sh 的默认口径一致（它默认把 JAVA_HOME 指到 .android-env/jdk17）
+      - name: JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK（cmdline-tools + sdkmanager）
+        uses: android-actions/setup-android@v3
+
+      - name: 装 Android SDK 组件
+        run: |
+          set -euo pipefail
+          # 版本与包名取自 scripts/android-env.sh（DANMUBOX_SDK_PACKAGES / DANMUBOX_NDK_VERSION）与本机实测：
+          # compileSdk 36 → platforms;android-36；AGP 8.11 用 build-tools 35.0.0；NDK 与本机同版本。
+          # 不需要 emulator / system-image（CI 不跑模拟器）。
+          # 许可：新 CLI 的 --licenses 已是空操作，许可哈希由 --install 自动落盘（脚本里同样的注释）。
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+          # 包名写法随 cmdline-tools 版本而异：旧版用 ";"，新版（本机 cmdline-tools 23.0）用 "/"，
+          # 两种形式一一对应（见 scripts/android-env.sh 顶部注释）。先按 ";" 试，失败再按 "/" 试一次。
+          sdkmanager --sdk_root="$ANDROID_HOME" --install \
+            "platform-tools" "platforms;android-36" "build-tools;35.0.0" "ndk;27.0.12077973" \
+          || sdkmanager --sdk_root="$ANDROID_HOME" --install \
+            "platform-tools" "platforms/android-36" "build-tools/35.0.0" "ndk/27.0.12077973"
+
+      - name: 导出 Android 环境变量 + NDK 链接器配置
+        run: |
+          set -euo pipefail
+          ndk="$ANDROID_HOME/ndk/27.0.12077973"
+          echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          ndk_bin="$ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+          cfg="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+          mkdir -p "$(dirname "$cfg")"
+          # 与 scripts/android-env.sh 的 _dmb_write_cargo_config 同口径：四个 target 的 linker/ar/ranlib
+          # 指向 NDK 的 clang 包装器（API 级别 24 = Tauri 默认 minSdk）。
+          # 注意 ranlib 必须是 { path = "..." } 表，写成裸字符串 cargo 直接报错。
+          # armv7 的坑：Rust triple 是 armv7-linux-androideabi，NDK 的 clang 名字却是 armv7a-linux-androideabi。
+          cat >> "$cfg" <<EOF
+          # 由 .github/workflows/ci.yml 写入（对应本机 scripts/android-env.sh 生成的同款配置）
+          [target.aarch64-linux-android]
+          linker = "$ndk_bin/aarch64-linux-android24-clang"
+          ar = "$ndk_bin/llvm-ar"
+          ranlib = { path = "$ndk_bin/llvm-ranlib" }
+
+          [target.armv7-linux-androideabi]
+          linker = "$ndk_bin/armv7a-linux-androideabi24-clang"
+          ar = "$ndk_bin/llvm-ar"
+          ranlib = { path = "$ndk_bin/llvm-ranlib" }
+
+          [target.i686-linux-android]
+          linker = "$ndk_bin/i686-linux-android24-clang"
+          ar = "$ndk_bin/llvm-ar"
+          ranlib = { path = "$ndk_bin/llvm-ranlib" }
+
+          [target.x86_64-linux-android]
+          linker = "$ndk_bin/x86_64-linux-android24-clang"
+          ar = "$ndk_bin/llvm-ar"
+          ranlib = { path = "$ndk_bin/llvm-ranlib" }
+          EOF
+
+      - name: 前端依赖
+        working-directory: apps/desktop/ui
+        run: npm ci
+
+      - name: 出 macOS .dmg
+        # bundle.active=false，靠 --bundles 覆盖；没有应用图标也能出（产物见 target/release/bundle/dmg/）
+        run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
+
+      - name: 上传 macOS .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: danmubox-macos-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: 生成一次性 release 签名材料
+        # 本机的 apps/desktop/src-tauri/gen/android/{keystore.jks,keystore.properties} 是自用私钥，
+        # 已被 gen/android/.gitignore 忽略 —— 绝不入库、绝不进 CI（见 docs/operations.md §5.7）。
+        # CI 里改为一次性生成：口令由 run_id / run_attempt 派生，只活在本次运行里，run 结束即消失，
+        # 因此**CI 产物与本地产物签名不同**（装过本地包的设备要先卸载，§5.7、§4.3）。
+        run: |
+          set -euo pipefail
+          cd apps/desktop/src-tauri/gen/android
+          ks_pass="ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          keytool -genkeypair \
+            -keystore ci-release.jks \
+            -alias ci \
+            -keyalg RSA -keysize 2048 -validity 1 \
+            -storepass "$ks_pass" -keypass "$ks_pass" \
+            -dname "CN=danmubox CI, OU=ci, O=ci, L=ci, ST=ci, C=CN"
+          # 键名与 app/build.gradle.kts 的 signingConfigs.release 一致（storeFile 相对 gen/android/ 解析）
+          printf '%s\n' \
+            "storeFile=ci-release.jks" \
+            "storePassword=$ks_pass" \
+            "keyAlias=ci" \
+            "keyPassword=$ks_pass" > keystore.properties
+
+      - name: 出 Android release APK
+        # 与 docs/operations.md §5.3 的本机命令逐字相同（CI=true 由 Actions 自带，--ci 走非交互路径）。
+        # 干净克隆必须先能构建：TauriActivity.kt 与 proguard-tauri.pro 已入库（见 §5.3 与
+        # gen/android/app/.gitignore 的例外规则），否则 Gradle 会以 Unresolved reference 失败。
+        run: cd apps/desktop && ./ui/node_modules/.bin/tauri android build --apk --ci
+
+      - name: 上传 Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: danmubox-android-apk
+          path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk
+          if-no-files-found: error

@@ -221,8 +221,9 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 日志里页面加载的 URL 是 `tauri://localhost` 而不是 `http://localhost:5173`，
 因此不需要再起 Vite，双击即可运行。
 
-`tauri.conf.json` 当前 `bundle.active=false` 且 `icon` 为空，所以这一步不产出 `.app` / `.msi` / APK；
-要出安装包先补应用图标并打开 `bundle.active`，三端步骤与产物见 §5.3。
+`tauri.conf.json` 当前 `bundle.active=false` 且 `icon` 为空，所以这一步不产出 `.app` / `.dmg` / APK；
+要出安装包**不用**改这两项：macOS 的 `.dmg` 直接加 `--bundles dmg` 即可（`--bundles` 覆盖 `bundle.active`，
+`icon: []` 也不拦 macOS 出包 —— 2026-09-16 实测），三端步骤与产物见 §5.3。
 
 ---
 
@@ -513,21 +514,22 @@ Rust 产物目录在 workspace 下由 Cargo 决定，本节统一用 `<target-di
 
 #### macOS
 
-日常出包命令与产物见 §1.6（独立可执行文件，前端已内嵌）。需要 `.app` / `.dmg` 时：先补应用图标并打开 `bundle.active`，再执行
+日常出包命令与产物见 §1.6（独立可执行文件，前端已内嵌）。需要 `.dmg` 时**不用改 `tauri.conf.json`**：
+`--bundles` 会覆盖 `bundle.active=false`，`icon: []` 也不拦 macOS 出包（2026-09-16 实测，命令与产物如下）：
 
 ```bash
-cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles app,dmg
+cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
 ```
 
 | 产物 | 路径 |
 |---|---|
 | 独立可执行（实测） | `<target-dir>/release/danmubox-desktop`（前端已内嵌，约 13 MB） |
-| 应用包（需先补图标） | `<target-dir>/release/bundle/macos/danmubox.app` |
-| 安装镜像（需先补图标） | `<target-dir>/release/bundle/dmg/danmubox_0.1.0_<arch>.dmg` |
+| 安装镜像（实测 5,147,340 字节） | `<target-dir>/release/bundle/dmg/danmubox_0.1.0_<arch>.dmg` |
 
 - `<arch>` 由构建机架构决定（Apple Silicon 为 `aarch64`，Intel 为 `x64`）。
 - 交叉架构可在 Apple Silicon 上追加 `--target x86_64-apple-darwin`，产物落在 `<target-dir>/x86_64-apple-darwin/release/bundle/` 下。
-- 本地运行不需要 DMG，直接双击 `danmubox.app`，或用 §1.1 的开发期运行方式。
+- 本地运行不需要 DMG，直接从 `.dmg` 里拖出 `.app`，或用 §1.1 的开发期运行方式；要单独出 `.app` 用 `--bundles app`（本轮未实测）。
+- `.dmg` **不做 Apple 签名与公证**，口径见 §5.5（拷到另一台自用 Mac 时按那一节处理 Gatekeeper）。
 
 #### Windows
 
@@ -556,9 +558,9 @@ CI=true ./ui/node_modules/.bin/tauri android build --apk --ci                  #
 CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  # 按 ABI 分包
 ```
 
-- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，41 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的四处改（见下表）。
+- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，43 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的四处改（见下表）。
 - `CI=true` 与 `--ci` 一起用，让 Tauri CLI 走非交互路径。
-- **干净克隆 / 新 worktree 上第一次构建会失败，先补两个文件**（2026-09-16 实测）：`tauri android build` 只会（重新）生成 `app/src/main/java/…/generated/` 里 **wry** 那几个文件（`WryActivity.kt` 等）与 `app/tauri.properties` / `app/tauri.build.gradle.kts`；**`TauriActivity.kt` 与 `app/proguard-tauri.pro` 只在 `tauri android init` 时从 `tauri` crate 的 `mobile/android-codegen/` 拷进来**，而 `app/.gitignore` 又把 `generated/` 整个忽略了 —— 于是新 worktree 里 Gradle 会以 `e: …MainActivity.kt: Unresolved reference: TauriActivity`（连带一串「overrides nothing」）失败（本仓实测连续两轮，`apps/desktop/src-tauri/gen/android` 的 `generated/` 里只有 8 个 wry 文件、没有 `TauriActivity.kt`）。**修法**：从一个已经建过的 `gen/android` 工程把这两个文件拷过来（同版本 tauri 下内容稳定），或临时跑一次 `tauri android init` 生成后把那几处模板改动回退回去（见下表）。
+- **干净克隆可以直接构建**（2026-09-16 起）：`TauriActivity.kt` 与 `app/proguard-tauri.pro` **已入库**（`app/.gitignore` 对这两个路径写了 `!` 例外，其余 `generated/` 内容仍被忽略）。背景：`tauri android build` 只会（重新）生成 `app/src/main/java/…/generated/` 里 **wry** 那几个文件（`WryActivity.kt` 等）与 `app/tauri.properties` / `app/tauri.build.gradle.kts`；这两份则由 `tauri` crate 的 `build.rs` 从它的 `mobile/android-codegen/` 生成（把 `{{package}}` / `$PACKAGE` 替换成本包名），而 `app/.gitignore` 原先把 `generated/` 整个忽略 —— 于是新 worktree 与 CI 的干净检出里 Gradle 会以 `e: …MainActivity.kt: Unresolved reference: TauriActivity`（连带一串「overrides nothing」）失败（本仓实测连续两轮）。同版本 tauri 下这两份内容稳定，入库后干净检出不再需要任何手工补文件步骤；将来升 tauri 版本时 build.rs 会覆盖它们，按 diff 提交即可。
 - `tauri android dev -- --device <serial>`（真机热重载）**未实测**，本仓库暂不写具体用法。
 
 | 产物 | 路径 |
@@ -685,6 +687,7 @@ xattr -l /path/danmubox.app                   # 查看隔离属性
 - **这两个文件不在 `.android-env/` 内**，所以 `scripts/android-env.sh clean`（§5.12）删不到它们；反过来说，清工具链时**别手工把它们一起删掉**。
 - **丢了会怎样**：换一份新 keystore 就等于换了签名 → 设备上已装的那个同名应用**装不上**（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），只能先卸载（连带清掉 `config.toml` 凭据，重装后要重新扫码）。两者都在 `.gitignore` 里，**仓库没有任何备份来源**，请自行异地留存。
 - **缺 `keystore.properties` 不阻塞出包**：`app/build.gradle.kts` 的 `signingConfigs.release` 只在文件存在时创建，release 变为无签名（产物名带 `-unsigned`）。这种包装不进设备。
+- **CI 出的包用的是另一份一次性签名**（现场 `keytool` 生成，随 run 消失），因此装过本机包的设备要先卸载；见 §5.13。
 
 ```bash
 adb devices                                  # 确认设备已授权
@@ -799,6 +802,72 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 ```
 
 代价：`bootstrap` 要重新下载数 GB（JDK、SDK、NDK、system-image、rustup 工具链），耗时以网络为准；**签名材料与 `gen/android` 不受影响**，重装后同一台设备仍可覆盖安装。
+
+### 5.13 GitHub Actions CI（`.github/workflows/ci.yml`）
+
+仓库只有这一套 CI，两个 job，都跑在 **`macos-14`（Apple Silicon）** 上：与开发机同平台 —— `check` 不必在 Linux 上另补 WebKitGTK 那一套系统依赖，命令与 [`../AGENT.md`](../AGENT.md) §3 的本机口径完全一致；`artifacts` 产出的也就天然是 arm64 产物。
+
+| job | 做什么 | 触发 |
+|---|---|---|
+| `check` | `rustup component add rustfmt clippy` → `npm ci` → `npm run build`（= `tsc -b && vite build`）→ `cargo fmt --all -- --check`（**存量不通过，仅报告不拦**，见 [`../AGENT.md`](../AGENT.md) §9）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` | push 到 `main`、任何 `pull_request`、手动 `workflow_dispatch` |
+| `artifacts` | 出**两个**产物并上传：① macOS `tauri build --bundles dmg` → `.dmg`；② Android `tauri android build --apk --ci` → **已签名的** release APK | 仅 `workflow_dispatch` 与 `v*` tag（每次 push 都出包太贵） |
+
+缓存：`check` 缓存 `~/.cargo/registry`、`~/.cargo/git` 与 `target/`（键含 `Cargo.lock` 哈希）；两个 job 都用 `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`）。`artifacts` **不缓存** Gradle 与 release `target`：Gradle 依赖缓存近 GB 级、恢复比重新下载还慢，release `target` 还要乘上四个 ABI，收益为负；该 job 本来就只在手动 / 打 tag 时跑。
+
+#### 手动触发与取产物
+
+网页：仓库 → **Actions** → 左侧 `CI` → **Run workflow**（选分支）→ 跑完后在该 run 页面底部的 **Artifacts** 区下载：
+
+| 产物名 | 内容 | 在仓库里的来源路径 |
+|---|---|---|
+| `danmubox-macos-dmg` | `danmubox_0.1.0_aarch64.dmg` | `target/release/bundle/dmg/*.dmg` |
+| `danmubox-android-apk` | `app-universal-release.apk`（四个 ABI 的通用包） | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk` |
+
+产物保留期用仓库默认（公开仓库 90 天），过期即失效，要长期留存就自己下下来。
+
+#### 在本机出同样两个产物
+
+就是 §5.3 里那两条命令（CI 用的也是它们）：
+
+```bash
+# ① macOS .dmg（bundle.active=false 靠 --bundles 覆盖；不需要应用图标）
+cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
+#    产物：<repo>/target/release/bundle/dmg/danmubox_0.1.0_aarch64.dmg
+
+# ② Android 已签名 release APK（先 source 一次项目内工具链，见 §5.4）
+. scripts/android-env.sh
+cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
+#    产物：apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+```
+
+两条都要先装前端依赖（`tauri` CLI 与前端构建都在 `apps/desktop/ui/node_modules` 里）：`npm --prefix apps/desktop/ui install`（CI 里用 `npm ci`）。
+
+#### 签名口径差异（**CI 产物与本地产物签名不同**）
+
+- 本机的签名材料是 `gen/android/keystore.jks` + `keystore.properties`（自用私钥，已被 gitignore，**绝不入库、绝不进 CI**，见 §5.7）。
+- CI 上不用也不该用这份私钥：`artifacts` job 用 `keytool -genkeypair` **现场生成一次性 keystore**（写进 `keystore.properties` 的四个键；口令由 `github.run_id` / `run_attempt` 派生，只活在本次 run 里，run 结束即消失），因此 CI 的 APK 签名**有效但与本机不同**。
+- 后果：**设备上已装过本机包时，CI 包装不上**（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）—— 先 `adb uninstall dev.kksk.danmubox` 再装（卸载会清数据，`config.toml` 凭据要重新扫码，见 §4.3 与 §5.7）。
+- macOS 的 `.dmg` 不做 Apple 签名与公证，与 §5.5 的本机口径一致。
+- CI 里的 `keytool` 与 `sdkmanager` 只出现在 *run 步骤的 shell 里*，工作流文件中不含任何口令明文。
+
+#### 冒烟不在 CI 里跑
+
+`apps/desktop/ui/smoke/run-headless.mjs` 的两引擎冒烟**没有**纳入 CI —— 这是刻意的取舍，不是漏项。先排除一条常见误解：**它不需要真实网络，也不需要真实直播间**（自己 `npm run build` 出 `dist`，页内注入 `__TAURI_INTERNALS__` 替身、假 IPC 与夹具样本，`ui.md` §15）。不纳入的理由是另外三条：
+
+1. **成本**：验证矩阵是 **2 引擎 × 2 视口 × 2 主题**。Chromium 那一路要一台 Chrome for Testing，WebKit 那一路要 `npx playwright install webkit`（数百 MB 的浏览器产物）；再算上宿主机侧旁证链路的 `swift smoke/wkwebview-host.swift`。每个 PR 都跑这一套不划算。
+2. **稳定性**：WebKit 无头在内存紧张时会崩（`page.evaluate: Target crashed`），而且**看起来像「某一段场景必崩」**——脚本自己的注释就记着这个假象（重试上限 1 次，两次都崩才报失败）。它在本机是有兜底的临时现象，放进 CI 就变成随机红，反而掩盖真问题。宿主机侧那条旁证链还有个硬限制：**没有显示会话时 rAF 不持续产帧**，「跟随最新 / 虚拟列表窗口」一类断言会假失败。
+3. **它验的是集成后的那棵树**：[`../AGENT.md`](../AGENT.md) §9 与 [`ui.md`](ui.md) §15 已经把口径定死——全量无头冒烟由**主流程在集成收尾时统一跑一次**，在分支 / PR 上跑结果不可比，也不该由 CI 代替。
+
+所以冒烟仍在**本机 / 主流程**跑（命令与门槛见 [`ui.md`](ui.md) §15、[`testing.md`](testing.md) §9.2 与 §10）：`cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs`（Chromium）与 `node smoke/run-headless.mjs --engine webkit`（宿主引擎）两遍。
+
+#### 本地验证到什么程度（如实口径）
+
+| 项 | 状态 |
+|---|---|
+| `npm ci` / `npm run build` / 三条 Rust 命令 / `tauri build --bundles dmg` | **本机实测过**，产物路径即上文与 §5.3（`cargo fmt` 的不通过属存量，见 [`../AGENT.md`](../AGENT.md) §9） |
+| `tauri android build --apk --ci` | **本机干净 worktree 上真跑完过**（rc=0；`npm ci` 22 秒 + 构建，合计 381 秒；四个 ABI 全部编出，产物 `…/apk/universal/release/app-universal-release-unsigned.apk`）。那份 worktree 没有本地 keystore，所以是**未签名**产物；CI 里先造一次性 `keystore.properties`，产物名是 `app-universal-release.apk`（上传用的是 `*/release/*.apk` 通配，两种命名都覆盖） |
+| Android 工具链在 **runner 上**的安装（`setup-java`＋`setup-android`＋`sdkmanager` 装 `platform-tools` / `platforms;android-36` / `build-tools;35.0.0` / `ndk;27.0.12077973`，再写 NDK 链接器 `config.toml`） | **未在 runner 上验证**：它是本机 `scripts/android-env.sh` 的等价改写（版本号、包名、linker 路径都取自该脚本与本机实测），但 GitHub runner 的 `sdkmanager` 版本与包名写法（`;` / `/` 两种形式一一对应，见脚本注释）只能等第一次真跑才见分晓 —— 工作流里因此写了「先 `;` 后 `/`」的兜底重试 |
+| CI 工作流本身 | 从未在本仓库真实运行过（本轮只做了 YAML 可解析 + 每条命令的本机等价核对） |
 
 ---
 

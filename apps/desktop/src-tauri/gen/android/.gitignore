@@ -1,5 +1,8 @@
 *.iml
 .gradle
+# Kotlin 增量编译缓存（`buildSrc/.kotlin/` 等）：任何在树内跑的 gradle 构建都会生成它，
+# 不是源码，绝不入库。
+.kotlin
 /local.properties
 /.idea/caches
 /.idea/libraries

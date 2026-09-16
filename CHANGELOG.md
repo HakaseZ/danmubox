@@ -1721,6 +1721,7 @@
 ### Fixed
 
 - **CI 的 `artifacts` job 首次真跑即失败**（提交 `ad8709b`）：`android-actions/setup-android@v3` 会去装上游**早已下架**的 `tools` 包 —— 实测输出 `Warning: Failed to find package 'tools'` → `sdkmanager` 非零退出 → 整个 job 失败。改成与 `scripts/android-env.sh` **同款口径**：自取同一版本的 `cmdline-tools`（同 mac_arm64 包与 URL）→ 解压成 `cmdline-tools/latest` → 用它装 `platform-tools` / `platforms/android-36` / `build-tools/35.0.0` / `ndk/27.0.12077973`，装完自检三样都在（缺任一样后面 Gradle 配置阶段必挂）；cmdline-tools 版本固定后不再需要 `;` → `/` 的兜底重试。**这条正好落在 `docs/operations.md` §5.13 那张「本机验证到什么程度」的表里标着「未在 runner 上验证」的格子上** —— 首次真跑把它照出来了。
+  **修后真跑（2026-09-17 回填）**：以该修复提交本身（`ad8709b`）`workflow_dispatch` 跑 `dev/2609161236` —— **两个 job 全绿**：「产物（macOS dmg + Android APK）」**21 分 10 秒**成功、「检查（fmt / clippy / test / 前端构建）」49 秒成功（run `35108747297`）。即：`artifacts` job 从「首跑即失败」到「在 runner 上出包成功」已闭环，`docs/operations.md` §5.13 里标「未在 runner 上验证」的那一格可以据此改写。
 
 ### Fixed
 

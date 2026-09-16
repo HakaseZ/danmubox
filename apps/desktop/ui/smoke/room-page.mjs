@@ -3963,7 +3963,7 @@ const MOCK = (theme) => `(function () {
     out.giftDockInSharedRegion = !!dock && !!composer && !!panesEl && panesEl.contains(dock) &&
       (byTestId("db-pane-danmaku").compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
       (dock.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-    out.giftDockCollapsed = !!dock && !byTestId("db-gift-body");
+    out.giftDockCollapsed = !!dock && !byTestId("db-gift-area");
     out.giftDockFullWidth = !!dock && Math.abs(rect(dock).width - document.body.clientWidth) < 2;
     // 窄屏：折叠条只占一行，弹幕列表不被它挤掉
     put("giftDockCompact", !!dock && rect(dock).height <= 56);
@@ -3989,26 +3989,40 @@ const MOCK = (theme) => `(function () {
     // db-gift-dock 现在**就是**那枚折叠头按钮（issue #8），不再是「容器里装着一枚按钮」
     dock.click();
     await sleep(300);
-    out.giftDockExpands = !!byTestId("db-gift-body");
+    out.giftDockExpands = !!byTestId("db-gift-area");
     out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;
-    // ---- 一条一行：折叠后的行数（连击那两条合成 1 行）就是礼物栏的行数，body 的直接子元素
-    //      也只有这些行 —— 改前那段「金额排行 + 内容详情」的两段式结构已随本批删掉。
-    var giftBody = byTestId("db-gift-body");
-    var giftItems = allByTestId("db-gift-item");
+    // ---- 一条一行：折叠后的行数（连击那两条合成 1 行）就是礼物栏的行数 —— 改前那段
+    //      「金额排行 + 内容详情」的两段式结构已随 2609152029 第 5 条删掉。
+    //      **行现在是弹幕行的同一份实现**（用户 2026-09-16 第 2 条）：六条夹具 → 连击两条折叠
+    //      成一行 → 五行；行不再挂在 db-gift-area 的直接子层里，而在虚拟列表的高度块
+    //      db-gift-list 里（与弹幕区的 db-msg-list 同一个东西）。
+    var giftArea = byTestId("db-gift-area");
+    var giftItems = allByTestId("db-gift-row");
     out.giftDockItemCount = giftItems.length;
-    out.giftDockOneRowPerEvent = giftItems.length === 5 && !!giftBody &&
-      giftBody.children.length === giftItems.length;
+    out.giftDockOneRowPerEvent = giftItems.length === 5 && !!giftArea &&
+      allByTestId("db-gift-list").length === 1 && allByTestId("db-gift-scroll").length === 1;
     out.giftDockItemTexts = giftItems.map(function (item) {
       // 换行用 String.fromCharCode(10) 拼，**不写字面转义**：这一整段活在模板字符串里，
       // 反斜杠转义会先被模板吃掉（连注释里写一个都会变成真换行、把注释掰断）。
       return item.innerText.split(String.fromCharCode(10)).join(" ");
     });
-    out.giftDockItemSingleLine = giftItems.every(function (item) {
-      return rect(item) !== null && rect(item).height < 40;
+    // 行高记成实测值（旧版这里钉的是「必须 < 40px」的单行窄条，那是礼物栏**自己的**一套排版）；
+    // 现在行与弹幕行同款：身份行 + 正文行（+ 礼物 / 大航海的金额行），行高因此由内容决定。
+    out.giftDockRowHeights = giftItems.map(function (item) {
+      return rect(item) ? Math.round(rect(item).height * 10) / 10 : null;
     });
-    // ---- 金额格带单位（三类都是元，金瓜子按 ÷1000 换算），且连击折叠后是整串的总额
+    out.giftDockRowsAreDanmakuRows = giftItems.length === 5 && giftItems.every(function (item) {
+      return !!item.querySelector('[data-testid="db-gift-avatar-col"]') &&
+        !!item.querySelector('[data-testid="db-gift-identity"]') &&
+        !!item.querySelector('[data-testid="db-gift-body"]');
+    });
+    // ---- 金额格带单位（三类都是元，金瓜子按 ÷1000 换算），且连击折叠后是整串的总额。
+    //      SC 的金额是**卡片规格的一部分**（db-gift-sc-amount，与弹幕区里那条 SC 同一格）；
+    //      礼物 / 大航海的金额行只在礼物栏这一份画（db-gift-amount，见 §4.1 / §5.3），
+    //      所以这里两种钩子一起取：一行恰有一个金额格。
     out.giftDockAmounts = giftItems.map(function (item) {
-      var el = item.querySelector('[data-testid="db-gift-amount"]');
+      var el = item.querySelector(
+        '[data-testid="db-gift-amount"], [data-testid="db-gift-sc-amount"]');
       return el ? el.innerText : "";
     });
     out.giftDockAmountsCarryUnits =
@@ -4034,9 +4048,14 @@ const MOCK = (theme) => `(function () {
     // ---- 头像（第 2 条）：**有源才画** —— 两条连击礼物（折叠后 1 行）与两条 SC 有 face，
     //      V1 礼物与大航海在上游没有头像字段（协议 §10.2 / §10.6 的字段表里都没有），
     //      因此礼物栏里这一个都不许出现（界面不画假图）。
-    var giftAvatars = [].slice.call(giftBody.querySelectorAll('[data-testid="db-msg-avatar"]'));
+    //      **头像列永远占位**（§4.2，与弹幕行同一口径）：有图没图都留一列，逐行才对得齐 ——
+    //      五个非 system 行各一列，其中三列有图。
+    var giftAvatars = [].slice.call(giftArea.querySelectorAll('[data-testid="db-gift-avatar"]'));
     out.giftDockAvatarCount = giftAvatars.length;
     out.giftDockAvatarsOnlyWhereSourced = giftAvatars.length === 3;
+    out.giftDockAvatarColCount = allByTestId("db-gift-avatar-col").length;
+    out.giftDockAvatarColAlwaysReserved = out.giftDockAvatarColCount === 5 &&
+      out.giftDockAvatarCount === 3;
     out.giftDockAvatarIsImage = giftAvatars.length > 0 && giftAvatars.every(function (el) {
       return el.tagName === "IMG";
     });
@@ -4045,11 +4064,21 @@ const MOCK = (theme) => `(function () {
     ] : null;
     out.giftDockAvatarSquare = giftAvatars.length > 0 &&
       Math.abs(rect(giftAvatars[0]).width - rect(giftAvatars[0]).height) < 1;
+    // 头像盒与弹幕行同一档（1.25 × 行盒）：两处不再各算一套尺寸
+    var chatAvatarEl = byTestId("db-msg-avatar");
+    out.giftDockAvatarSameBoxAsChat = !!chatAvatarEl && giftAvatars.length > 0 &&
+      Math.abs(rect(giftAvatars[0]).width - rect(chatAvatarEl).width) < 0.6 &&
+      Math.abs(rect(giftAvatars[0]).height - rect(chatAvatarEl).height) < 0.6;
     snap();
 
-    // ---- SC 卡片（第 2 条）：卡片背景 / 边框取自档位令牌，金额行低一档加粗、独占一行
-    var scLow = rowWith("这是脱敏的醒目留言正文");
-    var scHigh = rowWith("1000 元档的脱敏留言");
+    // ---- SC 卡片（第 2 条）：卡片背景 / 边框取自档位令牌，金额行低一档加粗、独占一行。
+    //      文本一律**从夹具读**，不在断言里写死：最低档那条的正文刻意写长（40 个汉字，
+    //      见 fixtures/gift-sc-guard-rows.json 里 superchat-low 的 why），它同时是下面
+    //      「SC 不许被截断」的断言件。
+    var scLowSpec = GIFT_ROWS.filter(function (r) { return r.key === "superchat-low"; })[0].message;
+    var scHighSpec = GIFT_ROWS.filter(function (r) { return r.key === "superchat-high"; })[0].message;
+    var scLow = rowWith(scLowSpec.content);
+    var scHigh = rowWith(scHighSpec.content);
     out.scCardTiers = [scLow, scHigh].map(function (r) {
       return r ? r.getAttribute("data-sc-tier") : null;
     });
@@ -4076,6 +4105,129 @@ const MOCK = (theme) => `(function () {
     out.scCardAmountOnOwnLine = !!scAmountStyle && scAmountStyle.display === "block";
     snap();
 
+    // ---- 用户 2026-09-16 第 2 条：「礼物区域的显示和弹幕区直接保持一致（一样的布局、
+    //      一样的背景颜色、一样的自动滚动）」。
+    //      做法是**同一份实现**（行 = MessageRow、列表 = MessageList，scope="gift"），
+    //      所以这一组量的是「同一条 SC 在两处逐项相等」——行盒 / 头像列 / 身份行 / 正文块 /
+    //      计算底色逐项比出来，不是「看起来差不多」。另一条腿是**SC 不许被截断**（用户报的
+    //      「sc 在礼物区域显示不全」）：正文块的 scrollWidth/scrollHeight 不许超过
+    //      clientWidth/clientHeight，也不许是 nowrap + ellipsis。
+    var partOf = function (row, id) {
+      return row ? row.querySelector('[data-testid="' + id + '"]') : null;
+    };
+    var giftScRow = giftItems.filter(function (r) {
+      return r.innerText.indexOf(scLowSpec.content) >= 0;
+    })[0];
+    var chatScRow = rowWith(scLowSpec.content);
+    var giftScBody = partOf(giftScRow, "db-gift-body");
+    var chatScBody = partOf(chatScRow, "db-msg-body");
+    var clipOf = function (el) {
+      if (!el) return null;
+      var st = getComputedStyle(el);
+      return {
+        x: Math.round((el.scrollWidth - el.clientWidth) * 10) / 10,
+        y: Math.round((el.scrollHeight - el.clientHeight) * 10) / 10,
+        whiteSpace: st.whiteSpace,
+        textOverflow: st.textOverflow
+      };
+    };
+    out.giftParityScRowFound = !!giftScRow && !!chatScRow;
+    // ① 布局：同一条 SC 的行盒几何与行内各格逐项相同
+    var giftScBox = rect(giftScRow), chatScBox = rect(chatScRow);
+    out.giftParityRowGeometry = !!giftScBox && !!chatScBox &&
+      Math.abs(giftScBox.height - chatScBox.height) < 0.6 &&
+      Math.abs(giftScBox.left - chatScBox.left) < 0.6 &&
+      Math.abs(giftScBox.width - chatScBox.width) < 0.6;
+    out.giftParityRowHeightPx = giftScBox ? Math.round(giftScBox.height * 10) / 10 : null;
+    var gCol = rect(partOf(giftScRow, "db-gift-avatar-col"));
+    var cCol = rect(partOf(chatScRow, "db-msg-avatar-col"));
+    out.giftParityAvatarCol = !!gCol && !!cCol &&
+      Math.abs(gCol.width - cCol.width) < 0.6 && Math.abs(gCol.height - cCol.height) < 0.6 &&
+      Math.abs(gCol.left - cCol.left) < 0.6;
+    var gIdent = rect(partOf(giftScRow, "db-gift-identity"));
+    var cIdent = rect(partOf(chatScRow, "db-msg-identity"));
+    out.giftParityIdentityRow = !!gIdent && !!cIdent &&
+      Math.abs(gIdent.height - cIdent.height) < 0.6 && Math.abs(gIdent.left - cIdent.left) < 0.6;
+    var gBodyBox = rect(giftScBody), cBodyBox = rect(chatScBody);
+    out.giftParityBodyBox = !!gBodyBox && !!cBodyBox &&
+      Math.abs(gBodyBox.width - cBodyBox.width) < 0.6 &&
+      Math.abs(gBodyBox.left - cBodyBox.left) < 0.6;
+    var gBodyStyle = giftScBody ? getComputedStyle(giftScBody) : null;
+    var cBodyStyle = chatScBody ? getComputedStyle(chatScBody) : null;
+    out.giftParityBodyFont = !!gBodyStyle && !!cBodyStyle &&
+      gBodyStyle.fontSize === cBodyStyle.fontSize &&
+      gBodyStyle.lineHeight === cBodyStyle.lineHeight;
+    // 行内各格一个不差：同一条 SC 在两处的 innerText 逐字相同（昵称 + 正文 + 金额行）
+    out.giftParityScRowText = !!giftScRow && !!chatScRow &&
+      giftScRow.innerText === chatScRow.innerText;
+    var gScAmount = partOf(giftScRow, "db-gift-sc-amount");
+    var cScAmount = partOf(chatScRow, "db-msg-sc-amount");
+    out.giftParityScAmountLine = !!gScAmount && !!cScAmount &&
+      gScAmount.innerText === cScAmount.innerText && gScAmount.innerText === yuan(30) + " 元";
+    // ② 背景色：两栏底色同一（.paneGift 不再另刷 --bg-elevated），同一行的计算底色与边框也相同
+    var paneGiftEl = byTestId("db-pane-gift");
+    var paneDanmakuEl = byTestId("db-pane-danmaku");
+    out.giftParityPaneBackground = !!paneGiftEl && !!paneDanmakuEl &&
+      getComputedStyle(paneGiftEl).backgroundColor ===
+      getComputedStyle(paneDanmakuEl).backgroundColor;
+    out.giftParityPaneBackgroundColor = paneGiftEl
+      ? getComputedStyle(paneGiftEl).backgroundColor : null;
+    out.giftParityRowBackground = !!giftScRow && !!chatScRow &&
+      getComputedStyle(giftScRow).backgroundColor ===
+      getComputedStyle(chatScRow).backgroundColor &&
+      getComputedStyle(giftScRow).borderTopColor === getComputedStyle(chatScRow).borderTopColor &&
+      getComputedStyle(giftScRow).borderTopWidth === getComputedStyle(chatScRow).borderTopWidth;
+    out.giftParityRowBackgroundColor = giftScRow
+      ? getComputedStyle(giftScRow).backgroundColor : null;
+    // ③ SC 不许被截断：两处都不许（现在这一条同时钉住弹幕区那一份，避免只修了礼物栏那一处）
+    out.giftScBodyClip = clipOf(giftScBody);
+    out.chatScBodyClip = clipOf(chatScBody);
+    out.giftScNotTruncated = !!out.giftScBodyClip &&
+      out.giftScBodyClip.x <= 1 && out.giftScBodyClip.y <= 1 &&
+      out.giftScBodyClip.whiteSpace === "pre-wrap" && out.giftScBodyClip.textOverflow === "clip";
+    out.chatScNotTruncated = !!out.chatScBodyClip &&
+      out.chatScBodyClip.x <= 1 && out.chatScBodyClip.y <= 1 &&
+      out.chatScBodyClip.whiteSpace === "pre-wrap" && out.chatScBodyClip.textOverflow === "clip";
+    out.giftScFullTextPresent = !!giftScBody &&
+      giftScBody.innerText.indexOf(scLowSpec.content) >= 0;
+    out.chatScFullTextPresent = !!chatScBody &&
+      chatScBody.innerText.indexOf(scLowSpec.content) >= 0;
+    // 礼物 / 大航海的金额**只在礼物栏画**（§4.1：弹幕流行内不塞金额；§5.3：礼物栏画）：
+    // 同一批"投喂 小心心"在两处各一行，礼物栏那行有金额行、弹幕流那行没有。
+    var chatGiftRow = rowWith("投喂 小心心");
+    var paneGiftRow = giftItems.filter(function (r) {
+      return r.innerText.indexOf("投喂 小心心") >= 0;
+    })[0];
+    out.giftAmountOnlyInPane = !!chatGiftRow && !!paneGiftRow &&
+      !partOf(chatGiftRow, "db-msg-amount") && !partOf(chatGiftRow, "db-msg-sc-amount") &&
+      !!partOf(paneGiftRow, "db-gift-amount") &&
+      partOf(paneGiftRow, "db-gift-amount").innerText === yuan(0.6) + " 元";
+    // ④ 自动滚动与「跟随 / 暂停 / 回到最新」与弹幕列表**同源**：同一套 8px 判据、同一条
+    //      scrollToIndex(align: "end") 贴底、同一枚「回到最新」控件 —— 只是另一份实例。
+    var giftScroll = byTestId("db-gift-scroll");
+    var giftGapNow = function () { return giftScroll ? bottomGap(giftScroll) : null; };
+    out.giftFollowPinnedToBottom = !!giftScroll && giftGapNow() < 8 && !byTestId("db-gift-anchor");
+    // 贴底的可观察面：最新一条真的在视口里（末行的底边不越过滚动容器的底边）
+    var lastGiftRow = giftItems[giftItems.length - 1];
+    var giftScrollBox = rect(giftScroll);
+    out.giftNewestRowVisible = !!lastGiftRow && !!giftScrollBox &&
+      rect(lastGiftRow).bottom <= giftScrollBox.bottom + 1;
+    // 用户自己往上滚 → 暂停跟随（判据与弹幕区同一条：离底 > 8px 且「回到最新」出现）
+    var chatGapBefore = bottomGap(byTestId("db-chat-scroll"));
+    giftScroll.scrollTop = 0;
+    await sleep(400);
+    out.giftPausedGapPx = giftGapNow();
+    out.giftPausedShowsJumpButton = !!byTestId("db-gift-anchor") && giftGapNow() > 8;
+    // 两处各自一份滚动位置与虚拟列表状态：滚礼物栏**不动**弹幕区
+    out.giftScrollIndependentOfChat =
+      Math.abs(bottomGap(byTestId("db-chat-scroll")) - chatGapBefore) < 1;
+    var giftAnchorBtn = byTestId("db-gift-anchor");
+    if (giftAnchorBtn) giftAnchorBtn.click();
+    await sleep(500);
+    out.giftJumpButtonReturnsToBottom = giftGapNow() < 8 && !byTestId("db-gift-anchor");
+    out.giftRowsStillRendered = allByTestId("db-gift-row").length === giftItems.length;
+    snap();
+
     // ---- 两枚开关的四种组合（第 4 条）：每一次都顺带验「切开关不丢消息」（同一批数据只换渲染位置）。
     //      点开关之前必须先把**筛选面板**开回来：上一步展开礼物栏那一下按「五者互斥」把面板收掉了
     //      （不是 bug，是 §2.3 的口径）。反过来，开面板也会收起礼物栏 —— 两件事分开验，不混在一起。
@@ -4085,12 +4237,12 @@ const MOCK = (theme) => `(function () {
     await sleep(350);
     out.giftPanelOffHidesDock = !byTestId("db-gift-dock");
     out.giftPanelOffKeepsStream = !!rowWith("投喂 小心心") &&
-      !!rowWith("这是脱敏的醒目留言正文");
+      !!rowWith(scLowSpec.content);
     out.giftSwitchInDanmakuOff = setGiftSwitch("弹幕包含礼物", false);
     await sleep(350);
     out.giftBothOffHidesDock = !byTestId("db-gift-dock");
     out.giftBothOffHidesStream = !rowWith("投喂 小心心") &&
-      !rowWith("这是脱敏的醒目留言正文") && !rowWith("开通 舰长");
+      !rowWith(scLowSpec.content) && !rowWith("开通 舰长");
     // 普通弹幕不受这两枚开关影响（它们只管礼物类三族）。判据现场推一条**新的**弹幕再找它：
     // 历史那条早已滚出虚拟列表的渲染窗口，拿它当锚会假失败（踩过一次）。
     window.__emit("danmubox://message", window.__mk("danmaku", "两枚开关都关时的普通弹幕", false, {
@@ -4106,7 +4258,7 @@ const MOCK = (theme) => `(function () {
     // 它本身就是那枚按钮 —— 不再是「容器里有按钮」。
     byTestId("db-gift-dock").click();
     await sleep(350);
-    out.giftPanelOnlyRendersAllRows = allByTestId("db-gift-item").length === 5;
+    out.giftPanelOnlyRendersAllRows = allByTestId("db-gift-row").length === 5;
     // 回到默认（两枚都开）：同样先开面板再点开关；开面板那一下已经把展开的礼物栏收起来了，
     // 因此这里不再点多一次（连点会把礼物栏又展开，下一段的「默认形态」就不是折叠态了）。
     // 后面几段（面板互斥 / 多标签）因此跑在**默认形态**上：筛选面板开着、礼物栏折叠着。
@@ -4114,7 +4266,7 @@ const MOCK = (theme) => `(function () {
     await sleep(300);
     out.giftSwitchBothBackOn = setGiftSwitch("弹幕包含礼物", true);
     await sleep(350);
-    out.giftRestoredToDefault = !!byTestId("db-gift-dock") && !byTestId("db-gift-body") &&
+    out.giftRestoredToDefault = !!byTestId("db-gift-dock") && !byTestId("db-gift-area") &&
       !!rowWith("投喂 小心心") && window.__prefs["ui.gift_in_danmaku"] === true &&
       window.__prefs["ui.gift_panel"] === true;
     snap();
@@ -4456,7 +4608,7 @@ const MOCK = (theme) => `(function () {
       out.immersiveKeepsGiftDock = byTestId("db-gift-dock") !== null && !!immGift0 &&
         !!immGift1 && !!immSplit1 &&
         // 折叠态（此刻它就是折叠的）在沉浸态里照旧折叠：高度仍然是折叠头那一个数
-        !byTestId("db-gift-body") &&
+        !byTestId("db-gift-area") &&
         Math.abs(immGift1.height - immGift0.height) < 1 &&
         Math.abs(immGift1.height - immGiftHeadH) < 1 &&
         Math.abs(rect(byTestId("db-chat-scroll")).bottom - immSplit1.top) < 1 &&
@@ -4930,7 +5082,7 @@ const MOCK = (theme) => `(function () {
     //      最后把两枚开关都还原成默认值，礼物栏因此折叠着在场）。
     var openPanelCount = function () {
       return (byTestId("db-panel") ? 1 : 0) + (byTestId("db-admin-panel") ? 1 : 0) +
-        (byTestId("db-gift-body") ? 1 : 0);
+        (byTestId("db-gift-area") ? 1 : 0);
     };
     // 房管面板的开/关都只有一条路：⋯ 菜单里那一项（面板内没有开关自己的按钮）
     var toggleAdminFromHeader = async function () {
@@ -4944,7 +5096,7 @@ const MOCK = (theme) => `(function () {
     clickTool("表情");
     await sleep(450);
     out.panelExclusiveEmoteClosesAdmin = !!byTestId("db-panel") &&
-      !byTestId("db-admin-panel") && !byTestId("db-gift-body") && openPanelCount() === 1;
+      !byTestId("db-admin-panel") && !byTestId("db-gift-area") && openPanelCount() === 1;
     clickTool("短语");
     await sleep(350);
     out.panelExclusivePhraseReplacesEmote = allByTestId("db-panel").length === 1 &&
@@ -4958,11 +5110,11 @@ const MOCK = (theme) => `(function () {
     var exclusiveDockHead = byTestId("db-gift-dock");
     if (exclusiveDockHead) exclusiveDockHead.click();
     await sleep(450);
-    out.panelExclusiveGiftDockClosesPanel = !!byTestId("db-gift-body") &&
+    out.panelExclusiveGiftDockClosesPanel = !!byTestId("db-gift-area") &&
       !byTestId("db-panel") && !byTestId("db-admin-panel") && openPanelCount() === 1;
     await toggleAdminFromHeader();
     out.panelExclusiveAdminClosesGiftDock = !!byTestId("db-admin-panel") &&
-      !byTestId("db-panel") && !byTestId("db-gift-body") && openPanelCount() === 1;
+      !byTestId("db-panel") && !byTestId("db-gift-area") && openPanelCount() === 1;
 
     // ---- 上游拒绝**原样展示**（code + message）：三块各自留痕、互不清空，面板留在原地。
     //      这一档必须在**有权限**时测 —— 入口只对房管存在，身份被撤销时面板会直接收起（见下）。
@@ -5844,7 +5996,7 @@ const MOCK = (theme) => `(function () {
       await sleep(300);
     }
     // 归一形态：礼物栏折叠（点折叠头收起；它顺带收起别的面板）
-    if (byTestId("db-gift-body")) {
+    if (byTestId("db-gift-area")) {
       byTestId("db-gift-dock").click();
       await sleep(350);
     }
@@ -5864,7 +6016,7 @@ const MOCK = (theme) => `(function () {
     out.splitterDefaultOrderGiftBelow =
       danmakuBox0.bottom <= splitBox0.top + 1 && splitBox0.bottom <= giftBox0.top + 1;
     // 折叠态：礼物栏只有折叠头那么高（「礼物栏不小于它的折叠头」这条约束的常态）
-    out.splitterCollapsedGiftIsHeadHeight = !byTestId("db-gift-body") &&
+    out.splitterCollapsedGiftIsHeadHeight = !byTestId("db-gift-area") &&
       Math.abs(giftBox0.height - headBox0.height) <= 1;
     out.splitterDefaultRatioPref = ratioAtEntry;
     out.splitterDefaultOnTopPref = window.__prefs["ui.gift_pane_on_top"] === false;
@@ -5877,7 +6029,7 @@ const MOCK = (theme) => `(function () {
     await sleep(80);
     var midGiftBox = rect(byTestId("db-pane-gift"));
     out.splitterDragLiveGrewPx = Math.round(midGiftBox.height - giftBox0.height);
-    out.splitterDragLiveExpandsPane = !!byTestId("db-gift-body");
+    out.splitterDragLiveExpandsPane = !!byTestId("db-gift-area");
     out.splitterDragLiveGrew = midGiftBox.height > giftBox0.height + 80;
     // 拖动中**一帧都不写 store**：磁盘上还是进来时那一份
     out.splitterDragLiveWithoutStore = window.__prefs["ui.gift_pane_ratio"] === ratioAtEntry;
@@ -5929,7 +6081,7 @@ const MOCK = (theme) => `(function () {
       var remountProbe = {
         activeBefore: remountRoomId,
         other: otherRoomId,
-        giftBodyBefore: !!byTestId("db-gift-body"),
+        giftBodyBefore: !!byTestId("db-gift-area"),
         giftHeightBefore: Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10,
         headHeightBefore: Math.round(headBox0.height * 10) / 10,
         ratioPrefBefore: window.__prefs["ui.gift_pane_ratio"],
@@ -5942,7 +6094,7 @@ const MOCK = (theme) => `(function () {
         })[0];
         return t ? t.getAttribute("data-room-id") : null;
       })();
-      remountProbe.giftBodyAfterOther = !!byTestId("db-gift-body");
+      remountProbe.giftBodyAfterOther = !!byTestId("db-gift-area");
       tabByRoomId(remountRoomId).click();
       await sleep(900);
       remountProbe.activeAfterBack = (function () {
@@ -5951,7 +6103,7 @@ const MOCK = (theme) => `(function () {
         })[0];
         return t ? t.getAttribute("data-room-id") : null;
       })();
-      remountProbe.giftBodyAfterBack = !!byTestId("db-gift-body");
+      remountProbe.giftBodyAfterBack = !!byTestId("db-gift-area");
       remountProbe.giftHeightAfterBack = byTestId("db-pane-gift")
         ? Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10 : null;
       remountProbe.ratioPrefAfterBack = window.__prefs["ui.gift_pane_ratio"];
@@ -5960,7 +6112,7 @@ const MOCK = (theme) => `(function () {
     // 切房那一趟做得出来才算数（标签条上至少要有两枚、且能认出当前那一枚）；
     // 做不出就是夹具的事，明着写出来，不把它悄悄放过 —— 与 tabs 那一段的 tabsRendered 同一条口径。
     out.splitterRemountAvailable = remountAvailable;
-    out.splitterCollapsedAfterRemount = remountAvailable && !byTestId("db-gift-body") &&
+    out.splitterCollapsedAfterRemount = remountAvailable && !byTestId("db-gift-area") &&
       Math.abs(rect(byTestId("db-pane-gift")).height - headBox0.height) <= 1;
     byTestId("db-gift-dock").click();
     await sleep(400);

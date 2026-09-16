@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { AdminPanel } from "./AdminPanel";
-import { Avatar } from "./Avatar";
 import { Composer, type PanelKind } from "./Composer";
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
@@ -873,11 +872,15 @@ export function RoomView({
             />
           </div>
         }
-        /* 独立礼物栏（issue 2609152029 第 5 条改成**每个礼物 / SC / 大航海一条**：
-           头像 + 昵称 + 内容 + 数量 + 金额，原来那两段「金额排行 + 内容详情」已取消）。
+        /* 独立礼物栏（issue 2609152029 第 5 条改成**每个礼物 / SC / 大航海一条**；
+           2026-09-16 第 2 条再进一步：**与弹幕区同一套呈现** —— 行就是 MessageRow、
+           列表就是 MessageList（scope="gift"）：一样的布局（头像列 / 身份行 / 正文块 /
+           时间戳）、一样的背景色、一样的自动滚动与「跟随 / 暂停 / 回到最新」。它自己的
+           滚动位置与虚拟列表状态是**另一份实例**，两边互不影响。
            是否出现由 `ui.gift_panel` 决定（管弹幕流那一头的是 `ui.gift_in_danmaku`，
            两枚各自独立：都开 = 默认形态，同一批消息两处都渲染）。
-           折叠头带 `data-pane-head`：它是**这一栏的最小高度**（SplitPanes 实测）。 */
+           折叠头带 `data-pane-head`：它是**这一栏的最小高度**（SplitPanes 实测）。
+           空态文案在 `empty` 上（判据「哪一套行算本场」留在调用方）。 */
         gift={
           giftPanel ? (
             <>
@@ -899,43 +902,14 @@ export function RoomView({
                 <span className={styles.giftDockToggle}>{giftOpen ? "收起" : "展开"}</span>
               </button>
               {giftOpen && (
-                <div className={styles.giftDockBody} data-testid="db-gift-body">
-                  {giftRows.length === 0 ? (
-                    <div className={styles.empty}>本场还没有礼物</div>
-                  ) : (
-                    giftRows.map((row) => {
-                      const amount = amountText(row.message.amount, row.message.kind);
-                      return (
-                        <div
-                          key={row.message.local_id}
-                          className={styles.giftItem}
-                          data-testid="db-gift-item"
-                        >
-                          <Avatar url={row.message.face} name={row.message.uname} />
-                          <span className={styles.giftWho} data-testid="db-gift-who">
-                            {row.message.uname}
-                          </span>
-                          <span className={styles.giftWhat} data-testid="db-gift-what">
-                            {row.message.content}
-                          </span>
-                          {/* 数量与弹幕行同一个口径：礼物恒显示 ×N（折叠后是整串连击的次数），
-                              其余 kind 只在真折叠过时才有（`count > 1`）。 */}
-                          {(row.count > 1 || row.message.kind === "gift") && (
-                            <span className={styles.giftCount} data-testid="db-gift-count">
-                              ×{row.count}
-                            </span>
-                          )}
-                          {/* 金额格带单位；上游没给价（amount = 0）时**整格不画**，不拿 0 顶替 */}
-                          {amount.length > 0 && (
-                            <span className={styles.giftAmount} data-testid="db-gift-amount">
-                              {amount}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                <MessageList
+                  rows={giftRows}
+                  anchorUid={room.anchor_uid}
+                  prefs={prefs}
+                  scope="gift"
+                  empty={giftRows.length === 0 ? "本场还没有礼物" : undefined}
+                  onMenu={(message, at) => setMessageMenu({ at, message })}
+                />
               )}
             </>
           ) : null

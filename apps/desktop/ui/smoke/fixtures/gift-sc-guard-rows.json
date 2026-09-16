@@ -102,12 +102,12 @@
     {
       "key": "superchat-low",
       "source": "superchat",
-      "why": "SC 最低档（30 元）：SC 卡片 + 金额行「30 元」+ 第 1 档配色。",
+      "why": "SC 最低档（30 元）：SC 卡片 + 金额行「30 元」+ 第 1 档配色。正文**刻意写长**（40 个汉字）：360 宽下它在弹幕行的正文列里必然折成两行，因此在旧礼物栏那一行（`white-space: nowrap` + `text-overflow: ellipsis`）里会被截断——这条样本就是「SC 在礼物区域显示不全」的复现件，也是「两处都不许截断」的断言件。",
       "message": {
         "kind": "superchat",
         "uid": 7103,
         "uname": "醒目留言者",
-        "content": "这是脱敏的醒目留言正文",
+        "content": "这条醒目留言刻意写得很长：它必须整段看得见，不许被省略号吃掉，也不许只剩一行。",
         "amount": 30,
         "combo_id": "",
         "upstream_id": "<redacted>",

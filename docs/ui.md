@@ -162,7 +162,7 @@
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-gift-dock` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-chat-area` / `db-msg-count` / `db-gift-dock` / `db-gift-area` / `db-gift-scroll` / `db-gift-list` / `db-gift-anchor` / `db-gift-row` / `db-gift-avatar` / `db-gift-avatar-col` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
 
 ### 2.3.1 沉浸模式（issue #1）
 
@@ -453,7 +453,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | `face` 非空 | 圆形缩略图（`--avatar` = `1.25 × --row-line`，比身份行稍高，随字号缩放），`alt=""`、`title=昵称`（装饰性图片，昵称已在旁边） |
 | `face` 为空串 | **不画图**（上游没给就没有头像），但**头像列照常占位**（同样 `--avatar` 宽的空列，`data-testid="db-msg-avatar-col"`）：否则这一行的身份行 / 正文会整体左移，与其它行对不齐（用户 2026-09-12：时间与列要对齐） |
 | 加载失败 | 退化成昵称首字符的圆形占位（居中大写，底色 `--bg-input`） |
-| 独立礼物栏里（§5.3） | **同一个 `Avatar` 组件**：基准取 `:root` 的 `--avatar`（行外默认 1.35em；礼物栏那条把基准调到 1.8em —— 那一块字号只有 `--fs-2`，照 1.35em 算出来只有 16px 上下，看不清）。空串同样不画图，而且**不留占位列**（礼物栏不是逐行对齐的表格，空一列只是白吃间距）—— V1 礼物与大航海因此在那里既没有图、也没有空洞 |
+| 独立礼物栏里（§5.3） | **同一个 `Avatar` 组件、同一档尺寸**（2026-09-16 第 2 条之后礼物栏的行就是弹幕行）：基准取行盒派生的 `--avatar` = 1.25 × 行盒（26.25px @ `ui.font_scale = 1`），与弹幕行逐项相同（此前礼物栏是**另一档** 1.8em，因为那一栏的字号是 `--fs-2`）。空串同样不画图，而且**头像列照常占位**（与弹幕行同一口径，「逐行对齐」这条在礼物栏里成立）—— V1 礼物与大航海因此在那里没有图、但有一列空位 |
 
 **头像的对齐口径：顶部与身份行对齐、比身份行稍高**（用户 2026-09-13：「注意头像需要比身份簇稍微高一些，太小了看不清」，并要按参考图对齐）。做法：头像列的高度 = 头像盒高（`--avatar` = **1.25 × 行盒** = 26.25px），行容器里顶对齐，于是列顶 = 行的内容顶 = 身份行的行盒顶（21px）；头像比身份行高出那 25% 向下探进正文行的带宽，但它在自己的列里，不压正文，行高由正文块的两行决定，所以放大头像**不会**把行撑高（行高 ≈ 58px 是两行本身的结果）。冒烟按 `layoutAvatarTopAlignedWithIdentity`（头像列顶边 − 身份行顶边 < 1.5px）、`rowAvatarTallerThanIdentity`（头像 ≥ 身份行的 1.15 倍）、`rowScaleFollowsFontSlider`（0.85 / 1 / 1.6 三档字号下比值不变）与 `layoutAvatarNotRowCentered`（反面对照）两个视口都断言。
 
@@ -711,7 +711,10 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 ### 5.2 独立礼物栏线框（`ui.gift_panel` 为真时）
 
-**这一栏现在与弹幕区上下分区**（issue #8，用户 2026-09-16 确认的外置口径，见 §5.4）——
+**这一栏与弹幕区上下分区**（issue #8，用户 2026-09-16 确认的外置口径，见 §5.4），
+并且**栏内的行就是弹幕行**（用户 2026-09-16 第 2 条：「礼物区域的显示和弹幕区直接保持一致
+（一样的布局、一样的背景颜色、一样的自动滚动）」）—— 行 = `MessageRow`（`scope="gift"`）、
+列表 = `MessageList`（同一份虚拟列表 / 跟随 / 贴底 / 「回到最新」实现，两处各持自己的滚动位置）。
 它不再在输入区下方，「输入区下方」那个位置整段取消。默认形态（弹幕在上、礼物在下、礼物栏折叠着）：
 
 ```
@@ -726,37 +729,45 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 │ 礼物 / SC（6）  本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 /        │   ← 礼物折叠条（折叠态只有这一行）
 │                 大航海 1 · 138 元                     收起 ▴  │
 ├──────────────────────────────────────────────────────────────┤   ← 展开后：栏内独立滚动（栏高由份额定）
-│ (头像) 王五  投喂 小心心      ×3   0.6 元                      │
-│ (头像) 周八  投喂 辣条        ×1   0.1 元                      │
-│ (头像) 赵六  这是醒目留言正文      30 元                       │
-│ (头像) 孙七  一千块的留言         1,000 元                     │
-│        钱七  开通 舰长            138 元                       │
+│ (头像) 王五:                                                 │      行与弹幕行**逐项相同**：
+│        投喂 小心心 ×3                                        │      头像列 / 身份行 / 正文块 / 金额行
+│        0.6 元                                                │
+│ (头像) 赵六:                                                 │
+│        这是醒目留言正文……（整段折行，不许截断）               │
+│        30 元                                                 │
+│ (头像) 钱七:                                                 │
+│        开通 舰长                                             │
+│        138 元                                                │
 ├──────────────────────────────────────────────────────────────┤
 │ 说点什么…                                                      │   ← 输入区（§6）
 │ [表情][短语][筛选]                                    [ 发送 ] │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-（线框里的头像格只画在有头像源的那几条上：V1 礼物与大航海在上游没有头像字段，界面就是**不画**，
-不占空位 —— 见 §4.1 与 §4.2。）
+（线框里的头像只画在有头像源的那几条上：V1 礼物与大航海在上游没有头像字段，界面就是**不画图**，
+但**列照常占位** —— 见 §4.1 / §4.2 与 §5.3 的「无源不画」一行。
+金额行同样是条件渲染：SC 两处都有，礼物 / 大航海只在礼物栏这一份有。）
 
 ### 5.3 独立礼物栏规则
 
 | 项 | 规则 |
 |---|---|
 | 位置 | **与弹幕区共享一块上下分区，全宽**（用户 2026-09-12：不再占侧栏、不抢弹幕宽度；用户 2026-09-16 第 8 条改成与弹幕区上下分区）；`ui.gift_panel` 为真时出现（**默认就开**，所以默认形态下弹幕区是「弹幕 + 礼物 + SC + 大航海」双份呈现）。上下顺序、栏高比例、分割条与长按换位见 §5.4 |
-| 一条一行 | **每个礼物 / SC / 大航海一条**（本批第 5 条）：头像 + 昵称 + 内容（`Message.content`）+ 数量（`×N`）+ 金额（带单位）都在**同一行**里。改前那套「金额排行一条 + 内容详情一条」的两段式结构**整段删除** —— 排行是同一批消息的第二种画法，用户要的是一眼看清「谁送了什么、多少」 |
+| 与弹幕区同一套呈现 | **行 = 弹幕行**（用户 2026-09-16 第 2 条：「礼物区域的显示和弹幕区直接保持一致」）：栏内的每一条都由 **`MessageRow`** 渲染（`scope="gift"`），列表由 **`MessageList`** 渲染（`scope="gift"`）—— 布局（头像列 / 身份行 / 正文块 / 金额行）、设计令牌、行盒尺度、悬停洗色、行右键菜单全部与弹幕区同一份代码；**两处各持自己的滚动位置与虚拟列表状态**，互不影响。渲染差异只有三处，都是刻意的：① 行内 `data-testid` 前缀（`db-gift-*` / `db-msg-*`，让冒烟能分辨是哪一个实例）；② 空态文案（栏内空时写「本场还没有礼物」）；③ **礼物 / 大航海那一行金额**（见下面「金额与单位」一行）。冒烟按 `giftParity*` 一组断言（行盒 / 头像列 / 身份行 / 正文块几何与字号、行与两栏的**计算底色**逐项相等） |
+| 一条一行 | **每个礼物 / SC / 大航海一条**（2026-09-15 第 5 条）：头像 + 昵称（身份行）+ 内容（`Message.content`）+ 数量（`×N`，正文行内）+ 金额（独占一行）都在**同一条行里**。改前那套「金额排行一条 + 内容详情一条」的两段式结构**整段删除**；2026-09-16 第 2 条又把行本身换成弹幕行的同一份实现（此前它是礼物栏自己的一套单行布局：`nowrap` + 省略号，长 SC 因此显示不全） |
 | 数量 | 与弹幕行同一口径（`filtering.toDisplayRows` 的折叠结果）：**礼物行恒有 `×N`**（没折叠就是 `×1`），SC / 大航海没有连击折叠，因此不画那一格 |
-| 金额与单位 | 金额格 = `filtering.amountText(amount, kind)`：**三类一律按元展示** —— SC 的 `amount` 上游就是元，礼物与大航海是金瓜子、按 **`元 = 金瓜子 / 1000`** 换算（契约 §5「金额单位」）。整数元不带小数、非整数保留必要小数（`138 元` / `0.1 元`）；`amount <= 0`（上游没给价）**不画金额格** |
+| 金额与单位 | 金额行 = `filtering.amountText(amount, kind)`：**三类一律按元展示** —— SC 的 `amount` 上游就是元，礼物与大航海是金瓜子、按 **`元 = 金瓜子 / 1000`** 换算（契约 §5「金额单位」）。整数元不带小数、非整数保留必要小数（`138 元` / `0.1 元`）；`amount <= 0`（上游没给价）**不画这一行**。**位置与规格与弹幕区里 SC 的金额行同一格**（`.scAmount`：正文块里的块级一格、`--fs-3`、加粗）；**SC 两处都画**，**礼物 / 大航海只在礼物栏这一份画**（弹幕流行内不塞金额，见 §4.1）。冒烟按 `giftDockAmounts*`（带单位、连击折叠后是总额）、`giftDockNoRawCoinDisplay`（金瓜子原值不许直接贴「元」）与 `giftAmountOnlyInPane`（同一批礼物在弹幕流那一行没有金额格、在礼物栏那一行有）断言 |
 | 折叠态汇总 | 标题行 =「礼物 / SC（N）」+ **按 kind 分组**的汇总（每组 `<kind> <条数> · <金额> 元`，空组不出现），例如「本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 / 大航海 1 · 138 元」。三组单位**现在都是元**（见上一行），分组因此只剩下展示结构上的意义 —— **是否合并成一条合计由用户裁决，本批未改**。分组明细是一个可缩的省略项（`text-overflow: ellipsis`）：窄屏下放不下就截断，标题上那个总条数不缩 —— 明细是给宽屏「一眼看清」用的，条数才是窄屏的兜底 |
 | 折叠 | 默认**折叠**（只有折叠头一行 = 这一栏的最小高度，§5.4）；展开时会收起其它四个面板（五者互斥，§2.3）—— 礼物栏也算一个面板 |
-| 滚动 | 展开后**栏内独立滚动**（栏高由份额定，见 §5.4），与弹幕区互不影响；跟随语义按面板各自维护 |
+| 滚动 | 展开后**栏内独立滚动**（栏高由份额定，见 §5.4），与弹幕区互不影响，但**判据与实现同源**（2026-09-16 第 2 条）：同一份虚拟列表 + 同一条 8px 贴底判据（`scrollHeight - scrollTop - clientHeight < 8`）+ 同一个 `scrollToIndex(align: "end")` 贴底路子 + 同一枚「回到最新」悬浮钮 + 同一套悬停暂停（`ui.pause_on_hover`）。**不给礼物栏另写一份滚动逻辑**；两处各持自己的滚动位置与虚拟列表状态（`room-page.mjs` 的 `giftFollow*` / `giftPaused*` / `giftJumpButton*` 与 `giftScrollIndependentOfChat` 一组断言） |
+| 长正文不截断 | 行里的正文块**折行、不裁剪**（与 §4.1 的正文同一规格：`white-space: pre-wrap`、`text-overflow: clip`、不 `nowrap`）—— SC 的长留言整段看得见（用户 2026-09-16 第 2 条报的「sc 在礼物区域显示不全」就是旧礼物栏那条 `nowrap` + `ellipsis` 造成的）。冒烟按 `giftScNotTruncated` / `chatScNotTruncated`（正文块 `scrollWidth/scrollHeight` 都不超 `clientWidth/clientHeight`）与 `giftScFullTextPresent` / `chatScFullTextPresent`（整段文字都在 DOM 里）断言 |
 | 内容 | 三类都进：`gift`（`<动作词> <礼物名>`）、`superchat`（留言正文）、`guard`（开通播报） |
 | 合并 | 礼物连击折叠（§8.4）：同一次连击（`combo_id` 相同且相邻）折叠为一条，`count` 记次数、`amount` 累加 —— **与弹幕流共用同一份折叠结果**（`toDisplayRows`），礼物栏不另算一遍。低价礼物是**另一条**独立的合并规则（下一段），两者不串味 |
-| 空态 | 本会话尚无三类事件时，标题行写「本场暂无礼物」、展开区写「本场还没有礼物」。统计集被 `ui.gift_exclude_cheap_stats` 清空、但礼物栏里还有低价礼物时，标题行改写「本场 低价礼物已剔除」（下一段） |
+| 空态 | 本会话尚无三类事件时，标题行写「本场暂无礼物」、展开区写「本场还没有礼物」（文案由调用方经 `MessageList` 的 `empty` 传入，判据留在调用方那一处）。统计集被 `ui.gift_exclude_cheap_stats` 清空、但礼物栏里还有低价礼物时，标题行改写「本场 低价礼物已剔除」（下一段） |
 | 切换 | 筛选面板「辅助功能」块里的两枚开关（「弹幕包含礼物」/「独立礼物栏」，§8.5）：写回这两枚键，切换即重排，**不丢消息**（数据仍在同一 store，只有渲染位置变） |
-| 无源不画 | V1 礼物与大航海的 `face` 是空串（上游没有这个字段，见 §4.1）—— 那两条行**没有头像，也不留空位**；SC 与 V2 礼物有源就画（同一个 `Avatar` 组件，基准 1.8em） |
+| 无源不画、列照占位 | V1 礼物与大航海的 `face` 是空串（上游没有这个字段，见 §4.1）—— 那两条行**不画图**，但**头像列照常占位**（与弹幕行同一口径，§4.2：否则同栏的行会左右不齐）；SC 与 V2 礼物有源就画（同一个 `Avatar` 组件，`--avatar` = 1.25 × 行盒）。冒烟按 `giftDockAvatarsOnlyWhereSourced`（5 行里 3 个 img）、`giftDockAvatarColAlwaysReserved`（5 列）与 `giftDockAvatarSameBoxAsChat`（头像盒与弹幕行同一档）断言 |
 | 不变式 | 折叠 / 展开礼物栏**不改变弹幕区的宽度**（只改两栏的高度分配） |
+| 钩子 | 列表根 `db-gift-area`（展开才在场上）、滚动容器 `db-gift-scroll`、虚拟高度块 `db-gift-list`、「回到最新」`db-gift-anchor`、行 `db-gift-row`、行内 `db-gift-avatar(-col)` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount`；弹幕区那一族同时补齐 `db-chat-area`（列表根）与 `db-msg-count`（`×N` 那一格） |
 
 **低价礼物桶（`ui.gift_collapse_cheap`）与统计剔除（`ui.gift_exclude_cheap_stats`）** —— 本段是本批
 （issue 2609162056 第 3、4 条，用户 2026-09-16）新增的，两枚键的默认值、类型与溯源见
@@ -1326,7 +1337,7 @@ node smoke/run-headless.mjs --engine webkit    # WebKit（宿主引擎）：Play
 | 快照即契约 | 快照字段名（`step*` 与 `layout*` / `row*` / `panel*` / `fixture*` / `follow*` / `send*` / `live*` / `emote*` / `admin*` / `narrow*` / `wide*` 等前缀）是断言契约，改名等于改断言。视口专属断言按 `narrow_*` / `wide_*` 命名：同一份场景两个视口都跑，**断言集合相同、没有例外名单**（面板在窄屏同样是文档流里的一块，所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真） |
 | 夹具 | 弹幕行夹具 `smoke/fixtures/danmaku-rows.json` 是**完整原始 `DANMU_MSG` 载荷**（正文弹幕 / 表情包弹幕 / 无空格长 ASCII 串），脱敏只做三件事：昵称 / 牌名 / 主播名 → **等长掩码**（CJK 与全角 → `＊`、ASCII → `x`）、`uid` / 哈希 → `<redacted>`、CDN 只脱敏哈希段；`emoticon_unique` 的房间号段 → `room_<redacted>_<id>`（**房间号不入库**）。冒烟侧 `messageFromDanmakuPayload()` 照搬 `crates/danmubox-bili/src/cmd.rs::danmaku` 的取值路径派生成 `Message`，只把图换成本地替身（**固有尺寸与真图一致**）；`local_id` 借 `__mk` 分配（store 只接受比末尾更大的 `local_id`，契约 §5）。礼物 / SC / 大航海的夹具 `smoke/fixtures/gift-sc-guard-rows.json` 则是**按协议文档字段表构造**的（`protocol.md` §10.2 / §10.3 / §10.6）—— `AGENT.md` §8 第 16 条禁止为测试发送礼物 / 醒目留言 / 大航海，这类事件拿不到授权样本，而「礼物栏一条一行 + 金额带单位」「两枚开关的四种组合」「SC 卡片」这些新行为不能零断言；它只借字段名与语义，数值全是布局用的假值，脱敏与「构造 / 派生」的分档见 [`testing.md`](testing.md) §9.1。关注列表夹具由真实响应派生：`follow-getweblist-raw.json`（直播侧只给在播）/ `follow-followings-raw.json`（主站关注关系）/ `follow-status-raw.json`（批量房间接口，含未开播）→ `follow-list.json`（70 条），mock 里另加 3 条自造条目（在播 / 有标题 / 无标题各一）；脱敏口径与断言见 §2.2 与 `protocol.md` A28 |
 | 几何记账 | 行盒 / 身份行 / 正文行 / 折行行盒 / 表情图渲染盒与原图尺寸 / 横向溢出量逐项入快照（`fixtureTextRow` / `fixtureEmoteRow` / `fixtureAsciiRow` / `rowScale` / `layoutPanelScrollStablePx` 等）。判据是「量出来的」，不靠人眼：贴底间隙、三行昵称左边缘一致、徽标在昵称右侧且间距 = `--sp-1`、正文在身份行下方且左边缘与昵称一致、折行后每个行盒左边缘相等、头像顶边 = 身份行顶边、头像 1.25 / 身份牌 0.9 / 表情 1.1 × 行盒、正文可用宽度 ≥ 视口一半、表情图见方 + `contain` 且不随原图尺寸变。每条的具体断言名见对应节的「冒烟按 … 断言」 |
-| 覆盖 | 逐条断言名写在对应节里，本表不再另列清单。横切面已覆盖：关注列表（自动加载 / 排序分页 / 两档排布 / 标签名）、账号区与对话框、面板只挤列表且不遮最新一条、右键菜单、时间戳、礼物类消息的两枚开关（四种组合）与独立礼物栏（一条一行 / 金额带单位 / 按 kind 分组的汇总 / 有源头像）、**弹幕区与礼物栏的上下分区**（拖分割条改比例并落盘、拖到极限时两栏最小高度成立、比例在重挂后保持、长按 0.5s 换位与三种取消路、关掉礼物栏后分区退化，`splitter*` / `swap*`）、醒目留言卡片（档位令牌 + 金额行加粗）、互动自动消失与系统类消息白名单、筛选面板的两块两列勾选清单（消息类型 / 辅助功能同形态、四枚辅助开关逐枚可切、干净环境下复选框画的即契约默认值）、历史与实时同款、贴底与头像列占位、粉丝牌真彩色与兜底色、本房间舰长标、主站「我的表情」、@ 目标与文本同源、房管权限前置与二次确认、行排版整体感、昵称不吃弹幕颜色（深浅两套各量一遍）、表情面板 tab / 尺寸 / 置灰、短语固定行、乐观发送与失败标记、窄屏无横向滚动与热区 ≥ 40px |
+| 覆盖 | 逐条断言名写在对应节里，本表不再另列清单。横切面已覆盖：关注列表（自动加载 / 排序分页 / 两档排布 / 标签名）、账号区与对话框、面板只挤列表且不遮最新一条、右键菜单、时间戳、礼物类消息的两枚开关（四种组合）与独立礼物栏（一条一行 / 金额带单位 / 按 kind 分组的汇总 / 有源头像 / **与弹幕区同一套呈现**：`giftParity*` 一组逐项比行盒 / 头像列 / 身份行 / 正文块与两栏底色、SC 长留言不截断、`giftFollow*` / `giftPaused*` / `giftJumpButton*` 一组验跟随与「回到最新」同源）、**弹幕区与礼物栏的上下分区**（拖分割条改比例并落盘、拖到极限时两栏最小高度成立、比例在重挂后保持、长按 0.5s 换位与三种取消路、关掉礼物栏后分区退化，`splitter*` / `swap*`）、醒目留言卡片（档位令牌 + 金额行加粗）、互动自动消失与系统类消息白名单、筛选面板的两块两列勾选清单（消息类型 / 辅助功能同形态、四枚辅助开关逐枚可切、干净环境下复选框画的即契约默认值）、历史与实时同款、贴底与头像列占位、粉丝牌真彩色与兜底色、本房间舰长标、主站「我的表情」、@ 目标与文本同源、房管权限前置与二次确认、行排版整体感、昵称不吃弹幕颜色（深浅两套各量一遍）、表情面板 tab / 尺寸 / 置灰、短语固定行、乐观发送与失败标记、窄屏无横向滚动与热区 ≥ 40px |
 | 产物 | 快照 JSON + 截图，命名 `danmubox-ui[-narrow]-<theme>-<场景>.png`（**主题后缀必须有**，否则深浅两遍互相覆盖，验收矩阵里只剩一套图）。场景：`-follow` / `-rooms` / `-short-content` / `-room` / `-admin` / `-admin-confirm` / `-account-area` / `-account` / `-account-qr` / `-toast` / `-optimistic` / `-final`。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
 | 官方口径 | 「官方是怎么做的」这类判据（画不画一个徽标、走哪条渲染分支、哪种视觉细节）**去读官方前端产物**，或从浏览器直接对照官方页面 —— **不许凭印象模仿**。先例：A26 补充（表情权限判定）、A37（粉丝牌配色）、A39（舰长标取哪个字段）、A43（没点亮的粉丝牌不画）。判据落进规格时要写明它出自哪份产物 / 哪条分支，便于复核 |
 | 维护约定 | 场景代码整段是一个模板字符串：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩 |

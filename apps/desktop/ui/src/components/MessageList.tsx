@@ -12,7 +12,61 @@ interface Props {
   anchorUid?: number;
   prefs: Prefs;
   onMenu: (message: Message, at: MenuPoint) => void;
+  /**
+   * 这一份列表实例在**哪一处**（docs/ui.md §5.3）：弹幕区（`chat`）还是独立礼物栏（`gift`）。
+   *
+   * 两处**共用这一份实现**（用户 2026-09-16 第 2 条：礼物栏要与弹幕区「一样的布局、一样的
+   * 背景色、一样的自动滚动」）—— 虚拟列表、贴底判据、8px 阈值、悬停暂停、「回到最新」
+   * 与 `scrollToIndex(align: "end")` 全是同一段代码，各实例各持自己的滚动位置与虚拟列表状态。
+   * scope 只做两件事：把两处的 `data-testid` 分成两族（否则「弹幕流里还有没有这条」的断言
+   * 会被礼物栏那一份蒙混过去），以及决定礼物 / 大航海行画不画金额行。
+   */
+  scope?: "chat" | "gift";
+  /**
+   * 空列表时的文案（不传 = 什么都不画，例如弹幕区的空态由别的层负责）。
+   * 礼物栏用「本场还没有礼物」（§5.3）——文案由调用方给，判据（哪一套行算「本场」）
+   * 因此留在调用方那一处。
+   */
+  empty?: string;
 }
+
+/**
+ * 两处实例的分叉（docs/ui.md §2.3 的稳定钩子表）：弹幕区沿用既有那一套钩子，
+ * 礼物栏自成一族 —— 两处的行、滚动容器与「回到最新」都能被分别选中。
+ */
+interface ListScope {
+  /** 列表根（`.chatArea`）。 */
+  area: string;
+  /** 滚动容器（`.scroller`）。 */
+  scroll: string;
+  /** 虚拟高度块（`.msgList`）。 */
+  list: string;
+  /** 「回到最新」那枚悬浮钮。 */
+  anchor: string;
+  /** 交给 `MessageRow` 的 testid 前缀。 */
+  row: "msg" | "gift";
+  /** 礼物 / 大航海行画不画金额行（只有礼物栏那一份画，见 §4.1 / §5.3）。 */
+  showGiftAmount: boolean;
+}
+
+const SCOPES: Record<"chat" | "gift", ListScope> = {
+  chat: {
+    area: "db-chat-area",
+    scroll: "db-chat-scroll",
+    list: "db-msg-list",
+    anchor: "db-bottom-anchor",
+    row: "msg",
+    showGiftAmount: false,
+  },
+  gift: {
+    area: "db-gift-area",
+    scroll: "db-gift-scroll",
+    list: "db-gift-list",
+    anchor: "db-gift-anchor",
+    row: "gift",
+    showGiftAmount: true,
+  },
+};
 
 /**
  * 贴底：交给虚拟列表自己定位（`scrollToIndex(align: "end")`）。
@@ -32,7 +86,15 @@ function pinToBottom(
 }
 
 /** 聊天流。虚拟滚动 + 自动跟随/暂停规则见 docs/ui.md §2、§3。 */
-export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
+export function MessageList({
+  rows,
+  anchorUid,
+  prefs,
+  onMenu,
+  scope = "chat",
+  empty,
+}: Props) {
+  const ids = SCOPES[scope];
   const scrollerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(prefs["ui.auto_scroll"]);
@@ -93,10 +155,10 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
   const showJumpButton = !following && rows.length > 0;
 
   return (
-    <div className={styles.chatArea}>
+    <div className={styles.chatArea} data-testid={ids.area}>
       <div
         ref={scrollerRef}
-        data-testid="db-chat-scroll"
+        data-testid={ids.scroll}
         className={styles.scroller}
         style={{
           // em 而不是 px：基准字号由 body 的 --fs-root 给定（app.module.css 的令牌）
@@ -124,9 +186,15 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
+        {/* 空态（礼物栏用「本场还没有礼物」）：文案由调用方给，判据因此留在调用方那一处
+            （哪一套行算「本场」由它决定，见 Props.empty）。它落在滚动容器里，
+            与旧版的 `db-gift-body` 空态同一个位置。 */}
+        {rows.length === 0 && empty !== undefined && (
+          <div className={styles.empty}>{empty}</div>
+        )}
         <div
           ref={listRef}
-          data-testid="db-msg-list"
+          data-testid={ids.list}
           className={styles.msgList}
           style={{
             height: `${virtualizer.getTotalSize()}px`,
@@ -156,6 +224,8 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
                 anchorUid={anchorUid}
                 prefs={prefs}
                 onMenu={onMenu}
+                scope={ids.row}
+                showGiftAmount={ids.showGiftAmount}
               />
             </div>
           ))}
@@ -164,7 +234,7 @@ export function MessageList({ rows, anchorUid, prefs, onMenu }: Props) {
       {showJumpButton && (
         <button
           className={`${styles.ctlRound} ${styles.bottomAnchor}`}
-          data-testid="db-bottom-anchor"
+          data-testid={ids.anchor}
           title="回到最新"
           aria-label="回到最新"
           onClick={() => {

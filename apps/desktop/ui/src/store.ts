@@ -46,6 +46,15 @@ interface AppStore {
    */
   immersive: boolean;
   messages: Message[];
+  /**
+   * 「互动消息自动消失」的**重算信号**（`ui.interact_auto_hide`，docs/ui.md §4.8）：
+   * 每次有互动行到点就变一下，让派生（`filtering.toDisplayRows`）重新算一遍。
+   *
+   * 它**不是**一份「隐藏清单」——到点这件事完全由 `ts + INTERACT_AUTO_HIDE_MS` 派生，
+   * 消息一直留在 `messages` 里：关掉开关，早先「消失」的那些行同一帧就原样回来
+   * （issue 2609171849 第 5 条：自动消失不许丢内容，开关关掉要能恢复原样）。
+   */
+  interactTick: number;
   status: Record<number, { state: ConnState; detail: string }>;
   /** 各房间最近一次的观众数（协议 §10.7）；上游还没给过的一侧为 undefined。 */
   roomStats: Record<number, { online?: number; watched?: number }>;
@@ -171,8 +180,10 @@ let unsubscribe: (() => void) | undefined;
 
 /**
  * 互动/进场消息自动消失的定时器（`ui.interact_auto_hide` 打开时）。
- * 房间切换或离开房间必须清掉：`local_id` 只在一次房内会话内唯一，
- * 残留的定时器会把另一个房间里同号的消息误删。
+ *
+ * 它们**只负责到点那一刻叫醒一次重算**（把 `interactTick` 挪一格），不删任何消息
+ * （见 `scheduleInteractHide`）。房间切换或离开房间仍要清掉：`local_id` 只在一次房内会话内
+ * 唯一，残留的定时器会把另一个房间的画面算到别的时刻上。
  */
 let interactTimers: number[] = [];
 
@@ -668,8 +679,17 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
 }
 
 /**
- * 到点把互动消息从列表里摘掉；同一时长已由 CSS 跑成淡出（见 MessageRow）。
- * `roomId` 记下来是为了防房间切换后误删：`local_id` 只在一次房内会话内唯一。
+ * 互动/进场消息到点**不再从缓冲里摘掉**：只把 `interactTick` 挪一下，让派生重算 ——
+ * 「到点的不画」这一判据在显示层（`filtering.toDisplayRows` / `interactAutoHidden`），
+ * 判据是 `ts + INTERACT_AUTO_HIDE_MS`，与行上那段淡出动画同一个常量。
+ *
+ * 为什么不再删：用户 2026-09-21（issue 2609171849 第 5 条）要求这些显示层的开关
+ * 「都不会丢掉相应内容，把开关关掉后要能恢复原样」。旧实现是
+ * `messages.filter(...)`，消息一摘就再也回不来了（`ui.interact_auto_hide` 拨回 false
+ * 也只会让**之后**来的行常驻）——那是真的丢内容。改后缓冲里一条不少，开关一关就回来。
+ *
+ * `roomId` 记下来是为了防房间切换后误判：`local_id` 只在一次房内会话内唯一，
+ * 残留的定时器不该去动另一个房间的画面。
  */
 function scheduleInteractHide(store: StoreApi<AppStore>, roomId: number, messages: Message[]) {
   const now = Date.now();
@@ -678,9 +698,7 @@ function scheduleInteractHide(store: StoreApi<AppStore>, roomId: number, message
     const timer = window.setTimeout(
       () => {
         if (store.getState().activeRoomId !== roomId) return;
-        store.setState((state) => ({
-          messages: state.messages.filter((item) => item.local_id !== message.local_id),
-        }));
+        store.setState({ interactTick: Date.now() });
       },
       Math.max(0, message.ts + INTERACT_AUTO_HIDE_MS - now),
     );
@@ -718,6 +736,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
   rooms: [],
   immersive: false,
   messages: [],
+  interactTick: 0,
   status: {},
   roomStats: {},
   logs: [],
@@ -1074,8 +1093,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
       set({ error: describeError(error) });
       return;
     }
-    // 只有这个开关本身变了才动定时器：其它偏好改动不能顺手撤销已排好的摘除
+    // 只有这个开关本身变了才动定时器：其它偏好改动不能顺手撤销已排好的到点重算
     // （无头冒烟实测：任何与自动消失无关的偏好改动，都会让列表里的互动消息永久留下）。
+    // 拨回 false 时**不用**恢复什么：行由 `ts + INTERACT_AUTO_HIDE_MS` 派生，
+    // `prefs` 一变重算就把早先「消失」的那些行原样画回来（消息一直在 `messages` 里）。
     if (patch["ui.interact_auto_hide"] === undefined) return;
     clearInteractTimers();
     const roomId = get().activeRoomId;

@@ -164,8 +164,9 @@ export function MessageRow({
         ? `${message.uname || "有人"} 进入直播间`
         : "";
 
-  // 互动/进场消息：默认显示一会儿就淡出（store 到点摘除，见 store.scheduleInteractHide）；
-  // 关掉 `ui.interact_auto_hide` 则常驻。
+  // 互动/进场消息：默认显示一会儿就淡出，到点这一行**不再被画**（`filtering.interactAutoHidden`，
+  // 判据 `ts + INTERACT_AUTO_HIDE_MS`）—— 消息仍在会话缓冲里，关掉 `ui.interact_auto_hide`
+  // 就原样回来（issue 2609171849 第 5 条，见 docs/ui.md §4.8）。
   const autoHide = message.kind === "interact" && prefs["ui.interact_auto_hide"];
 
   // 本地乐观行**不加任何待确认视觉**（用户 2026-09-13 的更正：「发出去就是和已发送一样的状态，
@@ -233,7 +234,8 @@ export function MessageRow({
           </span>
         )}
         {/* 礼物行始终显示数量（连击折叠后的次数）；其余类型不再有 ×N ——
-            「相似消息合并」已整条删除（P49），count > 1 只可能来自礼物连击。
+            「相似消息合并」已整条删除（P49），count > 1 因此只可能来自礼物**连击**折叠、
+            **低价礼物桶**（`ui.gift_collapse_cheap`，桶里是整桶合计）或弹幕**聚合**。
             它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。 */}
         {(count > 1 || message.kind === "gift") && (
           <span className={styles.merged} data-testid={t("count")}>

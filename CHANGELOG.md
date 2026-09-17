@@ -362,6 +362,22 @@
 
 ### Added
 
+- **弹幕聚合：不同观众短时间内发的同一条弹幕折成一行**（issue 2609171849 第 7 条，用户 2026-09-17；
+  分支 `feat/2609171849-aggregate`）。判据是「**不同的人** + 同一个键 + 短窗口」：归一化正文
+  （去首尾空白、连续空白并成一个空格、大小写不敏感；表情弹幕按 `emote.emoticon_unique`）相同、
+  相邻、与**锚点**（这一行的第一条）相差 ≤ **5 秒**、**至少两位不同观众**参与 —— 同一个人的重复不算，
+  因此它**不是** 2026-09-13 删掉的「合并相似消息」（那条的判据是同一个 uid 的重复，见本文件 Removed 段
+  与 `docs/requests.md` P49），也**不是**礼物连击折叠（那条判据是同一个 `combo_id`）。
+  展示沿用既有行形态、不另立视觉：正文行内 `×N`（`count` = 折了几条）+ 紧跟一格「都是谁」
+  （`data-testid="db-msg-senders"`，按首次出现顺序列前 3 位，多于此写「等 N 人」）；代表行的
+  头像 / 昵称 / 时间戳仍是第一条那条消息的（React key 不变，后续观众加入不重建节点、行不跳位）。
+  实现：新增 `apps/desktop/ui/src/aggregate.ts`（纯函数 + 三个常量），只在 `MessageList` 的**弹幕区**
+  那一份行上跑（礼物栏不经过）；`DisplayRow` 增可选字段 `senders`（`filtering.ts`）。
+  规格：`docs/contract.md` §4（三条常量与下注）/ §9 溯源行、`docs/ui.md` §8.4（改写成「两条折叠规则」
+  并各配一张表）、§4.1 / §4.7 / §5.3 / §7.1 / §2.5、`README.md` §3（功能面）。**冒烟未跑**（由主流程统一跑）：
+  新增断言块 `aggregate*`（同文本两位观众 → 一行且 `×2`、名单含两位；不同文本 → 两行；
+  窗口外同文本 → 两行）已写进 `apps/desktop/ui/smoke/room-page.mjs`。
+
 - **Android 端开工：可出包、可安装、可启动**（用户 2026-09-15；分支 `feat/android-mobile`，提交 `0e1bde6` / `40152e0` / `a71c5a3` / `62ea667`）。交付物三块：
   ① **仓库内工具链**（见下一条）；② **`apps/desktop/src-tauri/gen/android/**` 入库**（40 个文件，属长期维护的源码；根 `.gitignore` 从「忽略整个 `gen/`」改成只忽略 `gen/schemas/`）；③ **自用 release 签名**——`gen/android/keystore.jks` + `keystore.properties`（两者都被 `gen/android/.gitignore` 忽略，**不在 `.android-env/` 内**，`clean` 删不到；缺 `keystore.properties` 时退回未签名构建，产物名带 `-unsigned`）。
   出包命令：`. scripts/android-env.sh` + `cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci`（分 ABI 再加 `--split-per-abi`）；产物 `gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（实测 52 MB，四个 ABI）与 `apk/<arm64|arm|x86|x86_64>/release/app-<abi>-release.apk`。

@@ -1,6 +1,7 @@
 import { Avatar } from "./Avatar";
 import type { MenuPoint } from "./ContextMenu";
 import type { ReactNode } from "react";
+import { sendersText } from "../aggregate";
 import {
   amountText,
   badgesFor,
@@ -259,11 +260,19 @@ export function MessageRow({
             </span>
           )}
           {/* 礼物行始终显示数量（连击折叠后的次数）；其余类型不再有 ×N ——
-              「相似消息合并」已整条删除（P49），count > 1 只可能来自礼物连击。
-              它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。 */}
+              「相似消息合并」已整条删除（P49），count > 1 只可能来自礼物连击
+              **或弹幕聚合**（`docs/ui.md` §8.4 的两条规则）。它是正文里的**行内**一格：
+              跟在最后一行文字后面，不另占一行。 */}
           {(count > 1 || message.kind === "gift") && (
             <span className={styles.merged} data-testid={t("count")}>
               ×{count}
+            </span>
+          )}
+          {/* 弹幕聚合行的「都是谁」（§8.4 第二张表）：紧跟 `×N`，同样是正文里的行内一格
+              （复用 `.merged` 的次级文字规格，不另立视觉）。`senders` 缺席 = 这一行不是聚合行。 */}
+          {row.senders !== undefined && row.senders.length >= 2 && (
+            <span className={styles.merged} data-testid={t("senders")}>
+              {sendersText(row.senders)}
             </span>
           )}
           {message.send_state !== undefined && (

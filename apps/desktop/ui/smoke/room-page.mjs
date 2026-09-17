@@ -6985,9 +6985,23 @@ const MOCK = (theme) => `(function () {
     var switchScopeBlockRan = false;
     try {
       var ssRoomId = 5555;
-      // 计数用：弹幕区里含某个字样的行有几条（礼物栏那一族用 cheapRowCount / cheapPaneText）。
+      // 计数用：弹幕区里含某条礼物的行有几条（礼物栏那一族用 cheapRowCount / cheapPaneText）。
+      // 判据是「子串命中，且命中处后面不紧跟汉字」：夹具里「投喂 铅笔」是「投喂 铅笔屑」的
+      // 前缀，纯子串会同时命中两条（首次真跑即此红）；折叠之后只剩桶行、它的文本比礼物名长，
+      // 所以也不能改成精确相等。注意本文件整体活在模板串里，不能写任何反斜杠转义，
+      // 因此这里用 charCodeAt 判汉字区间，不用正则。
       var ssChatRowsWith = function (needle) {
-        return rows().filter(function (r) { return r.innerText.indexOf(needle) >= 0; });
+        return rows().filter(function (r) {
+          var body = r.innerText;
+          var n = needle.length;
+          for (var i = body.indexOf(needle); i >= 0; i = body.indexOf(needle, i + 1)) {
+            var after = body.slice(i + n, i + n + 1);
+            if (after === "") return true;
+            var c = after.charCodeAt(0);
+            if (!(c >= 0x3400 && c <= 0x9fff)) return true;
+          }
+          return false;
+        });
       };
       // 面板里的一枚开关拨到指定值（面板自己开合，幂等）：返回「找没找到并拨成功」。
       var ssToggle = async function (label, value) {

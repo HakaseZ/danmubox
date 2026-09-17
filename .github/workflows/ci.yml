@@ -292,8 +292,18 @@ jobs:
         # shell 显式取 bash（runner 默认是 pwsh）：这条命令因此与 docs/operations.md §5.3 里
         # macOS / Android 的写法是同一种形态（`./ui/node_modules/.bin/tauri …`）。
         # `bundle.active=false` 由 `--bundles` 覆盖（与 macOS 那边同理）。
+        #
+        # `--config` **只**覆盖 Windows 这一侧的 `bundle.icon`，不动共享的 `tauri.conf.json`：
+        # `bundle.icon = []` 在 macOS 上能出 dmg，在 Windows 上过不去 —— 两处都硬要一枚 `.ico`：
+        #   ① 编译期 `tauri-build` 的 Windows 资源（winres）步骤：`bundle.icon` 里没有 `.ico`
+        #      就回落到 `icons/icon.ico`，该文件不存在则直接报错中断编译；
+        #   ② 打包期 MSI（WiX）那条路径要求 `bundle.icon` 里能找到 `.ico` —— tauri-cli 把
+        #      bundler 的 `windows.iconPath` 显式置成空 PathBuf（`interface/rust.rs`），
+        #      于是只能回落到 `bundle.icon` 列表，列表为空就报 `Couldn't find a .ico icon`。
+        # 相应地 `icons/icon.ico` 也入库（`tauri icon` 从 `icons/icon.png` 生成，6 个尺寸：
+        # 16/24/32/48/64/256）。NSIS 那条路径不读它 —— 安装器的图标取自 exe 内嵌的那枚。
         shell: bash
-        run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi
+        run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'
 
       - name: 上传 Windows 产物
         uses: actions/upload-artifact@v4

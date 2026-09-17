@@ -29,6 +29,17 @@
       "rules": {
         "eslint/no-useless-escape": "off"
       }
+    },
+    {
+      // 冒烟夹具已按主题拆成 `scenario/parts/*.mjs`，运行时由组装器**按行原样拼成同一份
+      // 页面侧脚本**（不再塞进模板串）。于是 `00-mock.mjs`（IPC 替身）与 `10-harness.mjs`
+      // （共享工具）里声明的符号，是**被后面 17 个主题块消费**的 —— 规则按**单文件**分析，
+      // 看不到跨片段的引用，会把这批声明全报成 no-unused-vars（2026-09-17 集成时实测 4 条）。
+      // 只对这两个**共享片段**放行；主题块（`2x-*` / `3x-*`）上规则照旧，真死码仍会被抓到。
+      "files": ["smoke/scenario/parts/00-mock.mjs", "smoke/scenario/parts/10-harness.mjs"],
+      "rules": {
+        "eslint/no-unused-vars": "off"
+      }
     }
   ]
 }

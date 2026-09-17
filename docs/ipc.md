@@ -88,7 +88,7 @@
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表；交给界面前按 `live_status == 1` 置顶（`contract.md` §5），完整展示排序见 `ui.md` §2.2 |
 | `wallet_balance` | 无 | `number`（Rust `i64`） | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额（整数）：上游 `data.gold`（金瓜子）按 `gold / 100` 换算成电池；`gold` 缺失或不可解析 → `UPSTREAM_ERROR`。没有包裹类型（口径与端点见 `protocol.md` 附录 A29） |
 | `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令。平台实现：macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 各一条系统命令；**Android 走官方 `tauri-plugin-opener`（平台 Intent）**——插件只在 Android 目标声明（`[target.'cfg(target_os = "android")'.dependencies]`，桌面构建依赖图与产物一字不变），由 **Rust 侧**调用、**不进 capability**（`capabilities/default.json` 不需要 `opener:*` 权限）；iOS 等其余平台仍是显式 `Unsupported`（不静默失败） |
-| `prefs_get` | 无 | `PrefsSnapshot`（`contract.md` §8 全部 18 键的**生效值**） | `INTERNAL` | 未写入过的键返回 `contract.md` §8 默认值。同步命令 |
+| `prefs_get` | 无 | `PrefsSnapshot`（`contract.md` §8 全部 23 键的**生效值**） | `INTERNAL` | 未写入过的键返回 `contract.md` §8 默认值。同步命令 |
 | `prefs_set` | `patch: Partial<PrefsSnapshot>` | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令 |
 | `diagnose_start` | `engine: String` | `DiagnoseStart` | — | 一键诊断：开始采集连接诊断（`contract.md` §4.4）。`engine` 是渲染引擎标识（前端传 `navigator.userAgent`：内核版本只有页面知道，报告头要用它）。窗口固定 180 秒，界面按 `ends_ms` 倒计时、到点自动收工。采集中**不发送任何数据**（本仓无遥测）。同步命令：只写窗口起止时刻，不碰 IO |
 | `diagnose_export` | 无 | `DiagnoseExport` | `INTERNAL` | 一键诊断：渲染并写出**恰好一个**报告文件（`contract.md` §4.4 的位置与命名）、结束采集并清空采集内容。`INTERNAL` 只在写文件失败时出现（目录不可写 / MediaStore 拒绝），`message` 带本地路径与原话。前端由 `diagnose_start` 的界面在窗口到点或用户点「提前结束」时调用 |
@@ -278,7 +278,7 @@ type RoomStats = {
 
 type ReportReason = { id: number; reason: string };
 
-type PrefsSnapshot = {            // contract.md §8 的 18 键全量，键名即契约字面
+type PrefsSnapshot = {            // contract.md §8 的 23 键全量，键名即契约字面
   "ui.font_scale": number; "ui.theme": "system" | "dark" | "light";
   "ui.auto_scroll": boolean; "ui.pause_on_hover": boolean;
   "ui.gift_in_danmaku": boolean;      // 弹幕流里是否包含礼物 / SC / 大航海（默认 true）
@@ -293,7 +293,12 @@ type PrefsSnapshot = {            // contract.md §8 的 18 键全量，键名�
   "filter.uids": number[];
   "filter.kinds": MessageKind[];      // 默认不含 "system"（系统类消息默认不显示）
   "filter.medal_level_min": number;
-  "history.buffer_rows": number;
+  "history.buffer_rows_danmaku": number;    // 会话缓冲各档上限（契约 §4.3 / §8）
+  "history.buffer_rows_gift": number;       //   礼物档内部再按金额切低 10% / 中 40% / 高 50%
+  "history.buffer_rows_superchat": number;
+  "history.buffer_rows_guard": number;
+  "history.buffer_rows_interact": number;   // 互动/进场档：刻意小于弹幕档
+  "history.buffer_rows_system": number;     // 系统通知档：刻意小于弹幕档
   "ui.recent_watched": Record<string, number>;  // 房间号 → 最近一次打开的时刻（UTC 毫秒）
 };
 
@@ -552,7 +557,7 @@ sequenceDiagram
 
 | 项 | 上限 | 超出行为 |
 |---|---|---|
-| core 会话缓冲（权威，`history.buffer_rows`） | 见 `contract.md` §8 | 丢最旧；前端显示上限只影响渲染侧 |
+| core 会话缓冲（权威，按 `kind` 分道） | 各档见 `contract.md` §4.3 / §8 的六枚 `history.buffer_rows_*` | 只丢**该道**最旧；前端显示上限只影响渲染侧 |
 | 前端 `messages` | `CLIENT_MESSAGE_CAP` = 2000 条 | 丢最旧 |
 | 前端 `logs` | `LOG_CAP` = 200 行 | 丢最旧 |
 | `emotes` / `ownedEmotes` | 无独立上限 | 随房间 / 会话变化整体替换；换人即清空（同 `ownedLoaded` / `ownedError` / `balance`） |

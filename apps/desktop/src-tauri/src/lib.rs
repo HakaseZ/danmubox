@@ -15,8 +15,8 @@ use danmubox_core::ports::{
     QrState, RoomAdmin, RoomCatalog, SessionState, WalletProvider,
 };
 use danmubox_core::{
-    config_path, data_dir, prefs_path, BlacklistedUser, ConfigStore, Counters, Emote, Event,
-    EventBus, FollowedRoom, HistoryQuery, Message, MessageKind, Prefs, ReportReason, Room,
+    config_path, data_dir, prefs_path, BlacklistedUser, BufferCaps, ConfigStore, Counters, Emote,
+    Event, EventBus, FollowedRoom, HistoryQuery, Message, MessageKind, Prefs, ReportReason, Room,
     RoomRuntime, RoomSession, SendOutcome, SilentUser,
 };
 use serde::{Deserialize, Serialize};
@@ -332,12 +332,12 @@ async fn rooms_connect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()
     // 锁外先备好构造运行时需要的东西（凭据、偏好），避免把两把锁叠在一起。
     let source: Arc<dyn LiveSource> =
         Arc::new(BiliLive::with_store(Arc::clone(&state.store)).map_err(ApiError::from)?);
-    let buffer_rows = state.prefs.lock().expect("prefs poisoned").buffer_rows();
+    let caps = state.prefs.lock().expect("prefs poisoned").buffer_caps();
     let mut rooms = state.rooms.lock().expect("rooms poisoned");
     spawn_runtime(
         &mut rooms,
         room_id,
-        buffer_rows,
+        caps,
         state.bus.clone(),
         Arc::clone(&state.counters),
         source,
@@ -354,7 +354,7 @@ async fn rooms_connect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()
 fn spawn_runtime(
     rooms: &mut Rooms,
     room_id: i64,
-    buffer_rows: usize,
+    caps: BufferCaps,
     bus: EventBus,
     counters: Arc<Counters>,
     source: Arc<dyn LiveSource>,
@@ -374,7 +374,7 @@ fn spawn_runtime(
         RoomRuntime::spawn_on(
             tauri::async_runtime::handle().inner(),
             room,
-            buffer_rows,
+            caps,
             bus,
             counters,
             source,
@@ -400,12 +400,12 @@ async fn rooms_disconnect(state: State<'_, AppState>, room_id: i64) -> ApiResult
 /// 房间内「刷新」：立即重建连接，**不清空**会话缓冲（`docs/contract.md` §4.3）。
 #[tauri::command]
 fn rooms_reconnect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()> {
-    let buffer_rows = state.prefs.lock().expect("prefs poisoned").buffer_rows();
+    let caps = state.prefs.lock().expect("prefs poisoned").buffer_caps();
     let mut rooms = state.rooms.lock().expect("rooms poisoned");
     refresh_room(
         &mut rooms,
         room_id,
-        buffer_rows,
+        caps,
         state.bus.clone(),
         Arc::clone(&state.counters),
         || {
@@ -432,7 +432,7 @@ fn rooms_reconnect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()> {
 fn refresh_room(
     rooms: &mut Rooms,
     room_id: i64,
-    buffer_rows: usize,
+    caps: BufferCaps,
     bus: EventBus,
     counters: Arc<Counters>,
     make_source: impl FnOnce() -> danmubox_core::Result<Arc<dyn LiveSource>>,
@@ -442,7 +442,7 @@ fn refresh_room(
         return Ok(());
     }
     let source = make_source().map_err(ApiError::from)?;
-    spawn_runtime(rooms, room_id, buffer_rows, bus, counters, source)
+    spawn_runtime(rooms, room_id, caps, bus, counters, source)
 }
 
 #[tauri::command]

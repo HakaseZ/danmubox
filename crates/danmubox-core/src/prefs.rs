@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 use serde_json::{json, Map, Value};
 
 use crate::error::{Error, Result};
+use crate::session::BufferCaps;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ty {
@@ -64,8 +65,20 @@ const LEGACY_SYSTEM_NOTICE: &str = "ui.system_notice";
 /// 旧键本身当未知键忽略；下次 `save` 只落 `overrides`，文件里就只剩新形态。
 const LEGACY_GIFT_PANEL_MODE: &str = "ui.gift_panel_mode";
 
+/// 已删除的历史偏好键（issue 2609171849 #3）。
+///
+/// 单一环形缓冲拆成按 `kind` 分档之后，这一枚不再是「缓冲上限」这件事的完整表达（它盖不住
+/// 六档）。存量 `prefs.json` 里可能还写着它：`load` 时按它的值物化进 `history.buffer_rows_danmaku`
+/// —— 用户当初表达的是「缓冲区留多少条」，而弹幕是那个缓冲里的主流量，落点就是弹幕档。
+/// 旧键本身当未知键忽略；下次 `save` 只落 `overrides`，文件里就只剩新形态。
+const LEGACY_BUFFER_ROWS: &str = "history.buffer_rows";
+
 /// 已在 `load` 里被接管的历史键：它们不参与白名单匹配，也不算「未知键」。
-const LEGACY_KEYS: [&str; 2] = [LEGACY_SYSTEM_NOTICE, LEGACY_GIFT_PANEL_MODE];
+const LEGACY_KEYS: [&str; 3] = [
+    LEGACY_SYSTEM_NOTICE,
+    LEGACY_GIFT_PANEL_MODE,
+    LEGACY_BUFFER_ROWS,
+];
 
 fn spec(
     key: &'static str,
@@ -174,10 +187,61 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             Some(60.0),
             None,
         ),
+        // 会话缓冲各档上限（issue 2609171849 第 3 条，契约 §4.3 / §8）。
+        //
+        // **按 kind 分档**：单一上限时代所有消息挤一条队列，一个热闹房间的进场消息能把弹幕
+        // 整段顶出去。现在每档各按自己的上限丢最旧，互不挤占；礼物那一档内部再按金额分三档
+        // （三档之比见 `session.rs` 的 `GIFT_TIER_SHARE`），价值越高留得越多。
+        //
+        // 互动与系统两档**刻意小得多**（300 / 200）：互动是「一次性、看过即弃」的消息
+        // （`ui.interact_auto_hide` 默认就是显示一会儿自动淡出），系统事件（开播 / 下播 /
+        // 标题变更 / 公告）一天也没几条 —— 两者都不需要深度回滚，而弹幕需要。
+        //
+        // 取值范围与旧键一致（100–100000）：六枚同域，文档里一行讲得清。
         spec(
-            "history.buffer_rows",
+            "history.buffer_rows_danmaku",
             Ty::Int,
             json!(5000),
+            Some(100.0),
+            Some(100_000.0),
+            None,
+        ),
+        spec(
+            "history.buffer_rows_gift",
+            Ty::Int,
+            json!(2000),
+            Some(100.0),
+            Some(100_000.0),
+            None,
+        ),
+        spec(
+            "history.buffer_rows_superchat",
+            Ty::Int,
+            json!(500),
+            Some(100.0),
+            Some(100_000.0),
+            None,
+        ),
+        spec(
+            "history.buffer_rows_guard",
+            Ty::Int,
+            json!(200),
+            Some(100.0),
+            Some(100_000.0),
+            None,
+        ),
+        spec(
+            "history.buffer_rows_interact",
+            Ty::Int,
+            json!(300),
+            Some(100.0),
+            Some(100_000.0),
+            None,
+        ),
+        spec(
+            "history.buffer_rows_system",
+            Ty::Int,
+            json!(200),
             Some(100.0),
             Some(100_000.0),
             None,
@@ -298,11 +362,26 @@ impl Prefs {
         Ok(())
     }
 
-    pub fn buffer_rows(&self) -> usize {
-        self.get("history.buffer_rows")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(5000)
+    /// 会话缓冲各档上限（契约 §8 的六枚 `history.buffer_rows_*`）。
+    ///
+    /// 只在**建立会话时**读一次：改动对下一次 `rooms_connect` 生效，当前会话的容量不变
+    /// （与旧键 `history.buffer_rows` 的口径一致，见 `docs/architecture.md` §4.2）。
+    pub fn buffer_caps(&self) -> BufferCaps {
+        let cap = |key: &str, fallback: usize| {
+            self.get(key)
+                .and_then(|value| value.as_u64())
+                .map(|value| value as usize)
+                .unwrap_or(fallback)
+        };
+        let default = BufferCaps::default();
+        BufferCaps {
+            danmaku: cap("history.buffer_rows_danmaku", default.danmaku),
+            gift: cap("history.buffer_rows_gift", default.gift),
+            superchat: cap("history.buffer_rows_superchat", default.superchat),
+            guard: cap("history.buffer_rows_guard", default.guard),
+            interact: cap("history.buffer_rows_interact", default.interact),
+            system: cap("history.buffer_rows_system", default.system),
+        }
     }
 
     /// 读取 `prefs.json`。文件缺失或损坏都回落到默认值；
@@ -344,6 +423,7 @@ impl Prefs {
             }
             migrate_legacy_system_notice(&mut prefs, obj);
             migrate_legacy_gift_panel_mode(&mut prefs, obj);
+            migrate_legacy_buffer_rows(&mut prefs, obj);
         }
         if !unknown.is_empty() {
             tracing::debug!(keys = ?unknown, "忽略文件里未知或非法的偏好键（下次落盘即清理）");
@@ -445,6 +525,36 @@ fn migrate_legacy_gift_panel_mode(prefs: &mut Prefs, file: &Map<String, Value>) 
     }
 }
 
+/// 把历史键 `history.buffer_rows` 的值物化进弹幕档（见 [`LEGACY_BUFFER_ROWS`]）。
+///
+/// 只在文件里真的写了**合法**整数时才动手：取值域直接问 SPECS 要（新旧两键同域），
+/// 免得把 100 / 100000 在两处各写一遍；文件里被手写坏的值按未知键忽略、不动新形态。
+/// 文件里已经显式写出 `history.buffer_rows_danmaku` 的以文件为准 —— 迁移只补新形态没说的那部分
+/// （与另两条迁移同一口径）。
+fn migrate_legacy_buffer_rows(prefs: &mut Prefs, file: &Map<String, Value>) {
+    const KEY: &str = "history.buffer_rows_danmaku";
+    let Some(rows) = file.get(LEGACY_BUFFER_ROWS).and_then(Value::as_i64) else {
+        return;
+    };
+    if prefs.overrides.contains_key(KEY) {
+        return;
+    }
+    let value = json!(rows);
+    match find_spec(KEY) {
+        Some(spec) if validate(spec, &value).is_ok() => {}
+        _ => {
+            tracing::debug!(
+                rows,
+                "偏好键 history.buffer_rows 的取值超出 {KEY} 的取值域，忽略"
+            );
+            return;
+        }
+    }
+
+    tracing::info!(rows, "偏好键 history.buffer_rows 已删除，按它的值物化进 {KEY}");
+    prefs.overrides.insert(KEY.to_string(), value);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,8 +638,23 @@ mod tests {
             "低价礼物剔除统计默认关：默认形态必须与改前一致（契约 §8）"
         );
         assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
-        assert_eq!(prefs.get("history.buffer_rows").unwrap(), json!(5000));
-        assert_eq!(prefs.buffer_rows(), 5000);
+        // 会话缓冲的六枚键：默认值以 `BufferCaps::default()` 为准（`buffer_caps_are_the_six_keys`
+        // 把两者钉在一起），这里只确认它们真的在 SPECS 里、读得出来。
+        assert_eq!(
+            prefs.buffer_caps(),
+            BufferCaps::default(),
+            "六枚键的默认值必须与 BufferCaps::default() 逐项一致"
+        );
+        assert_eq!(
+            prefs.get("history.buffer_rows_danmaku").unwrap(),
+            json!(5000)
+        );
+        assert_eq!(prefs.get("history.buffer_rows_interact").unwrap(), json!(300));
+        assert_eq!(
+            prefs.get("history.buffer_rows_system").unwrap(),
+            json!(200),
+            "系统档默认明显小于弹幕档（issue 2609171849 第 3 条）"
+        );
         assert_eq!(
             prefs.get("filter.kinds").unwrap(),
             json!(DEFAULT_KINDS),
@@ -597,7 +722,12 @@ mod tests {
             json!({ "ui.gift_pane_ratio": 1.5 }),
             json!({ "filter.kinds": ["danmaku", "notice"] }),
             json!({ "filter.uids": [1, "2"] }),
-            json!({ "history.buffer_rows": 5 }),
+            // 会话缓冲六枚键：取值域仍是 100–100000（与旧键同域）
+            json!({ "history.buffer_rows_danmaku": 99 }),
+            json!({ "history.buffer_rows_danmaku": 100_001 }),
+            json!({ "history.buffer_rows_interact": "300" }),
+            // 旧的单一键已删除：按未知键拒绝（`deleted_pref_key_is_not_writable` 再钉一次）
+            json!({ "history.buffer_rows": 5000 }),
             // 「最近观看」必须是「房间号 → 时刻」的映射：数组、字符串键、非整数时刻都不收
             json!({ "ui.recent_watched": [1, 2] }),
             json!({ "ui.recent_watched": { "room:7": 1 } }),
@@ -861,6 +991,8 @@ mod tests {
             ("ui.system_notice", json!(false)),
             // 礼物栏旧键同理：两枚新键才是唯一入口（issue 2609152029 #4）。
             ("ui.gift_panel_mode", json!("separate")),
+            // 单一缓冲上限同理：六枚 `history.buffer_rows_*` 才是唯一入口（issue 2609171849 #3）。
+            ("history.buffer_rows", json!(5000)),
         ] {
             // 键是变量：`json!` 会把它当成字面 ident，这里显式拼 `Map`（否则测的是 `"key"`）。
             let mut patch = Map::new();
@@ -872,5 +1004,84 @@ mod tests {
             );
         }
         assert!(prefs.overrides().is_empty());
+    }
+
+    /// 存量 `history.buffer_rows` 的迁移（issue 2609171849 #3）：单档上限拆成六档之后，
+    /// 旧键的值物化进**弹幕档**（用户当初表达的是「缓冲留多少条」，弹幕是那个缓冲的主流量），
+    /// 旧键本身不再留在 `overrides` 里。
+    #[test]
+    fn legacy_buffer_rows_migrates_into_the_danmaku_cap() {
+        let migrated = load_temp("mig-rows", r#"{"history.buffer_rows":8000}"#);
+        assert_eq!(
+            migrated.get("history.buffer_rows_danmaku").unwrap(),
+            json!(8000),
+            "用户当初设的 8000 必须落在弹幕档上"
+        );
+        assert_eq!(
+            migrated.buffer_caps(),
+            BufferCaps {
+                danmaku: 8000,
+                ..BufferCaps::default()
+            },
+            "其余五档走默认值"
+        );
+        assert!(
+            migrated.overrides().get(LEGACY_BUFFER_ROWS).is_none(),
+            "旧键不得留在 overrides 里（下次落盘即消失）"
+        );
+
+        // 文件里已显式写出新键的以文件为准：迁移不覆盖用户在新形态上的取值。
+        let explicit = load_temp(
+            "mig-rows-explicit",
+            r#"{"history.buffer_rows":8000,"history.buffer_rows_danmaku":2000}"#,
+        );
+        assert_eq!(
+            explicit.get("history.buffer_rows_danmaku").unwrap(),
+            json!(2000)
+        );
+
+        // 取值超出新键取值域（100–100000）/ 类型不对：按坏值忽略，不留任何 down-level 痕迹。
+        for junk in [
+            r#"{"history.buffer_rows":5}"#,
+            r#"{"history.buffer_rows":99999999}"#,
+            r#"{"history.buffer_rows":"8000"}"#,
+        ] {
+            let loaded = load_temp("mig-rows-junk", junk);
+            assert_eq!(loaded.buffer_caps(), BufferCaps::default(), "坏值 → 默认值");
+            assert!(loaded.overrides().is_empty(), "坏值不该写进 overrides");
+        }
+
+        // 没有旧键就不凭空多出一条 overrides。
+        let absent = load_temp("mig-rows-absent", r#"{"ui.theme":"dark"}"#);
+        assert!(absent.overrides().get("history.buffer_rows_danmaku").is_none());
+    }
+
+    /// 六枚档位键的生效值汇总成 `BufferCaps`：只填两枚时其余五枚走默认值；
+    /// 六枚各自独立（改一枚不动别的）。
+    #[test]
+    fn buffer_caps_read_the_six_keys_independently() {
+        let mut prefs = Prefs::new();
+        prefs
+            .set_patch(&json!({
+                "history.buffer_rows_danmaku": 9000,
+                "history.buffer_rows_system": 100,
+            }))
+            .unwrap();
+        assert_eq!(
+            prefs.buffer_caps(),
+            BufferCaps {
+                danmaku: 9000,
+                system: 100,
+                ..BufferCaps::default()
+            }
+        );
+
+        // 读回来的那一份要落进 prefs.json 并在重启后仍然生效（与其余键同一条往返路径）。
+        let dir = std::env::temp_dir().join(format!("danmubox-prefs-caps-{}", std::process::id()));
+        let path = dir.join("prefs.json");
+        prefs.save(&path).unwrap();
+        let loaded = Prefs::load(&path);
+        assert_eq!(loaded.buffer_caps(), prefs.buffer_caps());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

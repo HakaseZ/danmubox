@@ -370,6 +370,29 @@
   同批**附带一条机制级单测**（`crates/danmubox-bili/src/ws.rs` 的 `reconnect_keeps_the_session_numbering_monotonic`）：钉住「同一次会话内的重连不重置 `local_id`」——
   界面按 `local_id` 判单调（`store.ts:798-799`），编号一旦回退，重连之后的每一条弹幕都会被界面悄悄丢掉。该用例在「每次重连新起一个 `MessageSink`」的模拟缺陷下会失败（实测 `[1,1,1]`），当前实现为 `[1,2,3]`。
   闸门读数：`cargo test -p danmubox-bili` **192 passed / 0 failed**（含该用例）、`cargo clippy -p danmubox-bili --all-targets -- -D warnings` **零告警**；`rustfmt` 差异数与本文件改动前**同为 23 处**（无新增，存量不通过见 `AGENT.md` §9）、格式修复按仓库规矩**不跑** `cargo fmt`。
+- **会话缓冲按消息类型分档 + 礼物按金额分级保留**（`issue` 2609171849 第 3 条：「礼物、弹幕、互动（进场消息）、
+  系统通知分开做缓存、互动和系统通知存少一点，礼物分级缓存，价值越高权重越高」）。缓冲从「单一环形队列
+  （`history.buffer_rows`，默认 5000 条）」改成**按 `kind` 分道**：弹幕 5000 / 礼物 2000 / SC 500 / 大航海 200 /
+  **互动（进场）300** / **系统通知 200**，各由一枚 `history.buffer_rows_*` 覆盖、**各道只丢自己的最旧**。
+  此前四类共用一条队列，一个热闹房间的进场消息能把弹幕整段顶出去 —— 这是分档要解决的那件事。
+  礼物那一档内部再按 `amount`（金瓜子，契约 §5）切三档，条数按 **低 10% / 中 40% / 高 50%** 分配：
+  低档 ≤ 0.1 元（门槛复用既有的「低价礼物」口径）、中档 ≤ 10 元、高档 > 10 元；`amount <= 0`（上游没给价）
+  **不算低价**，进中档。三档各自 FIFO，因此价高的留得更多、也留得更久（高档礼物本来就到得少）。
+  档位是本地保留策略的取舍，**不对上游礼物价位作任何断言**。
+  **语义边界一字未动**：仍仅内存、离开房间即销毁、无数据库无落盘（契约 §4.3）；`history_query` 与界面看到的
+  仍是同一批消息、同一个到达顺序（各道归并回 `local_id` 升序），分档只决定「超出时先丢谁」。
+  **旧键 `history.buffer_rows` 已删除**：`prefs_set` 按未知键报 `BAD_REQUEST`；存量 `prefs.json` 里若还写着它，
+  `load` 时按它的值物化进 `history.buffer_rows_danmaku`（超出新键取值域则忽略，文件里已显式写新键的以文件为准）。
+  规格：`docs/contract.md` §4 常量表 / §4.3（分档表 + 礼物三档）/ §8（六枚键）/ §9 溯源行、`docs/ipc.md` 的
+  `PrefsSnapshot` 与内存边界表、`docs/ui.md` §2.4、`docs/architecture.md` §4.2 / §4.3、`docs/protocol.md` §12.3、
+  `docs/testing.md` §4（B-03 / B-04）、`docs/decisions/0005`、`docs/foldable.md`、`README.md` §9、`AGENT.md` §9；
+  代码：`crates/danmubox-core/src/session.rs`（`BufferCaps` / 分道 / `gift_tier` 与单测）、`prefs.rs`（六枚键 +
+  存量迁移与单测）、`apps/desktop/src-tauri/src/lib.rs`、`crates/danmubox-cli/src/main.rs`、前端 `types.ts`
+  与冒烟替身的键清单。
+  顺带修好一条**坏掉的闸门**：`crates/danmubox-core/Cargo.toml` 的 `tokio` 只开了 `sync`/`macros`/`rt`，而本 crate
+  自己的测试用 `tokio::time::sleep` / `timeout` —— `cargo test -p danmubox-core` 一直编不过
+  （`could not find time in tokio`），只有 `cargo test --workspace` 靠工作区级特性合并才跑得起来。
+  补 `[dev-dependencies] tokio = { features = ["time"] }` 后，单 crate 的测试闸门可用。
 
 ### Added
 

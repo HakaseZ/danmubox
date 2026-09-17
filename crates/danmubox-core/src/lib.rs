@@ -25,7 +25,7 @@ pub use model::{
 };
 pub use paths::{config_path, data_dir, downloads_dir, prefs_path};
 pub use prefs::Prefs;
-pub use session::{HistoryQuery, MessageBuffer, RoomRuntime};
+pub use session::{BufferCaps, HistoryQuery, MessageBuffer, RoomRuntime};
 
 /// UTC 毫秒时间戳。
 pub fn now_ms() -> i64 {

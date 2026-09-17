@@ -445,7 +445,20 @@ export interface Prefs {
   "filter.uids": number[];
   "filter.kinds": MessageKind[];
   "filter.medal_level_min": number;
-  "history.buffer_rows": number;
+  /**
+   * 会话缓冲的**各档上限**（契约 §4.3 / §8）。后端按 `kind` 分道裁剪、每道丢自己的最旧，
+   * 界面不参与这件事 —— 这几枚键只经 `prefs_get` / `prefs_set` 往返，
+   * 改动对**下一次进房**生效。
+   */
+  "history.buffer_rows_danmaku": number;
+  /** 礼物档；档内再按金额切低 10% / 中 40% / 高 50%（价高的留得多，契约 §4.3）。 */
+  "history.buffer_rows_gift": number;
+  "history.buffer_rows_superchat": number;
+  "history.buffer_rows_guard": number;
+  /** 互动 / 进场档：刻意小于弹幕档。 */
+  "history.buffer_rows_interact": number;
+  /** 系统通知档：刻意小于弹幕档。 */
+  "history.buffer_rows_system": number;
   /**
    * 各房间最近一次**打开**的时刻（键 = 房间号，值 = UTC 毫秒）。
    * 界面在 `openRoom` 时记一次，关注列表按它降序排（契约 §8，用户 #16）。

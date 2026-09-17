@@ -135,9 +135,7 @@ pub fn map_packages(room_id: i64, value: &Value) -> Vec<Emote> {
             .and_then(Value::as_array)
             .unwrap_or(&empty);
         let kind = classify_package(pkg_name, pkg_type, package_items);
-        let pkg_token = pkg_id
-            .clone()
-            .unwrap_or_else(|| format!("pkg{pkg_index}"));
+        let pkg_token = pkg_id.clone().unwrap_or_else(|| format!("pkg{pkg_index}"));
 
         if package_items.is_empty() {
             tracing::debug!(pkg_index, "表情包缺少表情数组，跳过");
@@ -621,7 +619,10 @@ mod tests {
         let none: Vec<Value> = Vec::new();
         assert_eq!(classify_package("粉丝勋章", 2, &none), EmotePackage::Medal);
         assert_eq!(classify_package("舰长专属", 2, &none), EmotePackage::Guard);
-        assert_eq!(classify_package("大航海表情", 2, &none), EmotePackage::Guard);
+        assert_eq!(
+            classify_package("大航海表情", 2, &none),
+            EmotePackage::Guard
+        );
         // 「房管」不构成分类：房管没有表情包（项目所有者确认 + 官方前端无该分支）。
         // 万一上游真发了这种名字的包，按房间专属处理即可——不为此单开一类。
         assert_eq!(classify_package("房管表情", 2, &none), EmotePackage::Room);

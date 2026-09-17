@@ -225,7 +225,8 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 
 `tauri.conf.json` 当前 `bundle.active=false` 且 `icon` 为空，所以这一步不产出 `.app` / `.dmg` / APK；
 要出安装包**不用**改这两项：macOS 的 `.dmg` 直接加 `--bundles dmg` 即可（`--bundles` 覆盖 `bundle.active`，
-`icon: []` 也不拦 macOS 出包 —— 2026-09-16 实测），三端步骤与产物见 §5.3。
+`icon: []` 也不拦 macOS 出包 —— 2026-09-16 实测），三端步骤与产物见 §5.3，
+`icon` 为什么保持为空、Windows 那枚 `.ico` 为什么在命令行覆盖见 §5.3「图标与 `bundle.icon` 的口径」。
 
 ---
 
@@ -704,7 +705,8 @@ Rust 产物目录在 workspace 下由 Cargo 决定，本节统一用 `<target-di
 #### macOS
 
 日常出包命令与产物见 §1.6（独立可执行文件，前端已内嵌）。需要 `.dmg` 时**不用改 `tauri.conf.json`**：
-`--bundles` 会覆盖 `bundle.active=false`，`icon: []` 也不拦 macOS 出包（2026-09-16 实测，命令与产物如下）：
+`--bundles` 会覆盖 `bundle.active=false`，`icon: []` 也不拦 macOS 出包（2026-09-16 首次实测；
+2026-09-17 复测 `--bundles dmg` 与 `--bundles app` 都 rc=0，见本节末尾的图标口径）。命令与产物如下：
 
 ```bash
 cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
@@ -717,7 +719,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
 
 - `<arch>` 由构建机架构决定（Apple Silicon 为 `aarch64`，Intel 为 `x64`）。
 - 交叉架构可在 Apple Silicon 上追加 `--target x86_64-apple-darwin`，产物落在 `<target-dir>/x86_64-apple-darwin/release/bundle/` 下。
-- 本地运行不需要 DMG，直接从 `.dmg` 里拖出 `.app`，或用 §1.1 的开发期运行方式；要单独出 `.app` 用 `--bundles app`（本轮未实测）。
+- 本地运行不需要 DMG，直接从 `.dmg` 里拖出 `.app`，或用 §1.1 的开发期运行方式；要单独出 `.app` 用 `--bundles app`（2026-09-17 实测：`icon: []` 与把图标写进列表两种写法都出得来，差别只在 `.app` 有没有图标）。
 - `.dmg` **不做 Apple 签名与公证**，口径见 §5.5（拷到另一台自用 Mac 时按那一节处理 Gatekeeper）。
 
 #### Windows
@@ -748,7 +750,8 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
   置成空 PathBuf，只能回落到这个列表，空列表会报 `Couldn't find a .ico icon`。
   为此 `apps/desktop/src-tauri/icons/icon.ico` 入库（6312 字节，`tauri icon` 从既有的 `icons/icon.png` 生成，
   含 16/24/32/48/64/256 六个尺寸），并用 `--config` 只覆盖 Windows 这一次调用 ——
-  共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动（§5.3 的 macOS 段依赖它）。
+  共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动（口径、三端的读法与「为什么不搬进共享配置」
+  见本节末尾的「图标与 `bundle.icon` 的口径」）。
   NSIS 那条路径不读 `bundle.icon`：它的安装器图标只看可选的 `nsis.installerIcon`（本仓库没设，其模板里
   `!if "${INSTALLERICON}" != ""` 不成立 ⇒ 用 NSIS 自己的默认图标；据上游模板核对，未真机看过）。
 - **两个安装器文件名里的 `<version>` 段**：上表第三列的字节数是 2026-09-17 那次 run 的实测值，那次构建的版本号是 `0.1.0`（当时文件名写作 `danmubox_0.1.0_x64-setup.exe` / `danmubox_0.1.0_x64_en-US.msi`）；当前版本是 `0.2.0`，名字随之变成 `danmubox_0.2.0_*`，**以实际构建为准**（§5.2 / §5.8）。
@@ -758,6 +761,28 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
 - **装机与运行全部未验**：上面三个文件都是 runner 上的构建产物，**没有在任何真 Windows 上装过 / 启动过**。
   首次安装后能否从「应用和功能」正常卸载（§4）、安装器是否需要联网装 WebView2、SmartScreen 拦截行为，
   见 §5.6 与 [`testing.md`](testing.md) §10.3 的 W-1~W-4（仍未验）。产物未做代码签名（口径同 §5.6）。
+
+#### 图标与 `bundle.icon` 的口径（2026-09-17 落定）
+
+**口径：共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动；Windows 那一条命令用 `--config`
+只覆盖这一次调用的 `bundle.icon`。** 三端对它的实际读法（每一格都注明是实测还是静态核对）：
+
+| 端 | 读不读 `bundle.icon` | 依据 |
+|---|---|---|
+| macOS | 出包**不要求**它非空；给了图标就用 | **实测（2026-09-17，本机）**：`icon: []` 时 `--bundles dmg` 与 `--bundles app` 都 rc=0，`.app` 里**没有** `Contents/Resources/`、`Info.plist` 也没有 `CFBundleIconFile`（⇒ 系统通用图标）；把 `icons/icon.png` 写进列表后，tauri **自己**从 png 生成 `danmubox.icns`（19,499 字节）并写上 `CFBundleIconFile` —— 两种写法都出得来包 |
+| Windows | **要**（两处硬要求） | 编译期（`tauri-build` → winres）与打包期（WiX / MSI）都得在列表里找到 `.ico`；两次真跑的记录见上一条 bullet |
+| Android | **不读** | `gen/android/app/src/main/AndroidManifest.xml` 的 `android:icon="@mipmap/ic_launcher"` 指向**已入库**的 `gen/android/app/src/main/res/mipmap-*`；`tauri android build` 只重生成 wry 那几个文件与 `tauri.properties` / `tauri.build.gradle.kts`（见下面的 Android 段）。**本轮是静态核对，未跑 APK 复核** |
+
+**为什么留空、为什么只在 Windows 的命令行覆盖**：唯一**硬要求** `.ico` 的是 Windows，而 Windows 出包
+**只有 CI 一条出口**（开发机是 macOS，见上一段）。把这条需求搬进共享配置，等于同时改掉 macOS 与 Android 的
+打包输入 —— 后两者本机能验，Windows 那半边**只能靠一次真跑**；而现有写法已经由 run `35213437486`
+真跑过（那次三个 job 全绿）。所以本轮的取舍是：**不动打包行为**，把这套口径写在这里。
+
+**已知代价（别当成「没有代价」）**：`.app` / `.dmg` 装出来是**系统通用图标**（上表第一行实测）。
+要换成带图标的口径是一次**联动**改动：`tauri.conf.json` 的 `bundle.icon` 写成
+`["icons/icon.png", "icons/icon.ico"]`，并删掉 `artifacts-windows` 那条命令里的 `--config`
+（macOS 侧顺带白拿 `.app` 图标 —— 实测 tauri 会从 png 生成 icns）。但改完**必须**手动触发一次
+`workflow_dispatch` 把 Windows job 真跑一遍才算验过。本轮**没有**做这个改动（未验的那一半不能推定）。
 
 #### Android
 
@@ -1026,9 +1051,9 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 | job | 做什么 | 触发 |
 |---|---|---|
-| `check` | `rustup component add rustfmt clippy` → `npm ci` → `npm run build`（= `tsc -b && vite build`）→ `cargo fmt --all -- --check`（**存量不通过，仅报告不拦**，见 [`../AGENT.md`](../AGENT.md) §9）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` | push 到 `main`、任何 `pull_request`、手动 `workflow_dispatch` |
+| `check` | `rustup component add rustfmt clippy` → `npm ci` → `npm run lint`（= `oxlint --deny-warnings`，**告警即失败**，2026-09-17 接入）→ `npm run build`（= `tsc -b && vite build`）→ `cargo fmt --all -- --check`（**提交门**：2026-09-17 起已摘掉 `continue-on-error`）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` | push 到 `main`、任何 `pull_request`、手动 `workflow_dispatch` |
 | `artifacts` | 出**两个**产物并上传：① macOS `tauri build --bundles dmg` → `.dmg`；② Android `tauri android build --apk --ci` → **已签名的** release APK。跑在 `macos-14` | 仅 `workflow_dispatch` 与 `v*` tag（每次 push 都出包太贵） |
-| `artifacts-windows` | 出**三个**产物并上传：`tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'` → 免安装 `.exe` + NSIS 安装器 + MSI。跑在 `windows-latest`；命令与产物口径见 §5.3 的 Windows 段 | 与 `artifacts` 同口径（仅 `workflow_dispatch` 与 `v*` tag） |
+| `artifacts-windows` | 出**三个**产物并上传：`tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'` → 免安装 `.exe` + NSIS 安装器 + MSI。跑在 `windows-latest`；命令与产物口径见 §5.3 的 Windows 段，那枚 `.ico` 为什么只在命令行覆盖见 §5.3「图标与 `bundle.icon` 的口径」 | 与 `artifacts` 同口径（仅 `workflow_dispatch` 与 `v*` tag） |
 
 缓存：`check` 缓存 `~/.cargo/registry`、`~/.cargo/git` 与 `target/`（键含 `Cargo.lock` 哈希）；三个 job 都用 `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`）。`artifacts` **不缓存** Gradle 与 release `target`：Gradle 依赖缓存近 GB 级、恢复比重新下载还慢，release `target` 还要乘上四个 ABI，收益为负；该 job 本来就只在手动 / 打 tag 时跑。`artifacts-windows` 同理**只缓存 registry 不缓存 `target`**，代价是每次冷编译一遍 release（实测 17m42s）。
 
@@ -1100,7 +1125,7 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 | 项 | 状态 |
 |---|---|
-| `npm ci` / `npm run build` / 三条 Rust 命令 / `tauri build --bundles dmg` | **本机实测过**，产物路径即上文与 §5.3（`cargo fmt` 的不通过属存量，见 [`../AGENT.md`](../AGENT.md) §9） |
+| `npm ci` / `npm run lint` / `npm run build` / 三条 Rust 命令 / `tauri build --bundles dmg` | **本机实测过**，产物路径即上文与 §5.3（`cargo fmt` 全仓已格式化，`AGENT.md` §9 记着修前的存量读数） |
 | `tauri android build --apk --ci` | **本机干净 worktree 上真跑完过**（rc=0；`npm ci` 22 秒 + 构建，合计 381 秒；四个 ABI 全部编出，产物 `…/apk/universal/release/app-universal-release-unsigned.apk`）。那份 worktree 没有本地 keystore，所以是**未签名**产物；CI 里先造一次性 `keystore.properties`，产物名是 `app-universal-release.apk`（上传用的是 `*/release/*.apk` 通配，两种命名都覆盖） |
 | Android 工具链在 **runner 上**的安装 | **已实测（2026-09-21，run `35108747297`）**：首次真跑暴露出 `android-actions/setup-android@v3` 会去装上游早已下架的 `tools` 包（`Failed to find package 'tools'` → job 失败），**已改成自取 cmdline-tools**（同版本同 URL 解压成 `cmdline-tools/latest`，再用 `sdkmanager` 装 `platform-tools` / `platforms/android-36` / `build-tools/35.0.0` / `ndk/27.0.12077973`），复跑该 job 全步骤 success 并上传了两个产物 |
 | Windows 产物（`artifacts-windows`） | **已真跑（2026-09-17，run `35213437486`）**：三个 job 全绿，「出 Windows 产物」一步 **18m19s**（11:01:21Z→11:19:40Z）—— 其中 Rust release 编译 17m42s（冷缓存），NSIS `nsis-3.11` 与 WiX `wix314` 都是打包时现场下载后跑 `makensis` / `candle`+`light`，结束时 `Finished 2 bundles`；上传三个文件（名 / 字节数 / 类型见 §5.3）。**未验**：真机安装 / 启动 / 卸载、WebView2 是否需联网、SmartScreen —— 即 [`testing.md`](testing.md) §10.3 的 W-1~W-4 |

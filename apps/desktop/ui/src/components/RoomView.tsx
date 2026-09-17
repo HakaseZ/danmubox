@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import { AdminPanel } from "./AdminPanel";
 import { Composer, type PanelKind } from "./Composer";
@@ -7,6 +14,7 @@ import { MessageList } from "./MessageList";
 import { SplitPanes } from "./SplitPanes";
 import { BACK_PRIORITY, registerBackHandler } from "../back";
 import { api, describeError } from "../ipc";
+import { LIVE_DOT_CLASS, LIVE_TEXT, liveKindOf } from "../liveKind";
 import { useApp } from "../store";
 import {
   amountText,
@@ -22,7 +30,6 @@ import {
   KIND_LABEL,
   MUTE_HOURS,
   type AdminAction,
-  type ConnState,
   type DiagnoseExport,
   type Emote,
   type Message,
@@ -62,38 +69,6 @@ interface Props {
   onPrefs: (patch: Partial<Prefs>) => void;
   onNotice: (text: string) => void;
 }
-
-/** 状态点三态：**开播 / 下播 / 未连接**（房间头与房间标签页**共用这一套**）。 */
-export type LiveKind = "on" | "off" | "idle";
-
-/** 连接态 × 上游 `live_status` → 三态。这是**唯一**的判据：两处圆点都走它，颜色因此必然一致。 */
-export function liveKindOf(
-  conn: ConnState | undefined,
-  connected: boolean,
-  liveStatus: number,
-): LiveKind {
-  // 两路「连没连上」的信号取**与**：事件驱动的连接态（`danmubox://status`）与列表载荷的
-  // `connected` 各自都可能落后 —— 刚开房间时事件还没到（那时以载荷为准），断开那一刻载荷
-  // 已经刷新而事件还在路上（那时以载荷为准）。**任一说没连上，这颗点就是未连接（灰）**：
-  // 宁可早一格变灰，也不许把「已经断了」一直显示成红 / 绿（用户 2026-09-13 报的就是它 ——
-  // 标题旁那颗点断连后没有变化，只有红绿）。
-  const live = conn === undefined ? connected : conn === "connected" && connected;
-  return live ? (liveStatus === 1 ? "on" : "off") : "idle";
-}
-
-/** 三态 → 圆点配色（`--live-*` 三枚令牌）。 */
-export const LIVE_DOT_CLASS: Record<LiveKind, string> = {
-  on: styles.liveOn,
-  off: styles.liveOff,
-  idle: styles.liveIdle,
-};
-
-/** 三态 → 文案：只进 `title` / `aria-label`，不上屏（用户 2026-09-12：房间头不再写字）。 */
-export const LIVE_TEXT: Record<LiveKind, string> = {
-  on: "开播",
-  off: "下播",
-  idle: "未连接",
-};
 
 /**
  * 沉浸模式（issue #1）的**双击判据**（唯一一处，`docs/ui.md` §2.3「沉浸模式」）。
@@ -392,7 +367,8 @@ export function RoomView({
    * 会剩下一个与界面不符的处理器 —— 该认领的返回被放走、或该放走的被吞掉。
    * 关的动作复用界面上既有的那三条：`onPanel(null)` 是点面板外 / 再点一次工具按钮走的路，
    * 两个 `toggle` 是 `⋯` 菜单里那条「收起房管面板」与礼物栏按钮走的路，不另写一套状态变更。
-   * 每次渲染把最新状态与动作写进 ref（与 `MessageList` 的 `stateRef` 同一套写法）。
+   * 每次渲染的最新状态与动作**在布局阶段**写进 ref（与 `MessageList` 的 `stateRef` 同一套写法）：
+   * 写在渲染期会让被丢弃的那一版渲染把值漏进 ref，而处理器要的只是「最后一次提交的值」。
    *
    * **沉浸态排在最前**（issue #1）：沉浸态里房间头与标签条都不在场上（返回键、标签都没了），
    * 返回手势该做的第一件事是**退出沉浸**，而不是把整个房间页关掉 —— 后者会连房间一起丢，
@@ -408,16 +384,18 @@ export function RoomView({
     toggleGiftDock,
     setImmersive,
   });
-  backRef.current = {
-    immersive,
-    panel,
-    adminOpen,
-    giftOpen,
-    onPanel,
-    toggleAdminPanel,
-    toggleGiftDock,
-    setImmersive,
-  };
+  useLayoutEffect(() => {
+    backRef.current = {
+      immersive,
+      panel,
+      adminOpen,
+      giftOpen,
+      onPanel,
+      toggleAdminPanel,
+      toggleGiftDock,
+      setImmersive,
+    };
+  });
 
   useEffect(
     () =>
@@ -447,6 +425,10 @@ export function RoomView({
   // 倒计时：只在采集期间跑（不采集时没必要一秒一次重渲染）。
   useEffect(() => {
     if (diag === undefined) return;
+    // 规则建议的「渲染期派生 / 初始状态直接给」在这里不成立：`diagNow` 就是**一只钟**，
+    // 只能由计时器推；下面这一格是把上一轮采集留下的旧读数立刻作废（不清的话新窗口的头一秒
+    // 会按旧钟算剩余时间），interval 那一格才是常规推进。
+    // oxlint-disable-next-line react/set-state-in-effect
     setDiagNow(Date.now());
     const timer = window.setInterval(() => setDiagNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
@@ -470,8 +452,11 @@ export function RoomView({
 
   // 固定窗口到点**自动收工**：用户不必守着，也不会有「采完忘了导出」这一档。
   // （提前结束走面板上那颗键，两者最终都只调一次 `diagnose_export`。）
+  // 这也是「与外部系统（窗口到点）同步」那一类 effect：`finishDiagnose` 开头就把忙标志举起来
+  // 是为了**同一次提交内**关掉面板上的重复点击，派生不出来。
   useEffect(() => {
     if (diag === undefined || diagBusy || diagRemainMs > 0) return;
+    // oxlint-disable-next-line react/set-state-in-effect
     void finishDiagnose();
   }, [diag, diagBusy, diagRemainMs, finishDiagnose]);
 
@@ -500,6 +485,11 @@ export function RoomView({
   // 这里用 effect 而不是给 `RoomView` 加 `key`：加 key 会把整棵子树重挂（含 `Composer`），
   // 草稿与「不是整页重挂」的口径相冲；弹幕列表的滚动/跟随另用 `MessageList` 的 key 处理（见下）。
   useEffect(() => {
+    // 规则给的替代路径在这里都不成立：①「加 `key`」（React 官方的整套重置法）会把整棵子树
+    // 重挂，`Composer` 的按房间草稿跟着丢，上面那段注释解释了为什么不走它；②「从触发方改」
+    // 也不成立 —— 切房间的真相在 store（`room.room_id` 变了），点标签只是其中一条路
+    // （列表页进房、返回手势、断开重连都会改它）。这个 effect 因此就是那个**同步点**。
+    // oxlint-disable-next-line react/set-state-in-effect
     setShowLogs(false);
     setHeaderMenu(null);
     setMessageMenu(null);
@@ -517,8 +507,11 @@ export function RoomView({
 
   // 房管入口按身份出现（第 3 条，契约 C6）：面板打开期间身份被撤销（事件更新 / 会话重建）
   // 就收起面板与确认条 —— 不能让「非房管还开着房管面板」这一档留下来。
+  // 身份不是本组件的事件（它从 store 的事件更新里来），因此这里就是同步点；
+  // 也不改成「渲染期按 `isAdmin` 屏蔽面板」—— 那会让身份恢复时面板自己弹回来，是另一种行为。
   useEffect(() => {
     if (isAdmin) return;
+    // oxlint-disable-next-line react/set-state-in-effect
     setAdminOpen(false);
     setAdminConfirm(null);
   }, [isAdmin]);
@@ -557,6 +550,11 @@ export function RoomView({
     if (reportTarget) void loadReportReasons();
   }, [reportTarget, loadReportReasons]);
 
+  // 字号在下面有两处用处：① 标题那一趟测量（依赖数组里只能放**变量** —— `prefs["ui.font_scale"]`
+  // 这种带下标的表达式会被 `react-hooks/exhaustive-deps` 判成「复杂表达式」而拒绝静态检查）；
+  // ② 交给弹幕列表。抄成一个变量语义一字不变，规则也就能真的盯住它。
+  const fontScale = prefs["ui.font_scale"];
+
   // 标题的循环滚动是**量出来的**：一份文字的宽度 vs 可视宽度（ResizeObserver 同时盯容器与
   // 文字本身，所以窗口改宽 / 字号滑杆 / 换标题都会重新判一次）。滚动是纯 CSS 的
   // `translateX(-50%)` 无限循环，布局宽度自始至终不变（`.title` 是 `overflow: hidden` +
@@ -582,7 +580,7 @@ export function RoomView({
     // `immersive` 同理：沉浸态里房间头整块不在场上（两个 ref 都是 null），退出时它才重新挂上，
     // 这一趟必须重新量一次 —— 否则短标题会带着上一轮的结论回来（ResizeObserver 绑在新节点上，
     // 但 `measure()` 得有人叫第一声）。
-  }, [titleText, prefs["ui.font_scale"], room.room_id, immersive]);
+  }, [titleText, fontScale, room.room_id, immersive]);
 
   const { chatRows, giftRows } = splitGiftRows(rows, prefs);
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
@@ -929,7 +927,7 @@ export function RoomView({
       <SplitPanes
         giftOnTop={giftPaneOnTop}
         ratio={prefs["ui.gift_pane_ratio"]}
-        fontScale={prefs["ui.font_scale"]}
+        fontScale={fontScale}
         giftCollapsed={!giftOpen}
         onRatio={(value) => onPrefs({ "ui.gift_pane_ratio": value })}
         onSwap={() => onPrefs({ "ui.gift_pane_on_top": !giftPaneOnTop })}

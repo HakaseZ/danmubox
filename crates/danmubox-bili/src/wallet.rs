@@ -82,7 +82,8 @@ mod tests {
     #[test]
     fn reads_battery_as_gold_over_hundred() {
         // 实测样本：gold=15000 → 150 电池（10 金瓜子 = 0.1 电池 = 1 分钱）。
-        let value = json!({"code": 0, "message": "OK", "data": {"gold": 15000, "silver": 44, "bp": "0"}});
+        let value =
+            json!({"code": 0, "message": "OK", "data": {"gold": 15000, "silver": 44, "bp": "0"}});
         assert_eq!(parse_balance(&value).unwrap(), 150);
     }
 
@@ -95,7 +96,10 @@ mod tests {
     #[test]
     fn accepts_string_encoded_gold() {
         // 上游的 bp 是字符串，gold 目前是数字，但两种都容错。
-        assert_eq!(parse_balance(&json!({"code": 0, "data": {"gold": "1234"}})).unwrap(), 12);
+        assert_eq!(
+            parse_balance(&json!({"code": 0, "data": {"gold": "1234"}})).unwrap(),
+            12
+        );
     }
 
     #[test]
@@ -124,7 +128,8 @@ mod tests {
     #[tokio::test]
     async fn not_logged_in_is_rejected_without_a_request() {
         let dir = std::env::temp_dir().join(format!("danmubox-wallet-{}", std::process::id()));
-        let store = std::sync::Arc::new(danmubox_core::ConfigStore::load(dir.join("config.toml")).unwrap());
+        let store =
+            std::sync::Arc::new(danmubox_core::ConfigStore::load(dir.join("config.toml")).unwrap());
         let wallet = BiliWallet::new(store).unwrap();
         assert_eq!(wallet.balance().await.unwrap_err().code(), "NOT_LOGGED_IN");
     }

@@ -1514,6 +1514,75 @@ mod tests {
         runner.await.unwrap().unwrap();
     }
 
+    /// 同一次会话里的重连**不重置会话编号**（`docs/contract.md` §4.3：重连仍属同一次会话，
+    /// 已收到的消息保留）。
+    ///
+    /// 这不是记账细节：界面按 `local_id` 做单调判定
+    /// （`apps/desktop/ui/src/store.ts` 的 `message.local_id <= last` → 直接丢），
+    /// 编号一旦在某次重连之后回退，之后进来的**每一条**弹幕都会被界面悄悄丢掉 ——
+    /// 表现就是「房间看着已连接，却再也不进来弹幕」。
+    /// 断连窗口里丢的帧补不回来（上游没有可翻页的回放，见 `docs/protocol.md` A30），
+    /// 那是另一件事；这条只钉「重连之后新来的弹幕还能不能进列表」。
+    #[tokio::test]
+    async fn reconnect_keeps_the_session_numbering_monotonic() {
+        let limits = test_limits();
+        let (sink, bus) = test_sink();
+        let mut events = bus.subscribe();
+        let cancel = Cancel::new();
+        let times = Arc::new(StdMutex::new(Vec::new()));
+
+        let runner = {
+            let sink = sink.clone();
+            let cancel = cancel.clone();
+            let times = Arc::clone(&times);
+            tokio::spawn(async move {
+                reconnect_loop(1, &sink, &cancel, &limits, |node_start| {
+                    // 每次尝试投一条再收场（「连接中断」）—— 循环会拿着**同一份** sink 再试一次。
+                    let round = {
+                        let mut t = times.lock().expect("lock poisoned");
+                        t.push(Instant::now());
+                        t.len()
+                    };
+                    let sink = sink.clone();
+                    async move {
+                        // 内容按轮次变化，避开「同一条的第二份」那个指纹窗口。
+                        let mut message =
+                            Message::new(1, danmubox_core::MessageKind::Danmaku, round as i64);
+                        message.content = format!("第 {round} 轮");
+                        sink.publish_message(message);
+                        Attempt::new(
+                            &test_diag(),
+                            End::Failed("连接已被对端关闭".into()),
+                            false,
+                            Some(node_start),
+                        )
+                    }
+                })
+                .await
+            })
+        };
+
+        until(
+            || times.lock().expect("lock poisoned").len() >= 3,
+            Duration::from_millis(2000),
+        )
+        .await;
+        cancel.cancel();
+        runner.await.unwrap().unwrap();
+
+        let ids: Vec<u64> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                Event::Message(message) => Some(message.local_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![1, 2, 3],
+            "会话内编号从 1 起连续分配（跨重连不回退）：{ids:?}"
+        );
+    }
+
     /// §8.1：认证成功后 90 秒内没有任何入站帧 → 判定僵死、主动断开（测试里 120ms）。
     /// 日志里要能看到判定依据（距上次入站多久），返回的失败原因里也带着它。
     #[tokio::test]

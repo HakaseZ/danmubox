@@ -692,6 +692,13 @@ Rust 产物目录在 workspace 下由 Cargo 决定，本节统一用 `<target-di
 
 本期实测走的是默认情形：§1.6 的独立产物落在 `<repo>/target/release/danmubox-desktop`。
 
+`<version>`：本节与 §5.3 / §5.7 / §5.13 里产物名中的版本段，一律取 `apps/desktop/src-tauri/tauri.conf.json`
+的 `version`（唯一事实源，见 §5.8；与 workspace `Cargo.toml` 的 `[workspace.package] version` 同步）。
+当前值是 `0.2.0`，因此 macOS 安装镜像与 Windows 两个安装器的名字分别是
+`danmubox_0.2.0_<arch>.dmg`、`danmubox_0.2.0_x64-setup.exe`、`danmubox_0.2.0_x64_en-US.msi`；
+**提版本号后这些名字随之改变，以实际构建为准**（Android 通用包的本机产物路径为 `app-universal-release.apk`，
+名字里不含版本段，见 §5.3 的 Android 表）。
+
 ### 5.3 三端构建步骤与产物
 
 #### macOS
@@ -706,7 +713,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
 | 产物 | 路径 |
 |---|---|
 | 独立可执行（实测） | `<target-dir>/release/danmubox-desktop`（前端已内嵌，约 13 MB） |
-| 安装镜像（实测 5,147,340 字节） | `<target-dir>/release/bundle/dmg/danmubox_0.1.0_<arch>.dmg` |
+| 安装镜像（实测 5,147,340 字节，实测那次构建的版本号是 `0.1.0`） | `<target-dir>/release/bundle/dmg/danmubox_<version>_<arch>.dmg`（`<version>` 见 §5.2） |
 
 - `<arch>` 由构建机架构决定（Apple Silicon 为 `aarch64`，Intel 为 `x64`）。
 - 交叉架构可在 Apple Silicon 上追加 `--target x86_64-apple-darwin`，产物落在 `<target-dir>/x86_64-apple-darwin/release/bundle/` 下。
@@ -727,8 +734,8 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
 | 产物 | 路径 | 实测（2026-09-17，run `35213437486`） |
 |---|---|---|
 | 独立可执行（免安装） | `<target-dir>/release/danmubox-desktop.exe` | 16,434,176 字节，PE32+ x86-64 GUI |
-| NSIS 安装器 | `<target-dir>/release/bundle/nsis/danmubox_0.1.0_x64-setup.exe` | 3,896,645 字节，PE32 GUI（Nullsoft Installer） |
-| WiX MSI | `<target-dir>/release/bundle/msi/danmubox_0.1.0_x64_en-US.msi` | 5,816,320 字节，OLE 复合文档 |
+| NSIS 安装器 | `<target-dir>/release/bundle/nsis/danmubox_<version>_x64-setup.exe` | 3,896,645 字节，PE32 GUI（Nullsoft Installer） |
+| WiX MSI | `<target-dir>/release/bundle/msi/danmubox_<version>_x64_en-US.msi` | 5,816,320 字节，OLE 复合文档 |
 
 - **`--bundles` 不能省**：`tauri.conf.json` 里 `bundle.active = false`，而 tauri-cli 只在
   `config.bundle.active || 命令行给了 --bundles` 时才进打包阶段（`tauri-cli/src/build.rs`），
@@ -744,6 +751,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
   共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动（§5.3 的 macOS 段依赖它）。
   NSIS 那条路径不读 `bundle.icon`：它的安装器图标只看可选的 `nsis.installerIcon`（本仓库没设，其模板里
   `!if "${INSTALLERICON}" != ""` 不成立 ⇒ 用 NSIS 自己的默认图标；据上游模板核对，未真机看过）。
+- **两个安装器文件名里的 `<version>` 段**：上表第三列的字节数是 2026-09-17 那次 run 的实测值，那次构建的版本号是 `0.1.0`（当时文件名写作 `danmubox_0.1.0_x64-setup.exe` / `danmubox_0.1.0_x64_en-US.msi`）；当前版本是 `0.2.0`，名字随之变成 `danmubox_0.2.0_*`，**以实际构建为准**（§5.2 / §5.8）。
 - `--target x86_64-pc-windows-msvc` 是显式指 64 位；在 x86_64 的 Windows 上本就是默认（本轮未单独实测）。
 - `.msi` **只能在 Windows 上构建**（WiX 仅支持 Windows）；NSIS 官方称可在其他平台交叉构建，本仓库不采用。
 - 自用只保留 NSIS 安装器与免安装 exe，MSI 留一份作备用安装路径。
@@ -785,7 +793,7 @@ CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  #
 | `apps/desktop/src-tauri/gen/android/app/src/main/java/dev/kksk/danmubox/MainActivity.kt` | 只调 `enableEdgeToEdge()` | 从原生收 `WindowInsets`（系统栏含 ime）换算成 CSS 变量 `--safe-top` / `--safe-bottom` 下发给页面 | Tauri 的 Android 外壳是 edge-to-edge，而 **WebView 里拿不到系统栏高度**：`env(safe-area-inset-*)` 只报刘海（实测 top=129 / bottom=0 设备像素，同一次实测状态栏 128、手势栏 63）。不补这一步，顶栏会压进状态栏带、输入区会压进手势栏；见下方「已修」条目的实测数字 |
 | `apps/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml` + 新增的 `…/dev/kksk/danmubox/KeepAliveService.kt`（`MainActivity` 里配套的 `onStart` / `onStop` 钩子也属这一组） | 权限只有 `INTERNET`，没有任何 `<service>` | 加 `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` / `POST_NOTIFICATIONS` 三枚权限与 `<service android:name=".KeepAliveService" android:foregroundServiceType="dataSync" android:exported="false" />`；退到后台且有活跃连接时起、回到前台即停 | 后台保活：进程不被系统回收这一环。完整行为（怎么关、耗电、电池优化白名单、Android 15 的 6 小时额度）见 §2.8 |
 
-实测（2026-09-15，模拟器 android-35）：Gradle 8.14.3 / AGP 8.11.0 / Kotlin 1.9.25；`aapt2 dump badging` 读到 package `dev.kksk.danmubox`、versionCode 1000、versionName 0.1.0、minSdk 24、targetSdk / compileSdk 36、`INTERNET` 权限在；带签名包 `apksigner verify` 为 `Verifies`（v2 签名）。
+实测（2026-09-15，模拟器 android-35）：Gradle 8.14.3 / AGP 8.11.0 / Kotlin 1.9.25；`aapt2 dump badging` 读到 package `dev.kksk.danmubox`、versionCode 1000、versionName 0.1.0（当时版本号；现为 0.2.0，见 §5.8）、minSdk 24、targetSdk / compileSdk 36、`INTERNET` 权限在；带签名包 `apksigner verify` 为 `Verifies`（v2 签名）。
 
 **已修（2026-09-15，提交 `32dcefc`）**：targetSdk 36 强制 edge-to-edge 带来的遮挡。改前实测：状态栏占 y=0..128、手势栏占 y=2337..2400，顶栏整条落在状态栏带里（标题文本 y=68..116、右上主题按钮 y=74..114，与系统电池图标重叠），房间页输入区压在手势栏下（白底画到 y=2399）。改后（同一 AVD）：顶栏文本 y=196..244、主题按钮 y=202..242、房间页顶栏底 0 → 128、房间页标题 52..88 → 180..216、输入区白底止于 2338，`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL。**动的是页面排版而不是窗口**：应用窗口修复前后都是 `[0,0][1080,2400]`，系统栏本身也没变（状态栏仍是 `[0,0][1080,128]`、手势栏仍是 `[0,2337][1080,2400]`）。做法与拒绝「给 WebView 设 padding」的理由见上表第三行与 `MainActivity.kt` 的注释。inset 里含 ime：**小列表页的键盘已验**（内容止于键盘上沿、无 pan 双位移），**登录态下房间页输入区 + 键盘的组合未验**（房间页输入框未登录时禁用，见 [`testing.md`](testing.md) §10.5）。
 
@@ -873,7 +881,7 @@ xattr -l /path/danmubox.app                   # 查看隔离属性
 |---|---|
 | 自用本机构建、本机运行 | 从本机构建目录直接运行，**不经过浏览器下载**，通常不触发；若触发，走下一行 |
 | 已经出现警告 | 点「更多信息」→「仍要运行」 |
-| 拷贝到另一台自用机器 | 先解除文件锁定：文件属性 → 勾选「解除锁定」，或 PowerShell `Unblock-File .\danmubox_0.1.0_x64-setup.exe`，再运行安装器 |
+| 拷贝到另一台自用机器 | 先解除文件锁定：文件属性 → 勾选「解除锁定」，或 PowerShell `Unblock-File .\danmubox_<version>_x64-setup.exe`（`<version>` 见 §5.2），再运行安装器 |
 
 - 官方明确：签名只是减少警告的手段，**不是运行的必要条件**——只要愿意忽略 SmartScreen 警告，未签名也可运行。
 - 安装器默认在缺少 WebView2 时下载 WebView2 Bootstrapper（需要联网）。若目标机常年离线，可改为随包内嵌安装器，代价是安装器体积显著增大（体积量级见 §5.10）。
@@ -913,12 +921,12 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 | 项 | 规则 |
 |---|---|
-| 版本格式 | SemVer `MAJOR.MINOR.PATCH`，当前基线 `0.1.0`（`apps/desktop/src-tauri/tauri.conf.json` 的 `version`；记录见 `../CHANGELOG.md`） |
-| 单一事实源 | Tauri 配置中的 `version` 为准，三端产物名由它派生 |
+| 版本格式 | SemVer `MAJOR.MINOR.PATCH`，当前版本 **`0.2.0`**（`apps/desktop/src-tauri/tauri.conf.json` 的 `version`；workspace `Cargo.toml` 的 `[workspace.package] version` 与之同步，四个 crate 用 `version.workspace = true` 继承；变更记录见 `../CHANGELOG.md` 的 `[0.2.0]`） |
+| 单一事实源 | Tauri 配置中的 `version` 为准，三端产物名由它派生（`<version>`，见 §5.2）。**提版本号是「两处同改」**：`tauri.conf.json` 的 `version` + workspace `Cargo.toml` 的 `[workspace.package] version`，改完跑一次 `cargo check --workspace` 让 `Cargo.lock` 重生成 |
 | bundle id | `dev.kksk.danmubox`，三端一致；**一旦装机后不再更改**，否则 Android 无法覆盖安装、数据目录也会错位 |
 | Android versionCode | 采用官方派生规则 `major*1000000 + minor*1000 + patch`；需要连续递增时在 `bundle.android.versionCode` 显式指定 |
 | 预发布 | 自用不做预发布通道；`0.x` 期间 minor 变更允许破坏兼容 |
-| 文档同步 | 每次发版更新 `../CHANGELOG.md`；影响安装 / 数据目录 / 命令的改动同时更新本节与 §1 |
+| 文档同步 | 每次发版更新 `../CHANGELOG.md`；影响安装 / 数据目录 / 命令的改动同时更新本节与 §1。发版全程的操作步骤见 §5.13 的「发一版的操作步骤」 |
 | 本地文件兼容 | 无迁移；升级不影响 `config.toml` 与 `prefs.json`，弹幕缓冲是内存态、退出即丢（契约 §4.3） |
 
 ### 5.9 自用更新方式
@@ -1009,7 +1017,10 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 代价：`bootstrap` 要重新下载数 GB（JDK、SDK、NDK、system-image、rustup 工具链），耗时以网络为准；**签名材料与 `gen/android` 不受影响**，重装后同一台设备仍可覆盖安装。
 
-### 5.13 GitHub Actions CI（`.github/workflows/ci.yml`）
+### 5.13 发版与产物（GitHub Actions CI，`.github/workflows/ci.yml`）
+
+**发版口径一句话**：三端产物**由 CI 出**（不在本机「发布」），触发只有两种 —— 手动
+`workflow_dispatch`，或推一个 `v*` tag；具体步骤见下方「发一版的操作步骤」。
 
 仓库只有这一套 CI，**三个 job**：`check` 与 `artifacts` 跑在 **`macos-14`（Apple Silicon）**，与开发机同平台 —— `check` 不必在 Linux 上另补 WebKitGTK 那一套系统依赖，命令与 [`../AGENT.md`](../AGENT.md) §3 的本机口径完全一致；`artifacts` 产出的也就天然是 arm64 产物。`artifacts-windows` 则是**唯一**的 Windows 出口，跑在 `windows-latest`（开发机是 macOS，本机出不了 Windows 包，见 §5.3 的 Windows 段）。
 
@@ -1021,15 +1032,32 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 缓存：`check` 缓存 `~/.cargo/registry`、`~/.cargo/git` 与 `target/`（键含 `Cargo.lock` 哈希）；三个 job 都用 `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`）。`artifacts` **不缓存** Gradle 与 release `target`：Gradle 依赖缓存近 GB 级、恢复比重新下载还慢，release `target` 还要乘上四个 ABI，收益为负；该 job 本来就只在手动 / 打 tag 时跑。`artifacts-windows` 同理**只缓存 registry 不缓存 `target`**，代价是每次冷编译一遍 release（实测 17m42s）。
 
+#### 发一版的操作步骤
+
+以 `0.2.0` 为例，一次发版就是下面五步 —— 前三步在开发分支上做完，第 4 步才触发 CI：
+
+| # | 动作 | 落点 / 命令 | 要点 |
+|---|---|---|---|
+| 1 | 把 `[Unreleased]` 收成一个版本 | `../CHANGELOG.md`：整段收进 `## [x.y.z] - YYYY-MM-DD`，`[Unreleased]` 留空（只留占位一行） | 同一个版本内每个 `###` 小节**只出现一次**；各轮的 `> **本轮…的验证口径**` 引用块**逐字保留**（那是「凭什么说做完了」的证据） |
+| 2 | 提版本号 | `apps/desktop/src-tauri/tauri.conf.json` 的 `version` + workspace `Cargo.toml` 的 `[workspace.package] version` | **两处必须同一次改**（四个 crate 用 `version.workspace = true` 继承）。改完跑一次 `cargo check --workspace` 让 `Cargo.lock` 重生成并确认不破编译；产物名里的 `<version>` 随之改变（§5.2 / §5.8） |
+| 3 | 合并到 `main` | `git checkout main && git merge --no-ff <开发分支>` → push | 合并前先 `git status` 看索引（[`../AGENT.md`](../AGENT.md) §3 的「合并前先看索引」）；`check` job 会在这次 push 上跑一遍 |
+| 4 | 打 tag | `git tag -a vx.y.z -m "…" && git push origin vx.y.z` | **tag 才是出包开关**：`artifacts` 与 `artifacts-windows` 的 `if` 是 `startsWith(github.ref, 'refs/tags/v')`，tag 名必须以 `v` 开头 |
+| 5 | 取产物 | Actions → 该 run → 页面底部 **Artifacts**：`danmubox-macos-dmg` / `danmubox-android-apk` / `danmubox-windows` | 产物保留期用仓库默认（公开仓库 90 天），要长期留存就自己下下来 —— §5.9 的回滚靠留着上一版产物 |
+
+- **也可以只手动出包不发版**：Actions → `CI` → **Run workflow**（选分支）直接触发两个出包 job，不用 tag、不改 `CHANGELOG`。日常自用构建走这条。
+- **CI 只把文件挂到 run 的 Artifacts 区**，不发布到任何应用市场 / 包仓库（自用不发布，见 `../CHANGELOG.md` 的版本策略表）。
+- **版本号不要回退**：Android 的 `versionCode` 由版本号派生（`major*1000000 + minor*1000 + patch`），降版本号要卸载重装、会清数据（§5.7 / §5.9）。
+- **未验**：第 4 步「打 `v*` tag 触发」这条路**至今没有真跑过** —— CI 的两次出包实测都是 `workflow_dispatch` 触发的（§5.13 文末的验证表）。本条按 `.github/workflows/ci.yml` 的 `if` 条件写出，**不是实测**。
+
 #### 手动触发与取产物
 
 网页：仓库 → **Actions** → 左侧 `CI` → **Run workflow**（选分支）→ 跑完后在该 run 页面底部的 **Artifacts** 区下载：
 
 | 产物名 | 内容 | 在仓库里的来源路径 |
 |---|---|---|
-| `danmubox-macos-dmg` | `danmubox_0.1.0_aarch64.dmg` | `target/release/bundle/dmg/*.dmg` |
+| `danmubox-macos-dmg` | `danmubox_<version>_aarch64.dmg`（`<version>` 见 §5.2，以实际构建为准） | `target/release/bundle/dmg/*.dmg` |
 | `danmubox-android-apk` | `app-universal-release.apk`（四个 ABI 的通用包） | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk` |
-| `danmubox-windows` | 三个文件：`danmubox-desktop.exe`（免安装）+ `danmubox_0.1.0_x64-setup.exe`（NSIS 安装器）+ `danmubox_0.1.0_x64_en-US.msi` | `target/release/danmubox-desktop.exe`、`target/release/bundle/nsis/*.exe`、`target/release/bundle/msi/*.msi` |
+| `danmubox-windows` | 三个文件：`danmubox-desktop.exe`（免安装）+ `danmubox_<version>_x64-setup.exe`（NSIS 安装器）+ `danmubox_<version>_x64_en-US.msi` | `target/release/danmubox-desktop.exe`、`target/release/bundle/nsis/*.exe`、`target/release/bundle/msi/*.msi` |
 
 产物保留期用仓库默认（公开仓库 90 天），过期即失效，要长期留存就自己下下来。
 
@@ -1040,7 +1068,7 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 ```bash
 # ① macOS .dmg（bundle.active=false 靠 --bundles 覆盖；不需要应用图标）
 cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
-#    产物：<repo>/target/release/bundle/dmg/danmubox_0.1.0_aarch64.dmg
+#    产物：<repo>/target/release/bundle/dmg/danmubox_<version>_aarch64.dmg（<version> 见 §5.2）
 
 # ② Android 已签名 release APK（先 source 一次项目内工具链，见 §5.4）
 . scripts/android-env.sh

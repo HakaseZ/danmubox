@@ -1,13 +1,15 @@
 # danmubox · GitHub Actions CI
 #
-# 刻意只做两件事（不做矩阵、不做发布流程）：
+# 刻意只做三件事（不做矩阵、不做发布流程）：
 #
-#   check     仓库既有的检查：Rust 的 fmt / clippy / test + 前端的 tsc -b + vite build。
-#             触发：push 到 main、任何 pull_request、手动 workflow_dispatch。
-#   artifacts 出两个产物并上传：macOS .dmg 与**已签名的** Android release APK。
-#             触发：仅 workflow_dispatch 与 v* tag —— 每次 push 都出包太贵。
+#   check             仓库既有的检查：Rust 的 fmt / clippy / test + 前端的 tsc -b + vite build。
+#                     触发：push 到 main、任何 pull_request、手动 workflow_dispatch。
+#   artifacts         出 macOS .dmg 与**已签名的** Android release APK 两个产物并上传。
+#                     触发：仅 workflow_dispatch 与 v* tag —— 每次 push 都出包太贵。
+#   artifacts-windows 出 Windows 产物：NSIS 安装器 + MSI + 免安装 .exe。
+#                     触发：与 artifacts 相同（workflow_dispatch 与 v* tag）。
 #
-# 两个 job 都跑在 macos-14（Apple Silicon）：
+# check 与 artifacts 都跑在 macos-14（Apple Silicon）：
 #   * 与开发机同平台 —— check 不必在 Linux 上补 WebKitGTK 那一套系统依赖，
 #     命令与 AGENT.md §3 / docs/operations.md §5 里本机验证过的完全一致；
 #   * artifacts 产出的因此天然是 arm64 产物，与 §5.5 的 macOS 口径一致。
@@ -249,4 +251,69 @@ jobs:
         with:
           name: danmubox-android-apk
           path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk
+          if-no-files-found: error
+
+  # Windows 产物：与 `artifacts` 同样的触发口径（只在手动 / v* tag 上跑，出包贵）。
+  # 这条 job 是**唯一**的 Windows 出包路径：开发机是 macOS，出不了 Windows 包
+  # （`x86_64-pc-windows-msvc` 要 Windows 上的 MSVC 工具链；交叉到 `-gnu` 是另一条路，本仓库不采用）。
+  # 产物口径见 docs/operations.md §5.3 的 Windows 段：自用保留 NSIS 安装器 + 免安装 exe，MSI 作备用安装路径。
+  artifacts-windows:
+    name: 产物（Windows exe + NSIS 安装器 + MSI）
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      # 与 macOS 那边同样显式钉住产物目录，下面三条产物路径以此为准
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/ui/package-lock.json
+
+      - name: 缓存 cargo（registry）
+        # 与 macOS 的 artifacts 同口径：不缓存 target（release 产物体积远超缓存收益）
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-artifacts-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-artifacts-
+
+      - name: 前端依赖
+        working-directory: apps/desktop/ui
+        run: npm ci
+
+      - name: 出 Windows 产物（NSIS 安装器 + MSI）
+        # shell 显式取 bash（runner 默认是 pwsh）：这条命令因此与 docs/operations.md §5.3 里
+        # macOS / Android 的写法是同一种形态（`./ui/node_modules/.bin/tauri …`）。
+        # `bundle.active=false` 由 `--bundles` 覆盖（与 macOS 那边同理）。
+        #
+        # `--config` **只**覆盖 Windows 这一侧的 `bundle.icon`，不动共享的 `tauri.conf.json`：
+        # `bundle.icon = []` 在 macOS 上能出 dmg，在 Windows 上过不去 —— 两处都硬要一枚 `.ico`：
+        #   ① 编译期 `tauri-build` 的 Windows 资源（winres）步骤：`bundle.icon` 里没有 `.ico`
+        #      就回落到 `icons/icon.ico`，该文件不存在则直接报错中断编译
+        #      （首次真跑 run 35211873761 撞到的就是这一条）；
+        #   ② 打包期 MSI（WiX）那条路径要求 `bundle.icon` 里能找到 `.ico` —— tauri-cli 把
+        #      bundler 的 `windows.iconPath` 显式置成空 PathBuf（`interface/rust.rs`），
+        #      于是只能回落到 `bundle.icon` 列表，列表为空就报 `Couldn't find a .ico icon`
+        #      （这一条按上游源码核对，没真的撞上过 —— 上面那枚 .ico 同时修掉了 ①，也就轮不到 ②）。
+        # 相应地 `icons/icon.ico` 也入库（`tauri icon` 从 `icons/icon.png` 生成，6 个尺寸：
+        # 16/24/32/48/64/256）。NSIS 那条路径不读 `bundle.icon`：它只看可选的 `nsis.installerIcon`
+        # （本仓库没设 ⇒ 用 NSIS 自己的默认图标；据上游 nsis 模板核对，未真机看过）。
+        shell: bash
+        run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'
+
+      - name: 上传 Windows 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: danmubox-windows
+          path: |
+            target/release/danmubox-desktop.exe
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
           if-no-files-found: error

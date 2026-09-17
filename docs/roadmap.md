@@ -14,7 +14,7 @@
 | 2 登录层 | 已退出 |
 | 3 交互层 | 已退出 |
 | 4 关注与钱包 | 已退出 |
-| 5 三端编译 | **macOS 完成；Android 出包 / 装机 / 启动这一档完成**（2026-09-15：项目内工具链 + 出包 + 装进模拟器启动 + 进房连上，见 [`operations.md`](operations.md) §5.3；真机与登录 / 收发弹幕链路**未实测**）；**Windows 未完成**（缺工具链），见 §2.2 |
+| 5 三端编译 | **macOS 完成；Android 出包 / 装机 / 启动这一档完成**（2026-09-15：项目内工具链 + 出包 + 装进模拟器启动 + 进房连上，见 [`operations.md`](operations.md) §5.3；真机与登录 / 收发弹幕链路**未实测**）；**Windows 出包这一档完成**（2026-09-17：CI 的 `artifacts-windows` job 在 `windows-latest` 上出 NSIS 安装器 + MSI + 免安装 exe 并上传，三个 job 全绿，见 [`operations.md`](operations.md) §5.3 / §5.13；**装机与真机运行未验** —— [`testing.md`](testing.md) §10.3 的 W-1~W-4 仍全部未验），见 §2.2 |
 
 阶段 1–4 截至 2026-09-12 逐条实测通过并退出。仍缺上游样本的实测校准项（见 [`protocol.md`](protocol.md) 附录 A）不因此成为欠账：凡未实测的一律保持「未验证」标注，不按命名或文档推定为已知。
 
@@ -35,7 +35,7 @@
 | 项 | 说明 | 触发 / 前置 |
 |---|---|---|
 | Android 端 | Tauri 2 移动端产物。**2026-09-15 更新：已开工，出包 / 装机 / 启动这一档完成**——工具链装进仓库（`scripts/android-env.sh`，[`operations.md`](operations.md) §5.4）、`gen/android` 工程入库并接通自用签名、APK 装进模拟器启动、进公开测试房间 `1` 连上 | **剩余**：真机实测、扫码登录 / 发弹幕 / 收弹幕链路、四个分 ABI 包的安装；targetSdk 36 的 edge-to-edge 遮挡**已修**（提交 `32dcefc`，顶栏与输入区按系统栏 inset 让开，见 [`operations.md`](operations.md) §5.3） |
-| Windows 端 | Tauri 2 Windows 产物 | macOS 无法交叉编译（缺 WebView2 与 MSVC 运行时），需 Windows 机器或 CI |
+| Windows 端 | Tauri 2 Windows 产物。**2026-09-17 更新：CI 出包这一档完成**——`.github/workflows/ci.yml` 的 `artifacts-windows` job（`windows-latest`）出免安装 exe + NSIS 安装器 + MSI 并上传（[`operations.md`](operations.md) §5.3、§5.13；产物字节数与类型为实测）。**注意这只说明「CI 能出包」**：本机是 macOS，产物**没有在任何真 Windows 上装过 / 启动过**，[`testing.md`](testing.md) §10.3 的 W-1~W-4（安装运行、`%APPDATA%` 权限、SmartScreen、核心链路）**全部未验** | macOS 无法交叉编译（缺 MSVC 工具链），出包已由 CI 提供；**剩余**：一台真 Windows（含 WebView2 运行时）按 W-1~W-4 走一遍 |
 
 ### 2.3 更远期
 

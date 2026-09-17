@@ -86,6 +86,7 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 | 指定另一份配置 | 任何 CLI 子命令加 `--config <路径>`（全局参数） |
 | 前端依赖安装 | `npm --prefix apps/desktop/ui install` |
 | 前端类型检查 + 构建 | `npm --prefix apps/desktop/ui run build`（= `tsc -b && vite build`） |
+| 前端单测（显示层纯逻辑） | `cd apps/desktop/ui && node --test src/filtering.test.ts`（Node ≥ 22.18 的类型擦除直接跑 TS，仓库未装 vitest；**新增显示层纯逻辑用例按这个形态落**，写法见 `docs/testing.md` §9） |
 | 前端 dev server | `npm --prefix apps/desktop/ui run dev`（仅热重载开发需要；独立产物已内嵌前端，不需要它） |
 | 桌面端运行 | `cargo run -p danmubox-desktop` |
 | Android 环境（导入） | `. scripts/android-env.sh`（**必须 source**，直接执行无效；导出全部指向仓库内 `.android-env/` 的变量） |

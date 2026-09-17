@@ -260,7 +260,8 @@ export function MessageRow({
             </span>
           )}
           {/* 礼物行始终显示数量（连击折叠后的次数）；其余类型不再有 ×N ——
-              「相似消息合并」已整条删除（P49），count > 1 只可能来自礼物连击。
+              「相似消息合并」已整条删除（P49），count > 1 因此只可能来自礼物**连击**折叠、
+              **低价礼物桶**（`ui.gift_collapse_cheap`，桶里是整桶合计）或弹幕**聚合**。
               它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。 */}
           {(count > 1 || message.kind === "gift") && (
             <span className={styles.merged} data-testid={t("count")}>

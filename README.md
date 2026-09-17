@@ -149,6 +149,7 @@ danmubox/
 | 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败）；`--emote <唯一键>` 发表情弹幕 |
 | 电池 / 关注 / 表情 / 房管（CLI） | `cargo run -p danmubox-cli -- wallet`、`follow`、`emotes <房间>`、`emotes-owned`、`admin-lists <房间>` | 逐项核对上游能力的只读入口；`admin-lists` 需房管身份 |
 | 全局参数 | `--config <路径>` | 以上任何子命令都接受，用于指定另一份 `config.toml`（调试 / 多环境并存） |
+| 前端单测 | `cd apps/desktop/ui && node --test src/filtering.test.ts` | 显示层纯逻辑（过滤 / 折叠 / 自动消失）的机制级单测；用 Node ≥ 22.18 的类型擦除直接跑 TS，不需要 vitest（见 [`docs/testing.md`](docs/testing.md) §9） |
 | 桌面端（独立产物） | `cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` | **推荐**：产出 `target/release/danmubox-desktop`，前端已内嵌，双击即用 |
 | 桌面端（开发热更新） | `npm --prefix apps/desktop/ui run dev` + `cargo run -p danmubox-desktop` | 仅开发时用；须先起 dev server，否则窗口空白（见 `docs/operations.md` §1.1） |
 | Android 环境（导入） | `. scripts/android-env.sh` | **必须 source**（直接执行无效）；导出 `JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME` / `RUSTUP_HOME` / `CARGO_HOME` / `GRADLE_USER_HOME` 等，全部指向仓库内 `.android-env/`（见 `docs/operations.md` §5.4） |

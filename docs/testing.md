@@ -34,7 +34,7 @@ graph TD
 
 目录约定（规划路径，本期为文档阶段不创建）：协议与适配器测试放 `crates/danmubox-bili/tests/`，二进制 fixture 放同级 `tests/fixtures/`；会话、本地文件与端口契约测试放 `crates/danmubox-core/tests/`；前端测试与被测文件同目录，命名 `*.test.ts` / `*.test.tsx`。
 
-现状（与上段规划的差距）：上述三个测试目录与前端的 `*.test.ts` 均尚未创建，已有 Rust 测试全部是各 `src/*.rs` 内的 `#[cfg(test)] mod tests`（`crates/danmubox-core/src/` 六个文件、`crates/danmubox-bili/src/` 十五个文件、`apps/desktop/src-tauri/src/lib.rs`）；已落地的端到端验证在 `apps/desktop/ui/smoke/`（`run-headless.mjs` + `room-page.mjs` + `fixtures/`，引擎门槛见 `AGENT.md` §9）。新增测试先按规划落位，在规划目录建立前按现有同文件内联写法。
+现状（与上段规划的差距）：上述三个测试目录与前端的 `*.test.ts` 均尚未创建，已有 Rust 测试全部是各 `src/*.rs` 内的 `#[cfg(test)] mod tests`（`crates/danmubox-core/src/` 六个文件、`crates/danmubox-bili/src/` 十五个文件、`apps/desktop/src-tauri/src/lib.rs`）；已落地的端到端验证在 `apps/desktop/ui/smoke/`（`run-headless.mjs` + `room-page.mjs` + `scenario/**` 的页内片段 + `fixtures/`；目录结构与「原块 → 文件」映射见 §9.1，引擎门槛见 `AGENT.md` §9）。新增测试先按规划落位，在规划目录建立前按现有同文件内联写法。
 
 ## 3. 协议层测试（`danmubox-bili`）
 
@@ -223,18 +223,56 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | F-06 | 发弹幕乐观更新与结果提示 | 模拟 `chat_send` 返回七种 `SendOutcome` | 成功时上游回播把权威字段换进**同一行**（节点不重建、看不出回播）；`blocked_platform` / `blocked_room` / `rate_limited` / `medal_required` / `muted` / `failed` 给出**可区分**的失败提示并可重试，被拒的那行**留在列表里**：正文划线 + 行尾写上游给的原因，草稿保留（乐观行本身与「别的客户端看到的我」渲染逐项相同，不留「发送中」那类中间态） |
 | F-07 | 徽标渲染 | 渲染主播 / 房管 / 大航海样本 | 主播由 `uid == Room.anchor_uid` 派生、房管取 `is_admin`、大航海按 `guard_level` 展示 |
 | F-08 | 礼物类消息的去向 | 切换 `ui.gift_in_danmaku` / `ui.gift_panel` 两枚开关的四种组合 | `ui.gift_in_danmaku` 开时礼物 / SC / 大航海混在弹幕流里；`ui.gift_panel` 开时这三类另进**与弹幕区上下分区**的独立礼物栏（一条一行、金额各组带单位，`ui.md` §5.4）；两枚都开是默认形态（同一批消息两处都渲染，`ui.md` §5） |
-| F-08.1 | 上下分区的比例与顺序 | 拖动分割条、长按换位、改 `ui.gift_pane_ratio` / `ui.gift_pane_on_top` | 拖动实时改两栏高度（拖动中不写 store，松手写一次）、长按 0.5s 换位、两枚键持久化并在重启后读回；最小高度双向生效（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头）；`ui.gift_panel` 关掉时退化为弹幕区全高、分割条消失（`ui.md` §5.4；无头冒烟同款断言见 `smoke/room-page.mjs` 的 `splitter*` / `swap*`） |
-| F-08.2 | 低价礼物（≤ 0.1 元）的折叠与统计剔除 | 勾上「辅助功能」里的「折叠低价礼物」/「剔除低价礼物统计」，**弹幕区与礼物栏两处**都放 0.09 / 0.10 / 0.11 元与没给价（`amount = 0`）四条礼物 | **两个区域**（弹幕区 + 礼物栏）各量一次：折叠让**两处**的低价礼物合成一条（`×N` 与金额是整桶合计，弹幕区那一处不画金额格），折叠头的统计逐字不变；剔除只改**折叠头**的「礼物 / SC（N）」与三组明细（统计面只有这一处），**两处的行都不动**；边界：0.09 / 0.10 算低价、0.11 与 0 不算；SC 与大航海不受两枚开关影响；两枚默认都关且持久化（`ui.md` §5.3、`contract.md` §8；无头冒烟同款断言见 `smoke/room-page.mjs` 的 `cheapGift*` 与 `switchScope*`，单测见 `src/filtering.test.ts`） |
+| F-08.1 | 上下分区的比例与顺序 | 拖动分割条、长按换位、改 `ui.gift_pane_ratio` / `ui.gift_pane_on_top` | 拖动实时改两栏高度（拖动中不写 store，松手写一次）、长按 0.5s 换位、两枚键持久化并在重启后读回；最小高度双向生效（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头）；`ui.gift_panel` 关掉时退化为弹幕区全高、分割条消失（`ui.md` §5.4；无头冒烟同款断言见 `smoke/scenario/parts/34-split-panes.mjs` 的 `splitter*` / `swap*`） |
+| F-08.2 | 低价礼物（≤ 0.1 元）的折叠与统计剔除 | 勾上「辅助功能」里的「折叠低价礼物」/「剔除低价礼物统计」，**弹幕区与礼物栏两处**都放 0.09 / 0.10 / 0.11 元与没给价（`amount = 0`）四条礼物 | **两个区域**（弹幕区 + 礼物栏）各量一次：折叠让**两处**的低价礼物合成一条（`×N` 与金额是整桶合计，弹幕区那一处不画金额格），折叠头的统计逐字不变；剔除只改**折叠头**的「礼物 / SC（N）」与三组明细（统计面只有这一处），**两处的行都不动**；边界：0.09 / 0.10 算低价、0.11 与 0 不算；SC 与大航海不受两枚开关影响；两枚默认都关且持久化（`ui.md` §5.3、`contract.md` §8；无头冒烟同款断言见 `smoke/scenario/parts/35-cheap-gift.mjs` 的 `cheapGift*` 与 `switchScope*`，单测见 `src/filtering.test.ts`） |
 | F-08.3 | **剔除 / 折叠 / 隐藏 / 自动消失都不丢内容、开关关掉即复原**（issue 2609171849 第 5 条） | ① 折叠开着时关掉它：**两个区域**各自逐条回来；② 剔除开着时关掉它：统计串逐字回来；③ 关掉 `ui.interact_auto_hide`：早先「消失」的互动行原样回来，再打开又不见；④ 关掉 `ui.gift_panel` / `ui.gift_in_danmaku`：被藏起来的那一批整批回来 | 这四种机制**都只是显示层的派生**——原始消息始终留在会话缓冲里（只受契约 §4.3 的上限约束），不得因它们提前消失。关掉后顺序、数量、金额与统计串逐项与开之前相同（`ui.md` §5.3「不丢内容 / 可逆」与 §4.8；单测 `src/filtering.test.ts` 第 2/3/5 条，冒烟 `switchScope*`） |
 | F-09 | 刷新按钮 | 在房间内点击「刷新」 | 发出 `rooms_reconnect`；已渲染的当前会话消息不被清空 |
 | F-10 | 空态 / 错误态 / 未登录态 | 渲染三种状态 | 各自展示对应提示；未登录时发弹幕入口被禁用并提示登录 |
 | F-11 | IPC 订阅生命周期 | 挂载、卸载组件并反复切房间 | 解绑后不再收到事件，监听器数量回到基线（无泄漏） |
 
-### 9.1 房间页无头冒烟的夹具出处（`apps/desktop/ui/smoke/fixtures/`）
+### 9.1 房间页无头冒烟的目录结构与夹具出处（`apps/desktop/ui/smoke/`）
 
-无头冒烟（`smoke/run-headless.mjs` + `smoke/room-page.mjs`，跑法见 [`ui.md`](ui.md) §15）用的夹具分两类，
+无头冒烟（入口 `smoke/run-headless.mjs`，跑法见 [`ui.md`](ui.md) §15）用的夹具分两类，
 **每一份都必须在文件头的 `_note` / `sources` 里写明自己是哪一类**——夹具是「能失败」的前提，
 出处不明的夹具等于把真实故障藏起来（`AGENT.md` §8 第 7 条）。
+
+**场景的目录结构（2026-09-17 拆分）**：此前整个场景是 `smoke/room-page.mjs` 里的**一个模板字符串**
+（文件 7293 行，是全仓最大的单个文件；页内 979 项读数 = 一次宽屏快照的项数）。现在拆成
+「按主题的多个片段 + 一个薄组装器」：
+
+| 文件 | 作用 |
+|---|---|
+| `smoke/room-page.mjs` | **薄组装器 / 运行器**：拼出页内脚本；里面的 `BLOCKS` 有序清单就是运行顺序（顺序即语义） |
+| `smoke/scenario/fixtures.mjs` | Node 侧：夹具 → 页内数据（**唯一**读 `smoke/fixtures/*.json` 的地方），序列化成页内的 `__SMOKE_DATA` |
+| `smoke/scenario/parts/00-mock.mjs` | 页内 IPC 替身（`__TAURI_INTERNALS__`）与测试钩子（`__emit` / `__mk` / `__addRoom*` …） |
+| `smoke/scenario/parts/10-harness.mjs` | 页内共享工具（`out` / `snap` / `byTestId` / `sleep` / `pressKey` …） |
+| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（下表），**按文件名升序**依次执行 |
+| `smoke/scenario/parts/90-epilogue.mjs` | 页内收尾（把 `run` 命令接上 `window.__smoke_run`） |
+
+各 part 是**页内脚本的原文**（不是模板字符串里的字符串）：组装器 `readFileSync` 读出后原样拼接，所以
+片段里写反引号 / 反斜杠 / `${` 都与浏览器里一致 —— **不要**把它们塞回模板字符串（§9.3 的两个坑正是从那来的）。
+
+原块 → 新文件（主题边界照现场的块切；左列是拆分前的块名；`out.*` 前缀与快照字段名一字未动）：
+
+| 新文件 | 原块 |
+|---|---|
+| `20-room-list.mjs` | `step1` / `follow` / `theme` / 主页边距 / 未开播取样 / 关注项排布与分页 |
+| `21-room-header.mjs` | `step2` / `step3` / 房间头 / 状态点三态 / 图标规范 / 标题循环滚动 / 电池 / `layout` 的贴底与头像列 |
+| `22-danmaku-rows.mjs` | `layout` 的弹幕行部分：排版取证 / 长 ASCII 串 / 表情渲染盒 / ＠ 高亮 / 身份行 / 悬挂缩进 / 头像 / 尺度 / 颜色 |
+| `23-panels-layout.mjs` | 工具行 / 文档不滚动 / 面板只挤列表 / 表情面板（tab 轨道、行数、溢出、权限、切 tab 不关面板）/ 面板收起后跟随仍活 |
+| `24-composer-send.mjs` | 发送失败浮片 / 乐观渲染与回执校验 / 粉丝牌只在亮着时画 |
+| `25-aggregate-jump.mjs` | 弹幕聚合 / 面板展开不弹走阅读位置 / 「回到最新」图标 / 我的表情 |
+| `26-shortcuts-limits.mjs` | 点一下发 / 右键菜单 / `mention` / `limit` / `ime` / 超时兜底 / `time` 时间戳默认关 |
+| `27-filter-panel.mjs` | `filter` 两块两列清单 / 六枚辅助开关 / 标题层级 / 字号滑杆 / 对比度 / 时间戳位置 / `step4` `step5` `step6` |
+| `28-gift-dock.mjs` | `gift` 礼物类去向 / 礼物栏一条一行与金额 / SC 卡片 / 礼物区与弹幕区同款 / 选中态全宽 / 分界线 / 两枚开关四组合 |
+| `29-phrases-tabs.mjs` | 短语面板 / 断开与刷新连接 / `tabs` 多标签隔离 |
+| `30-immersive.mjs` | 沉浸模式 |
+| `31-admin.mjs` | `admin` / `panels` 五面板互斥 |
+| `32-top-scroll-account.mjs` | 滚到顶部不被头部压住 / `account` 账号区与账号对话框 |
+| `33-room-tabs.mjs` | 标签条：主播名与圆点 / 拖动排序 / 横向滚动 / 不画滚动条 |
+| `34-split-panes.mjs` | `splitter` 分割条与长按换位 |
+| `35-cheap-gift.mjs` | `cheapgift` / `switchscope` 两枚低价礼物开关 |
+| `36-status-poll.mjs` | 开播 / 下播状态自动更新（实时事件 + 列表页周期） |
 
 | 夹具 | 出处 | 覆盖什么 |
 |---|---|---|
@@ -256,7 +294,7 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 
 | 规矩 | 内容 | 落点 |
 |---|---|---|
-| ① **子 agent 不跑冒烟** | 全量无头冒烟由**主流程**在集成收尾时统一跑一次；子 agent 只跑**不启浏览器**的秒级闸（`npx tsc -b` / `npm run build` / `node --check` / `run-headless.mjs --precheck`）与自己改动相关的机制级验证，并在交付里**明写「冒烟未跑」** | `AGENT.md` §9 DoD 的前两条；`docs/ui.md` §15 运行纪律第 2 条 |
+| ① **子 agent 不跑冒烟** | 全量无头冒烟由**主流程**在集成收尾时统一跑一次；子 agent 只跑**不启浏览器**的秒级闸（`npx tsc -b` / `npm run build` / `node smoke/run-headless.mjs --precheck` —— 预检里面已逐份做过 `node --check`，见 §9.1）与自己改动相关的机制级验证，并在交付里**明写「冒烟未跑」** | `AGENT.md` §9 DoD 的前两条；`docs/ui.md` §15 运行纪律第 2 条 |
 | ② **冒烟不再串行** | 每个 agent 各起**独立**无头浏览器、并行跑，不抢锁（旧的「同一台机上必须串行」**作废**） | `docs/ui.md` §15 运行纪律第 1 条 |
 | ③ **产物来源标记** | 被当作证据的产物必须能自证「属于本次运行」——见下表 | `docs/ui.md` §15 运行纪律第 3 条 |
 | ④ **每 worktree 本地 `target`** | `CARGO_TARGET_DIR=$PWD/target`，**不得共享**（共享会让不同 worktree 的构建产物互相覆盖 → 假绿 / 假红） | `AGENT.md` §3 / §9；`docs/ui.md` §15 运行纪律第 7 条 |
@@ -275,7 +313,7 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 
 ### 9.3 新增断言块的写法（工程约定）
 
-改 `smoke/room-page.mjs` 时,新增或改动的断言块必须满足三条 —— 它们是**准入条件**,不是风格偏好:
+改冒烟场景时（`smoke/scenario/parts/**` 里任一主题块）,新增或改动的断言块必须满足三条 —— 它们是**准入条件**,不是风格偏好:
 
 | 条 | 要求 | 为什么 |
 |---|---|---|
@@ -285,7 +323,7 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 
 > 反例(本项目实测过的两种):把「点了没反应」写成块级 `throw`(整场带走);把「前提是 A 页」写成隐式假定(块恒假)。两种都会让一份**完全正确**的实现显示成红。
 
-> **两个实测坑（2026-09-17，同一天各有票踩到）**：① `room-page.mjs` **整个活在模板串里** —— 在注释里写**反引号**会让模板串提前收尾、`node --check` 当场报语法错（三个票各自踩了一次）；② 新增块**自己把状态摆正**再量（要列表页就先进列表页、要某个房间就先进那个房间、要滚到底就先滚），别依赖上一块的收尾 —— 上一块换写法时，你这段会**静默恒假**。
+> **两个实测坑（2026-09-17，同一天各有票踩到）**：① 场景块**自己把状态摆正**再量（要列表页就先进列表页、要某个房间就先进那个房间、要滚到底就先滚），别依赖上一块的收尾 —— 上一块换写法时，你这段会**静默恒假**；② 当日另有三个票被「整场塞进模板串」咬到（注释里的**反引号**让模板串提前收尾）—— 这一条已随 2026-09-17 的拆分消失：场景块现在是 `smoke/scenario/parts/**` 里的**页内脚本原文**，由 `smoke/room-page.mjs` 原样拼接，反引号 / 反斜杠 / `${` 都照原样进页面（文件头的注释也终于能正常写反引号了）。
 
 ## 10. 三端手工冒烟清单
 
@@ -380,7 +418,7 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 
 工具链本身也可无痕清除后再重建（`scripts/android-env.sh clean` / `bootstrap`，见 [`operations.md`](operations.md) §5.12），因此「换一台开发机重来一遍」这件事不需要真机即可走完到 A-1。
 
-**本轮日志审计登记的两条遗留（均未修、也还没开票，写在 `CHANGELOG.md` 的 Unreleased 里）**：
+**本轮日志审计登记的两条遗留（均未修、也还没开票，写在 `CHANGELOG.md` 的 `[0.2.0]` 里）**：
 
 | 遗留 | 现象与证据 | 状态 |
 |---|---|---|

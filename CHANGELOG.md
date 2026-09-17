@@ -362,6 +362,30 @@
 
 ### Added
 
+- **CI 出 Windows 产物**（2026-09-17；分支 `chore/ci-windows-artifact`，提交 `5c54c2e` / `ec8c3f7`；run `35213437486` **三个 job 全绿**）。
+  `.github/workflows/ci.yml` 新增 `artifacts-windows` job（跑在 **`windows-latest`**，触发口径与 `artifacts` 相同：仅 `workflow_dispatch` 与 `v*` tag），
+  出并上传**三个**文件到产物 `danmubox-windows`：免安装 `danmubox-desktop.exe`（**16,434,176 字节**，PE32+ x86-64 GUI）、
+  NSIS 安装器 `danmubox_0.1.0_x64-setup.exe`（**3,896,645 字节**，PE32 GUI / Nullsoft Installer）、
+  MSI `danmubox_0.1.0_x64_en-US.msi`（**5,816,320 字节**，OLE 复合文档）。名字 / 字节数 / 类型是把产物从 run 里 `gh run download` 下来后
+  用 `stat` + `file` 读的；`tauri build` 结束时也报了 `Finished 2 bundles`（NSIS 与 MSI 都真的产出了）。
+  「出 Windows 产物」一步耗时 **18m19s**（11:01:21Z→11:19:40Z）：Rust release 编译 **17m42s**（冷缓存 —— 该 job 与 `artifacts` 同口径，只缓存 registry 不缓存 `target`），
+  之后 NSIS `nsis-3.11` 与 WiX `wix314` 都是**打包时现场下载**，再跑 `makensis` 与 `candle`+`light`。
+  **两条踩过的坑**（首次真跑 run `35211873761` 的失败与根因 —— `artifacts-windows` 挂在**编译期**，不是打包器）：
+  ① `tauri-build` 生成 Windows 资源（winres）时找不到 `.ico` 直接中断编译，原文
+  `` `icons/icon.ico` not found; required for generating a Windows Resource file during tauri-build ``（外套 `error: failed to run custom build command for danmubox-desktop`，
+  `build-script-build` exit code 1）—— 故新增 `apps/desktop/src-tauri/icons/icon.ico`（6312 字节，用 `tauri icon` 从既有的 `icons/icon.png` 生成，含 16/24/32/48/64/256 六个尺寸）；
+  ② MSI（WiX）要求 `bundle.icon` 列表里能找到 `.ico` —— tauri-cli 把 bundler 的 `windows.iconPath` 置成空 PathBuf（`crates/tauri-cli/src/interface/rust.rs`），
+  只能回落到该列表，空列表会报 `Couldn't find a .ico icon` —— 故构建命令追加 `--config '{"bundle":{"icon":["icons/icon.ico"]}}'`。
+  这个覆盖**只作用于 Windows 那一条命令**：共享的 `tauri.conf.json` 里 `bundle.icon = []` 一字未动（macOS 出 dmg 依赖它，见 `docs/operations.md` §5.3）。
+  同一批纠正一处**文档错**：§5.3 的 Windows 段原写 `tauri build`「默认同时产出 msi 与 nsis」，但 `bundle.active = false` 时不给 `--bundles`
+  **根本不进打包阶段**（tauri-cli 的判据是 `config.bundle.active || options.bundles.is_some()`，按上游 2.11.4 源码核对），
+  已按实测命令改写，并写明「本机是 macOS，出不了 Windows 包，Windows 产物只有 CI 这条出口」。
+  **未验证**（本机是 macOS，装不了也跑不了 Windows 包）：产物**没有在任何真 Windows 上装过 / 启动过 / 卸载过**；
+  安装器是否需要联网装 WebView2、SmartScreen 拦截行为、`%APPDATA%\danmubox\` 的权限等价性，以及打 tag 那条触发路径 ——
+  即 `docs/testing.md` §10.3 的 W-1~W-4 **全部未验**；产物未做代码签名。
+  文档落点：`docs/operations.md` §5.3（Windows 段按实测重写）、§5.4（Windows 前置缺口标注「出包已由 CI 绕开」）、§5.13（三个 job / 产物表 / 本机口径 / 验证表）、
+  `docs/roadmap.md` §1 与 §2.2、`README.md` §3、`docs/requests.md` E16（证据列补这次真跑）。
+
 - **Android 端开工：可出包、可安装、可启动**（用户 2026-09-15；分支 `feat/android-mobile`，提交 `0e1bde6` / `40152e0` / `a71c5a3` / `62ea667`）。交付物三块：
   ① **仓库内工具链**（见下一条）；② **`apps/desktop/src-tauri/gen/android/**` 入库**（40 个文件，属长期维护的源码；根 `.gitignore` 从「忽略整个 `gen/`」改成只忽略 `gen/schemas/`）；③ **自用 release 签名**——`gen/android/keystore.jks` + `keystore.properties`（两者都被 `gen/android/.gitignore` 忽略，**不在 `.android-env/` 内**，`clean` 删不到；缺 `keystore.properties` 时退回未签名构建，产物名带 `-unsigned`）。
   出包命令：`. scripts/android-env.sh` + `cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci`（分 ABI 再加 `--split-per-abi`）；产物 `gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（实测 52 MB，四个 ABI）与 `apk/<arm64|arm|x86|x86_64>/release/app-<abi>-release.apk`。

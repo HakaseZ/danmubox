@@ -585,19 +585,40 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
 
 #### Windows
 
+**开发机是 macOS，本机出不了 Windows 包**（`x86_64-pc-windows-msvc` 要 Windows 上的 MSVC 工具链；
+交叉到 `-gnu` 是另一条路，本仓库不采用）。因此 Windows 产物**只有 CI 一条出口**：`artifacts-windows` job
+（`windows-latest`，触发口径见 §5.13）。下面是那条 job 里逐字在跑的命令（2026-09-17 run `35213437486` 实测出包）：
+
 ```bash
-cd apps/desktop && ./ui/node_modules/.bin/tauri build                       # 默认同时产出 msi 与 nsis
-cd apps/desktop && ./ui/node_modules/.bin/tauri build --target x86_64-pc-windows-msvc   # 显式 64 位
+cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
+  --config '{"bundle":{"icon":["icons/icon.ico"]}}'
 ```
 
-| 产物 | 路径 |
-|---|---|
-| WiX MSI | `<target-dir>/release/bundle/msi/danmubox_0.1.0_x64_en-US.msi` |
-| NSIS 安装器 | `<target-dir>/release/bundle/nsis/danmubox_0.1.0_x64-setup.exe` |
+| 产物 | 路径 | 实测（2026-09-17，run `35213437486`） |
+|---|---|---|
+| 独立可执行（免安装） | `<target-dir>/release/danmubox-desktop.exe` | 16,434,176 字节，PE32+ x86-64 GUI |
+| NSIS 安装器 | `<target-dir>/release/bundle/nsis/danmubox_0.1.0_x64-setup.exe` | 3,896,645 字节，PE32 GUI（Nullsoft Installer） |
+| WiX MSI | `<target-dir>/release/bundle/msi/danmubox_0.1.0_x64_en-US.msi` | 5,816,320 字节，OLE 复合文档 |
 
-- `.msi` **只能在 Windows 上构建**（WiX 仅支持 Windows）；NSIS 可在其他平台交叉构建，但属「最后手段」，本仓库不采用。
-- 自用只保留 NSIS 安装器与免安装可执行文件即可；MSI 留一份作为备用安装路径。
-- 首次安装后从「应用和功能」可正常卸载（见 §4）。
+- **`--bundles` 不能省**：`tauri.conf.json` 里 `bundle.active = false`，而 tauri-cli 只在
+  `config.bundle.active || 命令行给了 --bundles` 时才进打包阶段（`tauri-cli/src/build.rs`），
+  所以**光写 `tauri build` 一个安装器都不出**。本节此前写成「默认同时产出 msi 与 nsis」是错的 ——
+  那种默认只在模板工程 `bundle.active = true` 时成立（此条据上游源码 2.11.4 核对，非本仓库实测）。
+- **`.ico` 也是必需的**（新增于本批）。Windows 侧有两处硬要求：① 编译期 `tauri-build` 生成 Windows 资源
+  （winres）时找不到 `.ico` 就中断编译（首次真跑 run `35211873761` 就死在这里，原文：
+  `` `icons/icon.ico` not found; required for generating a Windows Resource file during tauri-build ``）；
+  ② 打包期 MSI（WiX）要求 `bundle.icon` 列表里能找到 `.ico` —— tauri-cli 把 bundler 的 `windows.iconPath`
+  置成空 PathBuf，只能回落到这个列表，空列表会报 `Couldn't find a .ico icon`。
+  为此 `apps/desktop/src-tauri/icons/icon.ico` 入库（6312 字节，`tauri icon` 从既有的 `icons/icon.png` 生成，
+  含 16/24/32/48/64/256 六个尺寸），并用 `--config` 只覆盖 Windows 这一次调用 ——
+  共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动（§5.3 的 macOS 段依赖它）。
+  NSIS 那条路径不读它：安装器图标取自 exe 内嵌的那枚。
+- `--target x86_64-pc-windows-msvc` 是显式指 64 位；在 x86_64 的 Windows 上本就是默认（本轮未单独实测）。
+- `.msi` **只能在 Windows 上构建**（WiX 仅支持 Windows）；NSIS 官方称可在其他平台交叉构建，本仓库不采用。
+- 自用只保留 NSIS 安装器与免安装 exe，MSI 留一份作备用安装路径。
+- **装机与运行全部未验**：上面三个文件都是 runner 上的构建产物，**没有在任何真 Windows 上装过 / 启动过**。
+  首次安装后能否从「应用和功能」正常卸载（§4）、安装器是否需要联网装 WebView2、SmartScreen 拦截行为，
+  见 §5.6 与 [`testing.md`](testing.md) §10.3 的 W-1~W-4（仍未验）。产物未做代码签名（口径同 §5.6）。
 
 #### Android
 
@@ -691,6 +712,8 @@ Windows 端属独立工程，开工前先补齐（2026-09-12 本机核查）：
 | Windows | `x86_64-pc-windows-msvc`（或 `-gnu`）target 与对应的链接器 / 工具链（macOS 无法交叉编译） | — |
 
 Android 端这段缺口已在 2026-09-15 关闭：工具链由 `scripts/android-env.sh bootstrap` 装进仓库，出包、装进模拟器与启动均已实测（§5.3）。
+
+Windows 端这段缺口**在本机仍然存在**（开发机是 macOS，装不了 MSVC 工具链；`windows-latest` 则自带），但**出包这条路已于 2026-09-17 绕开**：改走 CI 的 `artifacts-windows` job。产物与实测见 §5.3 与 §5.13。
 
 ### 5.5 macOS 本地运行与签名策略
 
@@ -857,14 +880,15 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 ### 5.13 GitHub Actions CI（`.github/workflows/ci.yml`）
 
-仓库只有这一套 CI，两个 job，都跑在 **`macos-14`（Apple Silicon）** 上：与开发机同平台 —— `check` 不必在 Linux 上另补 WebKitGTK 那一套系统依赖，命令与 [`../AGENT.md`](../AGENT.md) §3 的本机口径完全一致；`artifacts` 产出的也就天然是 arm64 产物。
+仓库只有这一套 CI，**三个 job**：`check` 与 `artifacts` 跑在 **`macos-14`（Apple Silicon）**，与开发机同平台 —— `check` 不必在 Linux 上另补 WebKitGTK 那一套系统依赖，命令与 [`../AGENT.md`](../AGENT.md) §3 的本机口径完全一致；`artifacts` 产出的也就天然是 arm64 产物。`artifacts-windows` 则是**唯一**的 Windows 出口，跑在 `windows-latest`（开发机是 macOS，本机出不了 Windows 包，见 §5.3 的 Windows 段）。
 
 | job | 做什么 | 触发 |
 |---|---|---|
 | `check` | `rustup component add rustfmt clippy` → `npm ci` → `npm run build`（= `tsc -b && vite build`）→ `cargo fmt --all -- --check`（**存量不通过，仅报告不拦**，见 [`../AGENT.md`](../AGENT.md) §9）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` | push 到 `main`、任何 `pull_request`、手动 `workflow_dispatch` |
-| `artifacts` | 出**两个**产物并上传：① macOS `tauri build --bundles dmg` → `.dmg`；② Android `tauri android build --apk --ci` → **已签名的** release APK | 仅 `workflow_dispatch` 与 `v*` tag（每次 push 都出包太贵） |
+| `artifacts` | 出**两个**产物并上传：① macOS `tauri build --bundles dmg` → `.dmg`；② Android `tauri android build --apk --ci` → **已签名的** release APK。跑在 `macos-14` | 仅 `workflow_dispatch` 与 `v*` tag（每次 push 都出包太贵） |
+| `artifacts-windows` | 出**三个**产物并上传：`tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'` → 免安装 `.exe` + NSIS 安装器 + MSI。跑在 `windows-latest`；命令与产物口径见 §5.3 的 Windows 段 | 与 `artifacts` 同口径（仅 `workflow_dispatch` 与 `v*` tag） |
 
-缓存：`check` 缓存 `~/.cargo/registry`、`~/.cargo/git` 与 `target/`（键含 `Cargo.lock` 哈希）；两个 job 都用 `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`）。`artifacts` **不缓存** Gradle 与 release `target`：Gradle 依赖缓存近 GB 级、恢复比重新下载还慢，release `target` 还要乘上四个 ABI，收益为负；该 job 本来就只在手动 / 打 tag 时跑。
+缓存：`check` 缓存 `~/.cargo/registry`、`~/.cargo/git` 与 `target/`（键含 `Cargo.lock` 哈希）；三个 job 都用 `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`）。`artifacts` **不缓存** Gradle 与 release `target`：Gradle 依赖缓存近 GB 级、恢复比重新下载还慢，release `target` 还要乘上四个 ABI，收益为负；该 job 本来就只在手动 / 打 tag 时跑。`artifacts-windows` 同理**只缓存 registry 不缓存 `target`**，代价是每次冷编译一遍 release（实测 17m42s）。
 
 #### 手动触发与取产物
 
@@ -874,12 +898,13 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 |---|---|---|
 | `danmubox-macos-dmg` | `danmubox_0.1.0_aarch64.dmg` | `target/release/bundle/dmg/*.dmg` |
 | `danmubox-android-apk` | `app-universal-release.apk`（四个 ABI 的通用包） | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk` |
+| `danmubox-windows` | 三个文件：`danmubox-desktop.exe`（免安装）+ `danmubox_0.1.0_x64-setup.exe`（NSIS 安装器）+ `danmubox_0.1.0_x64_en-US.msi` | `target/release/danmubox-desktop.exe`、`target/release/bundle/nsis/*.exe`、`target/release/bundle/msi/*.msi` |
 
 产物保留期用仓库默认（公开仓库 90 天），过期即失效，要长期留存就自己下下来。
 
-#### 在本机出同样两个产物
+#### 在本机出同样两个产物（macOS / Android）
 
-就是 §5.3 里那两条命令（CI 用的也是它们）：
+就是 §5.3 里那两条命令（CI 用的也是它们）。**Windows 不在这一节**：本机是 macOS，出不了 Windows 包，它的产物只在 CI 的 `artifacts-windows` job 上生成（§5.3 的 Windows 段）。
 
 ```bash
 # ① macOS .dmg（bundle.active=false 靠 --bundles 覆盖；不需要应用图标）
@@ -919,7 +944,8 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 | `npm ci` / `npm run build` / 三条 Rust 命令 / `tauri build --bundles dmg` | **本机实测过**，产物路径即上文与 §5.3（`cargo fmt` 的不通过属存量，见 [`../AGENT.md`](../AGENT.md) §9） |
 | `tauri android build --apk --ci` | **本机干净 worktree 上真跑完过**（rc=0；`npm ci` 22 秒 + 构建，合计 381 秒；四个 ABI 全部编出，产物 `…/apk/universal/release/app-universal-release-unsigned.apk`）。那份 worktree 没有本地 keystore，所以是**未签名**产物；CI 里先造一次性 `keystore.properties`，产物名是 `app-universal-release.apk`（上传用的是 `*/release/*.apk` 通配，两种命名都覆盖） |
 | Android 工具链在 **runner 上**的安装 | **已实测（2026-09-21，run `35108747297`）**：首次真跑暴露出 `android-actions/setup-android@v3` 会去装上游早已下架的 `tools` 包（`Failed to find package 'tools'` → job 失败），**已改成自取 cmdline-tools**（同版本同 URL 解压成 `cmdline-tools/latest`，再用 `sdkmanager` 装 `platform-tools` / `platforms/android-36` / `build-tools/35.0.0` / `ndk/27.0.12077973`），复跑该 job 全步骤 success 并上传了两个产物 |
-| CI 工作流本身 | **已真跑**：`check` job 在 PR 与 push 上多次 success（冷缓存 3m43s / 热缓存 53s–1m30s）；`artifacts` job 手动触发两次 —— 第一次抓到 setup-android 的失败，修好后第二次全步骤 success 并上传 `danmubox-macos-dmg` / `danmubox-android-apk` |
+| Windows 产物（`artifacts-windows`） | **已真跑（2026-09-17，run `35213437486`）**：三个 job 全绿，「出 Windows 产物」一步 **18m19s**（11:01:21Z→11:19:40Z）—— 其中 Rust release 编译 17m42s（冷缓存），NSIS `nsis-3.11` 与 WiX `wix314` 都是打包时现场下载后跑 `makensis` / `candle`+`light`，结束时 `Finished 2 bundles`；上传三个文件（名 / 字节数 / 类型见 §5.3）。**未验**：真机安装 / 启动 / 卸载、WebView2 是否需联网、SmartScreen —— 即 [`testing.md`](testing.md) §10.3 的 W-1~W-4 |
+| CI 工作流本身 | **已真跑**：`check` job 在 PR 与 push 上多次 success（冷缓存 3m43s / 热缓存 53s–1m30s）；`artifacts` job 手动触发两次 —— 第一次抓到 setup-android 的失败，修好后第二次全步骤 success 并上传 `danmubox-macos-dmg` / `danmubox-android-apk`；`artifacts-windows` 手动触发两次 —— 第一次（run `35211873761`）死在编译期缺 `icons/icon.ico`，补上该文件与 `--config` 覆盖后第二次（run `35213437486`）**三个 job 全绿**（该 run 全程 24m32s：`check` 1.2m、`artifacts-windows` 20.2m、`artifacts` 24.3m） |
 
 ---
 

@@ -25,10 +25,10 @@
 // `--precheck [file]`：只跑**起浏览器之前的两道闸门**（① `node --check` ② 每个主题各构造一次
 // HTML），不起浏览器；不给文件就检查本运行器要跑的那个场景文件。
 //
-// **改过 `room-page.mjs` 就必须重跑那两道闸门**（规则见 `AGENT.md` §9）：那个文件里有几百行注释
-// 活在**模板字符串内部**，未转义的反引号在那里**不是语法错** —— 模板提前收尾，后面那截文本会变成
-// 合法的表达式，`node --check` 照样通过，只有求值到那一行才炸（2026-09-13 连炸两次）；同理模板串里的
-// **反斜杠会被吃掉**（`/rgba?\(/` 求值后是 `/rgba?((/`），所以正则不要写在模板字符串里。
+// **改过场景文件就必须重跑预检**（规则见 `AGENT.md` §9）：场景本体现在是 `smoke/scenario/parts/` 里
+// 若干份**页内脚本原文**（由 `room-page.mjs` 拼接），「整场塞进模板字符串」的转义坑随之消失
+// （2026-09-13 连炸两次：反引号让模板提前收尾、反斜杠被模板吃掉）。预检三道全在起浏览器之前：
+// 组装器 + 每份片段的语法、每个主题各构造一次 HTML、再把拼出来的内联脚本编译一遍（报错折算回源文件）。
 // 换 Chrome：CHROME_BIN=/path/to/chrome node smoke/run-headless.mjs
 // 截图目录：SMOKE_SHOT_DIR（默认系统临时目录）。两个引擎要指到**不同**目录，否则同名截图互相覆盖。
 
@@ -607,12 +607,13 @@ if (snapshotFlag >= 0) {
 
 /* ------------------------------ 起浏览器之前的**三道闸门**（规则见 AGENT.md §9；理由见文件头）
 
-   ① 语法：`node --check`；② **构造**：每个主题各把 HTML 真的求值一遍；
+   ① 语法：`node --check` —— 组装器本体 + **每一份场景片段**（片段是页内函数体的原文，包一层函数再查）；
+   ② **构造**：每个主题各把 HTML 真的求值一遍；
    ③ 构造出来的页面里的**内联 mock 脚本**再编译一次（见 `precheckMockScript` 的说明）。
    三道都过才往下走；任一道不过就**带精确行号立刻退出** —— 一次浏览器启动都不必浪费。
-   `--precheck [file]` 只跑这三道（默认检查本运行器要跑的那个场景文件）。 */
+   `--precheck [file]` 只跑这三道（默认检查本运行器要跑的那个场景入口 `room-page.mjs`）。 */
 
-/** 本运行器要跑的场景文件：断言与 mock 都在这一个文件里。 */
+/** 本运行器要跑的场景入口：组装器 + 运行器；主题块在它旁边的 `scenario/parts/`。 */
 const SCENARIO_FILE = fileURLToPath(new URL("./room-page.mjs", import.meta.url));
 
 /**
@@ -624,23 +625,46 @@ function fatal(lines) {
   process.exit(2);
 }
 
-/** 两道闸门；返回 主题 → HTML（入口直接拿它写盘，不重复构造）。 */
-async function precheckScenario(file) {
+/** ① 语法闸门（单个文件）：`node --check`，失败即带 stderr 立刻退出。 */
+function checkFileSyntax(file, label) {
   try {
     execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "ignore", "pipe"] });
   } catch (error) {
     fatal([
-      `[smoke] ✗ 场景文件语法检查未通过（node --check ${file}）—— 不起浏览器，立刻退出：`,
+      `[smoke] ✗ ${label} 语法检查未通过（node --check ${file}）—— 不起浏览器，立刻退出：`,
       error.stderr?.toString() ?? String(error),
     ]);
   }
+}
 
-  // 模板起点：内联脚本里的第 1 行 = 模板的第 1 行 = 场景文件里这一行（用来把③的行号换算回去）
-  const templateStart = (() => {
-    const lines = readFileSync(file, "utf8").split(String.fromCharCode(10));
-    const index = lines.findIndex((line) => line.includes("const MOCK = (theme) =>"));
-    return index < 0 ? null : index + 1;
-  })();
+/**
+ * ① 语法闸门（场景片段）：逐份查。
+ * 片段是**页内函数体的原文**（里面有 `await` / `return`），单查语法要先包一层 async 函数。
+ *
+ * 为什么逐份查、而不是只查组装出来的那一整段：组装结果要等 ② 构造才出现，而 ① 的价值正是
+ * 「在构造之前把语法错误指到**具体哪一个文件**」—— 拆成十几份之后，只报「组装结果第 N 行」不够用
+ * （③ 会把组装结果的行号折算回源文件，两道各管一段）。
+ */
+function checkPartsSyntax(parts) {
+  if (parts.length === 0) return;
+  const dir = mkdtempSync(join(tmpdir(), "danmubox-parts-"));
+  try {
+    for (const part of parts) {
+      const target = join(dir, "part.js");
+      writeFileSync(
+        target,
+        "async function __smoke_part() {\n" + readFileSync(part.path, "utf8") + "}\n",
+      );
+      checkFileSyntax(target, `场景片段 ${part.name}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function precheckScenario(file) {
+  // ① 组装器本体先查（在 import 之前 —— 语法错误优先以「语法检查未通过」报出来）
+  checkFileSyntax(file, "场景入口");
 
   let scenario;
   try {
@@ -651,9 +675,15 @@ async function precheckScenario(file) {
       error?.stack ?? String(error),
     ]);
   }
+  // ① 再查各场景片段（只有我们的组装器会导出这份清单；`--precheck <别的文件>` 时为空）
+  const parts = typeof scenario.scenarioFiles === "function" ? scenario.scenarioFiles() : [];
+  checkPartsSyntax(parts);
+
   if (typeof scenario.buildSmokeHtml !== "function") {
     fatal([`[smoke] ✗ ${file} 没有导出 buildSmokeHtml —— 构造闸门无从谈起`]);
   }
+  const locate =
+    typeof scenario.locatePageScriptLine === "function" ? scenario.locatePageScriptLine : null;
 
   const built = new Map();
   for (const theme of THEMES) {
@@ -664,34 +694,36 @@ async function precheckScenario(file) {
       fatal([
         `[smoke] ✗ ${file} 过了 node --check，但构造 HTML（主题 ${theme}）时炸了 —— 不起浏览器，立刻退出：`,
         error?.stack ?? String(error),
-        "[smoke] （这类错的根因通常是模板字符串里未转义的反引号，或正则里的反斜杠被模板吃掉；" +
-          "产物没构建（npm run build）也会在这里报 ENOENT）",
+        "[smoke] （常见根因：scenario/parts 里多了一个没登记的片段 / 少了一个登记过的片段 ——" +
+          " 组装器会当场抛错；产物没构建（npm run build）也会在这里报 ENOENT）",
       ]);
     }
-    precheckMockScript(html, file, theme, templateStart);
+    precheckMockScript(html, file, theme, locate);
     built.set(theme, html);
   }
   log(
-    `✓ 预检通过：${file} 语法 OK，${THEMES.length} 个主题的 HTML 都构造出来了、` +
-      "里面的内联 mock 脚本也都能编译（未启浏览器）",
+    `✓ 预检通过：${file} + ${parts.length} 份场景片段语法 OK，${THEMES.length} 个主题的 HTML 都构造出来了、` +
+      "里面的内联脚本也都能编译（未启浏览器）",
   );
   return built;
 }
 
 /**
- * 第三道闸：把构造出来的页面里那段**内联 mock 脚本**再单独编译一次。
+ * 第三道闸：把构造出来的页面里那段**内联脚本**（mock + 全部场景块）再单独编译一次。
  *
- * 为什么非要它：前两道管不到这一类错 —— 场景代码整段活在模板字符串里，反斜杠转义是在
- * **求值模板时**才落地的：写一个换行转义会变成**真换行**、把字符串字面量当场掰断；
- * 而 `node --check` 只看场景文件本身（模板里的内容它一个字符都不看，只看得见「模板有没有提前收尾」）。
- * 2026-09-15 就是这么漏过去一条：两道闸门全绿，浏览器里却以「场景未跑完（超时）」的形式炸出来
- * （页面里那段脚本根本没跑起来，`__TAURI_INTERNALS__` 都没装上），白等 5 分钟。
+ * 为什么非要它：前两道只看**单个文件**，管不到「拼起来之后」的错 —— 片段是按行切出来的，
+ * 切错位置（例如把 `try {` 与它的 `catch` 切到两处、或把一个字符串切一半）在每一份片段里都合法，
+ * 拼起来才不合法。2026-09-15 就是这么漏过去一条（当时的原因是模板字符串吃掉了转义）：
+ * 两道闸门全绿，浏览器里却以「场景未跑完（超时）」的形式炸出来（页面里那段脚本根本没跑起来，
+ * `__TAURI_INTERNALS__` 都没装上），白等 5 分钟。
  *
- * 只取**不带 `type` 属性**的那个 `<script>`（= mock）；第二个是 `type="module"` 的应用产物，
+ * 只取**不带 `type` 属性**的那个 `<script>`（= 我们的页内脚本）；第二个是 `type="module"` 的应用产物，
  * 模块代码里有 `import.meta` 之类，塞不进 `new Function` 的编译目标。
  * 编译而不执行：这里要的只是「它还是一段合法 JS」。
+ *
+ * `locate` 由组装器给出（组装结果第 N 行 → 哪个片段第几行），所以报错行号能直接落到源文件上。
  */
-function precheckMockScript(html, file, theme, templateStart) {
+function precheckMockScript(html, file, theme, locate) {
   const match = /<script>([\s\S]*?)<\/script>/.exec(html);
   if (!match) {
     fatal([`[smoke] ✗ ${file} 构造出来的 HTML（主题 ${theme}）里找不到内联 mock 脚本`]);
@@ -704,13 +736,15 @@ function precheckMockScript(html, file, theme, templateStart) {
   } catch (error) {
     const raw = error.stderr?.toString() ?? String(error);
     const line = /:(\d+)[\s\S]*?SyntaxError/.exec(raw)?.[1];
-    const inScenario =
-      line && templateStart ? `（≈ 场景文件第 ${Number(line) + templateStart - 1} 行）` : "";
+    const where = line && locate ? locate(Number(line)) : null;
+    const inScenario = where
+      ? `（组装结果第 ${line} 行 = ${where.file} 第 ${where.line} 行）`
+      : "";
     fatal([
       `[smoke] ✗ ${file} 构造出来的内联脚本编译不过（主题 ${theme}）${inScenario} —— 不起浏览器，立刻退出：`,
       raw.trim(),
-      "[smoke] 常见根因：模板字符串里写了**反斜杠转义**（换行、制表、正则里的 \\d 等都会被模板吃掉）",
-      "[smoke] 或未转义的反引号；模板内部别写转义，改用 String.fromCharCode / 拼接。",
+      "[smoke] 常见根因：场景片段被从中间切开（片段单独看合法、拼起来不合法），或片段里写了未闭合的",
+      "[smoke] 字符串 / 正则 / 模板串。片段是**页内原文**、按行原样拼接，别把它塞回模板字符串。",
     ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });

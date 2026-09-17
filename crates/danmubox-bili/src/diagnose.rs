@@ -16,11 +16,7 @@ use danmubox_core::diagnose::{AttemptRecord, DiagSnapshot, ShellEnv, UtcParts};
 /// `secret_numbers` 是**本机已知的房间号 / 短号 / 主播 uid**：它们在日志里可能以
 /// `id=5440` 这种形态出现（`getDanmuInfo` 的查询串就是这个形状），键名白名单盖不住，
 /// 因此按「这些数字一律不许出现在文件里」逐值抹掉 —— 比再猜一套键名可靠。
-pub fn render_report(
-    snapshot: &DiagSnapshot,
-    env: &ShellEnv,
-    secret_numbers: &[i64],
-) -> String {
+pub fn render_report(snapshot: &DiagSnapshot, env: &ShellEnv, secret_numbers: &[i64]) -> String {
     let mut out = String::with_capacity(4096);
     out.push_str("danmubox 连接诊断报告\n");
     out.push_str("====================\n\n");
@@ -51,7 +47,10 @@ fn header(out: &mut String, snapshot: &DiagSnapshot, env: &ShellEnv) {
         blank(&env.app_version)
     ));
     out.push_str(&format!("渲染引擎：{}\n", blank(&env.engine)));
-    out.push_str(&format!("日志级别：DANMUBOX_LOG={}\n", blank(&env.log_level)));
+    out.push_str(&format!(
+        "日志级别：DANMUBOX_LOG={}\n",
+        blank(&env.log_level)
+    ));
     out.push('\n');
     out.push_str(
         "本文件由 danmubox 在本机生成，只包含连接诊断信息，应用不会自动发送任何数据。\n\
@@ -111,13 +110,19 @@ fn summary(out: &mut String, snapshot: &DiagSnapshot) {
         )),
         None => out.push_str("当前连接：本次进程里没有记录到任何连接尝试（还没进过房间）\n"),
     }
-    out.push_str(&format!("连接尝试：共 {} 次记录\n", snapshot.attempts.len()));
+    out.push_str(&format!(
+        "连接尝试：共 {} 次记录\n",
+        snapshot.attempts.len()
+    ));
     out.push_str(&format!(
         "未识别命令：本次采集期间 {} 种 / {} 次{}\n",
         snapshot.unknown_cmds.len(),
         snapshot.unknown_cmd_total(),
         if snapshot.unknown_dropped > 0 {
-            format!("（另有 {} 种超出名单上限，只计数）", snapshot.unknown_dropped)
+            format!(
+                "（另有 {} 种超出名单上限，只计数）",
+                snapshot.unknown_dropped
+            )
         } else {
             String::new()
         }
@@ -322,7 +327,11 @@ fn duration(ms: i64) -> String {
     if ms < 60_000 {
         return format!("{:.2} s", ms as f64 / 1_000.0);
     }
-    format!("{} 分 {:.0} 秒", ms / 60_000, (ms % 60_000) as f64 / 1_000.0)
+    format!(
+        "{} 分 {:.0} 秒",
+        ms / 60_000,
+        (ms % 60_000) as f64 / 1_000.0
+    )
 }
 
 /// 从尝试开始到某个阶段的耗时（阶段没发生就是 `未到达`）。
@@ -346,7 +355,11 @@ fn ticket(attempt: &AttemptRecord) -> String {
     match attempt.ticket_code {
         Some(code) => format!(
             "code={code}{}（{}）",
-            if code == 0 { "" } else { " ← 非 0 即被上游拒绝" },
+            if code == 0 {
+                ""
+            } else {
+                " ← 非 0 即被上游拒绝"
+            },
             took(attempt)
         ),
         None => "未完成".to_string(),
@@ -409,7 +422,11 @@ mod tests {
         attempt.inbound(1_000_651);
         attempt.inbound(1_030_000);
         attempt.business(1_031_000);
-        attempt.ended(1_372_400, "僵死：距上次入站帧 90000ms（阈值 90000ms）", true);
+        attempt.ended(
+            1_372_400,
+            "僵死：距上次入站帧 90000ms（阈值 90000ms）",
+            true,
+        );
         attempt.backoff(5_000, 0);
         diag.note_unknown_cmd(1_100_000, "NEW_CMD");
 
@@ -433,7 +450,10 @@ mod tests {
             "名单：NEW_CMD×1",
             "应用不会自动发送任何数据",
         ] {
-            assert!(report.contains(needle), "报告里缺少「{needle}」：\n{report}");
+            assert!(
+                report.contains(needle),
+                "报告里缺少「{needle}」：\n{report}"
+            );
         }
     }
 
@@ -468,12 +488,22 @@ mod tests {
         let diag = Diagnoser::new();
         let attempt = diag.begin_attempt(9_000_000);
         attempt.ticket_failed(9_000_400, "code=-352");
-        attempt.ended(9_000_400, "getDanmuInfo 失败: getDanmuInfo code=-352", false);
+        attempt.ended(
+            9_000_400,
+            "getDanmuInfo 失败: getDanmuInfo code=-352",
+            false,
+        );
 
         let report = render_report(&diag.snapshot(9_001_000), &env(), &[]);
 
-        assert!(report.contains("票据（getDanmuInfo）：失败：code=-352"), "{report}");
-        assert!(report.contains("code=-352「") || report.contains("code=-352"), "{report}");
+        assert!(
+            report.contains("票据（getDanmuInfo）：失败：code=-352"),
+            "{report}"
+        );
+        assert!(
+            report.contains("code=-352「") || report.contains("code=-352"),
+            "{report}"
+        );
         assert!(report.contains("认证包（op=7）发出：**未到达**") || report.contains("**未到达**"));
     }
 
@@ -491,7 +521,10 @@ mod tests {
 
         let report = render_report(&diag.snapshot(2_000), &env(), &[]);
 
-        assert!(report.contains("00:00:01.500 WARN  [danmubox_bili::ws]"), "{report}");
+        assert!(
+            report.contains("00:00:01.500 WARN  [danmubox_bili::ws]"),
+            "{report}"
+        );
         assert!(report.contains("判定连接僵死"), "{report}");
     }
 
@@ -513,12 +546,27 @@ mod tests {
             "danmubox_bili::http",
             "上游返回 DedeUserID=7654321; SESSDATA=deadbeef&bili_jct=cafe; uname=某主播",
         );
-        diag.log_line(1_200, "INFO", "danmubox::ui", "房间 5440 的弹幕已连接，+1.56 s 后收到首条");
+        diag.log_line(
+            1_200,
+            "INFO",
+            "danmubox::ui",
+            "房间 5440 的弹幕已连接，+1.56 s 后收到首条",
+        );
 
         let report = render_report(&diag.snapshot(2_000), &env(), &[5440]);
 
-        for secret in ["7654321", "deadbeef", "cafe", "某主播", "5440", "DedeUserID=7"] {
-            assert!(!report.contains(secret), "「{secret}」不该出现在报告里：\n{report}");
+        for secret in [
+            "7654321",
+            "deadbeef",
+            "cafe",
+            "某主播",
+            "5440",
+            "DedeUserID=7",
+        ] {
+            assert!(
+                !report.contains(secret),
+                "「{secret}」不该出现在报告里：\n{report}"
+            );
         }
         assert!(report.contains("id=***"), "房间号要变成占位符：\n{report}");
         assert!(report.contains("SESSDATA=***"));

@@ -74,9 +74,12 @@ fn is_value_end(ch: char) -> bool {
 ///   `gethistory?roomid=…` 被 `mid` 误伤）。
 /// - 同一位置命中多个键名时取**最长**的那个：`dedeuserid__ckmd5` 把 `dedeuserid` 包在里面，
 ///   `uids[]` 把 `uid` 包在里面。位置优先于长度，所以 `vmid=` 不会被里面的 `mid=` 抢走。
-fn next_secret_key(lowered: &str, from: usize, keys: &[&'static str]) -> Option<(usize, &'static str)> {
-    keys
-        .iter()
+fn next_secret_key(
+    lowered: &str,
+    from: usize,
+    keys: &[&'static str],
+) -> Option<(usize, &'static str)> {
+    keys.iter()
         .filter_map(|key| {
             let mut search = from;
             loop {
@@ -264,7 +267,10 @@ mod tests {
         // 测试房间 `1`（契约 §4.1 明记的例外），为它把「房间 1 未登记」这类文案里的 `1`
         // 抹掉，就会连 `共 1 次记录` / `[1] 开始` 一起毁掉 —— 报告的可读性优先，
         // 而键值对形态（`room_id=1` / `?id=1`，上面刚断言过）一位也照样抹。
-        assert!(out.contains("房间 1 未登记"), "裸文本的一位数字不抹：\n{out}");
+        assert!(
+            out.contains("房间 1 未登记"),
+            "裸文本的一位数字不抹：\n{out}"
+        );
     }
 
     /// ③ 导出文件的更严一档：房间号也抹掉，且覆盖「键名形态」与「裸数字」两种，

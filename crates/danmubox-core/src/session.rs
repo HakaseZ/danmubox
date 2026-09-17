@@ -699,7 +699,11 @@ mod tests {
             5,
             "互动档按自己的小上限裁剪（只留最新 5 条）"
         );
-        assert_eq!(kinds_len(&buf, MessageKind::System), 2, "系统档只留最新 2 条");
+        assert_eq!(
+            kinds_len(&buf, MessageKind::System),
+            2,
+            "系统档只留最新 2 条"
+        );
 
         // 留下的必须是**最新的**那批（各档内部照旧丢最旧）。
         let kept: Vec<i64> = buf
@@ -729,7 +733,11 @@ mod tests {
             buf.push(msg(i, kind, 1, "x"));
         }
         let ids: Vec<u64> = buf.snapshot().iter().map(|m| m.local_id).collect();
-        assert_eq!(ids, (1..=30).collect::<Vec<u64>>(), "归并后必须与到达顺序一致");
+        assert_eq!(
+            ids,
+            (1..=30).collect::<Vec<u64>>(),
+            "归并后必须与到达顺序一致"
+        );
     }
 
     /// 礼物分级缓存（issue 2609171849 第 3 条）：价值越高，留得越多。
@@ -917,7 +925,8 @@ mod tests {
             identity_fails: false,
         });
 
-        let runtime = RoomRuntime::spawn(room, BufferCaps::default(), bus, counters.clone(), source);
+        let runtime =
+            RoomRuntime::spawn(room, BufferCaps::default(), bus, counters.clone(), source);
         settle().await;
 
         let rows = runtime.query(&HistoryQuery::default());
@@ -997,7 +1006,13 @@ mod tests {
             identity_fails: false,
         });
         let mut events = bus.subscribe();
-        let first = RoomRuntime::spawn(room.clone(), BufferCaps::default(), bus.clone(), counters.clone(), noisy);
+        let first = RoomRuntime::spawn(
+            room.clone(),
+            BufferCaps::default(),
+            bus.clone(),
+            counters.clone(),
+            noisy,
+        );
         settle().await;
         assert_eq!(first.len(), 2, "本会话收到的消息应在缓冲内");
         assert_eq!(first.caps(), BufferCaps::default());
@@ -1167,7 +1182,8 @@ mod tests {
             ..Default::default()
         };
         let mut events = bus.subscribe();
-        let runtime = RoomRuntime::spawn(room, BufferCaps::default(), bus.clone(), counters, source);
+        let runtime =
+            RoomRuntime::spawn(room, BufferCaps::default(), bus.clone(), counters, source);
 
         // 掉线不等人：第一次连接一断，核心必须立刻再起一次，而不是停在断连态。
         settle().await;
@@ -1195,7 +1211,10 @@ mod tests {
                 last_state = Some(status.state);
             }
         }
-        assert!(saw_manual, "手动重连必须广播 connecting（点完不能没有反应）");
+        assert!(
+            saw_manual,
+            "手动重连必须广播 connecting（点完不能没有反应）"
+        );
         assert_eq!(
             last_state,
             Some(ConnState::Connected),

@@ -353,13 +353,19 @@ mod tests {
         assert_eq!(messages[0].room_id, 7);
         assert_eq!(messages[0].uid, 11);
         assert!(messages[0].is_admin, "房管弹幕靠 isadmin 字段标注");
-        assert_eq!(messages[0].guard_level, 3, "顶层 guard_level 是本房间的舰长等级");
+        assert_eq!(
+            messages[0].guard_level, 3,
+            "顶层 guard_level 是本房间的舰长等级"
+        );
         assert_eq!(
             messages[0].medal_guard_level, 3,
             "粉丝牌自身的舰长标记另取 user.medal.guard_level"
         );
         assert_eq!(messages[0].reply_to_uid, 0, "reply_mid=0 即不是回复");
-        assert_eq!(messages[1].reply_to_uid, 4242, "回复关系在顶层 reply 对象里");
+        assert_eq!(
+            messages[1].reply_to_uid, 4242,
+            "回复关系在顶层 reply 对象里"
+        );
         assert_eq!(messages[1].reply_to_uname, "被回复的人");
         assert_eq!(
             messages[1].reply_type_enum, 1,

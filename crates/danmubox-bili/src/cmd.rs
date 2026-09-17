@@ -81,7 +81,10 @@ pub enum Dispatch {
     /// （「开播」/「下播」），同时把状态冒泡给界面 —— 用户 2026-09-16 报的
     /// 「开播下播时状态不会自动更新」缺的正是后者（事件到了只入缓冲，没人把它写回房间状态）。
     /// 两者一起带出来，消费方按「先投消息、再投状态」处理，顺序与从前一致。
-    LiveStatus { message: Message, live_status: i32 },
+    LiveStatus {
+        message: Message,
+        live_status: i32,
+    },
     /// **大航海**（`GUARD_BUY` / `USER_TOAST_MSG`，协议 §10.6）：同一笔购买上游会拆成两条载荷，
     /// 两条都投就会同一笔算两次金额（issue 2609171849 #1）。消费方**不得**直接投递，
     /// 必须先经 [`GuardMerge`] 按笔合并（§12.3「按时间窗合并为一条播报」）。
@@ -192,7 +195,11 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
         if let Some(m) = &message {
             // 发言人的 uid 不进日志（`AGENT.md` §8 第 1 条）：命令与类型足以定位解析问题，
             // 要核对原始字段时另有 `danmubox::raw` 这一条专用出口（`docs/protocol.md` 附录 B.1）。
-            tracing::debug!(cmd, kind = m.kind.as_str(), "已归一化命令（原始载荷见上一条 debug 输出）");
+            tracing::debug!(
+                cmd,
+                kind = m.kind.as_str(),
+                "已归一化命令（原始载荷见上一条 debug 输出）"
+            );
         }
     }
     if let Some(source) = guard_source {
@@ -303,8 +310,8 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
     // 因此这一支无法像历史条目那样核对「正文是否就是这个表情」。
     // 观测到的实时表情弹幕正文就是表情本身（如 `info[1] == "这个好耶"`），故按整条画图处理。
     if let Some(emote) = meta.and_then(|m| m.get(13)).and_then(Value::as_object) {
-        message.emote = crate::emote::emote_ref_from_object(&Value::Object(emote.clone()))
-            .map(Box::new);
+        message.emote =
+            crate::emote::emote_ref_from_object(&Value::Object(emote.clone())).map(Box::new);
     }
 
     // 房管：经典槽位 `info[2][2]`。尚无正向样本，见 `docs/protocol.md` 附录 A 的校准项。
@@ -326,10 +333,7 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
             }
             // 回复关系也在这份 JSON 里（不在 `info` 的 `reply` 槽位上，见 §11.6 更正）。
             // `reply_mid == 0` 即不是回复。
-            let reply_mid = parsed
-                .get("reply_mid")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
+            let reply_mid = parsed.get("reply_mid").and_then(Value::as_i64).unwrap_or(0);
             if reply_mid != 0 {
                 message.reply_to_uid = reply_mid;
                 message.reply_to_uname = parsed
@@ -396,7 +400,10 @@ fn gift(room_id: i64, value: &Value) -> Option<Message> {
         .unwrap_or_default()
         .to_string();
     let num = data.get("num").and_then(Value::as_i64).unwrap_or(1).max(1);
-    let name = data.get("giftName").or_else(|| data.get("gift_name")).and_then(Value::as_str);
+    let name = data
+        .get("giftName")
+        .or_else(|| data.get("gift_name"))
+        .and_then(Value::as_str);
     if let Some(name) = name.filter(|n| !n.is_empty()) {
         message.content = format!("投喂 {name} ×{num}");
     }
@@ -661,10 +668,7 @@ fn guard(room_id: i64, value: &Value, source: GuardSource) -> Option<Message> {
         .unwrap_or_default()
         .to_string();
 
-    message.guard_level = data
-        .get("guard_level")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    message.guard_level = data.get("guard_level").and_then(Value::as_i64).unwrap_or(0);
     // 金额只认**实付**：`GUARD_BUY.price` 是标价（原价），拿它当金额就会把同一笔的
     // 原价与实付各统计一次（issue 2609171849 #1）。标价不进 `Message`，只在 `debug`
     // 留个读数供字段校准 —— 购买事件在窗口内没等到播报时，那一行按契约 §5
@@ -892,7 +896,10 @@ mod tests {
         assert_eq!(message.content, "亏爆57米");
         assert_eq!(message.uid, 123456789012345);
         assert_eq!(message.uname, "观众甲");
-        assert_eq!(message.face, "http://f/x.png", "头像在 info[0][15].user.base.face");
+        assert_eq!(
+            message.face, "http://f/x.png",
+            "头像在 info[0][15].user.base.face"
+        );
         assert_eq!(message.color, 16777215, "颜色在 info[0][3]");
         assert_eq!(message.ts, 1_789_134_601_006, "毫秒时间戳在 info[0][4]");
         assert_eq!(message.medal_level, 24);
@@ -932,7 +939,10 @@ mod tests {
         });
         let m = message(7, &other_room, &counters()).expect("必须解出弹幕");
         assert_eq!(m.guard_level, 0, "别的房间的舰长不得画本房间的舰长标");
-        assert_eq!(m.medal_guard_level, 3, "牌子自身的舰长标记仍要带出，供牌面样式用");
+        assert_eq!(
+            m.medal_guard_level, 3,
+            "牌子自身的舰长标记仍要带出，供牌面样式用"
+        );
 
         let this_room = json!({
             "cmd": "DANMU_MSG",
@@ -1044,8 +1054,7 @@ mod tests {
         assert_eq!(message.content, "这个好耶", "正文仍是表情名");
         let emote = message.emote.expect("必须带出表情信息");
         assert_eq!(
-            emote.url,
-            "https://i0.hdslb.com/bfs/live/2ce08b31618d3ad0d34877bf949ef0089a0438b7.png",
+            emote.url, "https://i0.hdslb.com/bfs/live/2ce08b31618d3ad0d34877bf949ef0089a0438b7.png",
             "表情图必须升级到 https，否则在客户端里根本加载不出来"
         );
         assert_eq!(emote.emoticon_unique, "official_345");
@@ -1108,13 +1117,15 @@ mod tests {
         assert_eq!(message.content, "[dog]", "正文仍是那个 token");
         let emote = message.emote.expect("extra.emots 里的表情必须带出来");
         assert_eq!(
-            emote.url,
-            "https://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png",
+            emote.url, "https://i0.hdslb.com/bfs/live/4428c84e694fbf4e0ef6c06e958d9352c3582740.png",
             "表情图必须升级到 https，否则在客户端里根本加载不出来"
         );
         assert_eq!(emote.emoticon_unique, "emoji_208");
         assert_eq!((emote.width, emote.height), (20, 20));
-        assert!(!emote.bulge_display, "文字表情没有 bulge_display，不得当成大表情");
+        assert!(
+            !emote.bulge_display,
+            "文字表情没有 bulge_display，不得当成大表情"
+        );
     }
 
     #[test]
@@ -1274,7 +1285,8 @@ mod tests {
             "PLAYURL_RELOAD_MASTER",
             "STOP_LIVE_ROOM_LIST",
         ] {
-            let payload = json!({"cmd": cmd, "data": {"pb": "CgtvbmxpbmVfcmFuaw==", "playurl": {}}});
+            let payload =
+                json!({"cmd": cmd, "data": {"pb": "CgtvbmxpbmVfcmFuaw==", "playurl": {}}});
             let c = counters();
             assert!(message(7, &payload, &c).is_none(), "{cmd} 不该产出消息");
             assert_eq!(
@@ -1591,7 +1603,10 @@ mod tests {
         assert_eq!(message.ts, 1_789_177_882_000, "pb 里是秒级时间戳");
         assert_eq!(message.medal_level, 12);
         assert_eq!(message.medal_name, "牌子");
-        assert_eq!(message.upstream_id, "4816040157599941120", "订单号即上游标识");
+        assert_eq!(
+            message.upstream_id, "4816040157599941120",
+            "订单号即上游标识"
+        );
         assert!(
             message.combo_id.starts_with("batch:gift:combo_id:"),
             "连击标识要带出来，界面靠它聚合"
@@ -1608,7 +1623,11 @@ mod tests {
         ] {
             assert!(message(7, &payload, &c).is_none(), "坏载荷必须丢弃");
         }
-        assert_eq!(c.snapshot().malformed_dropped, 2, "能解码但无礼物子消息的不计 malformed");
+        assert_eq!(
+            c.snapshot().malformed_dropped,
+            2,
+            "能解码但无礼物子消息的不计 malformed"
+        );
     }
 
     #[test]
@@ -1802,7 +1821,8 @@ mod tests {
         assert_eq!(message.content, "开播");
 
         // ② `PREPARING`：下播 → 未开播。
-        let preparing = dispatch(1, &json!({"cmd": "PREPARING"}), &c).expect("PREPARING 必须产生产出");
+        let preparing =
+            dispatch(1, &json!({"cmd": "PREPARING"}), &c).expect("PREPARING 必须产生产出");
         let Dispatch::LiveStatus {
             message,
             live_status,
@@ -1814,7 +1834,8 @@ mod tests {
         assert_eq!(message.content, "下播");
 
         // ③ 其余系统类命令**不带**状态：它们不改 `live_status`（轮播也不由这两条推出）。
-        let other = dispatch(1, &json!({"cmd": "ROOM_CHANGE"}), &c).expect("ROOM_CHANGE 必须产生消息");
+        let other =
+            dispatch(1, &json!({"cmd": "ROOM_CHANGE"}), &c).expect("ROOM_CHANGE 必须产生消息");
         assert!(
             matches!(other, Dispatch::Message(_)),
             "只有 LIVE / PREPARING 带开播状态"

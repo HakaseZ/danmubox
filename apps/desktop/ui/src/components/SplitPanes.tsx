@@ -131,8 +131,12 @@ export function SplitPanes({
   const [swapOver, setSwapOver] = useState(false);
   const [dragging, setDragging] = useState(false);
   // 回调放进 ref：指针监听器活在按下那一刻的闭包里，而房间页随时会因为新弹幕重渲染。
+  // 写在**布局阶段**（渲染期写 ref 会让被丢弃的那一版渲染把值漏进来）：指针事件永远在
+  // 提交之后才到，处理器读到的因此一定是最新的那一组回调。
   const handlers = useRef({ onRatio, onSwap, onExpand });
-  handlers.current = { onRatio, onSwap, onExpand };
+  useLayoutEffect(() => {
+    handlers.current = { onRatio, onSwap, onExpand };
+  });
 
   const applyShare = useCallback((value: number) => {
     const region = regionRef.current;

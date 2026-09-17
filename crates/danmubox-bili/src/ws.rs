@@ -39,6 +39,11 @@ pub const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// 上游 HTTP 心跳周期。
 const HTTP_HEARTBEAT_PERIOD: Duration = Duration::from_secs(60);
 /// 会话短于该时长视为「未真正建立」，不重置退避，避免紧循环重连。
+///
+/// **未认证成功过的尝试一律不算会话**，哪怕它把候选表逐个拨到超时、耗时远超本阈值：
+/// 那不是「健康的会话掉线」，是「压根没连上」—— 只看时长会让网络黑洞（每个候选都
+/// 拨号超时）落进「健康会话」那一档，5/10/20/40/60 的升级于是永不生效。
+/// 两条判据（认证成功过 + 活过本阈值）在 `reconnect_loop` 的 `healthy` 那一行合取。
 const HEALTHY_SESSION: Duration = Duration::from_secs(30);
 /// 单个弹幕节点的拨号超时；超时即换下一个节点。
 const WS_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -60,6 +65,9 @@ struct Limits {
     auth_failure_limit: u32,
     /// 同一节点连续失败多少次后轮换到下一项（§15.3）。
     node_failure_limit: u32,
+    /// 「健康会话」阈值（§13.2 的「连接成功后退避复位」）：**认证成功过**且活过它，
+    /// 退避才回到起点；两条缺一都不算健康（`HEALTHY_SESSION`）。
+    healthy_session: Duration,
     /// 退避起点与封顶（§13.2）。
     backoff_initial: Duration,
     backoff_max: Duration,
@@ -67,7 +75,8 @@ struct Limits {
 
 impl Default for Limits {
     /// 生产值，逐条对应文档：认证超时 10s（§7.3）、僵死 90s（§8.1）、
-    /// 心跳 30s（§8.1）、认证失败上限 3（§13.2）、同节点失败 2 次换节点（§15.3）。
+    /// 心跳 30s（§8.1）、认证失败上限 3（§13.2）、同节点失败 2 次换节点（§15.3）、
+    /// 健康会话 30s（§13.2 的退避复位条件）。
     fn default() -> Self {
         Self {
             auth_timeout: Duration::from_secs(10),
@@ -75,6 +84,7 @@ impl Default for Limits {
             heartbeat_period: Duration::from_secs(30),
             auth_failure_limit: 3,
             node_failure_limit: 2,
+            healthy_session: HEALTHY_SESSION,
             backoff_initial: INITIAL_BACKOFF,
             backoff_max: MAX_BACKOFF,
         }
@@ -838,15 +848,23 @@ where
         let outcome = attempt(node_start).await;
         // 收场先记账再判取消：一键诊断要看到**每一次**尝试的结局，
         // 包括「还没认证就被取消」那一档（`docs/operations.md` §2.9）。
-        outcome
-            .diag
-            .ended(danmubox_core::now_ms(), &end_reason(&outcome.end), outcome.verified);
+        outcome.diag.ended(
+            danmubox_core::now_ms(),
+            &end_reason(&outcome.end),
+            outcome.verified,
+        );
         if cancel.is_cancelled() {
             return Ok(());
         }
-        // 活过 HEALTHY_SESSION 的一次连接算「健康会话」：它的中断是偶发的，
-        // 退避回到起点；没活过阈值的（连不上、认证失败、刚握上就断）继续递增。
-        let healthy = started.elapsed() >= HEALTHY_SESSION;
+        // 「健康会话」= **两条同时满足**：
+        // ① 认证成功过（`op=8` 且 `code=0`）—— 从没认证成功的尝试不是「掉线的会话」，
+        //    是「压根没连上」，它没有资格把退避重置回起点；
+        // ② 活过 HEALTHY_SESSION —— 刚握上就被断的算不上健康。
+        // 只看时长会漏掉网络黑洞那一类：3 个候选各 10 秒拨号超时 = 一次尝试 30 秒 ≥ 阈值，
+        // 于是每次都被判成健康会话、退避每次回到 5 秒，5/10/20/40/60 的升级实际不生效
+        // （`docs/operations.md` §2.10.5 ②。回归单测：
+        // `unverified_attempt_past_the_healthy_threshold_does_not_reset_the_backoff`）。
+        let healthy = outcome.verified && started.elapsed() >= limits.healthy_session;
 
         match &outcome.end {
             End::Cancelled => {}
@@ -922,9 +940,7 @@ where
             "退避等待"
         );
         // 退避与连续失败次数是重连历史的两根坐标，跟着这一次尝试一起进报告。
-        outcome
-            .diag
-            .backoff(wait.as_millis() as u64, auth_failures);
+        outcome.diag.backoff(wait.as_millis() as u64, auth_failures);
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = tokio::time::sleep(wait) => {}
@@ -950,7 +966,12 @@ impl LiveSource for BiliLive {
 
     async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {
         // 游客态没有「本人身份」可言：不发请求，直接给全零身份。
-        if !self.store.as_ref().map(|s| s.is_logged_in()).unwrap_or(false) {
+        if !self
+            .store
+            .as_ref()
+            .map(|s| s.is_logged_in())
+            .unwrap_or(false)
+        {
             return Ok(RoomSession {
                 room_id,
                 ..Default::default()
@@ -1014,11 +1035,14 @@ pub fn next_backoff(current: Duration, max: Duration) -> Duration {
 
 /// 一次中断之后，为**下一次**连接尝试准备的退避基数（`docs/contract.md` §4）。
 ///
-/// 活过 `HEALTHY_SESSION` 的连接算「健康会话」：它的中断是偶发的，退避回到 `initial`
-/// （生产的 5 秒起点）。没活过阈值的（连不上、认证失败、刚握手就被断）继续
-/// `next_backoff` 递增，`max` 封顶。旧实现把重置写在「被取消」那一支里，掉线走的是
-/// 另一支，于是每次掉线都把退避翻倍、**从不回落**：断连后要干等一分钟才重连，
-/// 用户看到的就是「断了就回不来了」。
+/// `healthy` 由调用方按**两条**判据合取后传进来（`reconnect_loop` 的 `healthy` 那一行）：
+/// **认证成功过**（`outcome.verified`）**且**活过 `HEALTHY_SESSION` —— 这样的连接算「健康会话」，
+/// 它的中断是偶发的，退避回到 `initial`（生产的 5 秒起点）。其余的一律继续 `next_backoff`
+/// 递增、`max` 封顶：连不上（含「把候选表逐个拨到超时」）、认证失败、刚握手就被断。
+/// 旧实现把重置写在「被取消」那一支里，掉线走的是另一支，于是每次掉线都把退避翻倍、
+/// **从不回落**：断连后要干等一分钟才重连，用户看到的就是「断了就回不来了」。
+/// 反过来，把「活得久」当成健康的唯一判据又是另一个坑（网络黑洞里每次尝试都够久，
+/// 升级永不生效）—— 所以两条缺一不可。
 pub fn wait_after_break(current: Duration, healthy: bool, initial: Duration) -> Duration {
     if healthy {
         initial
@@ -1069,7 +1093,11 @@ mod tests {
         );
     }
 
-    /// 一次健康会话（活过 `HEALTHY_SESSION`）掉线之后，退避必须回到起点。
+    /// 一次健康会话掉线之后，退避必须回到起点。
+    ///
+    /// 这里的 `true` 是 [`reconnect_loop`] 合取两条判据之后的结论：**认证成功过**
+    /// （`outcome.verified`）**且**活过 `HEALTHY_SESSION`。缺任一条都不算健康会话
+    /// （另见 `unverified_attempt_past_the_healthy_threshold_does_not_reset_the_backoff`）。
     #[test]
     fn healthy_session_drops_the_backoff_back_to_the_start() {
         assert_eq!(
@@ -1185,7 +1213,10 @@ mod tests {
         let value = serde_json::json!({
             "data": {"badge": {"admin_level": 2, "is_room_admin": false}}
         });
-        assert!(parse_room_identity(1, &value).is_admin, "admin_level>0 也是房管");
+        assert!(
+            parse_room_identity(1, &value).is_admin,
+            "admin_level>0 也是房管"
+        );
     }
 
     #[test]
@@ -1243,7 +1274,7 @@ mod tests {
     }
 
     /// 测试用的时间参数：同一段代码在毫秒尺度上跑，判定逻辑一字不改。
-    /// 生产值见 [`Limits::default`]（10s / 90s / 30s / 3 / 2 / 5s / 60s）。
+    /// 生产值见 [`Limits::default`]（10s / 90s / 30s / 3 / 2 / 30s / 5s / 60s）。
     fn test_limits() -> Limits {
         Limits {
             auth_timeout: Duration::from_millis(40),
@@ -1251,6 +1282,9 @@ mod tests {
             heartbeat_period: Duration::from_millis(100),
             auth_failure_limit: 3,
             node_failure_limit: 2,
+            // 既有用例的每次尝试都是瞬时收场，因此这里的取值只影响本文件里
+            // 专门跑「活过阈值」的那两条用例（它们各自再覆盖成毫秒级）。
+            healthy_session: Duration::from_millis(100),
             backoff_initial: Duration::from_millis(25),
             backoff_max: Duration::from_millis(50),
         }
@@ -1303,22 +1337,37 @@ mod tests {
     impl futures_util::Sink<WsMessage> for RecordingSink {
         type Error = std::io::Error;
 
-        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(self: Pin<&mut Self>, item: WsMessage) -> std::result::Result<(), Self::Error> {
+        fn start_send(
+            self: Pin<&mut Self>,
+            item: WsMessage,
+        ) -> std::result::Result<(), Self::Error> {
             if let WsMessage::Binary(bytes) = item {
-                self.frames.lock().expect("lock poisoned").push(bytes.to_vec());
+                self.frames
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(bytes.to_vec());
             }
             Ok(())
         }
 
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
     }
@@ -1349,6 +1398,82 @@ mod tests {
         })
     }
 
+    /// 跑一个「每次尝试都**活过** `limits.healthy_session` 阈值」的重连循环：
+    /// `verified` 决定它落在哪一档 —— `false` 是「压根没连上，只是把候选表逐个拨到
+    /// 超时」，`true` 是「认证成功过、活过阈值又掉线」。两条判据（认证成功过 + 活过阈值）
+    /// 由这对用例分别钉住。
+    ///
+    /// 回报的是每次尝试那条诊断记录（与生产代码同一个形态）：断言读**循环自己算出的
+    /// 退避**（`AttemptRecord::backoff_ms`，带 ±20% 抖动），不读墙钟差值 —— 后者受调度
+    /// 噪声影响，会写出时灵时不灵的用例。
+    fn spawn_past_threshold_failing_loop(
+        sink: &MessageSink,
+        cancel: &Cancel,
+        limits: &Limits,
+        attempt_span: Duration,
+        verified: bool,
+        diags: Arc<StdMutex<Vec<Arc<DiagAttempt>>>>,
+    ) -> tokio::task::JoinHandle<Result<()>> {
+        let sink = sink.clone();
+        let cancel = cancel.clone();
+        let limits = *limits;
+        tokio::spawn(async move {
+            reconnect_loop(1, &sink, &cancel, &limits, |node_start| {
+                let diag = test_diag();
+                diags.lock().expect("lock poisoned").push(Arc::clone(&diag));
+                async move {
+                    // 一次尝试的时长：拨号超时 / 认证成功后的长连都只会更慢，不会更快。
+                    tokio::time::sleep(attempt_span).await;
+                    Attempt::new(
+                        &diag,
+                        End::Failed("候选节点连接超时 / 掉线（语义由 verified 区分）".into()),
+                        verified,
+                        Some(node_start),
+                    )
+                }
+            })
+            .await
+        })
+    }
+
+    /// 跑满 3 次尝试之后收场，返回每轮的记录（顺序 = 尝试顺序）。
+    async fn run_past_threshold_loop(
+        limits: &Limits,
+        attempt_span: Duration,
+        verified: bool,
+    ) -> Vec<Arc<DiagAttempt>> {
+        let (sink, _bus) = test_sink();
+        let cancel = Cancel::new();
+        let diags = Arc::new(StdMutex::new(Vec::new()));
+        let runner = spawn_past_threshold_failing_loop(
+            &sink,
+            &cancel,
+            limits,
+            attempt_span,
+            verified,
+            Arc::clone(&diags),
+        );
+        // 等到**三轮都算完退避**才收场：循环在取消之后会提前返回，不再记这一轮的退避，
+        // 那时收场就只剩两轮读数。
+        until(
+            || {
+                diags
+                    .lock()
+                    .expect("lock poisoned")
+                    .iter()
+                    .filter(|diag| diag.record().backoff_ms.is_some())
+                    .count()
+                    >= 3
+            },
+            Duration::from_millis(2000),
+        )
+        .await;
+        cancel.cancel();
+        runner.await.unwrap().unwrap();
+        let rounds = diags.lock().expect("lock poisoned").clone();
+        rounds
+    }
+
     /// `docs/roadmap.md` S1-AC9：非 0 认证 code 一律按失败处理，且只记录原始值。
     #[tokio::test]
     async fn non_zero_verify_code_fails_the_session() {
@@ -1361,7 +1486,15 @@ mod tests {
         let mut stream = Box::pin(futures_util::stream::iter(items));
 
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &test_diag(),
+            )
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => {
@@ -1395,7 +1528,15 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &test_diag(),
+            )
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "认证成功后应保持运行直到被取消");
@@ -1423,13 +1564,20 @@ mod tests {
         let cancel = Cancel::new();
         let verify = Notify::new();
         // 静默对端：握手成功，一个字节都不发。
-        let mut silent = Box::pin(futures_util::stream::pending::<std::result::Result<
-            WsMessage,
-            tokio_tungstenite::tungstenite::Error,
-        >>());
+        let mut silent = Box::pin(futures_util::stream::pending::<
+            std::result::Result<WsMessage, tokio_tungstenite::tungstenite::Error>,
+        >());
         let started = Instant::now();
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut silent, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut silent,
+                &test_diag(),
+            )
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => assert!(reason.contains("op=8"), "只描述事实：{reason}"),
@@ -1447,7 +1595,11 @@ mod tests {
         let (sink, _bus) = test_sink();
         let cancel = Cancel::new();
         let runner = spawn_auth_failing_loop(&sink, &cancel, &limits, Arc::clone(&times));
-        until(|| times.lock().expect("lock poisoned").len() >= 3, Duration::from_millis(2000)).await;
+        until(
+            || times.lock().expect("lock poisoned").len() >= 3,
+            Duration::from_millis(2000),
+        )
+        .await;
         let when = times.lock().expect("lock poisoned").clone();
         let first_gap = when[1] - when[0];
         let second_gap = when[2] - when[1];
@@ -1461,10 +1613,7 @@ mod tests {
             "退避必须递增（§13.2）：{first_gap:?} → {second_gap:?}"
         );
         // 连续 3 次到达上限：停在原地等人工（返回就等于核心驱动的循环立刻再连一次）。
-        assert!(
-            !runner.is_finished(),
-            "达上限必须停在原地，不得返回"
-        );
+        assert!(!runner.is_finished(), "达上限必须停在原地，不得返回");
         assert_eq!(when.len(), 3, "达上限后不许再有第 4 次：{when:?}");
         tokio::time::sleep(limits.backoff_max * 3).await;
         assert_eq!(
@@ -1474,6 +1623,70 @@ mod tests {
         );
         cancel.cancel();
         runner.await.unwrap().unwrap();
+    }
+
+    /// **回归（改前必失败）**：未认证成功的尝试即便把候选表逐个拨到超时、**耗时超过
+    /// 「健康会话」阈值**，也不算健康会话 —— 退避必须继续递增，不许回到 5 秒起点。
+    ///
+    /// 旧判据只看时长（`healthy = started.elapsed() >= HEALTHY_SESSION`），于是网络黑洞
+    /// （`host_list` 上 3 个候选各 10 秒拨号超时 = 一次尝试 30 秒，生产阈值正是 30 秒）
+    /// 每次都落进「健康会话」那一档 → 退避每次回到 5 秒，`5/10/20/40/60` 的升级实际不生效。
+    #[tokio::test]
+    async fn unverified_attempt_past_the_healthy_threshold_does_not_reset_the_backoff() {
+        // 阈值 12ms、每次尝试 15ms：每次尝试都「活过阈值」，但从未认证成功。
+        let limits = Limits {
+            healthy_session: Duration::from_millis(12),
+            ..test_limits()
+        };
+        let rounds = run_past_threshold_loop(&limits, Duration::from_millis(15), false).await;
+
+        let waits: Vec<u64> = rounds
+            .iter()
+            .filter_map(|diag| diag.record().backoff_ms)
+            .collect();
+        assert_eq!(waits.len(), 3, "每轮结束都要留下算出的退避：{waits:?}");
+        // 抖动的下界（±20%）：起点档 25ms 落在 [20, 30]，翻倍后的 50ms 档落在 [40, 60]。
+        let initial_band = limits.backoff_initial.mul_f64(0.79).as_millis() as u64;
+        let escalated_band = limits.backoff_max.mul_f64(0.79).as_millis() as u64;
+        // 第一轮按起点，第二轮必须翻倍 —— 除非被误判成健康会话。
+        assert!(
+            waits[0] >= initial_band && waits[0] < escalated_band,
+            "第一轮的退避是起点档（25ms ±20%）：{waits:?}"
+        );
+        assert!(
+            waits[1] >= escalated_band,
+            "未认证成功的尝试不得把退避重置回起点：第二轮之后应等 50ms 档（≥ {escalated_band}），实测 {:?}",
+            waits[1]
+        );
+    }
+
+    /// 反向护栏：**认证成功过**且活过阈值的连接掉线之后，退避照旧回到 5 秒起点。
+    ///
+    /// 与上一条只差 `verified`：防的是「把回落整条改没」（那会让断线后的重连一次比一次慢，
+    /// 正是 `a111720` 修掉的旧缺陷）。
+    #[tokio::test]
+    async fn verified_attempt_past_the_healthy_threshold_still_resets_the_backoff() {
+        let limits = Limits {
+            healthy_session: Duration::from_millis(12),
+            ..test_limits()
+        };
+        let rounds = run_past_threshold_loop(&limits, Duration::from_millis(15), true).await;
+
+        let waits: Vec<u64> = rounds
+            .iter()
+            .filter_map(|diag| diag.record().backoff_ms)
+            .collect();
+        assert_eq!(waits.len(), 3, "每轮结束都要留下算出的退避：{waits:?}");
+        let initial_band = limits.backoff_initial.mul_f64(0.79).as_millis() as u64;
+        let escalated_band = limits.backoff_max.mul_f64(0.79).as_millis() as u64;
+        assert!(
+            waits[1] < escalated_band,
+            "认证成功过又掉线 = 健康会话，退避必须回到 5 秒起点（25ms 档，< {escalated_band}）：{waits:?}"
+        );
+        assert!(
+            waits[1] >= initial_band,
+            "回落的目标是起点档（25ms ±20%）：{waits:?}"
+        );
     }
 
     /// §13.2 / §14：达上限停在 `Failed` 之后，手动重连（取消本次连接、重新调一次
@@ -1487,7 +1700,11 @@ mod tests {
         let times = Arc::new(StdMutex::new(Vec::new()));
         let cancel = Cancel::new();
         let runner = spawn_auth_failing_loop(&sink, &cancel, &limits, Arc::clone(&times));
-        until(|| times.lock().expect("lock poisoned").len() >= 3, Duration::from_millis(2000)).await;
+        until(
+            || times.lock().expect("lock poisoned").len() >= 3,
+            Duration::from_millis(2000),
+        )
+        .await;
         cancel.cancel();
         runner.await.unwrap().unwrap();
         assert_eq!(times.lock().expect("lock poisoned").len(), 3);
@@ -1497,14 +1714,22 @@ mod tests {
         let fresh = Cancel::new();
         let started = Instant::now();
         let runner = spawn_auth_failing_loop(&sink, &fresh, &limits, Arc::clone(&again));
-        until(|| !again.lock().expect("lock poisoned").is_empty(), Duration::from_millis(2000)).await;
+        until(
+            || !again.lock().expect("lock poisoned").is_empty(),
+            Duration::from_millis(2000),
+        )
+        .await;
         assert!(
             started.elapsed() < limits.backoff_initial,
             "手动重连的第一步必须立即发起、不等退避（实测 {:?}）",
             started.elapsed()
         );
         // 计数归零：新一轮照样能连着试满 3 次，而不是一上来就停在 Failed。
-        until(|| again.lock().expect("lock poisoned").len() >= 3, Duration::from_millis(2000)).await;
+        until(
+            || again.lock().expect("lock poisoned").len() >= 3,
+            Duration::from_millis(2000),
+        )
+        .await;
         assert_eq!(
             again.lock().expect("lock poisoned").len(),
             3,
@@ -1598,7 +1823,15 @@ mod tests {
             Box::pin(futures_util::stream::iter(items).chain(futures_util::stream::pending()));
         let started = Instant::now();
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &test_diag(),
+            )
             .await;
         let End::Failed(reason) = &outcome.end else {
             panic!("一直没有入站帧必须判死，实际 {:?}", outcome.end);
@@ -1611,10 +1844,7 @@ mod tests {
             reason.contains(&limits.inbound_stale.as_millis().to_string()),
             "阈值也要在原因里：{reason}"
         );
-        assert!(
-            outcome.verified,
-            "是「认证成功之后不推弹幕」，不是认证问题"
-        );
+        assert!(outcome.verified, "是「认证成功之后不推弹幕」，不是认证问题");
         assert!(started.elapsed() >= limits.inbound_stale, "不得提前判死");
 
         // 判死之后必须接着重连，而且**僵死不是认证失败**：连判 5 次也不许走到 Failed。
@@ -1640,7 +1870,11 @@ mod tests {
                 .await
             })
         };
-        until(|| times.lock().expect("lock poisoned").len() >= 5, Duration::from_millis(3000)).await;
+        until(
+            || times.lock().expect("lock poisoned").len() >= 5,
+            Duration::from_millis(3000),
+        )
+        .await;
         assert!(
             !runner.is_finished(),
             "僵死不等于认证失败：不许把连接停在 Failed"
@@ -1681,7 +1915,15 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &test_diag(),
+            )
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "有入站帧就不得判僵死");
@@ -1760,7 +2002,12 @@ mod tests {
                     // 传输层失败：认证失败会让连续认证失败计数先到上限而停在 Failed，
                     // 那不是本用例要看的轴。
                     async move {
-                        Attempt::new(&test_diag(), End::Failed("模拟掉线".into()), false, Some(index))
+                        Attempt::new(
+                            &test_diag(),
+                            End::Failed("模拟掉线".into()),
+                            false,
+                            Some(index),
+                        )
                     }
                 })
                 .await

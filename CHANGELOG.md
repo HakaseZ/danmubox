@@ -375,7 +375,7 @@
   `` `icons/icon.ico` not found; required for generating a Windows Resource file during tauri-build ``（外套 `error: failed to run custom build command for danmubox-desktop`，
   `build-script-build` exit code 1）—— 故新增 `apps/desktop/src-tauri/icons/icon.ico`（6312 字节，用 `tauri icon` 从既有的 `icons/icon.png` 生成，含 16/24/32/48/64/256 六个尺寸）；
   ② MSI（WiX）要求 `bundle.icon` 列表里能找到 `.ico` —— tauri-cli 把 bundler 的 `windows.iconPath` 置成空 PathBuf（`crates/tauri-cli/src/interface/rust.rs`），
-  只能回落到该列表，空列表会报 `Couldn't find a .ico icon` —— 故构建命令追加 `--config '{"bundle":{"icon":["icons/icon.ico"]}}'`。
+  只能回落到该列表，空列表会报 `Couldn't find a .ico icon`（这一条**按上游源码核对，没有真的撞上过** —— 加的那枚 `.ico` 同时修掉了 ①）—— 故构建命令追加 `--config '{"bundle":{"icon":["icons/icon.ico"]}}'`。
   这个覆盖**只作用于 Windows 那一条命令**：共享的 `tauri.conf.json` 里 `bundle.icon = []` 一字未动（macOS 出 dmg 依赖它，见 `docs/operations.md` §5.3）。
   同一批纠正一处**文档错**：§5.3 的 Windows 段原写 `tauri build`「默认同时产出 msi 与 nsis」，但 `bundle.active = false` 时不给 `--bundles`
   **根本不进打包阶段**（tauri-cli 的判据是 `config.bundle.active || options.bundles.is_some()`，按上游 2.11.4 源码核对），

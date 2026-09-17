@@ -612,7 +612,8 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
   为此 `apps/desktop/src-tauri/icons/icon.ico` 入库（6312 字节，`tauri icon` 从既有的 `icons/icon.png` 生成，
   含 16/24/32/48/64/256 六个尺寸），并用 `--config` 只覆盖 Windows 这一次调用 ——
   共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动（§5.3 的 macOS 段依赖它）。
-  NSIS 那条路径不读它：安装器图标取自 exe 内嵌的那枚。
+  NSIS 那条路径不读 `bundle.icon`：它的安装器图标只看可选的 `nsis.installerIcon`（本仓库没设，其模板里
+  `!if "${INSTALLERICON}" != ""` 不成立 ⇒ 用 NSIS 自己的默认图标；据上游模板核对，未真机看过）。
 - `--target x86_64-pc-windows-msvc` 是显式指 64 位；在 x86_64 的 Windows 上本就是默认（本轮未单独实测）。
 - `.msi` **只能在 Windows 上构建**（WiX 仅支持 Windows）；NSIS 官方称可在其他平台交叉构建，本仓库不采用。
 - 自用只保留 NSIS 安装器与免安装 exe，MSI 留一份作备用安装路径。

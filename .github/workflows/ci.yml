@@ -296,12 +296,15 @@ jobs:
         # `--config` **只**覆盖 Windows 这一侧的 `bundle.icon`，不动共享的 `tauri.conf.json`：
         # `bundle.icon = []` 在 macOS 上能出 dmg，在 Windows 上过不去 —— 两处都硬要一枚 `.ico`：
         #   ① 编译期 `tauri-build` 的 Windows 资源（winres）步骤：`bundle.icon` 里没有 `.ico`
-        #      就回落到 `icons/icon.ico`，该文件不存在则直接报错中断编译；
+        #      就回落到 `icons/icon.ico`，该文件不存在则直接报错中断编译
+        #      （首次真跑 run 35211873761 撞到的就是这一条）；
         #   ② 打包期 MSI（WiX）那条路径要求 `bundle.icon` 里能找到 `.ico` —— tauri-cli 把
         #      bundler 的 `windows.iconPath` 显式置成空 PathBuf（`interface/rust.rs`），
-        #      于是只能回落到 `bundle.icon` 列表，列表为空就报 `Couldn't find a .ico icon`。
+        #      于是只能回落到 `bundle.icon` 列表，列表为空就报 `Couldn't find a .ico icon`
+        #      （这一条按上游源码核对，没真的撞上过 —— 上面那枚 .ico 同时修掉了 ①，也就轮不到 ②）。
         # 相应地 `icons/icon.ico` 也入库（`tauri icon` 从 `icons/icon.png` 生成，6 个尺寸：
-        # 16/24/32/48/64/256）。NSIS 那条路径不读它 —— 安装器的图标取自 exe 内嵌的那枚。
+        # 16/24/32/48/64/256）。NSIS 那条路径不读 `bundle.icon`：它只看可选的 `nsis.installerIcon`
+        # （本仓库没设 ⇒ 用 NSIS 自己的默认图标；据上游 nsis 模板核对，未真机看过）。
         shell: bash
         run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'
 

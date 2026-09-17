@@ -4,9 +4,13 @@
 //! 并在 `debug` 级别打印原始载荷，供阶段 1 的字段实测校准使用
 //! （`docs/protocol.md` 附录 A / B）。
 
+use std::collections::HashMap;
+use std::time::Duration;
+
 use danmubox_core::{Counters, Message, MessageKind};
 use prost::Message as _;
 use serde_json::Value;
+use tokio::time::Instant;
 
 use crate::pb::InteractWordV2;
 
@@ -78,6 +82,13 @@ pub enum Dispatch {
     /// 「开播下播时状态不会自动更新」缺的正是后者（事件到了只入缓冲，没人把它写回房间状态）。
     /// 两者一起带出来，消费方按「先投消息、再投状态」处理，顺序与从前一致。
     LiveStatus { message: Message, live_status: i32 },
+    /// **大航海**（`GUARD_BUY` / `USER_TOAST_MSG`，协议 §10.6）：同一笔购买上游会拆成两条载荷，
+    /// 两条都投就会同一笔算两次金额（issue 2609171849 #1）。消费方**不得**直接投递，
+    /// 必须先经 [`GuardMerge`] 按笔合并（§12.3「按时间窗合并为一条播报」）。
+    Guard {
+        message: Message,
+        source: GuardSource,
+    },
 }
 
 /// 把一条业务 JSON 载荷映射为领域产出；不产生任何产出时返回 `None`。
@@ -93,6 +104,9 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
     // `LIVE` / `PREPARING` 顺带带出的开播状态（协议 §10.7 的侧路）：只在 `SYSTEM_CMDS` 里标注了
     // 状态的那两条上被赋值，其余命令恒为 `None`（因此产出仍是 `Dispatch::Message`）。
     let mut status_update: Option<i32> = None;
+    // 大航海的来源命令（协议 §10.6）：只有 `GUARD_BUY` / `USER_TOAST_MSG` 两条会给它赋值，
+    // 赋了值就说明这条产出是「一笔购买的一半」，必须走 `Dispatch::Guard` 交给 [`GuardMerge`]。
+    let mut guard_source: Option<GuardSource> = None;
 
     let message = match cmd {
         "DANMU_MSG" => danmaku(room_id, value),
@@ -114,7 +128,16 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
         // 载荷里那个 `copy_writing` 模板（`"<%昵称%> 来了"`）留给上网页端用，
         // 两条进场路径的文案在这里保持一致。
         "ENTRY_EFFECT" => interact_json(room_id, value),
-        "GUARD_BUY" | "USER_TOAST_MSG" => guard(room_id, value),
+        // 大航海：这两条是**同一笔购买**的两条载荷（§10.6），各自的 `price` 语义不同
+        // （见 [`GuardSource`]）—— 归一出 `Dispatch::Guard`，投递前还必须按笔合并。
+        "GUARD_BUY" => {
+            guard_source = Some(GuardSource::Buy);
+            guard(room_id, value, GuardSource::Buy)
+        }
+        "USER_TOAST_MSG" => {
+            guard_source = Some(GuardSource::Toast);
+            guard(room_id, value, GuardSource::Toast)
+        }
         other => {
             if COUNTER_CMDS.contains(&other) {
                 Counters::bump(&counters.counter_updates);
@@ -171,6 +194,10 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
             // 要核对原始字段时另有 `danmubox::raw` 这一条专用出口（`docs/protocol.md` 附录 B.1）。
             tracing::debug!(cmd, kind = m.kind.as_str(), "已归一化命令（原始载荷见上一条 debug 输出）");
         }
+    }
+    if let Some(source) = guard_source {
+        // 大航海不在这里定去留：同一笔的另一半随时可能到，合并由 [`GuardMerge`] 按时间窗完成。
+        return message.map(|message| Dispatch::Guard { message, source });
     }
     match (message, status_update) {
         (Some(message), Some(live_status)) => Some(Dispatch::LiveStatus {
@@ -587,16 +614,35 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
     Some(message)
 }
 
-/// 大航海开通。等级口径（1 总督 / 2 提督 / 3 舰长）待实测校准。
-/// 大航海开通 / 续费播报（`GUARD_BUY` 与 `USER_TOAST_MSG` 共用）。
+/// 大航海载荷的来源命令（`docs/protocol.md` §10.6）。
 ///
-/// 字段名按社区接口文档核对（`docs/live/message_stream.md` 两节都有字段表），
-/// **尚未用真实样本观测**——这类事件在 10 分钟巨型房间采集里零条（见附录 A33）。
-/// 文档给出的取值：`guard_level` 1 总督 / 2 提督 / 3 舰长；`price` 为原金瓜子标价（CNY×1000）。
+/// 同一笔大航海开通 / 续费，上游会**先后**发两条载荷，两条的 `price` **语义不同**
+/// （2026-09-17 用真实抓包逐笔核对，样本量见 §10.6）：
 ///
-/// 头像**留空**：这两节字段表里都没有头像字段，实测样本又是零条——没有来源就不填
+/// | 命令 | 含义 | `price` 语义 | 实测取值（舰长 / 提督） |
+/// |---|---|---|---|
+/// | `GUARD_BUY` | 购买事件 | **标价（原价）** | 舰长恒为 `198000`（= 198 元）；提督 `1998000` |
+/// | `USER_TOAST_MSG` | 播报 | **实付** | 舰长 `138000`（连续包月）/ `168000`（单月）/ 少数无折扣 `198000`；提督 `1998000`（个别折后 `1598000`） |
+///
+/// 金额只能取实付那一份：拿标价当金额，同一笔就会被统计成两次（issue 2609171849 #1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuardSource {
+    /// `GUARD_BUY`：购买事件。`price` 是标价，**不进** `Message.amount`。
+    Buy,
+    /// `USER_TOAST_MSG`：播报。`price` 是实付，即 `Message.amount`。
+    Toast,
+}
+
+/// 大航海开通 / 续费（`GUARD_BUY` 与 `USER_TOAST_MSG` 共用一套字段）。
+///
+/// 等级口径 `1` 总督 / `2` 提督 / `3` 舰长（社区文档 + 实测样本一致）。
+/// 实测样本（2026-09-17 核对，某个在播房间的两次长窗口抓包）另给出两条更正：
+/// `USER_TOAST_MSG` **带昵称**（`data.username`，样本 100% 有）与订单号 `payflow_id`；
+/// `GUARD_BUY` **没有** `payflow_id`，因此 `Message.upstream_id` 对购买事件是空串。
+///
+/// 头像**留空**：两条命令的字段表里都没有头像字段（实测样本同样没有）——没有来源就不填
 /// （`docs/protocol.md` §10.6 的记录与契约 §5 的 `face`）。
-fn guard(room_id: i64, value: &Value) -> Option<Message> {
+fn guard(room_id: i64, value: &Value, source: GuardSource) -> Option<Message> {
     let data = value.get("data")?;
     let ts_ms = data
         .get("start_time")
@@ -619,7 +665,18 @@ fn guard(room_id: i64, value: &Value) -> Option<Message> {
         .get("guard_level")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    message.amount = data.get("price").and_then(Value::as_i64).unwrap_or(0);
+    // 金额只认**实付**：`GUARD_BUY.price` 是标价（原价），拿它当金额就会把同一笔的
+    // 原价与实付各统计一次（issue 2609171849 #1）。标价不进 `Message`，只在 `debug`
+    // 留个读数供字段校准 —— 购买事件在窗口内没等到播报时，那一行按契约 §5
+    // 「无法确证时 `0`，不得推算」留 0（界面因此不画金额格，而不是拿原价冒充）。
+    let price = data.get("price").and_then(Value::as_i64).unwrap_or(0);
+    message.amount = match source {
+        GuardSource::Toast => price,
+        GuardSource::Buy => {
+            tracing::debug!(price, "GUARD_BUY 的 price 是标价（原价），不作金额");
+            0
+        }
+    };
     message.upstream_id = data
         .get("payflow_id")
         .and_then(Value::as_str)
@@ -639,13 +696,137 @@ fn guard(room_id: i64, value: &Value) -> Option<Message> {
     Some(message)
 }
 
-/// 大航海等级 → 名称。取值按社区文档（1 总督 / 2 提督 / 3 舰长），未知等级不编造。
+/// 大航海等级 → 名称。取值按社区文档与实测样本（1 总督 / 2 提督 / 3 舰长），未知等级不编造。
 fn guard_title(level: i64) -> &'static str {
     match level {
         1 => "总督",
         2 => "提督",
         3 => "舰长",
         _ => "大航海",
+    }
+}
+
+/// 同一笔大航海的键：`uid` + `guard_level` + 载荷起始时间（`ts`）。
+///
+/// 实测 699 对样本里两条载荷的这三项**逐项相同**；`GUARD_BUY` 又没有 `payflow_id`，
+/// 认「同一笔」只能靠它们。同一用户在**同一秒**内买两次会被认成一笔（窗口内只投一条）——
+/// 代价是多投一条的漏报，比同一笔算两次金额（用户报的那个 bug）轻。
+type GuardKey = (i64, i64, i64);
+
+/// 「一笔大航海只投一条播报」的合并器（`docs/protocol.md` §10.6 / §12.3）。
+///
+/// 上游把同一笔拆成两条载荷（[`GuardSource`]），两条都投就会**同一笔算两次金额**：
+/// 舰长的标价与实付各进一次统计，界面汇总因此出 `198 + 138 = 336 元` 这种数
+/// （issue 2609171849 #1）。口径是「一笔一条，金额取实付」：
+///
+/// | 到手的载荷 | 行为 |
+/// |---|---|
+/// | 先 `GUARD_BUY`、窗口内又收到 `USER_TOAST_MSG` | 只投**播报**那条（金额 = 实付），购买事件被吸收 |
+/// | 只有 `GUARD_BUY`（窗口内没等到播报） | 窗口到期后照投一条，**金额留 0**（标价不是实付，见 [`guard`]） |
+/// | 只有 `USER_TOAST_MSG` | 立即投播报（金额 = 实付） |
+/// | 同一笔的第二条（方向不限、窗口内） | 压掉不投 —— 一笔一条是硬口径 |
+///
+/// 窗口取 **5s**：实测两条到达间隔 p50 43ms / p90 113ms / p99 1.99s / 最大 2.16s（699 对）。
+/// 状态只保留窗口内的那几笔（每次调用顺手清理旧项），不会随会话增长。
+///
+/// 一个**未观测到**的降级：键里的起始时间取自 `data.start_time`，全部实测样本都有它。
+/// 若某个房间没给这个字段，两条的 `ts` 会各自回落成收包时刻、认不出是同一笔 ——
+/// 那时**金额口径仍然只算实付一次**（购买事件那条 `amount = 0`），只是会多出一条无金额的行。
+pub struct GuardMerge {
+    window: Duration,
+    /// 已到、还没等到播报的购买事件（附到达时刻；窗口到期由 [`GuardMerge::flush`] 放出）。
+    pending: HashMap<GuardKey, (Instant, Message)>,
+    /// 窗口内**已经投过**的那几笔：后到的另一半一律压掉。
+    announced: HashMap<GuardKey, Instant>,
+}
+
+impl Default for GuardMerge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GuardMerge {
+    /// 生产口径：窗口 5s（依据见类型文档）。
+    pub fn new() -> Self {
+        Self::with_window(Duration::from_secs(5))
+    }
+
+    /// 指定窗口，供测试卡住边界。
+    pub fn with_window(window: Duration) -> Self {
+        Self {
+            window,
+            pending: HashMap::new(),
+            announced: HashMap::new(),
+        }
+    }
+
+    /// 还压着的购买事件最早什么时候到期（`None` = 没有待放项）。
+    /// 调用方拿它当定时器的截止时刻 —— 没有待放项时**不该**起定时器。
+    pub fn deadline(&self) -> Option<Instant> {
+        self.pending.values().map(|(at, _)| *at + self.window).min()
+    }
+
+    /// 吸收一条大航海载荷；返回**现在就该投递**的那一条（暂存 / 压掉时为 `None`）。
+    pub fn absorb(
+        &mut self,
+        now: Instant,
+        message: Message,
+        source: GuardSource,
+    ) -> Option<Message> {
+        self.prune(now);
+        let key = (message.uid, message.guard_level, message.ts);
+        if self.announced.contains_key(&key) {
+            // 同一笔已经投过（另一条载荷早到、或购买事件已被 `flush` 放出）。
+            tracing::debug!(
+                room_id = message.room_id,
+                "同一笔大航海的第二条载荷，压掉不投"
+            );
+            return None;
+        }
+        match source {
+            GuardSource::Toast => {
+                // 播报自带实付金额与昵称，直接投；顺手把窗口里同一笔的购买事件消化掉。
+                self.pending.remove(&key);
+                self.announced.insert(key, now);
+                Some(message)
+            }
+            GuardSource::Buy => {
+                // 购买事件先压着：它的 `price` 是标价，投出去就会把原价算进统计。
+                self.pending.entry(key).or_insert((now, message));
+                None
+            }
+        }
+    }
+
+    /// 窗口到期时放出「没等到播报」的购买事件（调用方按 [`GuardMerge::deadline`] 驱动）。
+    pub fn flush(&mut self, now: Instant) -> Option<Message> {
+        self.prune(now);
+        let key = self
+            .pending
+            .iter()
+            .find(|(_, (at, _))| now.saturating_duration_since(*at) > self.window)
+            .map(|(key, _)| *key)?;
+        let (_, message) = self.pending.remove(&key)?;
+        self.announced.insert(key, now);
+        tracing::debug!(
+            room_id = message.room_id,
+            "大航海购买事件在窗口内没等到播报，按无金额放行"
+        );
+        Some(message)
+    }
+
+    /// 连接收尾：把还压着的购买事件**不论窗口**一律放出去。
+    /// 断连 / 手停都不该吃掉一条已经收到的开通 —— 重连不清缓冲（§12.3），这条同理。
+    pub fn take_pending(&mut self) -> impl Iterator<Item = Message> + '_ {
+        self.pending.drain().map(|(_, (_, message))| message)
+    }
+
+    /// 丢掉窗口外的记录：`announced` 只用于压掉紧跟着到的另一半，`pending` 由 `flush` 负责。
+    fn prune(&mut self, now: Instant) {
+        let window = self.window;
+        self.announced
+            .retain(|_, at| now.saturating_duration_since(*at) <= window);
     }
 }
 
@@ -666,6 +847,9 @@ mod tests {
             // `LIVE` / `PREPARING` 也带一条 `system` 消息（另外那份开播状态由
             // `live_and_preparing_bubble_the_room_status` 单独断言）。
             Some(Dispatch::LiveStatus { message, .. }) => Some(message),
+            // 大航海走 `Dispatch::Guard`（同一笔的两条载荷由 `GuardMerge` 合并，
+            // 见 `guard_pair_is_merged_into_one_announcement_with_the_paid_price`）。
+            Some(Dispatch::Guard { message, .. }) => Some(message),
             Some(Dispatch::RoomStats { .. }) => panic!("期望消息，实际拿到房间观众数"),
             None => None,
         }
@@ -1148,6 +1332,195 @@ mod tests {
         assert!(guard.face.is_empty(), "大航海没有头像字段");
     }
 
+    /// 大航海的两条载荷（`docs/protocol.md` §10.6）：同一笔购买上游拆成
+    /// `GUARD_BUY`（购买事件，`price` = **标价**）与 `USER_TOAST_MSG`（播报，`price` = **实付**）。
+    /// 形状照 2026-09-17 核对过的真实样本（合成 uid / 昵称 / 订单号，数值形态一致）。
+    fn guard_buy(uid: i64, level: i64, price: i64, start: i64) -> Value {
+        json!({
+            "cmd": "GUARD_BUY",
+            "data": {
+                "uid": uid, "username": "开舰长的人", "guard_level": level, "num": 1,
+                "price": price, "gift_name": "舰长", "start_time": start, "end_time": start
+            }
+        })
+    }
+
+    fn guard_toast(uid: i64, level: i64, price: i64, start: i64) -> Value {
+        json!({
+            "cmd": "USER_TOAST_MSG",
+            "data": {
+                "uid": uid, "username": "开舰长的人", "guard_level": level, "num": 1,
+                "price": price, "role_name": "舰长", "start_time": start, "end_time": start,
+                "payflow_id": "2604040000000000000000000"
+            }
+        })
+    }
+
+    fn guard_event(room_id: i64, value: &Value, counters: &Counters) -> (Message, GuardSource) {
+        match dispatch(room_id, value, counters) {
+            Some(Dispatch::Guard { message, source }) => (message, source),
+            _ => panic!("大航海必须产出 Dispatch::Guard（交付前由 GuardMerge 按笔合并）"),
+        }
+    }
+
+    /// `GUARD_BUY.price` 是**标价（原价）**，不得进 `Message.amount`；实付只来自播报。
+    /// 舰长的实测取值：标价 `198000`（= 198 元），实付 `138000`（连续包月）/ `168000`（单月）。
+    #[test]
+    fn guard_buy_price_is_the_list_price_and_never_becomes_the_amount() {
+        let c = counters();
+        let (buy, source) = guard_event(7, &guard_buy(90001, 3, 198_000, 1_775_317_388), &c);
+        assert_eq!(source, GuardSource::Buy);
+        assert_eq!(buy.kind, MessageKind::Guard);
+        assert_eq!(buy.uid, 90001);
+        assert_eq!(buy.uname, "开舰长的人");
+        assert_eq!(buy.amount, 0, "购买事件给的是标价，不能当金额");
+        assert_eq!(buy.guard_level, 3);
+        assert_eq!(buy.content, "开通 舰长 ×1", "名称取 gift_name，数量取 num");
+        assert_eq!(
+            buy.ts, 1_775_317_388_000,
+            "ts 取载荷 start_time（秒 → 毫秒）"
+        );
+        assert!(
+            buy.upstream_id.is_empty(),
+            "GUARD_BUY 没有 payflow_id（真实样本如此）"
+        );
+
+        let (toast, source) = guard_event(7, &guard_toast(90001, 3, 138_000, 1_775_317_388), &c);
+        assert_eq!(source, GuardSource::Toast);
+        assert_eq!(toast.amount, 138_000, "播报的 price 是实付，进金额");
+        assert_eq!(toast.content, "开通 舰长 ×1");
+        assert_eq!(toast.uname, "开舰长的人");
+        assert_eq!(toast.upstream_id, "2604040000000000000000000");
+    }
+
+    /// **issue 2609171849 #1 的回归**：同一笔的两条载荷只投**一条**，金额取实付 ——
+    /// 改前两条都投，界面汇总把标价 198 与实付 138 各算一次（336 元）。
+    #[test]
+    fn guard_pair_is_merged_into_one_announcement_with_the_paid_price() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        let (buy, source) = guard_event(7, &guard_buy(90001, 3, 198_000, 1_775_317_388), &c);
+        assert!(merge.absorb(now, buy, source).is_none(), "购买事件先压着");
+
+        let (toast, source) = guard_event(7, &guard_toast(90001, 3, 138_000, 1_775_317_388), &c);
+        let published = merge
+            .absorb(now + Duration::from_millis(43), toast, source)
+            .expect("同笔的播报要投出去");
+        assert_eq!(published.amount, 138_000, "金额取实付，不是标价 198000");
+        assert_eq!(published.content, "开通 舰长 ×1");
+
+        // 一笔一条：窗口里没有别的产出，等到天荒地老也不会再放一条。
+        assert!(merge.deadline().is_none());
+        assert!(merge.flush(now + Duration::from_secs(600)).is_none());
+    }
+
+    /// 只有购买事件（窗口内没等到播报）：窗口到期后照投一条，**金额留 0** ——
+    /// 标价不是实付，按契约 §5「无法确证时 `0`，不得推算」不拿它冒充。
+    #[test]
+    fn guard_buy_without_a_toast_is_released_without_an_amount() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        let (buy, source) = guard_event(7, &guard_buy(90002, 3, 198_000, 1_775_317_390), &c);
+        assert!(merge.absorb(now, buy, source).is_none());
+        assert_eq!(merge.deadline(), Some(now + Duration::from_secs(5)));
+        assert!(
+            merge.flush(now + Duration::from_secs(4)).is_none(),
+            "窗口没到不放行"
+        );
+
+        let released = merge
+            .flush(now + Duration::from_secs(5) + Duration::from_millis(1))
+            .expect("窗口到期要放行");
+        assert_eq!(released.amount, 0);
+        assert_eq!(released.content, "开通 舰长 ×1");
+        assert!(
+            merge.flush(now + Duration::from_secs(600)).is_none(),
+            "放行过的不再重复"
+        );
+    }
+
+    /// 只有播报（比如连接正好停在两条之间）：立即投，金额即实付。
+    #[test]
+    fn guard_toast_alone_is_published_immediately() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+        let (toast, source) = guard_event(7, &guard_toast(90003, 3, 168_000, 1_775_317_400), &c);
+        let published = merge.absorb(now, toast, source).expect("播报不必等另一半");
+        assert_eq!(published.amount, 168_000);
+        assert!(merge.deadline().is_none());
+    }
+
+    /// 同一笔的第二条载荷（方向不限、含重连补发）一律压掉；两笔不同的购买互不串台。
+    #[test]
+    fn a_second_payload_of_the_same_purchase_is_suppressed() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        // 反向顺序：播报先到，随后到的购买事件属于同一笔 → 压掉。
+        let (toast, source) = guard_event(7, &guard_toast(90003, 3, 168_000, 1_775_317_400), &c);
+        assert_eq!(merge.absorb(now, toast, source).unwrap().amount, 168_000);
+        let (late_buy, source) = guard_event(7, &guard_buy(90003, 3, 198_000, 1_775_317_400), &c);
+        assert!(
+            merge
+                .absorb(now + Duration::from_millis(20), late_buy, source)
+                .is_none(),
+            "同一笔已经投过，第二条不再投"
+        );
+
+        // 同一笔的购买事件重复到达 —— 也只留一条。
+        let (first, s1) = guard_event(7, &guard_buy(90004, 3, 198_000, 1_775_317_410), &c);
+        let (again, s2) = guard_event(7, &guard_buy(90004, 3, 198_000, 1_775_317_410), &c);
+        assert!(merge.absorb(now, first, s1).is_none());
+        assert!(merge
+            .absorb(now + Duration::from_millis(5), again, s2)
+            .is_none());
+
+        // 另一笔（uid 不同）同时压着：两条各自成行，不互相吞。
+        let (other_buy, s3) = guard_event(7, &guard_buy(90005, 3, 198_000, 1_775_317_410), &c);
+        assert!(merge
+            .absorb(now + Duration::from_millis(6), other_buy, s3)
+            .is_none());
+        let (other_toast, s4) = guard_event(7, &guard_toast(90005, 3, 138_000, 1_775_317_410), &c);
+        assert_eq!(
+            merge
+                .absorb(now + Duration::from_millis(40), other_toast, s4)
+                .unwrap()
+                .amount,
+            138_000
+        );
+
+        // 只剩 90004 那条「没等到播报」的要放行（金额 0），90005 已随播报投过。
+        let released = merge
+            .flush(now + Duration::from_secs(6))
+            .expect("该放 90004");
+        assert_eq!(released.uid, 90004);
+        assert_eq!(released.amount, 0);
+        assert!(merge.flush(now + Duration::from_secs(600)).is_none());
+    }
+
+    /// 断连收尾：还压着的购买事件**不论窗口**一律放出去 —— 重连不清缓冲（§12.3），
+    /// 一条已经收到的开通不该随连接一起消失。
+    #[test]
+    fn take_pending_releases_everything_on_connection_end() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+        for (uid, start) in [(90006, 1_775_317_420), (90007, 1_775_317_421)] {
+            let (buy, source) = guard_event(7, &guard_buy(uid, 3, 198_000, start), &c);
+            assert!(merge.absorb(now, buy, source).is_none());
+        }
+        let released: Vec<Message> = merge.take_pending().collect();
+        assert_eq!(released.len(), 2, "两条都还没投过，收尾时一并放行");
+        assert!(released.iter().all(|message| message.amount == 0));
+        assert!(merge.take_pending().next().is_none(), "放完就空了");
+    }
+
     #[test]
     fn cmd_with_suffix_is_recognised() {
         let payload = json!({
@@ -1267,28 +1640,9 @@ mod tests {
     }
 
     #[test]
-    fn guard_buy_uses_the_documented_fields() {
-        // 形状取自社区文档的字段表（尚无真实样本，见 A33）。
-        let payload = json!({
-            "cmd": "GUARD_BUY",
-            "data": {
-                "uid": 12345, "username": "开舰长的人",
-                "guard_level": 3, "num": 1, "price": 138000,
-                "gift_id": 10003, "gift_name": "舰长", "start_time": 1_789_179_000
-            }
-        });
-        let m = message(7, &payload, &counters()).expect("必须解出大航海");
-        assert_eq!(m.kind, MessageKind::Guard);
-        assert_eq!(m.uname, "开舰长的人");
-        assert_eq!(m.guard_level, 3);
-        assert_eq!(m.amount, 138000, "price 是金瓜子（文档记 CNY×1000）");
-        assert_eq!(m.content, "开通 舰长 ×1");
-        assert_eq!(m.ts, 1_789_179_000_000, "start_time 是秒级");
-    }
-
-    #[test]
     fn user_toast_msg_falls_back_to_the_level_title() {
-        // USER_TOAST_MSG 没有昵称字段，且 role_name 可能缺失——此时按等级补名字。
+        // `role_name` 可能缺失——此时按等级补名字（`username` 的兜底链同理：
+        // 实测样本里有 `username`，字段表却说没有，因此**两条路都要留着**）。
         let payload = json!({
             "cmd": "USER_TOAST_MSG",
             "data": {"guard_level": 2, "num": 2, "price": 2000000}
@@ -1296,7 +1650,7 @@ mod tests {
         let m = message(7, &payload, &counters()).expect("必须解出播报");
         assert_eq!(m.guard_level, 2);
         assert_eq!(m.content, "开通 提督 ×2");
-        assert_eq!(m.amount, 2000000);
+        assert_eq!(m.amount, 2000000, "播报的 price 是实付");
     }
 
     #[test]

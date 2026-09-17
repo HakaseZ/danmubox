@@ -1471,7 +1471,7 @@ mod tests {
         );
 
         // ① 进房间：建会话，适配器去连。
-        spawn_runtime(&mut rooms, ROOM, 16, bus.clone(), Arc::clone(&counters), Arc::clone(&source))
+        spawn_runtime(&mut rooms, ROOM, BufferCaps::default(), bus.clone(), Arc::clone(&counters), Arc::clone(&source))
             .unwrap();
         settle().await;
         assert_eq!(attempts.load(Ordering::SeqCst), 1, "进房间必须真的去连");
@@ -1487,7 +1487,7 @@ mod tests {
         refresh_room(
             &mut rooms,
             ROOM,
-            16,
+            BufferCaps::default(),
             bus.clone(),
             Arc::clone(&counters),
             || Ok(Arc::clone(&source)),
@@ -1549,7 +1549,7 @@ mod tests {
             },
         );
 
-        spawn_runtime(&mut rooms, ROOM, 16, bus, counters, source)
+        spawn_runtime(&mut rooms, ROOM, BufferCaps::default(), bus, counters, source)
             .expect("主线程（无 runtime 上下文）上刷新也必须能把会话建起来");
 
         assert!(

@@ -172,12 +172,12 @@ graph TD
 
   subgraph R1["房内会话 #1（room_id=A）"]
     L1["LiveSource（bili impl）"] --> N1["归一化产物 Message"]
-    B1["会话缓冲 VecDeque（上限 history.buffer_rows）"]
+    B1["会话缓冲：按 kind 分道的 VecDeque<br/>（各档上限 history.buffer_rows_*）"]
     H1["自动重连：5s 起、60s 封顶 ±20% 抖动"]
   end
   subgraph R2["房内会话 #2（room_id=B）"]
     L2["LiveSource（bili impl）"] --> N2["归一化产物 Message"]
-    B2["会话缓冲 VecDeque（上限 history.buffer_rows）"]
+    B2["会话缓冲：按 kind 分道的 VecDeque<br/>（各档上限 history.buffer_rows_*）"]
     H2["自动重连：5s 起、60s 封顶 ±20% 抖动"]
   end
 
@@ -204,13 +204,13 @@ graph TD
 
 | 项 | 规则 |
 |---|---|
-| 所有者 | `core::session` 的 `RoomRuntime`（`session.rs:150`）：每个活跃房间一个，随一次房内会话建立、随 `close()` 销毁 |
+| 所有者 | `core::session` 的 `RoomRuntime`（`session.rs:315`）：每个活跃房间一个，随一次房内会话建立、随 `close()` 销毁 |
 | 创建 | 进入某直播间（`rooms_connect` 成功建立会话）时创建，与 `RoomSession`（我在该房间的身份）同生命周期 |
 | 销毁 | 离开该房间即**销毁并清空**：`rooms_disconnect` / `rooms_remove` / 关闭房间标签 / 进程退出。再次进入同一房间是全新会话，缓冲为空 |
-| 容量 | 5000 条环形缓冲，容量由偏好键 `history.buffer_rows` 覆盖；超出丢最旧 |
-| 写入 | 只有该房间的 collector 任务写入；`MessageBuffer::push` 在 `push_back` 后若超容则 `pop_front`，常量时间（`session.rs:104`） |
-| 读取 | 只有 `history_query` 命令读，经 `Arc<Mutex<MessageBuffer>>` 的 `query`（`session.rs:123`），供当前会话内向上回滚查看 |
-| 偏好变更 | `history.buffer_rows` 只在**建立会话时**读取一次（`apps/desktop/src-tauri/src/lib.rs:259`）：改动对下一次 `rooms_connect` 生效，当前会话容量不变 |
+| 容量 | **按 `kind` 分道**（契约 §4.3）：六档上限各由一枚 `history.buffer_rows_*` 覆盖，礼物档内部再按金额切三档；每道超出丢自己的最旧一条 |
+| 写入 | 只有该房间的 collector 任务写入；`MessageBuffer::push` 先按 `kind`（礼物再按金额）选道（`session.rs:259`），再在 `push_back` 后若超该道上限则 `pop_front`，常量时间 |
+| 读取 | 只有 `history_query` 命令读，经 `Arc<Mutex<MessageBuffer>>` 的 `query`（`session.rs:284`）：先把各道归并回**到达顺序**（`local_id` 升序）再过滤，供当前会话内向上回滚查看 |
+| 偏好变更 | 六枚 `history.buffer_rows_*` 只在**建立会话时**读取一次（`apps/desktop/src-tauri/src/lib.rs:335`）：改动对下一次 `rooms_connect` 生效，当前会话各档容量不变 |
 | 不变量 | 不落盘、不跨会话、不导出；除本会话缓冲外，core 不保留任何历史 |
 
 ### 4.3 通道与背压
@@ -218,18 +218,18 @@ graph TD
 | 通道 | 类型 | 容量（设计值） | 语义 |
 |---|---|---|---|
 | 端口产出 → bus | `broadcast::Sender<Event>` | `EventBus::DEFAULT_CAPACITY = 1024`（`bus.rs:68`） | 多订阅者扇出，每个订阅者独立游标；写端永不阻塞 |
-| 端口产出 → 会话缓冲 | collector 任务直接写 | 由 `history.buffer_rows` 决定 | 常量时间写入，不经过跨 task 队列 |
-| 命令面 → driver | `Arc<Notify>`（`session.rs:159`）+ `Cancel` 令牌 | 手动重连 / 取消各一路 | 唤醒 driver 的 `select`，不与收包竞争缓冲 |
-| `history_query` → 缓冲 | `Arc<Mutex<MessageBuffer>>`（`session.rs:152`） | — | 只读查询，持锁时间 = 一次快照拷贝 |
+| 端口产出 → 会话缓冲 | collector 任务直接写 | 由 `history.buffer_rows_*` 的六档决定 | 常量时间写入（选道 + FIFO 追加），不经过跨 task 队列 |
+| 命令面 → driver | `Arc<Notify>`（`session.rs:324`）+ `Cancel` 令牌 | 手动重连 / 取消各一路 | 唤醒 driver 的 `select`，不与收包竞争缓冲 |
+| `history_query` → 缓冲 | `Arc<Mutex<MessageBuffer>>`（`session.rs:317`） | — | 只读查询，持锁时间 = 一次快照拷贝 |
 
 背压与丢弃策略：
 
 | 场景 | 行为 |
 |---|---|
-| 订阅者落后（`Lagged`） | collector 记 `warn` 后继续接收（`session.rs:243`）——丢弃的是该订阅者落后区间内的消息，界面另有 `history_query` 全量覆盖兜底（§4.5） |
-| 会话缓冲溢出 | 丢最旧一条（`MessageBuffer::push` 的 `pop_front`，`session.rs:112`） |
+| 订阅者落后（`Lagged`） | collector 记 `warn` 后继续接收（`session.rs:408`）——丢弃的是该订阅者落后区间内的消息，界面另有 `history_query` 全量覆盖兜底（§4.5） |
+| 会话缓冲溢出 | 只丢**该道**最旧一条（`MessageBuffer::push` 的 `pop_front`，`session.rs:264`）：别的档不受影响，互动洪水不会顶掉弹幕 |
 | 上游推送无法识别 | 不打断连接：命中 `SYSTEM_CMDS` 的按 `system` 归一化，其余丢弃并计入 `unknown_cmd`（`bili/cmd.rs:136`） |
-| 前端渲染跟不上 | 前端不向 core 回压：广播投递不等待订阅者，缓冲由后端按 `history.buffer_rows` 独立裁剪 |
+| 前端渲染跟不上 | 前端不向 core 回压：广播投递不等待订阅者，缓冲由后端按 `history.buffer_rows_*` 各档独立裁剪 |
 
 不采用的策略：无界队列（内存不可控）、写端阻塞（一个慢订阅者冻结整个房间）、静默丢包（前端与 core 会话缓冲不一致）。
 
@@ -246,8 +246,8 @@ sequenceDiagram
   participant B as 会话缓冲
   U->>C: invoke("rooms_reconnect", { roomId })
   C->>S: RoomRuntime::reconnect()
-  S->>D: restart.notify_one()（session.rs:335）
-  D->>D: 取消当前连接的子令牌并等它在途收场（session.rs:300–304）
+  S->>D: restart.notify_one()（session.rs:500）
+  D->>D: 取消当前连接的子令牌并等它在途收场（session.rs:460–464）
   D->>D: 立即进入下一轮：重新取连接参数、重新建连
   Note over D: 不走退避等待；连接前重新 getDanmuInfo
   D-->>S: 状态事件 Connecting（"手动重连"）→ 事件总线 → danmubox://room
@@ -273,25 +273,25 @@ graph LR
   DEC --> CMD["crates/danmubox-bili/src/cmd.rs:72<br/>dispatch：cmd → kind"]
   CMD --> SINK["crates/danmubox-core/src/bus.rs:214<br/>publish_with（去重 + local_id）"]
   SINK --> BUS["crates/danmubox-core/src/bus.rs:63<br/>EventBus（broadcast）"]
-  BUS --> BUF["crates/danmubox-core/src/session.rs:230<br/>collector → MessageBuffer"]
+  BUS --> BUF["crates/danmubox-core/src/session.rs:395<br/>collector → 分道 MessageBuffer"]
   BUS --> BRIDGE["apps/desktop/src-tauri/src/lib.rs:821<br/>Tauri 事件桥"]
   BRIDGE --> EVT["danmubox://message 等事件"]
   EVT --> STORE["apps/desktop/ui/src/store.ts:414<br/>onMessage"]
 ```
 
 - **一份产出、两处消费**：同一条 `Message` 既进总线（→ 事件桥 → 界面），也进该房间的会话缓冲。两条路径互不阻塞：缓冲写入是 collector 任务内的常量时间操作，广播投递不阻塞发送端。
-- **回填与实时同一条路**：进场回填走 `publish_history`（`bus.rs:199`），实时走 `publish_message`（`bus.rs:189`），两者都落到 `publish_with`（`bus.rs:214`）；差别只在「是否计入 `messages` 计数、是否参与去重」。回填在建立连接**之前**铺进总线（driver 任务，`session.rs:254` 起），因此顺序天然是「历史在前、实时在后」，不需要额外排序。
+- **回填与实时同一条路**：进场回填走 `publish_history`（`bus.rs:199`），实时走 `publish_message`（`bus.rs:189`），两者都落到 `publish_with`（`bus.rs:214`）；差别只在「是否计入 `messages` 计数、是否参与去重」。回填在建立连接**之前**铺进总线（driver 任务，`session.rs:419` 起），因此顺序天然是「历史在前、实时在后」，不需要额外排序。
 - **前端消费两条路**：事件流与 `history_query` 快照（命令见 `ipc.md`）。因此去重必须做在两处（§4.7）——只挡缓冲挡不住事件。
 
 ### 4.6 取消树与孤儿连接不变量
 
-一次房内会话 = 一个 `RoomRuntime`；`spawn_on`（`session.rs:193`）起三个受监督任务：身份（`session.rs:214`）、collector（`:230`）、driver（`:254`）。
+一次房内会话 = 一个 `RoomRuntime`；`spawn_on`（`session.rs:358`）起三个受监督任务：身份（`session.rs:379`）、collector（`:395`）、driver（`:419`）。
 
-**不变量：连接必须挂在会话的取消树上。** 每次连接用 `Cancel::child(&session)`（`session.rs:283`）从会话令牌派生**子令牌**，连接本身跑在 driver 另起的任务里；会话取消时 `select` 的取消分支会 `connection.cancel()` 并等它在途收场（`session.rs:295`–`:299`）。
+**不变量：连接必须挂在会话的取消树上。** 每次连接用 `Cancel::child(&session)`（`session.rs:448`）从会话令牌派生**子令牌**，连接本身跑在 driver 另起的任务里；会话取消时 `select` 的取消分支会 `connection.cancel()` 并等它在途收场（`session.rs:460`–`:464`）。
 
-`close()`（`session.rs:356`）做四件事：广播 `RoomClosed` → 取消会话令牌 → abort 三个受监督任务 → 清空缓冲；`Drop`（`session.rs:371`）兜底。
+`close()`（`session.rs:522`）做四件事：广播 `RoomClosed` → 取消会话令牌 → abort 三个受监督任务 → 清空缓冲；`Drop`（`session.rs:537`）兜底。
 
-> 这条不变量的由来（用户报的「界面上出现 ×2」）见 [`../CHANGELOG.md`](../CHANGELOG.md) 与 [`decisions/0006-room-supervisor-tasks.md`](decisions/0006-room-supervisor-tasks.md)：此前子令牌不是从会话派生的，`close()` 只能 abort driver，在途连接无人取消而成为**孤儿连接**，重进同一房间即有两条 WS 同时投递。回归测试：`closing_a_session_stops_its_connection_for_good`（`session.rs:855`）与 `a_backfilled_danmaku_is_not_repeated_by_the_live_path`（`session.rs:902`）。
+> 这条不变量的由来（用户报的「界面上出现 ×2」）见 [`../CHANGELOG.md`](../CHANGELOG.md) 与 [`decisions/0006-room-supervisor-tasks.md`](decisions/0006-room-supervisor-tasks.md)：此前子令牌不是从会话派生的，`close()` 只能 abort driver，在途连接无人取消而成为**孤儿连接**，重进同一房间即有两条 WS 同时投递。回归测试：`closing_a_session_stops_its_connection_for_good`（`session.rs:1244`）与 `a_backfilled_danmaku_is_not_repeated_by_the_live_path`（`session.rs:1291`）。
 
 ### 4.7 三道去重闸
 
@@ -358,8 +358,8 @@ sequenceDiagram
 | 步骤 | 动作 | 目的 |
 |---|---|---|
 | 1 | 接收退出信号 / Tauri 窗口关闭 | 进入优雅关闭，拒绝新命令 |
-| 2 | 取消所有房内会话（`RoomRuntime` 的取消令牌，`session.rs:356` 的 `close()` / `:371` 的 `Drop`） | 停止收包；停止写会话缓冲 |
-| 3 | 取消令牌使在途连接结束（`session.rs:295`–`:299`），不发显式 Close 帧 | 让服务端尽快回收连接 |
+| 2 | 取消所有房内会话（`RoomRuntime` 的取消令牌，`session.rs:522` 的 `close()` / `:537` 的 `Drop`） | 停止收包；停止写会话缓冲 |
+| 3 | 取消令牌使在途连接结束（`session.rs:460`–`:464`），不发显式 Close 帧 | 让服务端尽快回收连接 |
 | 4 | 丢弃全部会话缓冲与房间列表 | 缓冲不落盘，进程退出即丢（契约 §4.3） |
 | 5 | 进程退出 | — |
 

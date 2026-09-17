@@ -293,7 +293,12 @@ type PrefsSnapshot = {            // contract.md §8 的 18 键全量，键名�
   "filter.uids": number[];
   "filter.kinds": MessageKind[];      // 默认不含 "system"（系统类消息默认不显示）
   "filter.medal_level_min": number;
-  "history.buffer_rows": number;
+  "history.buffer_rows_danmaku": number;    // 会话缓冲各档上限（契约 §4.3 / §8）
+  "history.buffer_rows_gift": number;       //   礼物档内部再按金额切低 10% / 中 40% / 高 50%
+  "history.buffer_rows_superchat": number;
+  "history.buffer_rows_guard": number;
+  "history.buffer_rows_interact": number;   // 互动/进场档：刻意小于弹幕档
+  "history.buffer_rows_system": number;     // 系统通知档：刻意小于弹幕档
   "ui.recent_watched": Record<string, number>;  // 房间号 → 最近一次打开的时刻（UTC 毫秒）
 };
 
@@ -552,7 +557,7 @@ sequenceDiagram
 
 | 项 | 上限 | 超出行为 |
 |---|---|---|
-| core 会话缓冲（权威，`history.buffer_rows`） | 见 `contract.md` §8 | 丢最旧；前端显示上限只影响渲染侧 |
+| core 会话缓冲（权威，按 `kind` 分道） | 各档见 `contract.md` §4.3 / §8 的六枚 `history.buffer_rows_*` | 只丢**该道**最旧；前端显示上限只影响渲染侧 |
 | 前端 `messages` | `CLIENT_MESSAGE_CAP` = 2000 条 | 丢最旧 |
 | 前端 `logs` | `LOG_CAP` = 200 行 | 丢最旧 |
 | `emotes` / `ownedEmotes` | 无独立上限 | 随房间 / 会话变化整体替换；换人即清空（同 `ownedLoaded` / `ownedError` / `balance`） |

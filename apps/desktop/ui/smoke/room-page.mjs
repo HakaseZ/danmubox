@@ -467,7 +467,13 @@ const MOCK = (theme) => `(function () {
     // 默认白名单**不含 system**（契约 §8.1 / §4.8）：系统行默认不渲染，
     // 要看就现场勾「消息类型 → 系统」那一项（step4）。
     "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard"],
-    "filter.medal_level_min": 0, "history.buffer_rows": 5000,
+    "filter.medal_level_min": 0,
+    // 会话缓冲的六档上限（契约 §4.3 / §8，issue 2609171849 第 3 条）：旧的单一键
+    // history.buffer_rows 已删除，替身跟着换成六枚。这几枚界面不读（裁剪在 Rust 侧），
+    // 但替身必须与 prefs_get 同形 —— 否则它就不再是「照抄契约 §8」的那一份。
+    "history.buffer_rows_danmaku": 5000, "history.buffer_rows_gift": 2000,
+    "history.buffer_rows_superchat": 500, "history.buffer_rows_guard": 200,
+    "history.buffer_rows_interact": 300, "history.buffer_rows_system": 200,
     // 「最近观看」（契约 §8）：离线甲（room 300）先看过，**夹具第 1 条**（真实取样）后看过 ——
     // 用来看排序是否真的按它降序（见场景 step1 的 #16 断言）。
     "ui.recent_watched": { "300": 1789900000000, "${FOLLOW_FIXTURE[0].room_id}": 1789990000000 }

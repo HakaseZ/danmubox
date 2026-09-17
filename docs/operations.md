@@ -183,14 +183,15 @@ sid = ""
 
 ### 1.5 偏好文件 `prefs.json`
 
-界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为契约 §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_in_danmaku`、`ui.gift_panel`、`filter.kinds`、`history.buffer_rows`）。只存被显式改过的键，缺失的键回落到默认值（契约 §4.2）。
+界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为契约 §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_in_danmaku`、`ui.gift_panel`、`filter.kinds`、`history.buffer_rows_danmaku`）。只存被显式改过的键，缺失的键回落到默认值（契约 §4.2）。
 
 ```json
 {
   "ui.theme": "dark",
   "ui.gift_in_danmaku": false,
   "ui.gift_panel": true,
-  "history.buffer_rows": 8000
+  "history.buffer_rows_danmaku": 8000,
+  "history.buffer_rows_interact": 300
 }
 ```
 
@@ -787,7 +788,7 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 |---|---|---|
 | 应用本体（不含内嵌 WebView2 安装器） | 10¹ MB | Tauri 的定位是「小包体」；sidecar 方案已在 [`decisions/0001-tauri-over-flutter.md`](decisions/0001-tauri-over-flutter.md) 否决——它会把包体推回 40MB+，抵消 Tauri 的体积优势 |
 | Windows 安装器额外体积 | 0 / ~1.8MB / ~127MB / ~180MB 四档 | Tauri 官方 `webviewInstallMode` 对照表给出的增量：`downloadBootstrapper` 0 / `embedBootstrapper` ~1.8MB / `offlineInstaller` ~127MB / `fixedVersion` ~180MB |
-| 常驻内存 | 10² MB | 结构上由「WebView 渲染进程 + Rust 引擎」构成，其中 WebView 通常是大头；弹幕仅在内存环形缓冲内保存（`history.buffer_rows` 默认 5000 条），不是主要占用 |
+| 常驻内存 | 10² MB | 结构上由「WebView 渲染进程 + Rust 引擎」构成，其中 WebView 通常是大头；消息仅在内存环形缓冲内保存（按类型分档，六档之和默认 8200 条/房间，见 `contract.md` §4.3），不是主要占用 |
 
 参考来源（官方文档，核对日期 2026-09-11）：Tauri 2 Prerequisites、macOS Application Bundle、Windows Installer（WebView2 安装模式与体积对照）、Android 打包（versionCode 派生规则与产物路径）。
 

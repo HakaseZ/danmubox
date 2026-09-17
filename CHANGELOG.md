@@ -457,6 +457,47 @@
 
 ### Fixed
 
+- **界面三处：弹幕行的选中底色改全宽、SC 卡片只盖内容部、上下分区之间画出分界线**（issue `2609171849` 第 4 条的三点；
+  规格：`docs/ui.md` §4.10（新增）/ §4.1（SC 行）/ §5.4（分界线）/ §9.2（两枚新令牌）/ §2.3（钩子表））。
+  - **选中一条弹幕时，那层绿底从界面最左铺到最右**（用户原话：「现在这个卡在头像上有点不好看」）。
+    **根因不是底色画窄了，而是压根没有行级选中态**：用户看到的那层绿底是浏览器自己的 `::selection`
+    高亮 —— 它贴着**字形**画，头像那一列是空的，所以绿底被头像卡住、两侧也到不了界面边缘（「卡在头像上」）。
+    改法是把底色从字形搬到整行：`.row` 向两侧各探一道 `--sp-3`（`padding-inline` + 等量负 `margin-inline`，
+    正好吃掉 `.scroller` 的左右内边距，**内容一个像素都不动**——动的只是行盒的左右边界，悬停洗色因此同样铺满整条），
+    行内 `::selection` 置透明（否则整行一层绿、字上再叠一层更深的绿），整行底色由新令牌 `--select-wash`
+    给出、`data-selected` 驱动（`MessageRow`：**一份** document 级 `selectionchange` 监听 + 每行一次
+    `useSyncExternalStore` 订阅，判据是 `Range.intersectsNode(row)` —— 跨多行拖选时被碰到的每一行都亮，
+    松开即收回）。**选中的语义一条没少**：文字照样可选、可复制，`db-msg-body` 的 `user-select` 仍是 `text`
+    （`immersiveKeepsTextSelection` 钉的就是这两件事），非弹幕行的选区高亮不受影响。
+  - **SC 卡片只盖内容部**（用户原话：「仅显示在内容部分，也就是用户名、身份牌下面的区域，也是为了好看一点」）。
+    卡片从**行**上（`.row.scCard`：把头像列与身份行一起圈住）搬到正文块里包住「正文行 + 金额行」的那个节点
+    （钩子 `db-msg-sc-card` / `db-gift-sc-card`；与身份行之间那道缝是 `margin-top: --sp-1`），
+    头像列与身份行因此都在框外。行的 `data-sc-tier` 与档位令牌不变，`.row.scCard:hover` 那条随卡片搬迁一并删除。
+  - **上下分区画出分界线**（用户原话：「分割独立礼物栏的那个横折叠区域，弄点横线或者虚线之类的
+    （类似于折叠屏分屏的那个提示），而且现在 2 区间没有任何边界，有点不便于区分区域」）。改前那条线是挂在
+    `::before` 上的 1px `--border` 发丝线：**深色对底色 1.56:1、浅色 1.02:1**（几乎看不见）—— 用户的
+    「没有任何边界」就是它。现在线画在分割条**自己的顶边**上、改画**虚线** + 新令牌 `--fold-line`
+    （= `--fg-subtle`）：**4.4:1 / 3.88:1**（非文字图形要素的 3:1 达标线）；`::before` 那条整条删掉，
+    不是叠着画。悬停 / 键盘聚焦 / 拖动中改画**实线强调色**（「这里能拖」的提示照旧；1 → 2px 不改热区外层高度，
+    两栏的高度分配不被这条提示推动）。
+  - **实测**（本票自建探针：同一份断言表达式，Playwright **WebKit**（宿主引擎）与 **Chromium** 各跑一遍、
+    深浅两主题都成立）：行盒左边缘 − 滚动容器左边缘 = **0**、行盒右边缘 − 容器 `clientWidth` 右边缘 = **0**、
+    行盒比头像列左边缘还靠左 **12px**（改前这个差值是 0）、正文左边缘仍 = 用户名左边缘；
+    选中底色 = `--select-wash` 的计算值、G 通道占优（绿）、清掉选区后底色收回；
+    卡片顶边在身份行底边下方 **4px**、左边在头像列右边缘右侧、正文与金额行都在框内、行上不再有卡片类名；
+    分界线是 `dashed 1px` + `--fold-line` 的计算色、落在两栏之间。
+    冒烟断言（整块包在 `rowSelectBlockRan` / `scCardBlockRan` / `foldLineBlockRan` 里）：
+    `rowBoxFullBleed` / `rowBoxCoversAvatarColumn` / `rowFullBleedKeepsIndent` / `rowSelectedMarked` /
+    `rowSelectedUsesSelectWash` / `rowSelectedWashGreen` / `rowSelectionGlyphTransparent` /
+    `rowSelectionTextKept` / `rowSelectionCleared`、`scCardBelowIdentity` / `scCardOutsideAvatarCol` /
+    `scCardHoldsBodyAndAmount` / `scCardInsideRow` / `scCardRowUntouched`、`foldLineIsDashed` /
+    `foldLineUsesToken` / `foldLineContrastOnCanvas` / `foldLineOldBorderContrast`（反面对照）/
+    `foldLineSeparatesPanes` / `foldLinePseudoGone`。
+  - **闸门**：`npx tsc -b`、`npm run build`、`node --check smoke/room-page.mjs`、
+    `node smoke/run-headless.mjs --precheck` 四条全过。**无头冒烟按用户口径未跑**（子 agent 不跑，
+    留给主流程在集成收尾时统一跑那一次）—— 这一票新增/改动的断言因此**登记为待主流程执行**。
+    真机观感（macOS / Android 上的实际观感与触摸选中）**未验证**。
+
 - **Android：顶栏与输入区不再被系统栏遮挡（edge-to-edge 的 inset）**（提交 `32dcefc`；Android 独有的用户可见变化）。Tauri 的 Android 外壳本就是 edge-to-edge，`targetSdk 36` 起系统强制这一形态，而界面此前完全不知道这件事。**改前实测**（AVD pixel_6 / 1080×2400 @420dpi / Android 15）：状态栏占 `y=0..128`、底部手势栏占 `y=2337..2400`，房间页顶栏整条落在状态栏带里（标题文本 `y=68..116`、右上主题按钮 `y=74..114`，与系统电池图标直接重叠），输入区白底一路画到 `y=2399`、压在手势栏下。**关键事实：WebView 里拿不到系统栏高度**——`env(safe-area-inset-*)` 只报刘海（同一次实测 `top=129` / `bottom=0` 设备像素，而状态栏是 128、手势栏是 63），按它排版底部一定让不开、无刘海机型上顶部也一并失效；所以改从原生取 `WindowInsets`（含 ime）换算成 CSS 变量 `--safe-top` / `--safe-bottom` 下发（落点 `apps/desktop/src-tauri/gen/android/app/src/main/java/dev/kksk/danmubox/MainActivity.kt`，即本仓库对上游模板的**第三处**改，见 `docs/operations.md` §5.3），页面在 `body` 上让开。**改后实测**（同一 AVD）：顶栏文本 `y=196..244`、主题按钮 `y=202..242`（状态栏图标仍在 47..80，互不相交）、房间页顶栏让到 128、输入区白底止于 2338（= 手势栏上沿 2337），`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL / AndroidRuntime。**桌面端是空操作**：令牌默认值走 `env()`，桌面窗口解析成 0，已在 Chromium 与 WebKit 两处实测 `body` 内边距恒为 0px。没有走「给 WebView 设 padding」，原因是那样系统栏后面会露出 Android 主题色的 `windowBackground`，与界面里可强制的 `ui.theme` 不同步。
 - **上游用非 JSON 页面应答时，错误信息不再只剩一句「解码失败」**（用户 `2609132259` #6：房管面板里报
   `upstream error: 响应解析失败: error decoding response body（UPSTREAM_ERROR）`，「我啥也没干」）。

@@ -1742,6 +1742,29 @@
 > **产物**（自用，本批**重新打包**，构建方式见 `docs/operations.md` §5.3 / §5.4 / §5.7）：macOS `danmubox_0.1.0_aarch64.dmg` **5,069,549 字节**（`hdiutil verify` → checksum VALID；独立可执行 14,047,856 字节、前端已内嵌；**真启动 20 秒存活、`panic`/`ERROR` 零命中**，启动日志里可见 `api.live.bilibili.com/room/v1/Room/get_status_info_by_uids` 轮询 ＝ P124 那条链路在打包产物里是活的）；Android `danmubox_0.1.0_universal-release.apk` **54,854,528 字节**（四 ABI `arm64-v8a/armeabi-v7a/x86/x86_64`，`apksigner verify` → **Verifies**、v2 签名、签名者 `CN=danmubox`，包名 `dev.kksk.danmubox` / 0.1.0 (1000) / targetSdk 36）。两份都在 `.android-env/dist/`，**覆盖了 09-16 那两份不含本批改动的旧产物**。
 > **未验证**：三端手工冒烟清单（`docs/testing.md` §10）、真机 macOS / Android 观感、`docs/protocol.md` A46–A47 等既有未验证项。
 
+### Fixed
+
+- **大航海（舰长 / 提督 / 总督）的开通金额被统计了两遍，其中一遍是原价**（`issue` 2609171849 #1；分支 `fix/2609171849-guard-amount`）。
+  **根因两处**：① `crates/danmubox-bili/src/cmd.rs` 的 `dispatch` 把**同一笔开通**的两条载荷 ——
+  `GUARD_BUY`（购买事件）与 `USER_TOAST_MSG`（播报）—— 各自归一出**一条** `guard` 消息，而
+  `docs/protocol.md` §10.6 / §12.3 早就写明「按时间窗合并为一条播报」：**那条合并从未实现**
+  （全仓没有任何按笔去重），于是界面 `RoomView.tsx` 的礼物栏汇总把同一笔的两个金额都加进统计；
+  ② 金额取的是 `data.price`，而两条载荷的 `price` **语义不同**。
+  **实测口径**（2026-09-17 核对抓包样本：某个在播房间的两次长窗口采集、去重后 1680 笔舰长 / 提督开通）：
+  `GUARD_BUY.price` 舰长**恒为 `198000`**（= 198 元，1640 笔无一例外）、提督 `1998000`；
+  `USER_TOAST_MSG.price` 舰长 `138000`（连续包月，1174 笔）/ `168000`（单月，398 笔）/ `198000`（无折扣，68 笔），
+  提督 `1998000`（14 笔）/ 折后 `1598000`（2 笔）。两条**逐条一一配对**、播报恒在后（间隔 p50 43ms / p99 1.99s / 最大 2.16s，699 对）。
+  所以改前界面汇总出的是 `198 + 138 = 336 元`，而不是实付的 `138 元`。
+  **修法**：`guard()` 只把**播报**的 `price` 写进 `Message.amount`（购买事件的标价不入金额，仅在 `debug` 留读数）；
+  新增 `cmd::GuardMerge`（窗口 5s、键 = `uid` + `guard_level` + 起始时间）把同一笔的两条合成**一条**播报 ——
+  `ws.rs` 读循环按需 arm 一个到期分支（没有待放项时不加唤醒），连接收尾时统一放行未投的购买事件；
+  只有购买事件、窗口内等不到播报时按 `amount = 0` 放行（契约 §5「无法确证时 `0`，不得推算」，不拿标价冒充实付）。
+  **闸门读数（本票 worktree，未跑冒烟 —— 留给主流程）**：`cargo test -p danmubox-bili` **196 passed / 0 failed**、
+  `cargo clippy -p danmubox-bili --all-targets -- -D warnings` **零告警**、`npx tsc -b` 与 `npm run build` 通过、
+  `node --check smoke/room-page.mjs` 与 `node smoke/run-headless.mjs --precheck` 通过。
+  文档：`docs/protocol.md` §10.6 / §12.3 / A12 / A13 / A33、`docs/contract.md` §5、`docs/ui.md` §5.3、
+  冒烟夹具 `gift-sc-guard-rows.json` 的 guard 条目。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

@@ -63,37 +63,185 @@ impl HistoryQuery {
     }
 }
 
+/// 会话缓冲各档上限（`docs/contract.md` §4.3 / §8）。
+///
+/// **按 `kind` 分档**：弹幕一条道，礼物再按金额分三档（价值越高留得越多），
+/// SC / 大航海 / 互动 / 系统各一条道 —— 互动与系统那两档刻意小得多，
+/// 它们量大或价值低，不能让它们把弹幕挤出去。
+///
+/// 数值来自偏好键 `history.buffer_rows_*`，**只在建立会话时读一次**。
+/// [`BufferCaps::default`] 必须与契约 §8 的默认值逐项一致（`prefs.rs` 有单测把住）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferCaps {
+    pub danmaku: usize,
+    pub gift: usize,
+    pub superchat: usize,
+    pub guard: usize,
+    pub interact: usize,
+    pub system: usize,
+}
+
+impl Default for BufferCaps {
+    fn default() -> Self {
+        Self {
+            danmaku: 5000,
+            gift: 2000,
+            superchat: 500,
+            guard: 200,
+            interact: 300,
+            system: 200,
+        }
+    }
+}
+
+impl BufferCaps {
+    /// 各档上限之和；界面/CLI 报「上限」时用它。
+    ///
+    /// 注意它**不是**「礼物三档之和」的近似式：礼物三档的条数之和恒等于 `gift`
+    /// （见 [`gift_tier_caps`]），因此这里的六个字段加总就是缓冲真正能容纳的条数。
+    pub fn total(self) -> usize {
+        self.danmaku + self.gift + self.superchat + self.guard + self.interact + self.system
+    }
+
+    /// 每道各自的条数上限，下标与 [`Lane::ALL`] 一致。
+    fn lanes(self) -> [usize; Lane::COUNT] {
+        let [low, mid, high] = gift_tier_caps(self.gift);
+        [
+            self.danmaku.max(1),
+            low,
+            mid,
+            high,
+            self.superchat.max(1),
+            self.guard.max(1),
+            self.interact.max(1),
+            self.system.max(1),
+        ]
+    }
+}
+
+/// 礼物三档各占礼物档总额度的百分比（`docs/contract.md` §4.3）。
+///
+/// 低档只留一点点、高档留最多 —— 这就是「价值越高权重越高」的落点：
+/// 三档各自 FIFO，而**高价值礼物到得少**，同样的条数在时间轴上覆盖得远长于低档。
+const GIFT_TIER_SHARE: [usize; 3] = [10, 40, 50];
+
+/// 低档礼物的金额上界（金瓜子）：**复用**契约 §8 既有的「低价礼物」门槛
+/// （≤ 0.1 元；按契约 §5「金额单位」的 1 元 = 1000 金瓜子即 100 金瓜子）。
+const GIFT_LOW_MAX: i64 = 100;
+
+/// 高档礼物的金额下界（金瓜子，10 元）**以上**即进高档。
+///
+/// 档位是本地的保留策略取舍，**不对上游礼物价位作任何断言**：它只决定「同一条道里留多少条」，
+/// 与礼物本身的价格无关。
+const GIFT_HIGH_MIN: i64 = 10_000;
+
+/// 礼物按金额分档：`0` 低 / `1` 中 / `2` 高。判据是 `Message.amount`（金瓜子，契约 §5）。
+///
+/// `amount <= 0` 是「上游没给价」（契约 §5 的既有口径）——**不算低价**：进中档，
+/// 不猜价、也不当高档。两个金额门槛都取**闭区间**（`≤ 100` 是低、`≤ 10000` 是中）。
+fn gift_tier(amount: i64) -> usize {
+    if amount > GIFT_HIGH_MIN {
+        2
+    } else if amount > 0 && amount <= GIFT_LOW_MAX {
+        0
+    } else {
+        1
+    }
+}
+
+/// 礼物三档各自的条数：按 [`GIFT_TIER_SHARE`] 切礼物档总额度，**余数给高档**
+/// （三档之和因此恒等于总额度，不会因为取整凭空多出或少掉条数）。
+/// 每档至少 1 条：总额度再小也不该出现一条都留不下的档。
+fn gift_tier_caps(gift: usize) -> [usize; 3] {
+    let low = (gift * GIFT_TIER_SHARE[0] / 100).max(1);
+    let mid = (gift * GIFT_TIER_SHARE[1] / 100).max(1);
+    let high = gift.saturating_sub(low + mid).max(1);
+    [low, mid, high]
+}
+
+/// 缓冲分道（`docs/contract.md` §4.3）：每个 `kind` 一条，`gift` 再按金额档拆成三条。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lane {
+    Danmaku,
+    GiftLow,
+    GiftMid,
+    GiftHigh,
+    Superchat,
+    Guard,
+    Interact,
+    System,
+}
+
+impl Lane {
+    const COUNT: usize = 8;
+
+    /// 全部道，顺序即 [`BufferCaps::lanes`] 的下标顺序。
+    const ALL: [Lane; Self::COUNT] = [
+        Self::Danmaku,
+        Self::GiftLow,
+        Self::GiftMid,
+        Self::GiftHigh,
+        Self::Superchat,
+        Self::Guard,
+        Self::Interact,
+        Self::System,
+    ];
+
+    /// 礼物三档，下标与 [`gift_tier`] 的返回值同序。
+    const GIFT_TIERS: [Lane; 3] = [Self::GiftLow, Self::GiftMid, Self::GiftHigh];
+
+    /// 这条消息进哪一道。
+    fn of(message: &Message) -> Lane {
+        match message.kind {
+            MessageKind::Danmaku => Self::Danmaku,
+            MessageKind::Gift => Self::GIFT_TIERS[gift_tier(message.amount)],
+            MessageKind::Superchat => Self::Superchat,
+            MessageKind::Guard => Self::Guard,
+            MessageKind::Interact => Self::Interact,
+            MessageKind::System => Self::System,
+        }
+    }
+}
+
 /// 单次房内会话的环形缓冲：进入房间创建，离开房间销毁（`docs/contract.md` §4.3）。
-/// 超出容量时丢弃最旧一条；不落盘、不回看、不导出。
+///
+/// **按 `kind` 分道**（礼物另按金额分三档，见 [`Lane`]），每道各按自己的上限丢最旧；
+/// 不落盘、不回看、不导出。分道的意义是**互不挤占**：互动/进场的洪水不再把弹幕顶掉。
 pub struct MessageBuffer {
-    cap: usize,
-    items: VecDeque<Message>,
+    caps: BufferCaps,
+    /// 每道的条数上限（礼物三档在这里落成具体条数），建缓冲时算一次。
+    lane_caps: [usize; Lane::COUNT],
+    lanes: [VecDeque<Message>; Lane::COUNT],
     next_local_id: u64,
 }
 
 impl MessageBuffer {
-    pub fn new(cap: usize) -> Self {
+    pub fn new(caps: BufferCaps) -> Self {
         Self {
-            cap: cap.max(1),
-            items: VecDeque::new(),
+            caps,
+            lane_caps: caps.lanes(),
+            lanes: Lane::ALL.map(|_| VecDeque::new()),
             next_local_id: 0,
         }
     }
 
-    pub fn cap(&self) -> usize {
-        self.cap
+    pub fn caps(&self) -> BufferCaps {
+        self.caps
     }
 
+    /// 缓冲总条数（各道之和）。
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.lanes.iter().map(VecDeque::len).sum()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.lanes.iter().all(VecDeque::is_empty)
     }
 
     pub fn clear(&mut self) {
-        self.items.clear();
+        for lane in &mut self.lanes {
+            lane.clear();
+        }
     }
 
     /// 追加一条；`local_id` 已由 `MessageSink` 分配时**原样保留**，未分配（0）才由本缓冲补号。
@@ -108,20 +256,42 @@ impl MessageBuffer {
         } else {
             self.next_local_id = self.next_local_id.max(message.local_id);
         }
-        self.items.push_back(message);
-        if self.items.len() > self.cap {
-            return self.items.pop_front();
+        let lane = Lane::of(&message) as usize;
+        let lane_cap = self.lane_caps[lane];
+        let ring = &mut self.lanes[lane];
+        ring.push_back(message);
+        if ring.len() > lane_cap {
+            return ring.pop_front();
         }
         None
     }
 
-    /// 当前缓冲内的全部消息，按时间升序。
+    /// 当前缓冲内的全部消息，按到达顺序（`local_id` 升序）。
+    ///
+    /// 分道之后顺序不再是「一条队列的自然顺序」，得重新归并：`local_id` 是会话内单调的到达序号
+    /// （`MessageSink` 分配，契约 §5），按它排序即回到单一队列时代的顺序 —— 界面与
+    /// `history_query` 看到的相对次序与分道前一致。
     pub fn snapshot(&self) -> Vec<Message> {
-        self.items.iter().cloned().collect()
+        let mut all: Vec<Message> = self
+            .lanes
+            .iter()
+            .flat_map(|lane| lane.iter().cloned())
+            .collect();
+        all.sort_unstable_by_key(|message| message.local_id);
+        all
     }
 
+    /// 与 `snapshot()` 同一套次序（`local_id` 升序），但**只克隆命中并留下的那些**：
+    /// 先把各道的引用归并、排序、截尾，再拷出来 —— 读路径的分配量与结果同阶，
+    /// 不随缓冲总条数走。
     pub fn query(&self, query: &HistoryQuery) -> Vec<Message> {
-        let mut hits: Vec<&Message> = self.items.iter().filter(|m| query.matches(m)).collect();
+        let mut hits: Vec<&Message> = self
+            .lanes
+            .iter()
+            .flat_map(|lane| lane.iter())
+            .filter(|message| query.matches(message))
+            .collect();
+        hits.sort_unstable_by_key(|message| message.local_id);
         if query.limit > 0 && hits.len() > query.limit {
             hits.drain(..hits.len() - query.limit);
         }
@@ -137,8 +307,8 @@ impl MessageBuffer {
 impl std::fmt::Debug for MessageBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MessageBuffer")
-            .field("cap", &self.cap)
-            .field("len", &self.items.len())
+            .field("caps", &self.caps)
+            .field("len", &self.len())
             .finish()
     }
 }
@@ -169,7 +339,7 @@ impl RoomRuntime {
     /// 方变成 async，要么用 [`RoomRuntime::spawn_on`] 显式给一个 runtime 句柄。
     pub fn spawn(
         room: Room,
-        buffer_rows: usize,
+        caps: BufferCaps,
         bus: EventBus,
         counters: Arc<Counters>,
         source: Arc<dyn LiveSource>,
@@ -177,7 +347,7 @@ impl RoomRuntime {
         Self::spawn_on(
             &tokio::runtime::Handle::current(),
             room,
-            buffer_rows,
+            caps,
             bus,
             counters,
             source,
@@ -193,13 +363,13 @@ impl RoomRuntime {
     pub fn spawn_on(
         handle: &tokio::runtime::Handle,
         room: Room,
-        buffer_rows: usize,
+        caps: BufferCaps,
         bus: EventBus,
         counters: Arc<Counters>,
         source: Arc<dyn LiveSource>,
     ) -> Self {
         let handle = handle.clone();
-        let buffer = Arc::new(Mutex::new(MessageBuffer::new(buffer_rows)));
+        let buffer = Arc::new(Mutex::new(MessageBuffer::new(caps)));
         let cancel = Cancel::new();
         let session_state = Arc::new(Mutex::new(RoomSession {
             room_id: room.room_id,
@@ -348,8 +518,9 @@ impl RoomRuntime {
         self.len() == 0
     }
 
-    pub fn cap(&self) -> usize {
-        self.buffer.lock().expect("buffer poisoned").cap()
+    /// 本次会话各档上限（建立会话时读的那一份，`docs/contract.md` §4.3）。
+    pub fn caps(&self) -> BufferCaps {
+        self.buffer.lock().expect("buffer poisoned").caps()
     }
 
     /// 结束这次会话：广播关闭、取消后台任务、清空缓冲。
@@ -389,9 +560,38 @@ mod tests {
         m
     }
 
+    /// 礼物消息（`amount` 是金瓜子，契约 §5）。
+    fn gift(ts: i64, amount: i64, content: &str) -> Message {
+        let mut m = msg(ts, MessageKind::Gift, 9, content);
+        m.amount = amount;
+        m
+    }
+
+    /// 测试用上限：六档同值。只关心某一档时其余档给足，免得别的档先淘汰干扰读数。
+    fn caps_all(n: usize) -> BufferCaps {
+        BufferCaps {
+            danmaku: n,
+            gift: n,
+            superchat: n,
+            guard: n,
+            interact: n,
+            system: n,
+        }
+    }
+
+    /// 某一道当前留下的条数（走 `query`，与界面同一条读路径）。
+    fn kinds_len(buf: &MessageBuffer, kind: MessageKind) -> usize {
+        buf.query(&HistoryQuery {
+            limit: 0,
+            kinds: Some(vec![kind]),
+            ..Default::default()
+        })
+        .len()
+    }
+
     #[test]
     fn buffer_evicts_oldest_when_over_capacity() {
-        let mut buf = MessageBuffer::new(3);
+        let mut buf = MessageBuffer::new(caps_all(3));
         for ts in 0..5 {
             buf.push(msg(ts, MessageKind::Danmaku, 1, "x"));
         }
@@ -403,7 +603,7 @@ mod tests {
 
     #[test]
     fn local_ids_are_monotonic_and_survive_eviction() {
-        let mut buf = MessageBuffer::new(2);
+        let mut buf = MessageBuffer::new(caps_all(2));
         for ts in 0..4 {
             buf.push(msg(ts, MessageKind::Danmaku, 1, "x"));
         }
@@ -413,7 +613,7 @@ mod tests {
 
     #[test]
     fn query_filters_then_keeps_tail_in_ascending_order() {
-        let mut buf = MessageBuffer::new(100);
+        let mut buf = MessageBuffer::new(caps_all(100));
         for ts in 0..10 {
             let kind = if ts % 2 == 0 {
                 MessageKind::Danmaku
@@ -450,7 +650,7 @@ mod tests {
 
     #[test]
     fn before_and_after_are_exclusive() {
-        let mut buf = MessageBuffer::new(10);
+        let mut buf = MessageBuffer::new(caps_all(10));
         for ts in 0..5 {
             buf.push(msg(ts, MessageKind::Danmaku, 1, "x"));
         }
@@ -463,6 +663,182 @@ mod tests {
         assert_eq!(
             buf.query(&q).iter().map(|m| m.ts).collect::<Vec<_>>(),
             vec![2, 3]
+        );
+    }
+
+    /// 分道的核心承诺（issue 2609171849 第 3 条）：互动/进场的洪水**挤不掉**弹幕。
+    ///
+    /// 单一环形缓冲时代它们共用一条队列，一个热闹房间的进场消息能把弹幕整段顶出去；
+    /// 分道之后各档各按自己的上限裁剪，互不挤占。
+    #[test]
+    fn interact_flood_does_not_evict_danmaku() {
+        let caps = BufferCaps {
+            danmaku: 200,
+            interact: 5,
+            system: 2,
+            ..caps_all(200)
+        };
+        let mut buf = MessageBuffer::new(caps);
+        for ts in 0..200 {
+            buf.push(msg(ts, MessageKind::Danmaku, 1, "弹幕"));
+        }
+        for ts in 0..500 {
+            buf.push(msg(1000 + ts, MessageKind::Interact, 2, "进入直播间"));
+        }
+        for ts in 0..50 {
+            buf.push(msg(2000 + ts, MessageKind::System, 0, "开播"));
+        }
+
+        assert_eq!(
+            kinds_len(&buf, MessageKind::Danmaku),
+            200,
+            "互动/系统再热闹，弹幕那 200 条也一条都不该被挤掉"
+        );
+        assert_eq!(
+            kinds_len(&buf, MessageKind::Interact),
+            5,
+            "互动档按自己的小上限裁剪（只留最新 5 条）"
+        );
+        assert_eq!(kinds_len(&buf, MessageKind::System), 2, "系统档只留最新 2 条");
+
+        // 留下的必须是**最新的**那批（各档内部照旧丢最旧）。
+        let kept: Vec<i64> = buf
+            .query(&HistoryQuery {
+                limit: 0,
+                kinds: Some(vec![MessageKind::Interact]),
+                ..Default::default()
+            })
+            .iter()
+            .map(|m| m.ts)
+            .collect();
+        assert_eq!(kept, vec![1495, 1496, 1497, 1498, 1499]);
+    }
+
+    /// 归并后的顺序仍是**到达顺序**：分道打乱了「一条队列」的天然次序，
+    /// `snapshot()` 必须把它还原回去 —— 界面拿 `local_id` 当 key，`history_query`
+    /// 抽出来的次序就是用户上滚时看到的次序。
+    #[test]
+    fn snapshot_merges_lanes_back_into_arrival_order() {
+        let mut buf = MessageBuffer::new(caps_all(10));
+        for i in 0..30_i64 {
+            let kind = match i % 3 {
+                0 => MessageKind::Danmaku,
+                1 => MessageKind::Interact,
+                _ => MessageKind::System,
+            };
+            buf.push(msg(i, kind, 1, "x"));
+        }
+        let ids: Vec<u64> = buf.snapshot().iter().map(|m| m.local_id).collect();
+        assert_eq!(ids, (1..=30).collect::<Vec<u64>>(), "归并后必须与到达顺序一致");
+    }
+
+    /// 礼物分级缓存（issue 2609171849 第 3 条）：价值越高，留得越多。
+    ///
+    /// 三档各自 FIFO，档位由 `amount`（金瓜子，契约 §5）定，档位条数是礼物档总额度的
+    /// 10% / 40% / 50%（契约 §4.3）。低档的条数上限最小，因此**同样的时间内**它滚得最快。
+    #[test]
+    fn expensive_gifts_are_kept_longer_than_cheap_ones() {
+        // 礼物档 1000 条 → 低 100 / 中 400 / 高 500。
+        let mut buf = MessageBuffer::new(BufferCaps {
+            gift: 1000,
+            ..caps_all(1000)
+        });
+        for ts in 0..5000 {
+            buf.push(gift(ts, GIFT_LOW_MAX, "小心心")); // 低档（0.1 元）
+        }
+        for ts in 0..600 {
+            buf.push(gift(5000 + ts, 1_000, "普通礼物")); // 中档（1 元）
+        }
+        for ts in 0..20 {
+            buf.push(gift(9000 + ts, 138_000, "舰长")); // 高档（138 元）
+        }
+
+        let amounts: Vec<i64> = buf
+            .query(&HistoryQuery {
+                limit: 0,
+                kinds: Some(vec![MessageKind::Gift]),
+                ..Default::default()
+            })
+            .iter()
+            .map(|m| m.amount)
+            .collect();
+        assert_eq!(
+            amounts.iter().filter(|a| **a == GIFT_LOW_MAX).count(),
+            100,
+            "低档只留得住自己那 100 条（灌了 5000 条）"
+        );
+        assert_eq!(
+            amounts.iter().filter(|a| **a == 1_000).count(),
+            400,
+            "中档留得住自己那 400 条（灌了 600 条）"
+        );
+        assert_eq!(
+            amounts.iter().filter(|a| **a == 138_000).count(),
+            20,
+            "最贵的那批一条都不丢（高档还有余量）"
+        );
+        assert_eq!(amounts.len(), 520, "三档之和就是礼物档能容纳的条数");
+    }
+
+    /// 档位判据走**保留条数**这条可观察路径来验（而不是直接调私有函数）：
+    /// 低档 ≤ 0.1 元（复用契约 §8 既有的低价礼物门槛）、中档 ≤ 10 元、高档 > 10 元，
+    /// 而 `amount <= 0`（上游没给价，契约 §5）**不算低价** —— 它进中档，不猜价也不当高档。
+    #[test]
+    fn gift_tiers_split_by_amount_and_missing_price_rides_the_middle() {
+        assert_eq!(
+            gift_tier_caps(1000),
+            [100, 400, 500],
+            "三档之和恒等于礼物档总额度（余数给高档，不因取整漏条数）"
+        );
+        assert_eq!(
+            gift_tier_caps(1),
+            [1, 1, 1],
+            "总额度再小也不会出现「一条都留不下」的档"
+        );
+
+        // 礼物档 100 条 → 低 10 / 中 40 / 高 50；灌 200 条，读数即该档上限。
+        for (amount, expected, label) in [
+            (100_i64, 10_usize, "0.1 元整 = 低档（闭区间）"),
+            (101, 40, "刚过 0.1 元 = 中档"),
+            (10_000, 40, "10 元整 = 中档（闭区间）"),
+            (10_001, 50, "刚过 10 元 = 高档"),
+            (0, 40, "上游没给价 → 中档，不当低价"),
+            (-1, 40, "脏数据（负数）同「没给价」处理"),
+        ] {
+            let mut buf = MessageBuffer::new(BufferCaps {
+                gift: 100,
+                ..caps_all(100)
+            });
+            for ts in 0..200 {
+                buf.push(gift(ts, amount, "礼物"));
+            }
+            assert_eq!(
+                kinds_len(&buf, MessageKind::Gift),
+                expected,
+                "amount={amount}：{label}"
+            );
+        }
+    }
+
+    /// 各档上限之和 = 缓冲真正能容纳的条数；`gift` 那一档要按三档之和算，不是按字段值。
+    #[test]
+    fn caps_total_counts_every_lane() {
+        assert_eq!(
+            Lane::ALL.map(|lane| lane as usize),
+            std::array::from_fn(|index| index),
+            "道的下标必须等于它在 Lane::ALL 里的位置（lane_caps / lanes 两个数组都按它索引）"
+        );
+
+        let caps = BufferCaps::default();
+        assert_eq!(
+            caps.total(),
+            5000 + 2000 + 500 + 200 + 300 + 200,
+            "契约 §8 的六枚键加总"
+        );
+        assert_eq!(
+            caps.lanes().iter().sum::<usize>(),
+            5000 + 2000 + 500 + 200 + 300 + 200,
+            "每道上限之和与六枚键加总一致（礼物三档不多不少）"
         );
     }
 
@@ -541,7 +917,7 @@ mod tests {
             identity_fails: false,
         });
 
-        let runtime = RoomRuntime::spawn(room, 5000, bus, counters.clone(), source);
+        let runtime = RoomRuntime::spawn(room, BufferCaps::default(), bus, counters.clone(), source);
         settle().await;
 
         let rows = runtime.query(&HistoryQuery::default());
@@ -590,7 +966,7 @@ mod tests {
                 identity: RoomSession::default(),
                 identity_fails: false,
             });
-            let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
+            let runtime = RoomRuntime::spawn(room, BufferCaps::default(), bus, counters, source);
             settle().await;
             assert_eq!(
                 runtime.query(&HistoryQuery::default()).len(),
@@ -621,10 +997,10 @@ mod tests {
             identity_fails: false,
         });
         let mut events = bus.subscribe();
-        let first = RoomRuntime::spawn(room.clone(), 5000, bus.clone(), counters.clone(), noisy);
+        let first = RoomRuntime::spawn(room.clone(), BufferCaps::default(), bus.clone(), counters.clone(), noisy);
         settle().await;
         assert_eq!(first.len(), 2, "本会话收到的消息应在缓冲内");
-        assert_eq!(first.cap(), 5000);
+        assert_eq!(first.caps(), BufferCaps::default());
         first.close().await.unwrap();
 
         // 会话关闭必须广播，且缓冲随会话销毁。
@@ -644,7 +1020,7 @@ mod tests {
             identity: RoomSession::default(),
             identity_fails: false,
         });
-        let second = RoomRuntime::spawn(room, 5000, bus, counters, quiet);
+        let second = RoomRuntime::spawn(room, BufferCaps::default(), bus, counters, quiet);
         settle().await;
         assert!(second.is_empty(), "重进必须是新会话，旧缓冲不得残留");
         second.close().await.unwrap();
@@ -677,7 +1053,7 @@ mod tests {
         });
 
         let mut events = bus.subscribe();
-        let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
+        let runtime = RoomRuntime::spawn(room, BufferCaps::default(), bus, counters, source);
         settle().await;
 
         // 房间页要在「点了才会知道有没有权限」之外有一条确定答案：
@@ -710,7 +1086,7 @@ mod tests {
         });
 
         let mut events = bus.subscribe();
-        let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
+        let runtime = RoomRuntime::spawn(room, BufferCaps::default(), bus, counters, source);
         settle().await;
 
         assert_eq!(
@@ -791,7 +1167,7 @@ mod tests {
             ..Default::default()
         };
         let mut events = bus.subscribe();
-        let runtime = RoomRuntime::spawn(room, 5000, bus.clone(), counters, source);
+        let runtime = RoomRuntime::spawn(room, BufferCaps::default(), bus.clone(), counters, source);
 
         // 掉线不等人：第一次连接一断，核心必须立刻再起一次，而不是停在断连态。
         settle().await;
@@ -886,7 +1262,7 @@ mod tests {
 
         let runtime = RoomRuntime::spawn(
             room.clone(),
-            5000,
+            BufferCaps::default(),
             bus.clone(),
             Arc::clone(&counters),
             Arc::clone(&source),
@@ -903,7 +1279,7 @@ mod tests {
         );
 
         // 重进同一房间：只能有一条连接 —— 两条就是界面上 ×2 的源头。
-        let again = RoomRuntime::spawn(room, 5000, bus, counters, source);
+        let again = RoomRuntime::spawn(room, BufferCaps::default(), bus, counters, source);
         settle().await;
         assert_eq!(
             active.load(Ordering::SeqCst),
@@ -935,7 +1311,7 @@ mod tests {
             identity_fails: false,
         });
 
-        let runtime = RoomRuntime::spawn(room, 5000, bus, counters, source);
+        let runtime = RoomRuntime::spawn(room, BufferCaps::default(), bus, counters, source);
         settle().await;
 
         let rows = runtime.query(&HistoryQuery::default());
@@ -945,6 +1321,59 @@ mod tests {
             "同一条弹幕只能留下一份：既从回填又从实时各来一份就是界面上那行 ×2"
         );
         assert!(rows[0].is_history, "留下的是先到的那份（进场回填）");
+        runtime.close().await.unwrap();
+    }
+
+    /// 端到端那条路（总线 → collector → 分道缓冲）：互动洪水过后弹幕仍在。
+    ///
+    /// 缓冲级的用例验的是 `MessageBuffer` 本身；这一条把 collector 也带进来 ——
+    /// 「按 kind 分道」这件事在真实投递路径上同样成立（`rooms_connect` 建会话时读到的
+    /// `BufferCaps` 一路传到缓冲，中间没有第二个裁剪点）。
+    #[tokio::test]
+    async fn interact_storm_through_the_bus_leaves_danmaku_intact() {
+        let caps = BufferCaps {
+            danmaku: 50,
+            interact: 5,
+            ..caps_all(50)
+        };
+        let mut messages = Vec::new();
+        for ts in 0..300 {
+            messages.push(msg(ts, MessageKind::Danmaku, 1, "弹幕"));
+        }
+        for ts in 0..300 {
+            messages.push(msg(5000 + ts, MessageKind::Interact, 2, "进入直播间"));
+        }
+
+        let bus = EventBus::default();
+        let counters = Arc::new(Counters::default());
+        let room = Room {
+            room_id: 7,
+            ..Default::default()
+        };
+        let source: Arc<dyn LiveSource> = Arc::new(FakeSource {
+            messages,
+            history: vec![],
+            history_fails: false,
+            identity: RoomSession::default(),
+            identity_fails: false,
+        });
+
+        let runtime = RoomRuntime::spawn(room, caps, bus, counters, source);
+        settle().await;
+
+        let count = |kind: MessageKind| {
+            runtime
+                .query(&HistoryQuery {
+                    limit: 0,
+                    kinds: Some(vec![kind]),
+                    ..Default::default()
+                })
+                .len()
+        };
+        assert_eq!(count(MessageKind::Danmaku), 50, "弹幕档留下自己那 50 条");
+        assert_eq!(count(MessageKind::Interact), 5, "互动档只留最新 5 条");
+        assert_eq!(runtime.len(), 55, "总条数 = 各档之和");
+        assert_eq!(runtime.caps(), caps, "会话读到的是建会话时那一份上限");
         runtime.close().await.unwrap();
     }
 }

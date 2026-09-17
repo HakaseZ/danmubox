@@ -61,7 +61,7 @@
 | 文档基线 | 已完成：需求 [`REQUIREMENTS.md`](REQUIREMENTS.md)、契约 [`docs/contract.md`](docs/contract.md)、协议与实测校准 [`docs/protocol.md`](docs/protocol.md)，另有架构 / IPC / UI / 登录 / 运维 / 测试 / 路线图各一篇（索引见 §7） |
 | 代码 | 约 11300 行（Rust + TS/TSX）：`danmubox-core`（领域模型 / 端口 / 总线 / 会话缓冲 / 偏好 / 凭据）、`danmubox-bili`（协议 / WS / 鉴权 / WBI / HTTP）、`danmubox-cli`（采集与校准入口）、`apps/desktop`（Tauri 2 + React 19 + Zustand + 虚拟滚动） |
 | 阶段进度 | **阶段 1–4 已退出**；阶段 5 macOS 完成，Android 出包 / 装机 / 启动这一档完成（真机与登录、收发弹幕等链路**未实测**，见 [`docs/operations.md`](docs/operations.md) §5.3），Windows **CI 出包这一档完成**（2026-09-17：`artifacts-windows` job 在 `windows-latest` 出 NSIS 安装器 / MSI / 免安装 exe；**未装机未真机验**，见 [`docs/roadmap.md`](docs/roadmap.md) §2.2） |
-| 功能面 | 游客态与登录态收弹幕；发弹幕（纯文本 / 表情 / @回复 / 快捷短语）；进场历史回填；礼物（V1+V2、连击聚合、金额统计与排行）；SuperChat；大航海播报；举报（理由清单来自上游）；关注列表与分组；电池余额；多房间标签页；多账号切换与**界面内扫码登录**；房管面板；过滤与 13 项偏好（唯一权威清单见 [`docs/contract.md`](docs/contract.md) §8） |
+| 功能面 | 游客态与登录态收弹幕；发弹幕（纯文本 / 表情 / @回复 / 快捷短语）；进场历史回填；**弹幕聚合**（不同观众短时同文本折成一行，见 [`docs/ui.md`](docs/ui.md) §8.4）；礼物（V1+V2、连击聚合、金额统计与排行）；SuperChat；大航海播报；举报（理由清单来自上游）；关注列表与分组；电池余额；多房间标签页；多账号切换与**界面内扫码登录**；房管面板；过滤与 23 项偏好（唯一权威清单见 [`docs/contract.md`](docs/contract.md) §8） |
 | 构建与测试 | `cargo test --workspace` **153 通过**；`cargo clippy --workspace --all-targets -- -D warnings` **零告警**；前端 `npx tsc -b` 通过 |
 | 桌面端产物 | 可出**独立可执行文件**（前端已内嵌，**不再需要 dev server**）：`cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` → `target/release/danmubox-desktop` |
 | 移动端产物 | 可出 **APK**（工具链全在仓库内，见 §8 与 [`docs/operations.md`](docs/operations.md) §5.3）：`. scripts/android-env.sh` + `cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci` → `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（实测 52 MB / 四个 ABI）。**已验**：装进 Android 模拟器（android-35）启动成功、冷启动 TotalTime 1013ms、进公开测试房间 `1` 连接成功、数据目录与 `prefs.json` 落在应用私有目录；**未验**：真机、扫码登录、发弹幕、收弹幕（3.5 分钟内未观测到弹幕） |
@@ -149,6 +149,7 @@ danmubox/
 | 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败）；`--emote <唯一键>` 发表情弹幕 |
 | 电池 / 关注 / 表情 / 房管（CLI） | `cargo run -p danmubox-cli -- wallet`、`follow`、`emotes <房间>`、`emotes-owned`、`admin-lists <房间>` | 逐项核对上游能力的只读入口；`admin-lists` 需房管身份 |
 | 全局参数 | `--config <路径>` | 以上任何子命令都接受，用于指定另一份 `config.toml`（调试 / 多环境并存） |
+| 前端单测 | `cd apps/desktop/ui && node --test src/filtering.test.ts` | 显示层纯逻辑（过滤 / 折叠 / 自动消失）的机制级单测；用 Node ≥ 22.18 的类型擦除直接跑 TS，不需要 vitest（见 [`docs/testing.md`](docs/testing.md) §9） |
 | 桌面端（独立产物） | `cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` | **推荐**：产出 `target/release/danmubox-desktop`，前端已内嵌，双击即用 |
 | 桌面端（开发热更新） | `npm --prefix apps/desktop/ui run dev` + `cargo run -p danmubox-desktop` | 仅开发时用；须先起 dev server，否则窗口空白（见 `docs/operations.md` §1.1） |
 | Android 环境（导入） | `. scripts/android-env.sh` | **必须 source**（直接执行无效）；导出 `JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME` / `RUSTUP_HOME` / `CARGO_HOME` / `GRADLE_USER_HOME` 等，全部指向仓库内 `.android-env/`（见 `docs/operations.md` §5.4） |
@@ -166,7 +167,7 @@ danmubox/
 | 网络出口 | 仅连接 B 站直播相关域名（WS 长连与 REST 接口） |
 | 凭据文件 | `config.toml`，**明文 TOML**，权限 **0600**，位于本机数据目录；可直接手工编辑（界面与 CLI 都不提供 Cookie 导入入口） |
 | 偏好文件 | `prefs.json`，只存被显式改过的界面偏好，不含任何凭据 |
-| 弹幕缓冲 | 仅内存环形缓冲，上限 5000 条（`history.buffer_rows`）；生命周期 = 一次房内会话，离开房间即销毁清空，重进是新会话 |
+| 消息缓冲 | 仅内存、**按消息类型分档**的环形缓冲（弹幕 5000 / 礼物 2000 / SC 500 / 大航海 200 / 互动 300 / 系统 200，各由 `history.buffer_rows_*` 覆盖；礼物档内部再按金额分级）；生命周期 = 一次房内会话，离开房间即销毁清空，重进是新会话 |
 | 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；Android **应用私有目录**——由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，**不是**其下的 `files/` 子目录；实测模拟器 android-35 上为 `/data/user/0/dev.kksk.danmubox`），core 侧保持平台无关、不写死平台路径 |
 | 是否落盘 | 常规运行只写 `config.toml` 与 `prefs.json`；无数据库、无历史文件、无弹幕导出。**唯一例外**是你主动点过「一键诊断」之后的那个报告文件：桌面端落在 `~/Downloads/danmubox-diagnose-<UTC 时间戳>.txt`，Android 经 MediaStore 落在公共 `Download` 目录 —— 一次诊断只有一个文件、内容已脱敏（凭据 / uid / 昵称 / 房间号都是 `***`），想删随时删（`docs/operations.md` §2.9） |
 | 遥测 | 无。不上报崩溃、不埋点、不回传任何使用数据 |

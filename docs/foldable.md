@@ -60,7 +60,7 @@
 
 ### 3.2 会话语义（折叠适配的第一风险点）
 
-- 弹幕缓冲是**内存态，生命周期 = 一次房内会话**：进入房间开始、离开房间结束，离开即销毁；上限 5000 条（`history.buffer_rows`），进程退出即丢（[`contract.md`](contract.md) §4.3、[`README.md`](../README.md) §9）。
+- 弹幕缓冲是**内存态，生命周期 = 一次房内会话**：进入房间开始、离开房间结束，离开即销毁；上限按 `kind` 分档（`history.buffer_rows_*`，默认六档之和 8200 条），进程退出即丢（[`contract.md`](contract.md) §4.3、[`README.md`](../README.md) §9）。
 - 长连接同样挂在房内会话上（`rooms_connect` 起、`rooms_disconnect` / 关房结束，[`contract.md`](contract.md) §7）。
 - 因此：**折叠/展开本身不该掉会话**（它不是「离开房间」）；但如果系统重建了 Activity + WebView，前端 store（含未确认行、草稿、面板状态）与会话的界面侧镜像会一起没掉。**Rust 侧的进程内状态是否随之丢失，本次未实测 → 待核**（§4 R1、§6 缺口 1）。
 - 职责划分没有变化：核心逻辑全在 `danmubox-core` / `danmubox-bili`，前端是渐进增强（[`roadmap.md`](roadmap.md) §3「Tauri Android WebView 渲染差异」一条）。

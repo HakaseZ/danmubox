@@ -86,6 +86,7 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 | 指定另一份配置 | 任何 CLI 子命令加 `--config <路径>`（全局参数） |
 | 前端依赖安装 | `npm --prefix apps/desktop/ui install` |
 | 前端类型检查 + 构建 | `npm --prefix apps/desktop/ui run build`（= `tsc -b && vite build`） |
+| 前端单测（显示层纯逻辑） | `cd apps/desktop/ui && node --test src/filtering.test.ts`（Node ≥ 22.18 的类型擦除直接跑 TS，仓库未装 vitest；**新增显示层纯逻辑用例按这个形态落**，写法见 `docs/testing.md` §9） |
 | 前端 dev server | `npm --prefix apps/desktop/ui run dev`（仅热重载开发需要；独立产物已内嵌前端，不需要它） |
 | 桌面端运行 | `cargo run -p danmubox-desktop` |
 | Android 环境（导入） | `. scripts/android-env.sh`（**必须 source**，直接执行无效；导出全部指向仓库内 `.android-env/` 的变量） |
@@ -203,7 +204,7 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 | 7 | 为未实测的 B 站行为编造具体数值；只能以「待实测校准」表格承载并写明核对方法 |
 | 8 | 提交未完成的空壳实现 / 空实现 / 假 fallback / 被注释掉的死代码 |
 | 9 | 在未知认证回应 `code` 上臆造含义；非 0 一律按认证失败处理 |
-| 10 | 私自扩大范围：加遥测、加保活、加视频解码、加应用商店配置 |
+| 10 | 私自扩大范围：加遥测、加推送、加视频解码、加应用商店配置 |
 | 11 | 执行 git 历史改写、删除非本人产出的代码或文档 |
 | 12 | 重新引入本地数据库、弹幕落盘、回看或导出（见 `docs/decisions/0005-no-local-database.md`） |
 | 13 | 启动任何本地监听服务（HTTP / SSE / 进程外接口） |
@@ -230,7 +231,7 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 - [ ] **改 Rust 的票，必须真启动一次应用并确认存活 ≥ 10 秒、无 panic**：`cargo test` 自带 runtime，测不出「主线程没有 runtime 上下文」这类崩；前端冒烟跑的是浏览器、不是 Tauri 进程 —— 这两层都挡不住「启动即崩」。（2026-09-13 教训：`97af765` 修的正是这一类；此后凡动 Rust 一律按这条验，报告里写明「启动存活 N 秒、无 panic」。）
 - [ ] 端口边界未被破坏：`core` 仍可独立编译，不依赖 `bili` / `tauri` / 任何上层 crate，且 core 中无 B 站 URL、字段下标、签名或 protobuf。
 - [ ] `config.toml` 以 0600 权限写入且只含凭据；界面偏好只落 `prefs.json`；凭据未进日志 / 前端 / 仓库。
-- [ ] 弹幕缓冲遵守会话语义：只保留当前房内会话、上限 `history.buffer_rows`、离开房间即销毁。
+- [ ] 消息缓冲遵守会话语义：只保留当前房内会话、**按 `kind` 分档**（上限 = `history.buffer_rows_*` 六枚，礼物档内部再按金额分级）、离开房间即销毁。
 - [ ] 规范性常量、领域模型、端口、IPC 与偏好键与 `docs/contract.md` 一致。
 - [ ] 受影响的 `docs/` 文档已同步更新，相对路径可点击。
 - [ ] `CHANGELOG.md` 的 Unreleased 段已记录对外可见变化。

@@ -367,7 +367,7 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
     let prefs = Prefs::load(&prefs_path());
     let runtime = RoomRuntime::spawn(
         room.clone(),
-        prefs.buffer_rows(),
+        prefs.buffer_caps(),
         bus.clone(),
         counters.clone(),
         source,
@@ -459,10 +459,10 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
         .filter(|m| m.kind == danmubox_core::MessageKind::Danmaku)
         .count();
     println!(
-        "# 本次会话缓冲 {} 条（其中 danmaku {} 条），上限 {}",
+        "# 本次会话缓冲 {} 条（其中 danmaku {} 条），各档上限 {:?}",
         in_session.len(),
         danmaku,
-        runtime.cap()
+        runtime.caps()
     );
     println!("# 计数 {:?}", counters.snapshot());
 

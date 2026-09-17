@@ -427,16 +427,24 @@ export interface Prefs {
    */
   "ui.gift_pane_ratio": number;
   /**
-   * **礼物栏**里把单个价值 ≤ 0.1 元的礼物合并成一条（契约 §8，默认 `false` = 一条一行不变）。
-   * 只作用礼物栏：弹幕流的分支不受影响，SC / 大航海不在其列（docs/ui.md §5.3「低价礼物桶」）。
+   * 把单个价值 ≤ 0.1 元的礼物合并成一条（契约 §8，默认 `false` = 一条一行不变）。
+   * **两个区域都生效**：弹幕区与礼物栏各折一次（`filtering.splitGiftRows` 对两头各调
+   * `collapseCheapGiftRows`），SC / 大航海不在其列。纯派生、不改缓冲 —— 关掉即逐条回来
+   * （docs/ui.md §5.3「低价礼物桶」）。
    */
   "ui.gift_collapse_cheap": boolean;
   /**
    * 把 ≤ 0.1 元的礼物从**折叠汇总 / 统计**里剔除（契约 §8，默认 `false` = 统计与展示一致）。
-   * 只改统计口径：这些礼物作为消息的展示（礼物栏条目、弹幕流分支）不受影响。
+   * **只改统计**：这些礼物作为消息的展示（礼物栏条目、弹幕区的行）不受影响。统计面在本应用里
+   * 只有礼物栏折叠头那一处；弹幕区没有统计面，因此这条键在那里的效果是「什么都不改」
+   * （docs/ui.md §5.3）。
    */
   "ui.gift_exclude_cheap_stats": boolean;
-  /** 互动/进场消息显示一会儿后自动消失；关掉则常驻。 */
+  /**
+   * 互动/进场消息显示一会儿后自动消失；关掉则常驻。
+   * 「消失」是**显示层**的（`filtering.interactAutoHidden`，判据 `ts + INTERACT_AUTO_HIDE_MS`）：
+   * 消息一直留在会话缓冲里，关掉这枚开关先前消失的那些行会**原样回来**（docs/ui.md §4.8）。
+   */
   "ui.interact_auto_hide": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */
   "ui.show_timestamp": boolean;
@@ -445,7 +453,20 @@ export interface Prefs {
   "filter.uids": number[];
   "filter.kinds": MessageKind[];
   "filter.medal_level_min": number;
-  "history.buffer_rows": number;
+  /**
+   * 会话缓冲的**各档上限**（契约 §4.3 / §8）。后端按 `kind` 分道裁剪、每道丢自己的最旧，
+   * 界面不参与这件事 —— 这几枚键只经 `prefs_get` / `prefs_set` 往返，
+   * 改动对**下一次进房**生效。
+   */
+  "history.buffer_rows_danmaku": number;
+  /** 礼物档；档内再按金额切低 10% / 中 40% / 高 50%（价高的留得多，契约 §4.3）。 */
+  "history.buffer_rows_gift": number;
+  "history.buffer_rows_superchat": number;
+  "history.buffer_rows_guard": number;
+  /** 互动 / 进场档：刻意小于弹幕档。 */
+  "history.buffer_rows_interact": number;
+  /** 系统通知档：刻意小于弹幕档。 */
+  "history.buffer_rows_system": number;
   /**
    * 各房间最近一次**打开**的时刻（键 = 房间号，值 = UTC 毫秒）。
    * 界面在 `openRoom` 时记一次，关注列表按它降序排（契约 §8，用户 #16）。
@@ -554,7 +575,10 @@ export const KIND_LABEL: Record<MessageKind, string> = {
 
 /**
  * 互动/进场消息自动消失前的停留时长（`ui.interact_auto_hide` 打开时）。
- * `store` 的摘除定时器与行的淡出动画共用这一个长度，两者不会错位。
+ *
+ * 行的淡出动画（`.autoHide`）与「到点不再画」这一判据（`filtering.interactAutoHidden`，
+ * 取 `ts + INTERACT_AUTO_HIDE_MS`）共用这一个长度，两者不会错位。**到点只是不画**：
+ * 消息仍在会话缓冲里，`ui.interact_auto_hide` 关掉就原样回来（docs/ui.md §4.8）。
  */
 export const INTERACT_AUTO_HIDE_MS = 8000;
 

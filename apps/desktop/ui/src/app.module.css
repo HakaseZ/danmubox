@@ -90,6 +90,15 @@
   --badge-border: color-mix(in srgb, var(--badge-lift) 45%, transparent);
   /* 悬停洗色：同一处定义，行 / 折叠条 / 卡片都用它 */
   --hover-wash: color-mix(in srgb, var(--accent) 8%, transparent);
+  /* 选中一条弹幕时整行那层底色（issue 2609171849 #4 第 1 点，docs/ui.md §4.10）：
+     与 `--hover-wash` 同一族（同色、同「混透明」的画法），只是更重一档 —— 它是「这一条被我选中了」
+     的状态指示，要比悬停那层浅洗色读得清。比例同悬停那样按主题分档（浅色底更亮、要更重才看得出）。 */
+  --select-wash: color-mix(in srgb, var(--accent) 22%, transparent);
+  /* 上下分区那条**分界线**（issue 2609171849 #4 第 3 点，docs/ui.md §5.4）：
+     两栏的分界原来借的是 `--border` 那条发丝线：对底色只有 1.56:1（深色）/ 1.02:1（浅色），用户看不出有边界。
+     改取次级文字那枚中性灰（`--fg-subtle`）—— 非文字图形要素对两种主题的底色都 ≥ 3:1。
+     只在 `:root` 里给一次：`var()` 在使用处才解析，浅色主题换掉 `--fg-subtle` 时它自动跟着变。 */
+  --fold-line: var(--fg-subtle);
   --overlay: rgba(0, 0, 0, 0.55);
 
   /* 间距阶：4 / 8 / 12 / 16 / 24 */
@@ -228,6 +237,8 @@
   --on-danger: #ffffff; /* B+（对 #c4292f 5.6:1 ✓） */
   /* 浅色底更亮，洗色比例由 8% 提到 12% 才看得出（同一令牌、两套值，不新增名字） */
   --hover-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+  /* 选中底色同一口径：浅色下同样是 22% → 28% 一档（理由见 `:root` 那条注释） */
+  --select-wash: color-mix(in srgb, var(--accent) 28%, transparent);
   --overlay: rgba(11, 20, 26, 0.32); /* B：浅色下更轻 */
   --shadow-menu: 0 2px 10px rgba(11, 20, 26, 0.14); /* B+ */
   --shadow-dialog: 0 6px 24px rgba(11, 20, 26, 0.18); /* B+ */
@@ -833,6 +844,14 @@
   cursor: row-resize;
   touch-action: none;
   background: var(--bg);
+  /* 两栏的**分界线**（issue 2609171849 #4 第 3 点，用户原话：「分割独立礼物栏的那个横折叠区域，
+     弄点横线或者虚线之类的（类似于折叠屏分屏的那个提示），而且现在 2 区间没有任何边界，
+     有点不便于区分区域」）。改前这里只从 `::before` 画一条 1px 的 `--border` 发丝线 ——
+     它对底色只有 1.56:1（深色）/ 1.02:1（浅色），用户看不出有边界。现在这条线画在分割条**自己的顶边**上：
+     **虚线** + `--fold-line`（`--fg-subtle`，非文字图形要素对两套主题的底色都 ≥ 3:1），
+     正是折叠区分屏提示那种画法。线贴在上一个区间的下缘 —— 「两个区间的边界」就是这个意思；
+     它整条横贯，与礼物栏在上还是在下无关（分割条在 DOM 里恒在两栏之间，见 SplitPanes）。 */
+  border-top: 1px dashed var(--fold-line);
 }
 
 /* 触摸设备上把热区撑到 24px（= 24dp ≈ 3.8mm）。
@@ -851,22 +870,13 @@
   }
 }
 
-.splitter::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 1px;
-  transform: translateY(-50%);
-  background: var(--border);
-}
-
-.splitter:hover::before,
-.splitter:focus-visible::before,
-.splitter[data-dragging="true"]::before {
-  height: 2px;
-  background: var(--accent);
+/* 悬停 / 键盘聚焦 / 拖动中：分界线换成强调色**实线**（「这里能拖」的提示照旧，只是虚线换实线）。
+   线宽 1 → 2px 不改这块热区的外层高度（`box-sizing: border-box` + `height` 定死），
+   两栏的高度分配因此不会被这条提示推动，拖动中量到的几何也就不会抖。 */
+.splitter:hover,
+.splitter:focus-visible,
+.splitter[data-dragging="true"] {
+  border-top: 2px solid var(--accent);
 }
 
 .splitter:focus-visible {
@@ -981,8 +991,18 @@
   display: flex;
   align-items: flex-start;
   /* 行尾不再给「⋯」留位（用户 #5：与右键菜单重复），省下的 2em 全给正文。
-     上下内边距 = --sp-2：参考图里行与行之间留白明显（用户 2026-09-13 的参考图口径） */
-  padding: var(--sp-2) 0;
+     上下内边距 = --sp-2：参考图里行与行之间留白明显（用户 2026-09-13 的参考图口径）。
+
+     左右两道 --sp-3 内边距 + 同等负外边距是 issue 2609171849 #4 第 1 点的改法：
+     用户「选中某条弹幕时，那个绿色底色能不能从界面最左一直到最右，现在这个卡在头像上
+     有点不好看」——`.scroller` 有 --sp-3 的左右内边距，行盒因此比界面窄一截，行上刷的任何
+     底色（悬停洗色、选中底色）都到不了两侧、左边缘正落在头像那一列上。把行盒向两侧各探出一道
+     --sp-3、再用同样的内边距把内容顶回原位：**内容一个像素都不动**（头像列与正文的左边缘、
+     正文可用宽度、行高全部照旧），动的只是行盒的左右边界 —— 底色因此从界面最左铺到最右。
+     ⚠ 这两半必须成对改：只加负外边距会让整行内容左移，冒烟里「正文左边缘 = 用户名左边缘」
+     「头像列占位」「正文 ≥ 视口一半」那一族断言会连同排版一起变。 */
+  padding: var(--sp-2) var(--sp-3);
+  margin: 0 calc(-1 * var(--sp-3));
   word-break: break-word;
   white-space: pre-wrap;
   line-height: var(--row-line);
@@ -990,6 +1010,23 @@
 
 .row:hover {
   background: var(--hover-wash);
+}
+
+/* 行内**不再画**浏览器那层原生选区底（issue 2609171849 #4 第 1 点）：它贴着字形画，头像那一列
+   是空的，于是绿底被头像卡住、两侧也到不了 —— 正是用户抱怨的那一档。底色改由**整行**给
+   （`.row[data-selected]`），所以把行内的字形底色置成透明，避免整行一层绿、字上再叠一层更深的绿。
+   选中的**语义**一点没动：文字照样可选、可复制、`db-msg-body` 的 `user-select` 仍是 text
+   （冒烟 `immersiveKeepsTextSelection` 钉的就是这两件事）。 */
+.row::selection,
+.row ::selection {
+  background-color: transparent;
+}
+
+/* 选中态：整行一层底色（`MessageRow` 按「当前选区碰没碰到这一行」打 `data-selected`，
+   见那段注释）。它排在 `.row:hover` **之后**：同一条行既被悬停又被选中时，以选中为准。
+   礼物栏那一份走的是同一个组件、同一条规则（两处呈现一致的口径不变）。 */
+.row[data-selected="true"] {
+  background: var(--select-wash);
 }
 
 /* 时间戳：位置在**身份行的右端**（用户 2026-09-14：「时间戳显示时放在最右边」）——
@@ -1083,8 +1120,10 @@
 }
 
 /* 互动/进场消息：显示一会儿就淡出（`ui.interact_auto_hide` 打开时）。
-   动画时长由行内 `animationDuration` 给（= store 摘除定时器的同一长度），
-   到点后由 store 把这条从列表里摘掉，空间随之回收。 */
+   动画时长由行内 `animationDuration` 给（= `INTERACT_AUTO_HIDE_MS` 的同一长度），
+   到点后这一行**不再被画**（`filtering.interactAutoHidden`，判据是同一个常量），
+   空间随之回收 —— 但消息仍在会话缓冲里：关掉开关同一帧就原样回来
+   （issue 2609171849 第 5 条，见 docs/ui.md §4.8）。 */
 .autoHide {
   animation-name: interactFade;
   animation-timing-function: ease-out;
@@ -1286,21 +1325,25 @@
 }
 
 /* 醒目留言（SC）卡片（docs/ui.md §4.1）：背景与边框取自 SC 档位令牌 `--sc-1 … --sc-5`
-   —— 由 `.scTierN` 把命中的那一枚写进 `--sc-tier`，卡片规则只认这一个变量；金额行加粗。
+   —— 由 `.scTierN` 把命中的那一枚写进 `--sc-tier`（挂在**行**上、往下继承），卡片规则只认这一个
+   变量；金额行加粗。
    ⚠ 档位边界是**本地**取值（分界 100 / 500 / 1000 / 2000 元，见 `filtering.superChatTier`），
    五枚色值也是本项目自己的设计令牌：与 B 站网页端 SC 卡片的逐档比对还没做过，
    那一条仍挂在 `docs/protocol.md` 附录 A 的待校准表里（A.2「SC 卡片配色档位边界」）。
-   卡片自带内边距（`.row` 默认只有上下内边距，卡片贴边会看不出是卡片）。 */
+
+   **卡片只盖内容部**（issue 2609171849 #4 第 2 点，用户：「sc 的高亮框仅显示在内容部分，
+   也就是用户名、身份牌下面的区域，也是为了好看一点」）。改前这条规则挂在**行**上（`.row.scCard`）：
+   框把头像列与身份行一起圈进来。现在它挂在 `MessageRow` 里包住「正文 + 金额行」的那个节点上
+   （`db-msg-sc-card`），因此框从身份行的**下一行**开始 —— 头像与用户名 / 身份牌都在框外。
+   它是块级（内容部下半段的整宽），`margin-top: --sp-1` 是框与上方身份行之间那道呼吸缝
+   （行内允许的间距只有 `--sp-1` 与 `--sp-2`，见 §4.1）。 */
 .scCard {
+  display: block;
+  margin-top: var(--sp-1);
   padding: var(--sp-2);
   border: 1px solid var(--sc-tier);
   border-radius: var(--r-3);
   background: color-mix(in srgb, var(--sc-tier) 22%, var(--bg-elevated));
-}
-
-/* 悬停时保住卡片底色（`.row:hover` 那层洗色会把卡片背景整块换掉，看着像卡片没了） */
-.row.scCard:hover {
-  background: color-mix(in srgb, var(--sc-tier) 30%, var(--bg-elevated));
 }
 
 .scTier1 {

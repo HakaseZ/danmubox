@@ -359,9 +359,80 @@
   （窄屏工具行换行时不会被拆到两排）；点数值手动刷新（§6.4 一直这么写，这次把入口补上）。顶栏腾出的位置
   留给「当前在线」（`ONLINE_RANK_COUNT`）与「累计看过」（`WATCHED_CHANGE`）两个数值。
   规格：`docs/ui.md` §3.1（顶栏只留返回与 `⋯`）、§6.4（电池在发送簇左侧、点数值手动刷新）。
+- **低价礼物两枚开关改成「对两个区域都生效」，且剔除 / 折叠 / 隐藏 / 自动消失一律不丢内容、关掉即复原**
+  （issue 2609171849 第 5 条）。三处改动：
+  ① **`ui.gift_collapse_cheap`（折叠低价礼物）对两个区域都生效**：以前只折礼物栏，**弹幕区照旧一条一行**；
+  现在弹幕区与礼物栏**各折一次**（同一个 `filtering.collapseCheapGiftRows`、同一枚 `isCheapGift` 判据、
+  同一种桶形状：取桶里第一条的身份与位置、`×N` 与金额是整桶合计），弹幕区那一份不画金额格（既有口径）。
+  两处各持自己的行集合，互不影响。
+  ② **`ui.interact_auto_hide`（互动消息自动消失）不再删消息**：旧实现到点用 `messages.filter(...)` 把那条
+  从列表里摘掉 —— 那是真的丢内容（开关拨回 `false` 只能让**之后**来的行常驻，早先消失的再也回不来）。
+  现在「到点」只是**显示层不再画这一行**（`filtering.interactAutoHidden`，判据 `ts + INTERACT_AUTO_HIDE_MS`），
+  消息一直留在会话缓冲里；store 那批定时器只负责把新增的 `interactTick` 挪一格叫醒派生重算。
+  关掉开关，先前消失的那些行**同一帧原样回来**。
+  ③ **把「不丢内容 / 可逆」写成硬口径**：剔除（`ui.gift_exclude_cheap_stats`）/ 折叠 / 隐藏
+  （`ui.gift_panel`、`ui.gift_in_danmaku`）/ 自动消失**都只是显示层的派生**，原始消息只受会话缓冲上限约束；
+  关掉任一枚开关，两个区域各自恢复到原样（顺序、数量、金额与统计串逐项相同）。剔除统计的**统计面只有
+  礼物栏折叠头那一处**（弹幕区没有统计面）——这枚键出现在哪就管到哪，不为了对称编造第二处统计。
+  规格：`docs/contract.md` §8（两枚键的含义 + 新增「两个区域」「不丢内容」两行口径）、`docs/ui.md` §5.3
+  （「低价礼物桶」段整段重写：两个区域的定义、两处各折一次、可逆与不丢内容）与 §4.8（自动消失的机制）、
+  `docs/ipc.md` §3.1 / §5（`PrefsSnapshot` 注释、store 形状里的 `interactTick`）、`docs/testing.md` §9
+  （新增前端单测的跑法与写法要求）/ F-08.2 改写 + 新增 F-08.3 / §10.1 新增 C-15。
+  机制级验证：`apps/desktop/ui/src/filtering.test.ts`（6 条，`node --test src/filtering.test.ts`）+
+  冒烟 `switchScope*` 一组（两个区域各量一次折叠、关掉逐条复原、剔除只动统计、自动消失可逆）。
+  **未验证**：本轮子 agent **没跑无头冒烟**（两引擎的 `switchScope*` 读数由集成收尾统一跑）。
+
+- **后台 7×24 / 安卓后台丢弹幕 / 切网断连：排查结论入库**（`issue` 2609171849 #2 / #6，2026-09-17；**只写文档 + 一条测试，未改任何行为**）：
+  `docs/operations.md` **新增 §2.10**（§2.8 的排查表补一行指过去），结论三条：
+  ① **三端都不能承诺 7×24** —— Android 那枚 `dataSync` 前台服务只保「进程」、不保「网络」（Doze 要自己加电池优化白名单、Android 15+ 每 24 小时 6 小时额度、真机与厂商 ROM 未验证）；macOS / Windows 是「窗口开着就一直跑」，但上游本身会常态轮换断开（`protocol.md` A24 实测 2 小时 4 分断 4 次、每次都自动恢复）。
+  ② **安卓后台丢弹幕丢的是一整段断连窗口，且客户端没有任何补拉机制**（根因）：进场回填只在会话开始时调一次（`session.rs:263-272`），重连只是重建连接（`:283-306`），而上游只给最近 10 条、不可翻页（A30）→ 窗口内的弹幕**永久丢**；回到前台也没有「立刻重连」这一档（判死 90 秒 + 一次 5–60 秒退避），所以「最新一段看不到」还要再持续几十秒到两分钟。
+  ③ **切网会断、恢复不快**：客户端没有网络变化感知、也没有 TCP keepalive，判死只能靠 90 秒入站静默；另外连续 3 次「认证超时」会**停止自动重连**、等人工刷新（`ws.rs:793-815`，既有单测 `auth_timeout_is_a_failure_and_backs_off` 钉住）。
+  另在 §2.10.5 登记两条**未修**的缺陷（含建议修法）：界面那条单调序号判定 × 会话重建会让一个房间「看着已连接却再也不进来弹幕」；「健康会话」判据漏了「认证成功过」，使拨号全超时时退避升级不生效。
+  同处记下三处口径矛盾待主流程裁决：`docs/contract.md` §2 的「不做」表、`AGENT.md` §8 第 10 条、`docs/operations.md` §5.1 仍写「不做后台保活」，而 Android 前台服务是用户要求、已实现并实测的一档。
+  同批**附带一条机制级单测**（`crates/danmubox-bili/src/ws.rs` 的 `reconnect_keeps_the_session_numbering_monotonic`）：钉住「同一次会话内的重连不重置 `local_id`」——
+  界面按 `local_id` 判单调（`store.ts:798-799`），编号一旦回退，重连之后的每一条弹幕都会被界面悄悄丢掉。该用例在「每次重连新起一个 `MessageSink`」的模拟缺陷下会失败（实测 `[1,1,1]`），当前实现为 `[1,2,3]`。
+  闸门读数：`cargo test -p danmubox-bili` **192 passed / 0 failed**（含该用例）、`cargo clippy -p danmubox-bili --all-targets -- -D warnings` **零告警**；`rustfmt` 差异数与本文件改动前**同为 23 处**（无新增，存量不通过见 `AGENT.md` §9）、格式修复按仓库规矩**不跑** `cargo fmt`。
+- **会话缓冲按消息类型分档 + 礼物按金额分级保留**（`issue` 2609171849 第 3 条：「礼物、弹幕、互动（进场消息）、
+  系统通知分开做缓存、互动和系统通知存少一点，礼物分级缓存，价值越高权重越高」）。缓冲从「单一环形队列
+  （`history.buffer_rows`，默认 5000 条）」改成**按 `kind` 分道**：弹幕 5000 / 礼物 2000 / SC 500 / 大航海 200 /
+  **互动（进场）300** / **系统通知 200**，各由一枚 `history.buffer_rows_*` 覆盖、**各道只丢自己的最旧**。
+  此前四类共用一条队列，一个热闹房间的进场消息能把弹幕整段顶出去 —— 这是分档要解决的那件事。
+  礼物那一档内部再按 `amount`（金瓜子，契约 §5）切三档，条数按 **低 10% / 中 40% / 高 50%** 分配：
+  低档 ≤ 0.1 元（门槛复用既有的「低价礼物」口径）、中档 ≤ 10 元、高档 > 10 元；`amount <= 0`（上游没给价）
+  **不算低价**，进中档。三档各自 FIFO，因此价高的留得更多、也留得更久（高档礼物本来就到得少）。
+  档位是本地保留策略的取舍，**不对上游礼物价位作任何断言**。
+  **语义边界一字未动**：仍仅内存、离开房间即销毁、无数据库无落盘（契约 §4.3）；`history_query` 与界面看到的
+  仍是同一批消息、同一个到达顺序（各道归并回 `local_id` 升序），分档只决定「超出时先丢谁」。
+  **旧键 `history.buffer_rows` 已删除**：`prefs_set` 按未知键报 `BAD_REQUEST`；存量 `prefs.json` 里若还写着它，
+  `load` 时按它的值物化进 `history.buffer_rows_danmaku`（超出新键取值域则忽略，文件里已显式写新键的以文件为准）。
+  规格：`docs/contract.md` §4 常量表 / §4.3（分档表 + 礼物三档）/ §8（六枚键）/ §9 溯源行、`docs/ipc.md` 的
+  `PrefsSnapshot` 与内存边界表、`docs/ui.md` §2.4、`docs/architecture.md` §4.2 / §4.3、`docs/protocol.md` §12.3、
+  `docs/testing.md` §4（B-03 / B-04）、`docs/decisions/0005`、`docs/foldable.md`、`README.md` §9、`AGENT.md` §9；
+  代码：`crates/danmubox-core/src/session.rs`（`BufferCaps` / 分道 / `gift_tier` 与单测）、`prefs.rs`（六枚键 +
+  存量迁移与单测）、`apps/desktop/src-tauri/src/lib.rs`、`crates/danmubox-cli/src/main.rs`、前端 `types.ts`
+  与冒烟替身的键清单。
+  顺带修好一条**坏掉的闸门**：`crates/danmubox-core/Cargo.toml` 的 `tokio` 只开了 `sync`/`macros`/`rt`，而本 crate
+  自己的测试用 `tokio::time::sleep` / `timeout` —— `cargo test -p danmubox-core` 一直编不过
+  （`could not find time in tokio`），只有 `cargo test --workspace` 靠工作区级特性合并才跑得起来。
+  补 `[dev-dependencies] tokio = { features = ["time"] }` 后，单 crate 的测试闸门可用。
 
 ### Added
 
+- **弹幕聚合：不同观众短时间内发的同一条弹幕折成一行**（issue 2609171849 第 7 条，用户 2026-09-17；
+  分支 `feat/2609171849-aggregate`）。判据是「**不同的人** + 同一个键 + 短窗口」：归一化正文
+  （去首尾空白、连续空白并成一个空格、大小写不敏感；表情弹幕按 `emote.emoticon_unique`）相同、
+  相邻、与**锚点**（这一行的第一条）相差 ≤ **5 秒**、**至少两位不同观众**参与 —— 同一个人的重复不算，
+  因此它**不是** 2026-09-13 删掉的「合并相似消息」（那条的判据是同一个 uid 的重复，见本文件 Removed 段
+  与 `docs/requests.md` P49），也**不是**礼物连击折叠（那条判据是同一个 `combo_id`）。
+  展示沿用既有行形态、不另立视觉：正文行内 `×N`（`count` = 折了几条）+ 紧跟一格「都是谁」
+  （`data-testid="db-msg-senders"`，按首次出现顺序列前 3 位，多于此写「等 N 人」）；代表行的
+  头像 / 昵称 / 时间戳仍是第一条那条消息的（React key 不变，后续观众加入不重建节点、行不跳位）。
+  实现：新增 `apps/desktop/ui/src/aggregate.ts`（纯函数 + 三个常量），只在 `MessageList` 的**弹幕区**
+  那一份行上跑（礼物栏不经过）；`DisplayRow` 增可选字段 `senders`（`filtering.ts`）。
+  规格：`docs/contract.md` §4（三条常量与下注）/ §9 溯源行、`docs/ui.md` §8.4（改写成「两条折叠规则」
+  并各配一张表）、§4.1 / §4.7 / §5.3 / §7.1 / §2.5、`README.md` §3（功能面）。**冒烟未跑**（由主流程统一跑）：
+  新增断言块 `aggregate*`（同文本两位观众 → 一行且 `×2`、名单含两位；不同文本 → 两行；
+  窗口外同文本 → 两行）已写进 `apps/desktop/ui/smoke/room-page.mjs`。
 - **CI 出 Windows 产物**（2026-09-17；分支 `chore/ci-windows-artifact`，提交 `5c54c2e` / `ec8c3f7`；run `35213437486` **三个 job 全绿**）。
   `.github/workflows/ci.yml` 新增 `artifacts-windows` job（跑在 **`windows-latest`**，触发口径与 `artifacts` 相同：仅 `workflow_dispatch` 与 `v*` tag），
   出并上传**三个**文件到产物 `danmubox-windows`：免安装 `danmubox-desktop.exe`（**16,434,176 字节**，PE32+ x86-64 GUI）、
@@ -446,6 +517,47 @@
 > 单测只过编译、**未执行**；房管面板那 8 条的 UI 断言已写进冒烟场景，等用户要测时执行。
 
 ### Fixed
+
+- **界面三处：弹幕行的选中底色改全宽、SC 卡片只盖内容部、上下分区之间画出分界线**（issue `2609171849` 第 4 条的三点；
+  规格：`docs/ui.md` §4.10（新增）/ §4.1（SC 行）/ §5.4（分界线）/ §9.2（两枚新令牌）/ §2.3（钩子表））。
+  - **选中一条弹幕时，那层绿底从界面最左铺到最右**（用户原话：「现在这个卡在头像上有点不好看」）。
+    **根因不是底色画窄了，而是压根没有行级选中态**：用户看到的那层绿底是浏览器自己的 `::selection`
+    高亮 —— 它贴着**字形**画，头像那一列是空的，所以绿底被头像卡住、两侧也到不了界面边缘（「卡在头像上」）。
+    改法是把底色从字形搬到整行：`.row` 向两侧各探一道 `--sp-3`（`padding-inline` + 等量负 `margin-inline`，
+    正好吃掉 `.scroller` 的左右内边距，**内容一个像素都不动**——动的只是行盒的左右边界，悬停洗色因此同样铺满整条），
+    行内 `::selection` 置透明（否则整行一层绿、字上再叠一层更深的绿），整行底色由新令牌 `--select-wash`
+    给出、`data-selected` 驱动（`MessageRow`：**一份** document 级 `selectionchange` 监听 + 每行一次
+    `useSyncExternalStore` 订阅，判据是 `Range.intersectsNode(row)` —— 跨多行拖选时被碰到的每一行都亮，
+    松开即收回）。**选中的语义一条没少**：文字照样可选、可复制，`db-msg-body` 的 `user-select` 仍是 `text`
+    （`immersiveKeepsTextSelection` 钉的就是这两件事），非弹幕行的选区高亮不受影响。
+  - **SC 卡片只盖内容部**（用户原话：「仅显示在内容部分，也就是用户名、身份牌下面的区域，也是为了好看一点」）。
+    卡片从**行**上（`.row.scCard`：把头像列与身份行一起圈住）搬到正文块里包住「正文行 + 金额行」的那个节点
+    （钩子 `db-msg-sc-card` / `db-gift-sc-card`；与身份行之间那道缝是 `margin-top: --sp-1`），
+    头像列与身份行因此都在框外。行的 `data-sc-tier` 与档位令牌不变，`.row.scCard:hover` 那条随卡片搬迁一并删除。
+  - **上下分区画出分界线**（用户原话：「分割独立礼物栏的那个横折叠区域，弄点横线或者虚线之类的
+    （类似于折叠屏分屏的那个提示），而且现在 2 区间没有任何边界，有点不便于区分区域」）。改前那条线是挂在
+    `::before` 上的 1px `--border` 发丝线：**深色对底色 1.56:1、浅色 1.02:1**（几乎看不见）—— 用户的
+    「没有任何边界」就是它。现在线画在分割条**自己的顶边**上、改画**虚线** + 新令牌 `--fold-line`
+    （= `--fg-subtle`）：**4.4:1 / 3.88:1**（非文字图形要素的 3:1 达标线）；`::before` 那条整条删掉，
+    不是叠着画。悬停 / 键盘聚焦 / 拖动中改画**实线强调色**（「这里能拖」的提示照旧；1 → 2px 不改热区外层高度，
+    两栏的高度分配不被这条提示推动）。
+  - **实测**（本票自建探针：同一份断言表达式，Playwright **WebKit**（宿主引擎）与 **Chromium** 各跑一遍、
+    深浅两主题都成立）：行盒左边缘 − 滚动容器左边缘 = **0**、行盒右边缘 − 容器 `clientWidth` 右边缘 = **0**、
+    行盒比头像列左边缘还靠左 **12px**（改前这个差值是 0）、正文左边缘仍 = 用户名左边缘；
+    选中底色 = `--select-wash` 的计算值、G 通道占优（绿）、清掉选区后底色收回；
+    卡片顶边在身份行底边下方 **4px**、左边在头像列右边缘右侧、正文与金额行都在框内、行上不再有卡片类名；
+    分界线是 `dashed 1px` + `--fold-line` 的计算色、落在两栏之间。
+    冒烟断言（整块包在 `rowSelectBlockRan` / `scCardBlockRan` / `foldLineBlockRan` 里）：
+    `rowBoxFullBleed` / `rowBoxCoversAvatarColumn` / `rowFullBleedKeepsIndent` / `rowSelectedMarked` /
+    `rowSelectedUsesSelectWash` / `rowSelectedWashGreen` / `rowSelectionGlyphTransparent` /
+    `rowSelectionTextKept` / `rowSelectionCleared`、`scCardBelowIdentity` / `scCardOutsideAvatarCol` /
+    `scCardHoldsBodyAndAmount` / `scCardInsideRow` / `scCardRowUntouched`、`foldLineIsDashed` /
+    `foldLineUsesToken` / `foldLineContrastOnCanvas` / `foldLineOldBorderContrast`（反面对照）/
+    `foldLineSeparatesPanes` / `foldLinePseudoGone`。
+  - **闸门**：`npx tsc -b`、`npm run build`、`node --check smoke/room-page.mjs`、
+    `node smoke/run-headless.mjs --precheck` 四条全过。**无头冒烟按用户口径未跑**（子 agent 不跑，
+    留给主流程在集成收尾时统一跑那一次）—— 这一票新增/改动的断言因此**登记为待主流程执行**。
+    真机观感（macOS / Android 上的实际观感与触摸选中）**未验证**。
 
 - **Android：顶栏与输入区不再被系统栏遮挡（edge-to-edge 的 inset）**（提交 `32dcefc`；Android 独有的用户可见变化）。Tauri 的 Android 外壳本就是 edge-to-edge，`targetSdk 36` 起系统强制这一形态，而界面此前完全不知道这件事。**改前实测**（AVD pixel_6 / 1080×2400 @420dpi / Android 15）：状态栏占 `y=0..128`、底部手势栏占 `y=2337..2400`，房间页顶栏整条落在状态栏带里（标题文本 `y=68..116`、右上主题按钮 `y=74..114`，与系统电池图标直接重叠），输入区白底一路画到 `y=2399`、压在手势栏下。**关键事实：WebView 里拿不到系统栏高度**——`env(safe-area-inset-*)` 只报刘海（同一次实测 `top=129` / `bottom=0` 设备像素，而状态栏是 128、手势栏是 63），按它排版底部一定让不开、无刘海机型上顶部也一并失效；所以改从原生取 `WindowInsets`（含 ime）换算成 CSS 变量 `--safe-top` / `--safe-bottom` 下发（落点 `apps/desktop/src-tauri/gen/android/app/src/main/java/dev/kksk/danmubox/MainActivity.kt`，即本仓库对上游模板的**第三处**改，见 `docs/operations.md` §5.3），页面在 `body` 上让开。**改后实测**（同一 AVD）：顶栏文本 `y=196..244`、主题按钮 `y=202..242`（状态栏图标仍在 47..80，互不相交）、房间页顶栏让到 128、输入区白底止于 2338（= 手势栏上沿 2337），`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL / AndroidRuntime。**桌面端是空操作**：令牌默认值走 `env()`，桌面窗口解析成 0，已在 Chromium 与 WebKit 两处实测 `body` 内边距恒为 0px。没有走「给 WebView 设 padding」，原因是那样系统栏后面会露出 Android 主题色的 `windowBackground`，与界面里可强制的 `ui.theme` 不同步。
 - **上游用非 JSON 页面应答时，错误信息不再只剩一句「解码失败」**（用户 `2609132259` #6：房管面板里报
@@ -1765,6 +1877,40 @@
 > **环境如实记录**：Chromium 那 4 个视口本次**回落到用户自己的 Google Chrome**（冒烟自带的那只 Chrome for Testing 在 `Page.captureScreenshot` 出帧自检上超时；它在 2026-09-16 是过的，属瞬时环境问题，非配置回归），回落那次仍在 runner 的 300s/视口上限内跑完（110–270s/视口）—— 此前几轮的「视口未跑完」是机器被占满所致。
 > **产物**（自用，本批**重新打包**，构建方式见 `docs/operations.md` §5.3 / §5.4 / §5.7）：macOS `danmubox_0.1.0_aarch64.dmg` **5,069,549 字节**（`hdiutil verify` → checksum VALID；独立可执行 14,047,856 字节、前端已内嵌；**真启动 20 秒存活、`panic`/`ERROR` 零命中**，启动日志里可见 `api.live.bilibili.com/room/v1/Room/get_status_info_by_uids` 轮询 ＝ P124 那条链路在打包产物里是活的）；Android `danmubox_0.1.0_universal-release.apk` **54,854,528 字节**（四 ABI `arm64-v8a/armeabi-v7a/x86/x86_64`，`apksigner verify` → **Verifies**、v2 签名、签名者 `CN=danmubox`，包名 `dev.kksk.danmubox` / 0.1.0 (1000) / targetSdk 36）。两份都在 `.android-env/dist/`，**覆盖了 09-16 那两份不含本批改动的旧产物**。
 > **未验证**：三端手工冒烟清单（`docs/testing.md` §10）、真机 macOS / Android 观感、`docs/protocol.md` A46–A47 等既有未验证项。
+
+### Fixed
+
+- **大航海（舰长 / 提督 / 总督）的开通金额被统计了两遍，其中一遍是原价**（`issue` 2609171849 #1；分支 `fix/2609171849-guard-amount`）。
+  **根因两处**：① `crates/danmubox-bili/src/cmd.rs` 的 `dispatch` 把**同一笔开通**的两条载荷 ——
+  `GUARD_BUY`（购买事件）与 `USER_TOAST_MSG`（播报）—— 各自归一出**一条** `guard` 消息，而
+  `docs/protocol.md` §10.6 / §12.3 早就写明「按时间窗合并为一条播报」：**那条合并从未实现**
+  （全仓没有任何按笔去重），于是界面 `RoomView.tsx` 的礼物栏汇总把同一笔的两个金额都加进统计；
+  ② 金额取的是 `data.price`，而两条载荷的 `price` **语义不同**。
+  **实测口径**（2026-09-17 核对抓包样本：某个在播房间的两次长窗口采集、去重后 1680 笔舰长 / 提督开通）：
+  `GUARD_BUY.price` 舰长**恒为 `198000`**（= 198 元，1640 笔无一例外）、提督 `1998000`；
+  `USER_TOAST_MSG.price` 舰长 `138000`（连续包月，1174 笔）/ `168000`（单月，398 笔）/ `198000`（无折扣，68 笔），
+  提督 `1998000`（14 笔）/ 折后 `1598000`（2 笔）。两条**逐条一一配对**、播报恒在后（间隔 p50 43ms / p99 1.99s / 最大 2.16s，699 对）。
+  所以改前界面汇总出的是 `198 + 138 = 336 元`，而不是实付的 `138 元`。
+  **修法**：`guard()` 只把**播报**的 `price` 写进 `Message.amount`（购买事件的标价不入金额，仅在 `debug` 留读数）；
+  新增 `cmd::GuardMerge`（窗口 5s、键 = `uid` + `guard_level` + 起始时间）把同一笔的两条合成**一条**播报 ——
+  `ws.rs` 读循环按需 arm 一个到期分支（没有待放项时不加唤醒），连接收尾时统一放行未投的购买事件；
+  只有购买事件、窗口内等不到播报时按 `amount = 0` 放行（契约 §5「无法确证时 `0`，不得推算」，不拿标价冒充实付）。
+  **闸门读数（本票 worktree，未跑冒烟 —— 留给主流程）**：`cargo test -p danmubox-bili` **196 passed / 0 failed**、
+  `cargo clippy -p danmubox-bili --all-targets -- -D warnings` **零告警**、`npx tsc -b` 与 `npm run build` 通过、
+  `node --check smoke/room-page.mjs` 与 `node smoke/run-headless.mjs --precheck` 通过。
+  文档：`docs/protocol.md` §10.6 / §12.3 / A12 / A13 / A33、`docs/contract.md` §5、`docs/ui.md` §5.3、
+  冒烟夹具 `gift-sc-guard-rows.json` 的 guard 条目。
+
+> **本轮（批次 `2609171849`：7 条需求 = P125–P131）的验证口径**，如实记录：
+> **Rust**：`cargo test --workspace` **271 passed / 0 failed**（`danmubox-bili` 197 + `danmubox-core` 66 + `danmubox-desktop` 8；批次前 257 ⇒ **+14**）；`cargo clippy --workspace --all-targets -- -D warnings` **零告警**。
+> **前端**：`npx tsc -b` / `npm run build` / `node --check smoke/room-page.mjs` / `run-headless.mjs --precheck` 全过；新增前端单测 `node --test src/filtering.test.ts` **6 tests / 6 pass / 0 fail**。
+> **两引擎无头冒烟（集成树、仓库自带 runner）**：**两引擎各四个视口组合全部断言成立、都 `EXIT=0`** —— Chromium 与 WebKit 各 `wide/dark 759 条布尔断言 / 979 项快照 + narrow/dark 787 / 1015 + wide/light 759 / 979 + narrow/light 787 / 1015 = 3,092 条布尔 / 3,988 项快照`（批次前 2,836 / 3,668 ⇒ **+256 条断言**）。日志与 48 张截图在 `.android-env/verify/`。其中本批新增/改动的几组全绿：`switchScope*`（两个区域的折叠与逐项可逆）、`aggregate*`（跨观众短时同文本聚合）、`rowSelect*` / `foldLine*` / `scCard*`（三处界面）、`cheapGift*`（含按契约 §8 line 487 改正的那条期望值）、`roomStatus*`。
+> **集成阶段抓到 3 个「单票各自绿、合起来才红」的问题**（都已修；写法教训进 [`testing.md`](docs/testing.md) §9.3）：
+> ① T5 的新单测引用了 T3 已删除的偏好键 `history.buffer_rows` ⇒ `tsc` TS2353（按契约 §4/§8 默认值补齐六枚分档键）；
+> ② T3 把 `spawn_runtime` / `refresh_room` 的缓冲形参从 `usize` 换成 `BufferCaps`，却漏了桌面 crate 的**测试模块**三处 ⇒ `cargo clippy --all-targets` E0308 ×3（当时只跑 `cargo check --workspace`，**没带 `--all-targets`**）；
+> ③ T5 的冒烟取数用**纯子串**匹配，而夹具里「投喂 铅笔」是「投喂 铅笔屑」的前缀 ⇒ 命中 2 条而断言要 1 条。③ 经改前实测确认是**取数缺陷、不是实现缺陷**（同一块的 `GiftRowsRestored` / `AmountsRestored` / `SummaryRestored` / `BothPanesFold` 全为真），最终判据取「子串命中，且命中处后面不紧跟汉字」（`charCodeAt` 判区间，不写正则 —— 该文件活在模板串里）。
+> **本批新立的仓库约定**：**前端单测**（`node --test src/*.test.ts`；零新依赖，用 Node 自带的测试运行器与类型剥离），已写进 [`../AGENT.md`](../AGENT.md) §3 与 [`../README.md`](../README.md) —— 此前本仓只有「Rust 单测 + 无头冒烟」两层，这是第三层。
+> **未验证**：真机（尤其国产 ROM 的后台行为、切网是否真会连出三次认证超时）、macOS 最小化时的 App Nap 影响、Windows 端**安装与运行**（[`testing.md`](docs/testing.md) §10.3 的 W-1~W-4）、`WARNING` 提示的真实载荷、`AGGREGATE_MAX_COUNT = 999` 的渲染侧开销，以及既有的 [`protocol.md`](docs/protocol.md) A46–A47 等待样本项。
 
 ## [0.1.0] - 2026-09-11
 

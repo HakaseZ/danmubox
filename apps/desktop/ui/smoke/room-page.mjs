@@ -467,7 +467,13 @@ const MOCK = (theme) => `(function () {
     // 默认白名单**不含 system**（契约 §8.1 / §4.8）：系统行默认不渲染，
     // 要看就现场勾「消息类型 → 系统」那一项（step4）。
     "filter.kinds": ["danmaku", "gift", "superchat", "interact", "guard"],
-    "filter.medal_level_min": 0, "history.buffer_rows": 5000,
+    "filter.medal_level_min": 0,
+    // 会话缓冲的六档上限（契约 §4.3 / §8，issue 2609171849 第 3 条）：旧的单一键
+    // history.buffer_rows 已删除，替身跟着换成六枚。这几枚界面不读（裁剪在 Rust 侧），
+    // 但替身必须与 prefs_get 同形 —— 否则它就不再是「照抄契约 §8」的那一份。
+    "history.buffer_rows_danmaku": 5000, "history.buffer_rows_gift": 2000,
+    "history.buffer_rows_superchat": 500, "history.buffer_rows_guard": 200,
+    "history.buffer_rows_interact": 300, "history.buffer_rows_system": 200,
     // 「最近观看」（契约 §8）：离线甲（room 300）先看过，**夹具第 1 条**（真实取样）后看过 ——
     // 用来看排序是否真的按它降序（见场景 step1 的 #16 断言）。
     "ui.recent_watched": { "300": 1789900000000, "${FOLLOW_FIXTURE[0].room_id}": 1789990000000 }
@@ -3269,6 +3275,74 @@ const MOCK = (theme) => `(function () {
     out.medalBlockRan = medalBlockOk;
     snap();
 
+    // ---- 弹幕聚合（issue 2609171849 第 7 条，docs/ui.md §8.4 第二条、契约 §4 的三条常量）：
+    //      **不同观众**在短时间窗口里发的**同一条**弹幕折成一行 —— 正文行内「×N」（折了几条）
+    //      紧跟一格「都是谁」（db-msg-senders）。三条读数：
+    //      ① 同文本 + 两位不同观众 → **一行**、「×2」、名单里两位都在；
+    //      ② **不同文本** → 两行（聚合只认同一个键）；
+    //      ③ 同文本但**在窗口外**（5 秒）→ 两行（锚点是这一行的第一条，非滑动）。
+    //      准入前提自己保证（testing.md §9.3 ②）：本段要求停在**房间页**、聊天流在场、且列表
+    //      **跟随最新**（虚拟列表只渲染视口内的行，不跟随则新推的行根本不在 DOM 里）——
+    //      不在底部就点一次「回到最新」，缺 db-msg-list 则当场报错红、不静默通过。
+    //      读数一律**当场重查 DOM**（rows() / querySelector），因此归属于本次运行。
+    //      注：整个场景活在模板串里，注释也**不许出现反引号**（会把模板提前收尾，见 TESTING.md §9.3）。
+    var aggregateBlockRan = false;
+    try {
+      if (!byTestId("db-msg-list")) throw new Error("不在房间页：db-msg-list 不存在");
+      var aggAnchor = byTestId("db-bottom-anchor");
+      if (aggAnchor) {
+        aggAnchor.click();
+        await sleep(400);
+      }
+      var aggRowsOf = function (needle) {
+        return rows().filter(function (r) { return r.innerText.indexOf(needle) >= 0; });
+      };
+      var aggCellOf = function (row, cell) {
+        var el = row ? row.querySelector('[data-testid="' + cell + '"]') : null;
+        return el ? el.innerText.trim() : null;
+      };
+      var aggPush = function (text, uid, uname, ts) {
+        window.__emit("danmubox://message", window.__mk("danmaku", text, false, {
+          uid: uid, uname: uname, ts: ts
+        }));
+      };
+      // ① 两位不同观众、同一文本、相隔 100ms（窗口内）
+      var aggT0 = Date.now();
+      aggPush("聚合样本甲", 71001, "聚合一号", aggT0);
+      aggPush("聚合样本甲", 71002, "聚合二号", aggT0 + 100);
+      await sleep(400);
+      var aggPair = aggRowsOf("聚合样本甲");
+      out.aggregateSameTextRows = aggPair.length;
+      out.aggregateSameTextCount = aggCellOf(aggPair[0], "db-msg-count");
+      out.aggregateSameTextSenders = aggCellOf(aggPair[0], "db-msg-senders");
+      out.aggregateSameText = aggPair.length === 1 &&
+        out.aggregateSameTextCount === "×2" &&
+        (out.aggregateSameTextSenders || "").indexOf("聚合一号") >= 0 &&
+        (out.aggregateSameTextSenders || "").indexOf("聚合二号") >= 0;
+      snap();
+      // ② 不同文本：两条各占一行，且都不是聚合行（没有 ×N / 名单两格）
+      aggPush("聚合样本乙", 71003, "聚合三号", Date.now());
+      aggPush("聚合样本丙", 71004, "聚合四号", Date.now() + 50);
+      await sleep(400);
+      var aggB = aggRowsOf("聚合样本乙");
+      var aggC = aggRowsOf("聚合样本丙");
+      out.aggregateDifferentTextTwoRows =
+        aggB.length === 1 && aggC.length === 1 &&
+        aggCellOf(aggB[0], "db-msg-count") === null &&
+        aggCellOf(aggC[0], "db-msg-senders") === null;
+      // ③ 同文本、但第一条落在 60 秒前（远在 5 秒窗口之外）：不许折
+      aggPush("聚合样本丁", 71005, "聚合五号", Date.now() - 60000);
+      aggPush("聚合样本丁", 71006, "聚合六号", Date.now());
+      await sleep(400);
+      out.aggregateWindowSeparatesRows = aggRowsOf("聚合样本丁").length === 2;
+      snap();
+      aggregateBlockRan = true;
+    } catch (e) {
+      out.aggregateBlockError = String((e && e.stack) || e);
+      snap();
+    }
+    out.aggregateBlockRan = aggregateBlockRan;
+
     // ---- 面板展开会改可视高度：**正在看的位置不能被弹走**
     // 先把列表停在中间（此时不在底部 = 非跟随模式），再展开面板，量同一个行在视口里的
     // 位置变化。跟随模式下重新贴底是**有意**的（见 MessageList 的 ResizeObserver），
@@ -4100,6 +4174,17 @@ const MOCK = (theme) => `(function () {
     //      文本一律**从夹具读**，不在断言里写死：最低档那条的正文刻意写长（40 个汉字，
     //      见 fixtures/gift-sc-guard-rows.json 里 superchat-low 的 why），它同时是下面
     //      「SC 不许被截断」的断言件。
+    //
+    //      整段包一层（同 tabs / immersive / admin 段的手法：try/catch + xxxBlockRan）——
+    //      issue 2609171849 #4 第 2 点把卡片从**行**搬到**内容部**（只盖用户名 / 身份牌下面的
+    //      区域），这一段因此改读新的卡片节点；出岔子时让断言红（scCardBlockRan），
+    //      不把整场场景带走（§9.3 的准入条件 ①）。
+    var scCardBlockRan = false;
+    try {
+    // 行内按 testid 取一格：以下两段（SC 卡片 / 两处对等）都用它。
+    var partOf = function (row, id) {
+      return row ? row.querySelector('[data-testid="' + id + '"]') : null;
+    };
     var scLowSpec = GIFT_ROWS.filter(function (r) { return r.key === "superchat-low"; })[0].message;
     var scHighSpec = GIFT_ROWS.filter(function (r) { return r.key === "superchat-high"; })[0].message;
     var scLow = rowWith(scLowSpec.content);
@@ -4108,20 +4193,49 @@ const MOCK = (theme) => `(function () {
       return r ? r.getAttribute("data-sc-tier") : null;
     });
     out.scCardTierByAmount = out.scCardTiers.join(",") === "1,4";
+    // 卡片节点 = 正文块里那个 db-msg-sc-card。**改前它挂在行上**（.row.scCard），
+    // 所以下面这些读数从前量的都是整行 —— 现在量的必须是内容部那个框。
+    var scLowCard = partOf(scLow, "db-msg-sc-card");
+    var scHighCard = partOf(scHigh, "db-msg-sc-card");
     // 边框色 = 那一档的令牌值（令牌真的被消费了，不是写死的色值）
-    var scBorderColor = function (r) { return r ? getComputedStyle(r).borderTopColor : null; };
-    out.scCardLowUsesTierToken = scBorderColor(scLow) === cssColorOf("--sc-1");
-    out.scCardHighUsesTierToken = scBorderColor(scHigh) === cssColorOf("--sc-4");
+    var scBorderColor = function (card) { return card ? getComputedStyle(card).borderTopColor : null; };
+    out.scCardLowUsesTierToken = scBorderColor(scLowCard) === cssColorOf("--sc-1");
+    out.scCardHighUsesTierToken = scBorderColor(scHighCard) === cssColorOf("--sc-4");
     out.scCardTierTokensDistinct = cssColorOf("--sc-1") !== cssColorOf("--sc-4");
-    var scLowStyle = scLow ? getComputedStyle(scLow) : null;
+    var scLowStyle = scLowCard ? getComputedStyle(scLowCard) : null;
     out.scCardIsACard = !!scLowStyle && parseFloat(scLowStyle.borderTopWidth) >= 1 &&
       scLowStyle.borderTopStyle === "solid" &&
       parseFloat(scLowStyle.borderTopLeftRadius) >= 4 &&
       scLowStyle.backgroundColor !== getComputedStyle(document.body).backgroundColor;
-    var scAmountEl = scLow ? scLow.querySelector('[data-testid="db-msg-sc-amount"]') : null;
+    // ---- issue 2609171849 #4 第 2 点：「sc 的高亮框仅显示在内容部分，也就是用户名、身份牌下面的
+    //      区域」。改前卡片挂在整个**行**上（头像列 + 身份行 + 正文 + 金额都被圈住），
+    //      改后框从身份行的**下一行**开始。四条判据：① 框顶 ≥ 身份行底边；② 框左 ≥ 头像列右边缘
+    //      （头像在框外）；③ 正文与金额行都在框内；④ 框仍在行盒里（没横向溢出）。
+    //      反面对照 scCardRowUntouched：行上不再挂卡片类名（改前为假）。
+    var scCardBox = rect(scLowCard);
+    var scIdentBox = rect(partOf(scLow, "db-msg-identity"));
+    var scAvatarColBox = rect(partOf(scLow, "db-msg-avatar-col"));
+    var scRowBox = rect(scLow);
+    var scCardBodyBox = rect(partOf(scLow, "db-msg-body"));
+    var scCardAmountBox = rect(partOf(scLow, "db-msg-sc-amount"));
+    out.scCardRowUntouched = !!scLow && (scLow.className || "").indexOf("scCard") < 0;
+    out.scCardBelowIdentity = !!scCardBox && !!scIdentBox &&
+      scCardBox.top >= scIdentBox.bottom - 0.5;
+    out.scCardOutsideAvatarCol = !!scCardBox && !!scAvatarColBox &&
+      scCardBox.left >= scAvatarColBox.right - 0.5;
+    out.scCardHoldsBodyAndAmount = !!scCardBox && !!scCardBodyBox && !!scCardAmountBox &&
+      scCardBodyBox.top >= scCardBox.top - 0.5 &&
+      scCardBodyBox.bottom <= scCardBox.bottom + 0.5 &&
+      scCardAmountBox.top >= scCardBodyBox.top - 0.5 &&
+      scCardAmountBox.bottom <= scCardBox.bottom + 0.5;
+    out.scCardInsideRow = !!scCardBox && !!scRowBox &&
+      scCardBox.left >= scRowBox.left - 0.5 && scCardBox.right <= scRowBox.right + 0.5;
+    out.scCardGapAbovePx = scCardBox && scIdentBox
+      ? Math.round((scCardBox.top - scIdentBox.bottom) * 10) / 10 : null;
+    var scAmountEl = partOf(scLow, "db-msg-sc-amount");
     var scAmountStyle = scAmountEl ? getComputedStyle(scAmountEl) : null;
     var scBodyStyle = scLow
-      ? getComputedStyle(scLow.querySelector('[data-testid="db-msg-body"]')) : null;
+      ? getComputedStyle(partOf(scLow, "db-msg-body")) : null;
     out.scCardAmountText = scAmountEl ? scAmountEl.innerText : null;
     out.scCardAmountUnit = out.scCardAmountText === num(30) + " 元";
     out.scCardAmountBold = !!scAmountStyle && parseInt(scAmountStyle.fontWeight, 10) >= 700;
@@ -4137,9 +4251,7 @@ const MOCK = (theme) => `(function () {
     //      计算底色逐项比出来，不是「看起来差不多」。另一条腿是**SC 不许被截断**（用户报的
     //      「sc 在礼物区域显示不全」）：正文块的 scrollWidth/scrollHeight 不许超过
     //      clientWidth/clientHeight，也不许是 nowrap + ellipsis。
-    var partOf = function (row, id) {
-      return row ? row.querySelector('[data-testid="' + id + '"]') : null;
-    };
+    //      （行内取格子的 partOf 定义在上面 SC 卡片那一段。）
     var giftScRow = giftItems.filter(function (r) {
       return r.innerText.indexOf(scLowSpec.content) >= 0;
     })[0];
@@ -4189,7 +4301,9 @@ const MOCK = (theme) => `(function () {
     var cScAmount = partOf(chatScRow, "db-msg-sc-amount");
     out.giftParityScAmountLine = !!gScAmount && !!cScAmount &&
       gScAmount.innerText === cScAmount.innerText && gScAmount.innerText === yuan(30) + " 元";
-    // ② 背景色：两栏底色同一（.paneGift 不再另刷 --bg-elevated），同一行的计算底色与边框也相同
+    // ② 背景色：两栏底色同一（.paneGift 不再另刷 --bg-elevated）；同一条 SC 在两处**行本身**
+    //      与**卡片**的计算底色 / 边框也逐项相同（行不再刷底色，卡片才是那个框 —— issue
+    //      2609171849 #4 第 2 点之后卡片只盖内容部，见上面那一段的两条腿都量一遍）。
     var paneGiftEl = byTestId("db-pane-gift");
     var paneDanmakuEl = byTestId("db-pane-danmaku");
     out.giftParityPaneBackground = !!paneGiftEl && !!paneDanmakuEl &&
@@ -4199,11 +4313,16 @@ const MOCK = (theme) => `(function () {
       ? getComputedStyle(paneGiftEl).backgroundColor : null;
     out.giftParityRowBackground = !!giftScRow && !!chatScRow &&
       getComputedStyle(giftScRow).backgroundColor ===
-      getComputedStyle(chatScRow).backgroundColor &&
-      getComputedStyle(giftScRow).borderTopColor === getComputedStyle(chatScRow).borderTopColor &&
-      getComputedStyle(giftScRow).borderTopWidth === getComputedStyle(chatScRow).borderTopWidth;
+      getComputedStyle(chatScRow).backgroundColor;
     out.giftParityRowBackgroundColor = giftScRow
       ? getComputedStyle(giftScRow).backgroundColor : null;
+    var giftScCard = partOf(giftScRow, "db-gift-sc-card");
+    var chatScCard = partOf(chatScRow, "db-msg-sc-card");
+    out.giftParityCardBackground = !!giftScCard && !!chatScCard &&
+      getComputedStyle(giftScCard).backgroundColor ===
+      getComputedStyle(chatScCard).backgroundColor &&
+      getComputedStyle(giftScCard).borderTopColor === getComputedStyle(chatScCard).borderTopColor &&
+      getComputedStyle(giftScCard).borderTopWidth === getComputedStyle(chatScCard).borderTopWidth;
     // ③ SC 不许被截断：两处都不许（现在这一条同时钉住弹幕区那一份，避免只修了礼物栏那一处）
     out.giftScBodyClip = clipOf(giftScBody);
     out.chatScBodyClip = clipOf(chatScBody);
@@ -4252,6 +4371,167 @@ const MOCK = (theme) => `(function () {
     out.giftJumpButtonReturnsToBottom = giftGapNow() < 8 && !byTestId("db-gift-anchor");
     out.giftRowsStillRendered = allByTestId("db-gift-row").length === giftItems.length;
     snap();
+    scCardBlockRan = true;
+    } catch (e) {
+      out.scCardBlockError = String((e && e.stack) || e);
+      snap();
+    }
+    out.scCardBlockRan = scCardBlockRan;
+
+    // ---- issue 2609171849 #4 第 1 点：**选中一条弹幕时，那层绿底从界面最左铺到最右**
+    //      （用户原话：「选中某条弹幕时，那个绿色底色能不能从界面最左一直到最右，现在这个卡在
+    //      头像上有点不好看」）。实现见 docs/ui.md §4.10：底色不再画在字形上（浏览器那层原生选区底
+    //      贴着字画、头像那一列是空的），改成整行一层底 —— 行盒向两侧各探出一道 --sp-3
+    //      （.scroller 的左右内边距），由 MessageRow 按「当前选区碰没碰到这一行」打
+    //      data-selected。
+    //      整块包一层（try/catch + rowSelectBlockRan，§9.3 的准入条件 ①）；准入自备（条件 ②）：
+    //      块内自己确认在房间页、自己**推一条新行**当锚（虚拟列表的渲染窗口随时在变，
+    //      拿历史行当锚会假失败 —— 本仓踩过），跑完自己把选区清掉（后面的段落不受影响）。
+    var rowSelectBlockRan = false;
+    try {
+    // 读「某个令牌当背景色」的计算值：.row[data-selected] 的底色是 color-mix 出来的，
+    // 与探针走的是同一条解析路径，因此两者可以直接比字符串（issue 2609171849 #4）。
+    var bgColorOf = function (name) {
+      var probe = document.createElement("span");
+      probe.style.setProperty("background-color", "var(" + name + ")");
+      document.body.appendChild(probe);
+      var value = getComputedStyle(probe).backgroundColor;
+      probe.parentNode.removeChild(probe);
+      return value;
+    };
+    // 计算色的序列化随引擎 / 色值来源不同（color-mix 出来的是 color(srgb r g b / a)，
+    // 令牌里写死的十六进制是 rgb(r, g, b)），两族都要切得出来 —— 用 indexOf / split 切，
+    // **不写正则**（这一段活在模板字符串里，见文件头的维护约定）。
+    var channelsOf = function (css) {
+      var open = css.indexOf("(");
+      var close = css.lastIndexOf(")");
+      if (open < 0 || close < 0) return null;
+      var parts = css.slice(open + 1, close).split(",").join(" ").split("/").join(" ").split(" ");
+      var nums = [];
+      for (var i = 0; i < parts.length; i += 1) {
+        if (parts[i].length === 0) continue;
+        var value = parseFloat(parts[i]);
+        if (!isNaN(value)) nums.push(value);
+      }
+      return nums.length >= 3 ? nums : null;
+    };
+    out.rowSelectPrecondition = !!byTestId("db-chat-scroll") && !!byTestId("db-chat-area");
+    window.__emit("danmubox://message", window.__mk("danmaku", "选中态全宽断言样本", false, {
+      uid: 77006, uname: "全宽样本观众"
+    }));
+    await sleep(400);
+    var selRow = rowWith("选中态全宽断言样本");
+    var selScroller = byTestId("db-chat-scroll");
+    var selRowBox = rect(selRow);
+    var selScrollerBox = rect(selScroller);
+    var selBodyEl = selRow ? selRow.querySelector('[data-testid="db-msg-body"]') : null;
+    var selNameEl = selRow ? selRow.querySelector('[data-testid="db-msg-name"]') : null;
+    var selAvatarBox = rect(selRow
+      ? selRow.querySelector('[data-testid="db-msg-avatar-col"]') : null);
+    // ① 行盒与滚动容器**左右边界对齐**：.scroller 的左右内边距是 --sp-3，行盒探出去之后
+    //    左边缘 = 容器的内边距盒左边缘，右边缘 = 容器 clientWidth 的右边缘（clientWidth
+    //    已经扣掉滚动条那条槽：覆盖式滚动条下两者相等，经典滚动条下正好差一条槽宽）。
+    out.rowBoxFullBleedLeftPx = selRowBox && selScrollerBox
+      ? Math.round((selRowBox.left - selScrollerBox.left) * 10) / 10 : null;
+    out.rowBoxFullBleedRightPx = selRowBox && selScrollerBox
+      ? Math.round((selScrollerBox.left + selScroller.clientWidth - selRowBox.right) * 10) / 10 : null;
+    out.rowBoxFullBleed = out.rowBoxFullBleedLeftPx !== null &&
+      Math.abs(out.rowBoxFullBleedLeftPx) < 1 && Math.abs(out.rowBoxFullBleedRightPx) < 1;
+    // ② 底色真的铺到头像**左边**去了：改前行盒的左边缘就是头像列的左边缘（这个差值是 0），
+    //    所以这条是「不再被头像卡住」的正面判据（反面对照就是上面那两个 0）。
+    out.rowBoxBleedsLeftOfAvatarPx = selRowBox && selAvatarBox
+      ? Math.round((selAvatarBox.left - selRowBox.left) * 10) / 10 : null;
+    out.rowBoxCoversAvatarColumn = out.rowBoxBleedsLeftOfAvatarPx !== null &&
+      out.rowBoxBleedsLeftOfAvatarPx > 8;
+    // ③ 探出去的是**盒**不是内容：正文左边缘仍与用户名左边缘一致（悬挂缩进没被带歪）
+    out.rowFullBleedKeepsIndent = !!selBodyEl && !!selNameEl &&
+      Math.abs(rect(selBodyEl).left - rect(selNameEl).left) < 1;
+    // ④ 选中：真实 Range（与拖选走同一批 DOM API）
+    var selRange = document.createRange();
+    selRange.selectNodeContents(selBodyEl);
+    var selSel = window.getSelection();
+    selSel.removeAllRanges();
+    selSel.addRange(selRange);
+    await sleep(300);
+    out.rowSelectedMarked = !!selRow && selRow.getAttribute("data-selected") === "true";
+    out.rowSelectedBackground = selRow ? getComputedStyle(selRow).backgroundColor : null;
+    out.rowSelectedUsesSelectWash = out.rowSelectedBackground === bgColorOf("--select-wash");
+    out.rowSelectedWashIsOwn = bgColorOf("--select-wash") !== bgColorOf("--hover-wash");
+    var selChannels = channelsOf(out.rowSelectedBackground || "");
+    out.rowSelectedWashGreen = !!selChannels && selChannels[1] >= selChannels[0] &&
+      selChannels[1] >= selChannels[2] && selChannels[1] > 0;
+    out.rowSelectedOnlyThisRow = allByTestId("db-msg-row").filter(function (r) {
+      return r !== selRow && r.getAttribute("data-selected") !== null;
+    }).length === 0;
+    // 选中语义一条都不许少：正文仍可选中、仍取得到文字（沉浸态那条断言量的是同一件事）
+    out.rowSelectionTextKept = selSel.toString().length > 0;
+    out.rowSelectionKeepsTextSelectable = !!selBodyEl &&
+      getComputedStyle(selBodyEl).userSelect !== "none";
+    // 字形那层底已置透明（整行已经有一层底，再叠一层更深的绿就是两色）
+    out.rowSelectionGlyphBackground = selBodyEl
+      ? getComputedStyle(selBodyEl, "::selection").backgroundColor : null;
+    out.rowSelectionGlyphTransparent = out.rowSelectionGlyphBackground === "rgba(0, 0, 0, 0)" ||
+      out.rowSelectionGlyphBackground === "transparent";
+    // ⑤ 松开选区：底色与标记都要收回去（用户点一下就松手 = 没选中任何东西）
+    selSel.removeAllRanges();
+    await sleep(300);
+    out.rowSelectionCleared = !!selRow && selRow.getAttribute("data-selected") === null;
+    out.rowBackgroundBackToNone = !!selRow &&
+      getComputedStyle(selRow).backgroundColor === "rgba(0, 0, 0, 0)";
+    snap();
+    rowSelectBlockRan = true;
+    } catch (e) {
+      out.rowSelectBlockError = String((e && e.stack) || e);
+      // 出错也要把选区清掉：后面的段落不该带着一个活动选区跑。
+      try { window.getSelection().removeAllRanges(); } catch (ignored) {}
+      snap();
+    }
+    out.rowSelectBlockRan = rowSelectBlockRan;
+
+    // ---- issue 2609171849 #4 第 3 点：**上下分区的分界线**（用户原话：「分割独立礼物栏的那个
+    //      横折叠区域，弄点横线或者虚线之类的（类似于折叠屏分屏的那个提示），而且现在 2 区间
+    //      没有任何边界，有点不便于区分区域」）。改前那条线借的是 --border 发丝线：深色下对
+    //      底色 1.56:1、浅色下 1.02:1 —— 用户的「没有任何边界」就是它。现在画在分割条自己的顶边上
+    //      （**虚线** + --fold-line），对比度两套主题都 ≥ 3:1（图形要素的达标线）。
+    //      整块包一层（try/catch + foldLineBlockRan）；准入前提是礼物栏开着
+    //      （ui.gift_panel 为真、分割条在场），判据直接记进快照（条件 ②）。
+    var foldLineBlockRan = false;
+    try {
+    var splitEl = byTestId("db-pane-splitter");
+    var splitStyle = splitEl ? getComputedStyle(splitEl) : null;
+    var splitBox = rect(splitEl);
+    var paneDanmakuBox = rect(byTestId("db-pane-danmaku"));
+    var paneGiftBox = rect(byTestId("db-pane-gift"));
+    out.foldLinePrecondition = !!splitEl && window.__prefs["ui.gift_panel"] === true;
+    out.foldLineIsDashed = !!splitStyle && splitStyle.borderTopStyle === "dashed" &&
+      parseFloat(splitStyle.borderTopWidth) >= 1;
+    out.foldLineWidthPx = splitStyle
+      ? Math.round(parseFloat(splitStyle.borderTopWidth) * 10) / 10 : null;
+    // 线的颜色 = 令牌值（令牌真的被消费了，不是写死的色值）
+    out.foldLineUsesToken = !!splitStyle && splitStyle.borderTopColor === cssColorOf("--fold-line");
+    out.foldLineColor = splitStyle ? splitStyle.borderTopColor : null;
+    // 可见性：线的颜色对画布 ≥ 3:1（与「正文对背景 ≥ 4.5:1」同一套 WCAG 算式）。
+    // 反面对照 foldLineOldBorderContrast 是改前那条线（--border）的读数，两套主题都 < 1.6:1。
+    out.foldLineContrastOnCanvas = contrastRatio(
+      cssColorOf("--fold-line"), cssColorOf("--bg")) >= 3;
+    out.foldLineContrastPx = contrastRatio(cssColorOf("--fold-line"), cssColorOf("--bg"));
+    out.foldLineOldBorderContrast = contrastRatio(
+      cssColorOf("--border"), cssColorOf("--bg"));
+    // 它真的落在两个区间**之间**（礼物栏在上还是在下都成立：分割条在 DOM 里恒在两栏之间）
+    out.foldLineSeparatesPanes = !!splitBox && !!paneDanmakuBox && !!paneGiftBox &&
+      ((Math.abs(splitBox.top - paneDanmakuBox.bottom) < 1 &&
+        Math.abs(splitBox.bottom - paneGiftBox.top) < 1) ||
+       (Math.abs(splitBox.top - paneGiftBox.bottom) < 1 &&
+        Math.abs(splitBox.bottom - paneDanmakuBox.top) < 1));
+    // 改前那条居中发丝线（::before）整条删掉，不是叠着画
+    out.foldLinePseudoGone = !splitEl || getComputedStyle(splitEl, "::before").content === "none";
+    snap();
+    foldLineBlockRan = true;
+    } catch (e) {
+      out.foldLineBlockError = String((e && e.stack) || e);
+      snap();
+    }
+    out.foldLineBlockRan = foldLineBlockRan;
 
     // ---- 两枚开关的四种组合（第 4 条）：每一次都顺带验「切开关不丢消息」（同一批数据只换渲染位置）。
     //      点开关之前必须先把**筛选面板**开回来：上一步展开礼物栏那一下按「五者互斥」把面板收掉了
@@ -6685,6 +6965,178 @@ const MOCK = (theme) => `(function () {
       await sleep(800);
     }
     out.cheapGiftHomeRoomRestored = !!cheapHomeId && cheapActiveRoomId() === cheapHomeId;
+
+    /* ==== switchscope：两枚低价礼物开关的「**两个区域**」与「不丢内容 / 开关可逆」
+       （issue 2609171849 第 5 条；本票 = feat/2609171849-switch-scope，见 docs/ui.md §5.3 与 §4.8）
+
+       「两个区域」= **弹幕区**（行钩子 db-msg-row）与**礼物栏**（db-gift-row）——礼物类消息
+       按 ui.gift_in_danmaku / ui.gift_panel 分别落进这两栏，用户在同一屏里同时看得到（默认两枚
+       都开）。本段把每条口径都**在两处各量一次**：
+         ① 折叠（ui.gift_collapse_cheap）：低价礼物在两处都合并成一条（桶取第一条的身份与位置，
+            ×N 与金额是整桶合计），0.11 元那条与它无关、两处都照旧一行；
+         ② 关掉折叠：两处**逐条回来**，顺序（铅笔 → 铅笔屑 → 橡皮）、条目数、各行金额都回到原值；
+         ③ 剔除统计（ui.gift_exclude_cheap_stats）：只改**统计**（礼物栏折叠头的「礼物 / SC（N）」
+            与分组明细）—— 两个区域的行**一条都不动**；关掉它统计逐字回到原串；
+         ④ 自动消失（ui.interact_auto_hide）：到点那一行**不再画**，但消息没丢 —— 关掉开关它
+            原样回来，再打开又不见（两个方向都可逆）。
+       ⚠ 准入前提全部在本块内自备（§9.3 ②）：切回**空会话**的第二房间（只有本段推的夹具）、
+          三枚开关各自先拨到既定值、礼物栏展开（行数才等于条目数）。
+       ⚠ 整块包一层 try/catch + switchScopeBlockRan（§9.3 ①）：出岔子只作废本块、不带走整场。 */
+    var switchScopeBlockRan = false;
+    try {
+      var ssRoomId = 5555;
+      // 计数用：弹幕区里含某条礼物的行有几条（礼物栏那一族用 cheapRowCount / cheapPaneText）。
+      // 判据是「子串命中，且命中处后面不紧跟汉字」：夹具里「投喂 铅笔」是「投喂 铅笔屑」的
+      // 前缀，纯子串会同时命中两条（首次真跑即此红）；折叠之后只剩桶行、它的文本比礼物名长，
+      // 所以也不能改成精确相等。注意本文件整体活在模板串里，不能写任何反斜杠转义，
+      // 因此这里用 charCodeAt 判汉字区间，不用正则。
+      var ssChatRowsWith = function (needle) {
+        return rows().filter(function (r) {
+          var body = r.innerText;
+          var n = needle.length;
+          for (var i = body.indexOf(needle); i >= 0; i = body.indexOf(needle, i + 1)) {
+            var after = body.slice(i + n, i + n + 1);
+            if (after === "") return true;
+            var c = after.charCodeAt(0);
+            if (!(c >= 0x3400 && c <= 0x9fff)) return true;
+          }
+          return false;
+        });
+      };
+      // 面板里的一枚开关拨到指定值（面板自己开合，幂等）：返回「找没找到并拨成功」。
+      var ssToggle = async function (label, value) {
+        var opened = await cheapSetPanel(true);
+        var found = setGiftSwitch(label, value);
+        await sleep(300);
+        await cheapSetPanel(false);
+        return opened && found;
+      };
+
+      var ssTab = cheapTabFor(ssRoomId);
+      out.switchScopeFreshRoomTab = !!ssTab;
+      if (!ssTab) throw new Error("第二房间的标签拿不到（标签条前提失效）");
+      ssTab.click();
+      await sleep(900);
+      out.switchScopeFreshRoomActive = cheapActiveRoomId() === String(ssRoomId);
+      if (!out.switchScopeFreshRoomActive) throw new Error("没切进第二房间");
+
+      out.switchScopeSwitchesSet = (await ssToggle("折叠低价礼物", false)) &&
+        (await ssToggle("剔除低价礼物统计", false)) &&
+        (await ssToggle("互动消息自动消失", true)) &&
+        window.__prefs["ui.gift_collapse_cheap"] === false &&
+        window.__prefs["ui.gift_exclude_cheap_stats"] === false &&
+        window.__prefs["ui.interact_auto_hide"] === true;
+
+      // ---- ① 默认（两枚都关）：两个区域都一条一行
+      cheapPush("gift", "投喂 铅笔", 90);
+      cheapPush("gift", "投喂 铅笔屑", 100);
+      cheapPush("gift", "投喂 橡皮", 110);
+      await sleep(800);
+      var ssPaneOpen = await cheapSetPane(true);
+      out.switchScopeGiftRowsBefore = cheapRowCount();
+      out.switchScopeSummaryBefore = cheapSummary();
+      out.switchScopeBaseline = ssPaneOpen &&
+        ssChatRowsWith("投喂 铅笔").length === 1 &&
+        ssChatRowsWith("投喂 铅笔屑").length === 1 &&
+        ssChatRowsWith("投喂 橡皮").length === 1 &&
+        out.switchScopeGiftRowsBefore === 3 &&
+        cheapPaneText().indexOf("0.09 元") >= 0 &&
+        cheapPaneText().indexOf("0.1 元") >= 0 &&
+        cheapPaneText().indexOf("0.11 元") >= 0 &&
+        out.switchScopeSummaryBefore === "本场 礼物 3 · 0.3 元";
+
+      // ---- ② 折叠开：**两个区域都折**（弹幕区少一行、桶行带 ×2；礼物栏条目 3 → 2）
+      out.switchScopeFoldToggled = (await ssToggle("折叠低价礼物", true)) &&
+        window.__prefs["ui.gift_collapse_cheap"] === true;
+      await cheapSetPane(true);
+      var ssChatBucketRows = ssChatRowsWith("投喂 铅笔");
+      var ssChatBucketCount = ssChatBucketRows.length === 1
+        ? ssChatBucketRows[0].querySelector('[data-testid="db-msg-count"]') : null;
+      out.switchScopeChatPaneFolds = ssChatBucketRows.length === 1 &&
+        ssChatRowsWith("投喂 铅笔屑").length === 0 &&
+        !!ssChatBucketCount && ssChatBucketCount.innerText.indexOf("×2") >= 0;
+      out.switchScopeGiftRowsAfterFold = cheapRowCount();
+      out.switchScopeGiftPaneFolds = out.switchScopeGiftRowsAfterFold === 2 &&
+        cheapPaneText().indexOf("投喂 铅笔屑") < 0 &&
+        cheapPaneText().indexOf("0.19 元") >= 0;
+      out.switchScopeBothPanesFold = out.switchScopeChatPaneFolds && out.switchScopeGiftPaneFolds;
+      // 折叠只管形状：统计逐字不动（含头部那个 N）。
+      out.switchScopeFoldKeepsStats = cheapSummary() === out.switchScopeSummaryBefore;
+      // 0.11 元那条不是低价，两个区域都照旧单独一行。
+      out.switchScopeNonCheapRowUntouched = ssChatRowsWith("投喂 橡皮").length === 1 &&
+        cheapPaneText().indexOf("投喂 橡皮") >= 0;
+
+      // ---- ③ 折叠关回去：两处**逐条回来**（数量 / 顺序 / 金额 / 统计逐项复原）
+      out.switchScopeFoldOff = (await ssToggle("折叠低价礼物", false)) &&
+        window.__prefs["ui.gift_collapse_cheap"] === false;
+      await cheapSetPane(true);
+      var ssPencilRow = rowWith("投喂 铅笔");
+      var ssPencilDustRow = rowWith("投喂 铅笔屑");
+      var ssRubberRow = rowWith("投喂 橡皮");
+      out.switchScopeChatRowsRestored = ssChatRowsWith("投喂 铅笔").length === 1 &&
+        ssChatRowsWith("投喂 铅笔屑").length === 1 && ssChatRowsWith("投喂 橡皮").length === 1;
+      out.switchScopeChatOrderRestored = !!ssPencilRow && !!ssPencilDustRow && !!ssRubberRow &&
+        (ssPencilRow.compareDocumentPosition(ssPencilDustRow) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
+        (ssPencilDustRow.compareDocumentPosition(ssRubberRow) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      out.switchScopeGiftRowsRestored = cheapRowCount() === out.switchScopeGiftRowsBefore;
+      out.switchScopeAmountsRestored = cheapPaneText().indexOf("0.09 元") >= 0 &&
+        cheapPaneText().indexOf("0.1 元") >= 0 && cheapPaneText().indexOf("0.11 元") >= 0;
+      out.switchScopeSummaryRestored = cheapSummary() === out.switchScopeSummaryBefore;
+      out.switchScopeBothPanesRestore = out.switchScopeChatRowsRestored &&
+        out.switchScopeChatOrderRestored && out.switchScopeGiftRowsRestored &&
+        out.switchScopeAmountsRestored && out.switchScopeSummaryRestored;
+
+      // ---- ④ 剔除统计：只改统计，两个区域的行一条不动
+      out.switchScopeExcludeToggled = (await ssToggle("剔除低价礼物统计", true)) &&
+        window.__prefs["ui.gift_exclude_cheap_stats"] === true;
+      await cheapSetPane(true);
+      var ssExcludeSummary = cheapSummary();
+      out.switchScopeExcludeKeepsPanes = ssChatRowsWith("投喂 铅笔").length === 1 &&
+        ssChatRowsWith("投喂 铅笔屑").length === 1 && ssChatRowsWith("投喂 橡皮").length === 1 &&
+        cheapRowCount() === out.switchScopeGiftRowsBefore;
+      out.switchScopeExcludeTouchesStatsOnly = out.switchScopeExcludeKeepsPanes &&
+        ssExcludeSummary === "本场 礼物 1 · 0.11 元" &&
+        cheapDockText().indexOf("（1）") >= 0;
+
+      // ---- ⑤ 剔除关回去：统计逐字回到原串（头部 N 一起回来）
+      out.switchScopeExcludeOff = (await ssToggle("剔除低价礼物统计", false)) &&
+        window.__prefs["ui.gift_exclude_cheap_stats"] === false;
+      out.switchScopeExcludeRestoresStats = cheapSummary() === out.switchScopeSummaryBefore &&
+        cheapDockText().indexOf("（3）") >= 0;
+
+      // ---- ⑥ 自动消失：到点不画，但**内容没丢** —— 关掉开关原样回来，再打开又不见
+      window.__emit("danmubox://message", window.__mk("interact", "", false, {
+        room_id: ssRoomId, uname: "开关票标记", ts: Date.now() - 9000
+      }));
+      await sleep(600);
+      out.switchScopeAutoHideHidesExpired = text().indexOf("开关票标记") < 0;
+      out.switchScopeAutoHideOff = (await ssToggle("互动消息自动消失", false)) &&
+        window.__prefs["ui.interact_auto_hide"] === false;
+      await sleep(400);
+      out.switchScopeAutoHideRestoresContent = text().indexOf("开关票标记") >= 0;
+      out.switchScopeAutoHideOnAgain = (await ssToggle("互动消息自动消失", true)) &&
+        window.__prefs["ui.interact_auto_hide"] === true;
+      await sleep(400);
+      out.switchScopeAutoHideHidesAgain = text().indexOf("开关票标记") < 0;
+      out.switchScopeAutoHideReversible = out.switchScopeAutoHideHidesExpired &&
+        out.switchScopeAutoHideRestoresContent && out.switchScopeAutoHideHidesAgain;
+
+      // ---- 收尾：三枚开关回到契约 §8 的默认值、回到原来的房间（下一段从房间页开始量）
+      out.switchScopeDefaultsRestored = window.__prefs["ui.gift_collapse_cheap"] === false &&
+        window.__prefs["ui.gift_exclude_cheap_stats"] === false &&
+        window.__prefs["ui.interact_auto_hide"] === true;
+      if (cheapHomeId) {
+        cheapTabFor(cheapHomeId).click();
+        await sleep(800);
+      }
+      out.switchScopeHomeRoomRestored = !!cheapHomeId && cheapActiveRoomId() === cheapHomeId;
+      snap();
+      switchScopeBlockRan = true;
+    } catch (e) {
+      out.switchScopeBlockError = String((e && e.stack) || e);
+      switchScopeBlockRan = false;
+    }
+    out.switchScopeBlockRan = switchScopeBlockRan;
 
     /* ---- 开播 / 下播的状态自动更新（用户 2026-09-16：「在开播下播时，状态不会自动更新，
        打开的房间应该实时更新状态，列表应该定期查询状态」）。

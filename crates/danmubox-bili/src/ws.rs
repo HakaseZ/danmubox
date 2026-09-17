@@ -147,6 +147,18 @@ fn cmd_name(value: &Value) -> String {
     raw.split(':').next().unwrap_or(raw).to_string()
 }
 
+/// 大航海合并器的定时分支（`docs/protocol.md` §10.6）：等到 `deadline` 就放行那条
+/// 「窗口内没等到播报」的购买事件。
+///
+/// `deadline` 为 `None`（没有压着的购买事件）时返回一个**永不就绪**的 future ——
+/// `select!` 因此不会为了它被唤醒，连接空闲时一个多余的定时器都没有。
+async fn guard_flush_when_due(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 /// WS 心跳包体：字面量，见 `docs/protocol.md` §8.1。
 const HEARTBEAT_BODY: &[u8] = b"[object Object]";
 
@@ -463,15 +475,13 @@ impl BiliLive {
         }
     }
 
-    /// 读循环：解包投递，并守住两条时间护栏（`docs/protocol.md` §7.3 认证超时、
-    /// §8.1 僵死判定）。
+    /// 读循环的外层：与 [`Self::read_loop_inner`] 只差**大航海按笔合并器**的生命周期。
     ///
-    /// 返回的 [`Attempt`] 里 `host` 是空的：`host_list` 只有 [`BiliLive::run_once`] 见过，
-    /// 由它补上。
+    /// 合并器要在退出前把还压着的购买事件放出去（[`cmd::GuardMerge::take_pending`]），
+    /// 而内层有 5 条 `return` 出口（取消 / 认证超时 / 僵死 / 对端关闭 / 读失败），
+    /// 统一收在这一层才不会漏 —— 否则那条开通播报会随断连一起消失。
     ///
-    /// 参数多是因为它同时握着「会话内六件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
-    /// 入站流）与诊断采集句柄 `diag` —— 收成结构只会让调用点更长，与 `send::build_params`
-    /// 同一取舍（那里的 `#[allow]` 注释同样说明了这点）。
+    /// 签名与拆分前逐字一致：`ws::tests` 有 6 个用例直接调它。
     #[allow(clippy::too_many_arguments)]
     async fn read_loop<S>(
         &self,
@@ -482,6 +492,50 @@ impl BiliLive {
         limits: &Limits,
         read: &mut S,
         diag: &Arc<DiagAttempt>,
+    ) -> Attempt
+    where
+        S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
+            + Unpin,
+    {
+        let mut guard_merge = cmd::GuardMerge::new();
+        let attempt = self
+            .read_loop_inner(
+                room_id,
+                sink,
+                cancel,
+                verify,
+                limits,
+                read,
+                diag,
+                &mut guard_merge,
+            )
+            .await;
+        for message in guard_merge.take_pending() {
+            sink.publish_message(message);
+        }
+        attempt
+    }
+
+    /// 读循环本体：解包投递，并守住两条时间护栏（`docs/protocol.md` §7.3 认证超时、
+    /// §8.1 僵死判定）。
+    ///
+    /// 返回的 [`Attempt`] 里 `host` 是空的：`host_list` 只有 [`BiliLive::run_once`] 见过，
+    /// 由它补上。
+    ///
+    /// 参数多是因为它同时握着「会话内六件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
+    /// 入站流）、诊断采集句柄 `diag` 与大航海的按笔合并器 —— 收成结构只会让调用点更长，
+    /// 与 `send::build_params` 同一取舍（那里的 `#[allow]` 注释同样说明了这点）。
+    #[allow(clippy::too_many_arguments)]
+    async fn read_loop_inner<S>(
+        &self,
+        room_id: i64,
+        sink: &MessageSink,
+        cancel: &Cancel,
+        verify: &Notify,
+        limits: &Limits,
+        read: &mut S,
+        diag: &Arc<DiagAttempt>,
+        guard_merge: &mut cmd::GuardMerge,
     ) -> Attempt
     where
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
@@ -498,7 +552,15 @@ impl BiliLive {
             } else {
                 auth_deadline
             };
+            // 大航海按笔合并的到期时刻（`docs/protocol.md` §10.6）：只有真压着「等播报的
+            // 购买事件」时才有值，没有时不 arm 分支 —— 移动端不该为此常驻唤醒。
+            let guard_deadline = guard_merge.deadline();
             tokio::select! {
+                _ = guard_flush_when_due(guard_deadline) => {
+                    if let Some(message) = guard_merge.flush(tokio::time::Instant::now()) {
+                        sink.publish_message(message);
+                    }
+                }
                 _ = cancel.cancelled() => {
                     let end = if verified { End::Live } else { End::Cancelled };
                     return Attempt::new(diag, end, verified, None);
@@ -593,6 +655,18 @@ impl BiliLive {
                                         match cmd::dispatch(room_id, &value, &self.counters) {
                                             Some(cmd::Dispatch::Message(message)) => {
                                                 sink.publish_message(message)
+                                            }
+                                            // 大航海：同一笔购买的 `GUARD_BUY` 与
+                                            // `USER_TOAST_MSG` 在这里合成**一条**播报
+                                            // （§10.6 / §12.3），金额取实付那一份。
+                                            Some(cmd::Dispatch::Guard { message, source }) => {
+                                                if let Some(message) = guard_merge.absorb(
+                                                    tokio::time::Instant::now(),
+                                                    message,
+                                                    source,
+                                                ) {
+                                                    sink.publish_message(message);
+                                                }
                                             }
                                             Some(cmd::Dispatch::RoomStats {
                                                 online,
@@ -1438,6 +1512,75 @@ mod tests {
         );
         fresh.cancel();
         runner.await.unwrap().unwrap();
+    }
+
+    /// 同一次会话里的重连**不重置会话编号**（`docs/contract.md` §4.3：重连仍属同一次会话，
+    /// 已收到的消息保留）。
+    ///
+    /// 这不是记账细节：界面按 `local_id` 做单调判定
+    /// （`apps/desktop/ui/src/store.ts` 的 `message.local_id <= last` → 直接丢），
+    /// 编号一旦在某次重连之后回退，之后进来的**每一条**弹幕都会被界面悄悄丢掉 ——
+    /// 表现就是「房间看着已连接，却再也不进来弹幕」。
+    /// 断连窗口里丢的帧补不回来（上游没有可翻页的回放，见 `docs/protocol.md` A30），
+    /// 那是另一件事；这条只钉「重连之后新来的弹幕还能不能进列表」。
+    #[tokio::test]
+    async fn reconnect_keeps_the_session_numbering_monotonic() {
+        let limits = test_limits();
+        let (sink, bus) = test_sink();
+        let mut events = bus.subscribe();
+        let cancel = Cancel::new();
+        let times = Arc::new(StdMutex::new(Vec::new()));
+
+        let runner = {
+            let sink = sink.clone();
+            let cancel = cancel.clone();
+            let times = Arc::clone(&times);
+            tokio::spawn(async move {
+                reconnect_loop(1, &sink, &cancel, &limits, |node_start| {
+                    // 每次尝试投一条再收场（「连接中断」）—— 循环会拿着**同一份** sink 再试一次。
+                    let round = {
+                        let mut t = times.lock().expect("lock poisoned");
+                        t.push(Instant::now());
+                        t.len()
+                    };
+                    let sink = sink.clone();
+                    async move {
+                        // 内容按轮次变化，避开「同一条的第二份」那个指纹窗口。
+                        let mut message =
+                            Message::new(1, danmubox_core::MessageKind::Danmaku, round as i64);
+                        message.content = format!("第 {round} 轮");
+                        sink.publish_message(message);
+                        Attempt::new(
+                            &test_diag(),
+                            End::Failed("连接已被对端关闭".into()),
+                            false,
+                            Some(node_start),
+                        )
+                    }
+                })
+                .await
+            })
+        };
+
+        until(
+            || times.lock().expect("lock poisoned").len() >= 3,
+            Duration::from_millis(2000),
+        )
+        .await;
+        cancel.cancel();
+        runner.await.unwrap().unwrap();
+
+        let ids: Vec<u64> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                Event::Message(message) => Some(message.local_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![1, 2, 3],
+            "会话内编号从 1 起连续分配（跨重连不回退）：{ids:?}"
+        );
     }
 
     /// §8.1：认证成功后 90 秒内没有任何入站帧 → 判定僵死、主动断开（测试里 120ms）。

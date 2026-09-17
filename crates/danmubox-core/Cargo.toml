@@ -16,3 +16,12 @@ thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["sync", "macros", "rt"] }
 toml = "1.1.6"
 tracing = "0.1.44"
+
+[dev-dependencies]
+# 本 crate 的**测试**要用虚拟时钟与 `sleep`（`session.rs` 的 `settle()`、`bus.rs` 的取消用例），
+# 而 `time` 这一档库里用不到 —— 放在 dev-dependencies 里，库本身的特性集不变。
+#
+# 之前漏了它：`cargo test -p danmubox-core`（只编本 crate 时不做工作区级特性合并）
+# 会以 `could not find time in tokio` 直接编不过，只有 `cargo test --workspace` 才跑得起来
+# —— 于是「core 单 crate 的测试」这条闸门实际上是坏的。
+tokio = { version = "1.53.1", features = ["time"] }

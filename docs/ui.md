@@ -171,7 +171,7 @@
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-chat-area` / `db-msg-count` / `db-gift-dock` / `db-gift-area` / `db-gift-scroll` / `db-gift-list` / `db-gift-anchor` / `db-gift-row` / `db-gift-avatar` / `db-gift-avatar-col` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item` / `db-diagnose` / `db-diagnose-path` / `db-diagnose-finish`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-msg-sc-card` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-chat-area` / `db-msg-count` / `db-gift-dock` / `db-gift-area` / `db-gift-scroll` / `db-gift-list` / `db-gift-anchor` / `db-gift-row` / `db-gift-avatar` / `db-gift-avatar-col` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-sc-card` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item` / `db-diagnose` / `db-diagnose-path` / `db-diagnose-finish`），冒烟脚本按它定位，不再依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
 
 ### 2.3.1 沉浸模式（issue #1）
 
@@ -404,7 +404,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 |---|---|---|---|---|---|
 | `danmaku` | 全部用本地设计 token：正文 `--fg`、昵称 `--fg-dim`、时间戳 `--fg-muted`；**不消费** `Message.color`（§4.3） | `弹` | 左对齐 | 正文档 / 昵称低一档 / 时间最低档 | 竖条贴行首；正文色与其它 kind 一致 |
 | `gift` | 竖条 `--gold #C08A2E`；正文是上游给的「`<动作词> <礼物名>`」；行尾 `×N` | `礼` | 左对齐 | 正文档 / 昵称低一档 | 行里**不画金额**（上游把金额放在 `amount` 而不是正文里，行内再塞一格会与 `×N` 挤在一起）；金额在**独立礼物栏**里按「`<金额> 元`」呈现（金瓜子 ÷ 1000，见 §5.3 与契约 §5「金额单位」） |
-| `superchat` | **卡片**（本批第 2 条落地）：背景与边框都取自 SC 档位 token `--sc-1 … --sc-5`（`.scTierN` 把命中的那一枚写进 `--sc-tier`），金额行低一档加粗 | `SC` | 左对齐，卡片占满行宽 | 金额低一档加粗 / 正文档 / 昵称低一档 | 高度随内容行数增长。**档位边界是本地取值**：`amount`（元）< 100 → `--sc-1`、< 500 → `--sc-2`、< 1000 → `--sc-3`、< 2000 → `--sc-4`、≥ 2000 → `--sc-5`（分界取官方 SC 可购档位 30 / 50 / 100 / 500 / 1000 / 2000 元的中段），`amount = 0`（上游没给价）落最低档。**未与网页端卡片逐档比对**，那一条仍挂在 `protocol.md` 附录 A 的待校准表里（A.2「SC 卡片配色档位边界」）；这一段的色值因此是【B+】本地取值，不是官方取色 |
+| `superchat` | **卡片**（本批第 2 条落地）：背景与边框都取自 SC 档位 token `--sc-1 … --sc-5`（`.scTierN` 把命中的那一枚写进 `--sc-tier`），金额行低一档加粗。**卡片只盖内容部**（issue 2609171849 #4 第 2 点：用户要的是「仅显示在内容部分，也就是用户名、身份牌下面的区域，也是为了好看一点」）：框从身份行的**下一行**开始（`margin-top: --sp-1` 那道缝），包住正文行 + 金额行，**头像列与身份行都在框外**——改前卡片挂在整行上（冒烟的 `scCardRowUntouched` 会把改前判红） | `SC` | 左对齐，卡片占内容部整宽 | 金额低一档加粗 / 正文档 / 昵称低一档 | 高度随内容行数增长。**档位边界是本地取值**：`amount`（元）< 100 → `--sc-1`、< 500 → `--sc-2`、< 1000 → `--sc-3`、< 2000 → `--sc-4`、≥ 2000 → `--sc-5`（分界取官方 SC 可购档位 30 / 50 / 100 / 500 / 1000 / 2000 元的中段），`amount = 0`（上游没给价）落最低档。**未与网页端卡片逐档比对**，那一条仍挂在 `protocol.md` 附录 A 的待校准表里（A.2「SC 卡片配色档位边界」）；这一段的色值因此是【B+】本地取值，不是官方取色 |
 | `interact` | 竖条 `--neutral #6B7280`；正文 `--fg-muted` | `入` | 左对齐 | 最低档 | 弱化显示；默认显示一会儿后自动消失，见 §4.8 |
 | `guard` | 竖条按 `guard_level`：1 总督 `--guard-1 #C0392B` / 2 提督 `--guard-2 #8E44AD` / 3 舰长 `--guard-3 #2980B9`；`0` 用中性色 | `舰` | 左对齐 | 正文档加粗 / 昵称低一档 | 文案见 `protocol.md` 附录 A；金额同样只在独立礼物栏里呈现 |
 | `system` | 无竖条；文本 `--fg-subtle` | `系`（居中时可省略） | 整行居中 | 最低档 | 由 `core` 归一化后的系统事件；**默认不渲染**（`filter.kinds` 白名单默认不含它，见 §8.1 / §4.8） |
@@ -715,6 +715,27 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 ---
 
+### 4.10 选中态：整行一层底色（issue 2609171849 #4 第 1 点）
+
+用户原话：「选中某条弹幕时，那个绿色底色能不能从界面最左一直到最右，现在这个卡在头像上有点不好看」。
+
+**问题在哪**：改前弹幕行没有任何「选中」的样式，用户看到的那层绿底是**浏览器自己的选区高亮**（`::selection`）——
+它贴着**字形**画：头像那一列是空的，于是底色被头像卡住，两侧也到不了界面边缘。
+
+**改法：把「底色画在哪」从字形搬到整行**（`MessageRow.tsx` + `app.module.css` 的 `.row`）：
+
+| 项 | 规则 |
+|---|---|
+| 整行一层底 | 选中时 `.row[data-selected="true"]` 刷一层 `--select-wash`（`--accent` 混透明的另一档：深色 22% / 浅色 28%；比 `--hover-wash` 重一档，见 §9.2） |
+| 从最左到最右 | `.row` 向两侧各探出一道 `--sp-3`（`padding-inline` + 等量负 `margin-inline`），正好吃掉 `.scroller` 的左右内边距：行盒的左边缘 = 滚动容器的内边距盒左边缘、右边缘 = 容器 `clientWidth` 的右边缘。**内容一个像素都不动**（头像列与正文的左边缘、正文可用宽度、行高照旧），动的只是行盒的左右边界——悬停洗色（`.row:hover`）因此同样铺满整条 |
+| 行内不再画字形底 | `.row ::selection { background-color: transparent }`：底色改由整行给，否则整行一层绿、字上再叠一层更深的绿（两色）。**选中的语义一条没少**：文字照样可选可复制、`db-msg-body` 的 `user-select` 仍是 `text`（§2.3.1 的 `immersiveKeepsTextSelection` 钉的就是这两件事）；**非弹幕行**（输入框、对话框…）的选区高亮不受影响（规则只落在 `.row` 里） |
+| 谁算「被选中」 | `MessageRow` 用**一份** document 级 `selectionchange` 监听 + 每行一次 `useSyncExternalStore` 订阅：选区一动，只有「翻转了」的行重渲染。判据是 `Range.intersectsNode(row)`——**跨多行拖选时，被碰到的每一行都亮**；选区塌缩（点一下就松手）= 没选中任何东西 → 不亮；松开选区即收回去 |
+| 两处同一份 | 礼物栏的行是同一个组件（§5.3），所以那一栏的选中态与弹幕区逐项相同 |
+| 钩子 | `data-selected="true"`（对外可观察的选中标记）。**不新增 testid**：选中的判据就是这一个属性 + 行盒几何 |
+| 冒烟按 | `rowBoxFullBleed` / `rowBoxFullBleedLeftPx` / `rowBoxFullBleedRightPx`（行盒左右边界与滚动容器对齐）、`rowBoxCoversAvatarColumn` / `rowBoxBleedsLeftOfAvatarPx`（改前这个差值是 0，底色正卡在头像上）、`rowFullBleedKeepsIndent`（探出去的是盒不是内容）、`rowSelectedMarked` / `rowSelectedUsesSelectWash` / `rowSelectedWashGreen` / `rowSelectedOnlyThisRow`、`rowSelectionTextKept` / `rowSelectionKeepsTextSelectable` / `rowSelectionGlyphTransparent`、`rowSelectionCleared` / `rowBackgroundBackToNone` 断言（整块包在 `rowSelectBlockRan` 里） |
+
+---
+
 ## 5. 礼物类消息的两枚显示开关（`ui.gift_in_danmaku` / `ui.gift_panel`）
 
 **这一节是本批（issue 2609152029 第 4 条）重写的**：原先那枚字符串键 `ui.gift_panel_mode`（`merged` / `separate`）
@@ -796,7 +817,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 切换 | 筛选面板「辅助功能」块里的两枚开关（「弹幕包含礼物」/「独立礼物栏」，§8.5）：写回这两枚键，切换即重排，**不丢消息**（数据仍在同一 store，只有渲染位置变） |
 | 无源不画、列照占位 | V1 礼物与大航海的 `face` 是空串（上游没有这个字段，见 §4.1）—— 那两条行**不画图**，但**头像列照常占位**（与弹幕行同一口径，§4.2：否则同栏的行会左右不齐）；SC 与 V2 礼物有源就画（同一个 `Avatar` 组件，`--avatar` = 1.25 × 行盒）。冒烟按 `giftDockAvatarsOnlyWhereSourced`（5 行里 3 个 img）、`giftDockAvatarColAlwaysReserved`（5 列）与 `giftDockAvatarSameBoxAsChat`（头像盒与弹幕行同一档）断言 |
 | 不变式 | 折叠 / 展开礼物栏**不改变弹幕区的宽度**（只改两栏的高度分配） |
-| 钩子 | 列表根 `db-gift-area`（展开才在场上）、滚动容器 `db-gift-scroll`、虚拟高度块 `db-gift-list`、「回到最新」`db-gift-anchor`、行 `db-gift-row`、行内 `db-gift-avatar(-col)` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount`；弹幕区那一族同时补齐 `db-chat-area`（列表根）与 `db-msg-count`（`×N` 那一格） |
+| 钩子 | 列表根 `db-gift-area`（展开才在场上）、滚动容器 `db-gift-scroll`、虚拟高度块 `db-gift-list`、「回到最新」`db-gift-anchor`、行 `db-gift-row`、行内 `db-gift-avatar(-col)` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-sc-card` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount`；弹幕区那一族同时补齐 `db-chat-area`（列表根）与 `db-msg-count`（`×N` 那一格） |
 
 **低价礼物桶（`ui.gift_collapse_cheap`）与统计剔除（`ui.gift_exclude_cheap_stats`）** —— 本段是本批
 （issue 2609162056 第 3、4 条，用户 2026-09-16）新增的，两枚键的默认值、类型与溯源见
@@ -824,7 +845,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 [房间头 ……]
 [共享分区（flex-1，唯一生长区；面板 / 房管面板 / 输入区展开时挤的是它）
    ├ 弹幕区     ← 内部滚动（MessageList 的 .scroller）
-   ├ 分割条     ← 常驻；热区 8px（--splitter-hit），可见的是正中那条 1px 发丝线
+   ├ 分割条     ← 常驻；热区 8px（--splitter-hit），顶边画一条**虚线**（--fold-line）= 两栏的分界
    └ 礼物栏     ← 内部滚动；折叠态 = 只有折叠头
  ]
 [弹出面板 / 房管面板 / 日志条 / 举报条]
@@ -835,7 +856,8 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 |---|---|
 | 两枚键 | `ui.gift_pane_ratio`（number，默认 `0.35`，范围 **0.10–0.90**）= 礼物栏占**分区高度**的份额，**与它在上面还是下面无关**；`ui.gift_pane_on_top`（boolean，默认 `false` = 弹幕在上、礼物在下）。两者都持久化（契约 §8），重开应用保持 |
 | 默认形态 | 与改前一致：弹幕吃掉绝大部分高度、礼物栏折叠在下方。礼物栏折叠着时它**只有折叠头那么高**（折叠优先于份额），弹幕区拿走剩下的全部 |
-| 拖动分割条 | 指针事件（`pointerdown` / `pointermove` / `pointerup` + 窗口级监听），**触摸与鼠标同一条路**；`touch-action: none` **静态**写在分割条上，触摸拖动因此不会被页面滚动抢走（touchstart 那一刻就已生效，不存在「拿起来之后再改」的问题），`cursor: row-resize`。热区：桌面 / 鼠标 = `--splitter-hit` **8px**（需求下限）；**触摸设备（`@media (pointer: coarse)`）= 24px** —— 模拟器实测（1080×2400@420dpi、Android WebView、视口 412 CSS px，1 CSS px = 1 dp）：8px 时命中带只有**中线上下 4px ≈ 1.2mm**（逐 2px 扫命中测试：dy ∈ [-4, +2] 才打到分割条），手指接触面直径 7–9mm，基本按不中，按不中就等于落进某一栏去触发长按换位或滚动；24px 下命中带宽到 **±11px ≈ 3.8mm**，实测触摸拖动改比例一次成功。只改热区、不改那条 1px 的线（`::before` 依旧绝对定位在热区正中，视觉不动）。拖动中**实时**改比例：份额直接写在分区的两个自定义属性上（`--gift-share` / `--danmaku-share`），**一帧都不写 store**；**松手才回写一次偏好** |
+| 分界线（issue 2609171849 #4 第 3 点） | 用户原话：「分割独立礼物栏的那个横折叠区域，弄点横线或者虚线之类的（类似于折叠屏分屏的那个提示），而且现在 2 区间没有任何边界，有点不便于区分区域」。改前这条线是从 `::before` 画的 1px `--border` 发丝线：**深色下对底色只有 1.56:1、浅色下 1.02:1**（冒烟读数 `foldLineOldBorderContrast`）——用户说的「没有任何边界」就是它。现在线画在分割条**自己的顶边**上：**虚线**（`dashed`）+ `--fold-line`（= `--fg-subtle`），对比度深色 **4.4:1** / 浅色 **3.88:1**（非文字图形要素的 3:1 达标线，冒烟按 `foldLineContrastOnCanvas` 断言；读数 `foldLineContrastPx`）。`::before` 那条整条删掉，不是叠着画。悬停 / 键盘聚焦 / 拖动中改画**实线强调色**（「这里能拖」的提示照旧；1 → 2px 不改热区外层高度，两栏高度分配不被推动） |
+| 拖动分割条 | 指针事件（`pointerdown` / `pointermove` / `pointerup` + 窗口级监听），**触摸与鼠标同一条路**；`touch-action: none` **静态**写在分割条上，触摸拖动因此不会被页面滚动抢走（touchstart 那一刻就已生效，不存在「拿起来之后再改」的问题），`cursor: row-resize`。热区：桌面 / 鼠标 = `--splitter-hit` **8px**（需求下限）；**触摸设备（`@media (pointer: coarse)`）= 24px** —— 模拟器实测（1080×2400@420dpi、Android WebView、视口 412 CSS px，1 CSS px = 1 dp）：8px 时命中带只有**中线上下 4px ≈ 1.2mm**（逐 2px 扫命中测试：dy ∈ [-4, +2] 才打到分割条），手指接触面直径 7–9mm，基本按不中，按不中就等于…
 | 折叠态下拖动 | **拖开 = 展开**：折叠态下这一栏由内容定高、份额驱动不了它，所以拖动 / 键盘微调那一下与点「展开」同一条路（`onExpand`，含「五者互斥」那套收面板）。不这么做的话，折叠态下分割条就是「拖不动的死键」 |
 | 键盘 | 分割条可聚焦（`role="separator"` + `tabIndex`），`↑` / `↓` 每次微调 0.02：移动的是**分割条**（向上 ⇒ 上面那一栏变矮）。连按只有最后一次落盘（350ms 节流） |
 | 最小高度 | **双向生效**，由 CSS 兜住（夹到极限时浏览器就地分配，窗口从 1440 拖到 360 也成立）：礼物栏 ≥ 它的**折叠头**（实测值写进 `--gift-min-h`）；弹幕区 ≥ **3 行**（`9em × ui.font_scale + 3 × --sp-4`，即 3 ×（两行盒 + 上下 `--sp-2`），见 §9.2）。两栏都 `flex-basis: 0` + `flex-grow: <份额>`，**两个 grow 之和恒为 1**（折叠态与关掉礼物栏时弹幕区取 1）—— 和小于 1 时 Flexbox 只分配「和」那么多自由空间，底部会白白空掉一截 |
@@ -845,7 +867,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 换位拖拽期间 | 全局 `user-select: none`（拖到另一栏时会经过大片可选的弹幕正文，不禁选字的话 Chrome 会判成「开始选字」并发 `pointercancel`）；换位拖拽松手之后浏览器补发的那一下 `click` / `contextmenu` 被吞掉（否则松手会顺手点开行的东西 / 把折叠头开合一次），**且只吞它自己那一下**：举旗在松手那一刻，**放旗在下一次真的按下 / 按键**（两条窗口级捕获监听）—— 旧实现用一个 600ms 的兜底定时器去猜那一下 click 来没来，那个窗口里**任何**点击都会被吃掉（2026-09-21 同一条探针实测：长按弹幕栏拖一小段再松手，紧接着真的按一下礼物折叠头 —— 旧实现 `toggledByNextTap = false`（点击被整个吞掉），新实现 `true`；而「没有按下那一步」的合成 click 两个版本都照样被吞，说明差别就在「下一次按下会不会放旗」） |
 | 礼物栏关掉时（`ui.gift_panel=false`） | 共享区域退化为**弹幕区全高**，**分割条不渲染**（长按换位也随之停用 —— 没有另一栏可换） |
 | 尺寸与钩子 | 分区 `db-panes`（`data-gift` / `data-on-top` / `data-dragging`）、两栏 `db-pane-danmaku` / `db-pane-gift`（`data-swap-drag` / `data-swap-over`；`db-pane-gift` 就是礼物栏那一栏，它的第一个子元素是折叠头，带 `data-pane-head`）、分割条 `db-pane-splitter`（`role="separator"` + `aria-valuenow`）。礼物**折叠条**仍是 `db-gift-dock`（它从「礼物栏的根」变成「礼物栏的折叠头」：折叠态下量到的几何与改前一致） |
-| 冒烟 | §15 的 `roomPage*` 之外新增 `splitter*` / `swap*` 一组（拖分割条改比例并落盘、最小高度夹取、长按换位与取消、关掉礼物栏后退化），见 `docs/testing.md` §10 的 C-11。**手势归属**另有两条行为级断言（`swapTouchMoveOwnedWhenArmed` / `swapTouchMoveFreeWhenIdle`）：给区块派发一个可取消的 `touchmove`，拿起来时必须 `defaultPrevented`（滚动被收走）、没拿起来时必须不被拦（列表照旧滚）；`swapDoesNotEatNextTap` 量的是换位拖拽之后**紧接着那一次真的按下再点击**必须照旧生效 —— 判据是**礼物栏自己的折叠状态翻转**（列表根 `db-gift-area` 在场与否 + 折叠头 `aria-expanded`），**不要**拿行内钩子 `db-gift-body` 当这一栏的开合：那是**行内正文格**（见 §5.3 钩子表），礼物列表为空时开合两态都取不到它，断言会恒为 false（本轮首次真跑踩过）。⚠ 这些断言用的是**合成事件**，天然绕开浏览器的手势管线 —— 本票的真机故障（拿起来后第一次 `pointermove` 被 `pointercancel` 收走）在合成事件下**照不出来**，所以「触摸排序 / 换位在真机上真的能成」这一条由模拟器实测（CDP 注入真实触摸序列、Android WebView Chrome/124）背书，数值见本票报告与 `.android-env/verify/dragfix-*` |
+| 冒烟 | §15 的 `roomPage*` 之外新增 `splitter*` / `swap*` 一组（拖分割条改比例并落盘、最小高度夹取、长按换位与取消、关掉礼物栏后退化），见 `docs/testing.md` §10 的 C-11。**分界线**另有一组（issue 2609171849 #4 第 3 点，整块包在 `foldLineBlockRan` 里）：`foldLineIsDashed` / `foldLineWidthPx`（线是虚线、宽度 ≥ 1px）、`foldLineUsesToken`（颜色 = `--fold-line` 的计算值）、`foldLineContrastOnCanvas` / `foldLineContrastPx`（对画布 ≥ 3:1，读数）、`foldLineOldBorderContrast`（**反面对照**：改前那条 `--border` 发丝线的读数，两套主题都 < 1.6:1）、`foldLineSeparatesPanes`（线真的落在两栏之间，礼物栏在上在下都成立）、`foldLinePseudoGone`（改前那条 `::before` 整条删掉）。**手势归属**另有两条行为级断言（`swapTouchMoveOwnedWhenArmed` / `swapTouchMoveFreeWhenIdle`）：给区块派发一个可取消的 `touchmove`，拿起来时必须 `defaultPrevented`（滚动被收走）、没拿起来时必须不被拦（列表照旧滚）；`swapDoesNotEatNextTap` 量的是换位拖拽之后**紧接着那一次真的按下再点击**必须照旧生效 —— 判据是**礼物栏自己的折叠状态翻转**（列表根 `db-gift-area` 在场与否 + 折叠头 `aria-expanded`），**不要**拿行内钩子 `db-gift-body` 当这一栏的开合：那是**行内正文格**（见 §5.3 钩子表），礼物列表为空时开合两态都取不到它，断言会恒为 false（本轮首次真跑踩过）。⚠ 这些断言用的是**合成事件**，天然绕开浏览器的手势管线 —— 本票的真机故障（拿起来后第一次 `pointermove` 被 `pointercancel` 收走）在合成事件下**照不出来**，所以「触摸排序 / 换位在真机上真的能成」这一条由模拟器实测（CDP 注入真实触摸序列、Android WebView Chrome/124）背书，数值见本票报告与 `.android-env/verify/dragfix-*` |
 
 ---
 
@@ -1225,7 +1247,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 间距阶 | `--sp-1 … --sp-5` | 4 / 8 / 12 / 16 / 24 px | 间距只从这一档取；**弹幕行内只允许 `--sp-1`（贴）与 `--sp-2`（分）**（§4.1） |
 | 圆角阶 | `--r-1 … --r-4`、`--r-full` | 4 / 8 / 12 / 16 / 999 px | WhatsApp 口径：**控件（按钮 / 单行输入 / 下拉 / 芯片）一律 `--r-full` 胶囊**（写在 `index.css` 的元素默认值里），多行输入 `--r-4`，卡片 / 账号行 / 关注项 `--r-3`，对话框与右键菜单 `--r-4`，sheet 顶部 `--r-4`、正圆 `--r-full`；例外（页签上圆角、表情格、菜单项、礼物折叠行）在各自规则里显式覆盖 |
 | 字号阶 | `--fs-1 … --fs-8` | 0.79 / 0.86 / 0.93 / 1 / 1.07 / 1.15 / 1.3 / 1.43 em | **全部是 em**，不能写成 px：基准字号由 body 的 `--fs-root`（14px）给出，**只有弹幕区**再乘 `ui.font_scale`（写成 em，面板区不乘），因此字号滑杆作用到弹幕区的所有文字（§8.2） |
-| 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是**彩色底上**的文字色，`--accent-text` 是「强调色**作为文字**」（与填充分开：填充只要 3:1、文字要 4.5:1，浅色下两者必须分叉），遮罩 `--overlay`，悬停洗色 `--hover-wash`；`--mention` 是**正文里 `@昵称`** 的强调色（用户 2026-09-13「@的颜色之前不是粉色吗，白色看不清啊」）：深色 `#fb7299`（对 `--bg` 7.1:1 / 对 `--bg-elevated` 6.6:1）、浅色 `#c2185b`（米色 4.9:1 / 白面 5.9:1）—— 它是压在画布 / 表面上的**字色**，不复用 `--badge-fg`（那是彩底上的白字，只对彩底负责） |
+| 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是**彩色底上**的文字色，`--accent-text` 是「强调色**作为文字**」（与填充分开：填充只要 3:1、文字要 4.5:1，浅色下两者必须分叉），遮罩 `--overlay`，悬停洗色 `--hover-wash`，**选中一条弹幕时整行那层底色 `--select-wash`**（issue 2609171849 #4 第 1 点，与悬停同族、同色，只是重一档；行底色因此全宽，见 §4.10），**两栏分界的虚线色 `--fold-line`**（= `--fg-subtle`，issue 2609171849 #4 第 3 点，见 §5.4）；`--mention` 是**正文里 `@昵称`** 的强调色（用户 2026-09-13「@的颜色之前不是粉色吗，白色看不清啊」）：深色 `#fb7299`（对 `--bg` 7.1:1 / 对 `--bg-elevated` 6.6:1）、浅色 `#c2185b`（米色 4.9:1 / 白面 5.9:1）—— 它是压在画布 / 表面上的**字色**，不复用 `--badge-fg`（那是彩底上的白字，只对彩底负责） |
 | 徽标底色 | `--gold`、`--neutral`、`--guard-1…3`、`--sc-1…5`、`--block-platform`、`--block-room`、`--badge-fg`、`--badge-lift`、`--badge-border` | 见 `:root` | 粉丝牌**不吃**这些：它的真彩色来自上游（§4.2），令牌只兜底；`--sc-1…5` 是**醒目留言卡片的五档底色**（本批起被消费，改前全仓没人用它）：深色基座 `#2f6fd0` / `#1e9e8a` / `#c9a227` / `#d1603d` / `#c0392b`，来源标注【B+】——**本项目自己的设计令牌**，与 B 站网页端 SC 卡片的逐档比对**没做过**（`protocol.md` 附录 A 的 A.2「SC 卡片配色档位边界」仍待校准）；档位边界（100 / 500 / 1000 / 2000 元）同样是本地取值，依据见 §4.1。卡片实际用的是「该档色 22% 混 `--bg-elevated`」的底色 + 该档实色描边 |
 | 顶栏 / 状态点 / 浮动提示 | `--header-bg`（半透明顶栏：本主题表面色 88%）、`--header-lift`（自上而下的一道高光）、`--live-on` / `--live-off` / `--live-idle`（状态点三态：绿=开播 / 红=下播 / **灰=未连接**；房间头与房间标签页两处**共用这三枚**）、`--toast-bg` / `--toast-fg`（失败浮动提示） | 见 `:root` | 顶栏的「半透明深色层次」由这三条混出来，**深浅两套自动成立**（浅色下同一槽就是半透明白面）；状态点的色值与 `--ok` / `--danger` 分开命名：语义不同（在不在播 ≠ 连接状态），浅色下也要各自达标。**灰色那一档不新造颜色**：取次级文字的中性灰 `--fg-dim`（改前标签页上「未连接」那颗点用的就是它） |
 | 阴影 / 遮罩 | `--shadow-menu`、`--shadow-dialog`、`--shadow-sheet`、`--overlay` | — | 菜单 / 对话框 / sheet / 遮罩各一处 |
@@ -1260,6 +1282,8 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | `--live-idle` | `#8696a0`（= `--fg-dim`） | `#54656f`（= `--fg-dim`） | 现状（不改色值） | 状态点「**未连接**」**灰**（连接态不是 `connected` **或**列表载荷的 `connected` 为假）。改前是橙（`#e9a038` / `#c2410c`，饱和度 80% / 88%），用户 2026-09-13 拍板改灰；灰取自次级文字那枚中性灰（饱和度 12% / 14%），非文字图形要素对 `--bg` / `--bg-elevated`：6.1:1 / 5.7:1（深）、5.1:1 / 6.1:1（浅），≥ 3:1 ✓ |
 | `--toast-bg` / `--toast-fg` | 失败色 22% 混 `--bg-elevated` / `--fg` | 同式（浅色下自动是浅粉底 + 深字） | 派生 | 失败浮动提示；文字对底色 ≥ 12:1 ✓ |
 | `--hover-wash` | `--accent` 8% | `--accent` 12% | 派生 | 浅色底更亮，比例提高才看得出 |
+| `--select-wash` | `--accent` 22% | `--accent` 28% | 派生 | 选中一条弹幕时整行那层底色（§4.10）；比悬停洗色重一档 —— 它是「这一条被我选中了」的状态指示 |
+| `--fold-line` | `var(--fg-subtle)` = `#6a7e8a` | `var(--fg-subtle)` = `#667781` | 派生（引用已有槽） | 上下分区那条**分界线**（§5.4）：对画布 **4.4:1 / 3.88:1** ✓（非文字图形要素 ≥ 3:1）。改前那条 `--border` 发丝线是 **1.56:1 / 1.02:1** —— 用户说的「2 区间没有任何边界」就是它 |
 | `--overlay` | `rgba(0,0,0,.55)` | `rgba(11,20,26,.32)` | 现状 / B | 遮罩（浅色下更轻） |
 | `--shadow-menu/dialog/sheet` | 压薄一档 | 再压一档 | B+ | 平面语言：靠发丝线与色阶分层，不靠大投影 |
 
@@ -1367,7 +1391,7 @@ node smoke/run-headless.mjs --engine webkit    # WebKit（宿主引擎）：Play
 | 快照即契约 | 快照字段名（`step*` 与 `layout*` / `row*` / `panel*` / `fixture*` / `follow*` / `send*` / `live*` / `emote*` / `admin*` / `narrow*` / `wide*` 等前缀）是断言契约，改名等于改断言。视口专属断言按 `narrow_*` / `wide_*` 命名：同一份场景两个视口都跑，**断言集合相同、没有例外名单**（面板在窄屏同样是文档流里的一块，所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真） |
 | 夹具 | 弹幕行夹具 `smoke/fixtures/danmaku-rows.json` 是**完整原始 `DANMU_MSG` 载荷**（正文弹幕 / 表情包弹幕 / 无空格长 ASCII 串），脱敏只做三件事：昵称 / 牌名 / 主播名 → **等长掩码**（CJK 与全角 → `＊`、ASCII → `x`）、`uid` / 哈希 → `<redacted>`、CDN 只脱敏哈希段；`emoticon_unique` 的房间号段 → `room_<redacted>_<id>`（**房间号不入库**）。冒烟侧 `messageFromDanmakuPayload()` 照搬 `crates/danmubox-bili/src/cmd.rs::danmaku` 的取值路径派生成 `Message`，只把图换成本地替身（**固有尺寸与真图一致**）；`local_id` 借 `__mk` 分配（store 只接受比末尾更大的 `local_id`，契约 §5）。礼物 / SC / 大航海的夹具 `smoke/fixtures/gift-sc-guard-rows.json` 则是**按协议文档字段表构造**的（`protocol.md` §10.2 / §10.3 / §10.6）—— `AGENT.md` §8 第 16 条禁止为测试发送礼物 / 醒目留言 / 大航海，这类事件拿不到授权样本，而「礼物栏一条一行 + 金额带单位」「两枚开关的四种组合」「SC 卡片」这些新行为不能零断言；它只借字段名与语义，数值全是布局用的假值，脱敏与「构造 / 派生」的分档见 [`testing.md`](testing.md) §9.1。关注列表夹具由真实响应派生：`follow-getweblist-raw.json`（直播侧只给在播）/ `follow-followings-raw.json`（主站关注关系）/ `follow-status-raw.json`（批量房间接口，含未开播）→ `follow-list.json`（70 条），mock 里另加 3 条自造条目（在播 / 有标题 / 无标题各一）；脱敏口径与断言见 §2.2 与 `protocol.md` A28 |
 | 几何记账 | 行盒 / 身份行 / 正文行 / 折行行盒 / 表情图渲染盒与原图尺寸 / 横向溢出量逐项入快照（`fixtureTextRow` / `fixtureEmoteRow` / `fixtureAsciiRow` / `rowScale` / `layoutPanelScrollStablePx` 等）。判据是「量出来的」，不靠人眼：贴底间隙、三行昵称左边缘一致、徽标在昵称右侧且间距 = `--sp-1`、正文在身份行下方且左边缘与昵称一致、折行后每个行盒左边缘相等、头像顶边 = 身份行顶边、头像 1.25 / 身份牌 0.9 / 表情 1.1 × 行盒、正文可用宽度 ≥ 视口一半、表情图见方 + `contain` 且不随原图尺寸变。每条的具体断言名见对应节的「冒烟按 … 断言」 |
-| 覆盖 | 逐条断言名写在对应节里，本表不再另列清单。横切面已覆盖：关注列表（自动加载 / 排序分页 / 两档排布 / 标签名）、账号区与对话框、面板只挤列表且不遮最新一条、右键菜单、时间戳、礼物类消息的两枚开关（四种组合）与独立礼物栏（一条一行 / 金额带单位 / 按 kind 分组的汇总 / 有源头像 / **与弹幕区同一套呈现**：`giftParity*` 一组逐项比行盒 / 头像列 / 身份行 / 正文块与两栏底色、SC 长留言不截断、`giftFollow*` / `giftPaused*` / `giftJumpButton*` 一组验跟随与「回到最新」同源）、**弹幕区与礼物栏的上下分区**（拖分割条改比例并落盘、拖到极限时两栏最小高度成立、比例在重挂后保持、长按 0.5s 换位与三种取消路、关掉礼物栏后分区退化，`splitter*` / `swap*`）、醒目留言卡片（档位令牌 + 金额行加粗）、互动自动消失与系统类消息白名单、筛选面板的两块两列勾选清单（消息类型 / 辅助功能同形态、四枚辅助开关逐枚可切、干净环境下复选框画的即契约默认值）、历史与实时同款、贴底与头像列占位、粉丝牌真彩色与兜底色、本房间舰长标、主站「我的表情」、@ 目标与文本同源、房管权限前置与二次确认、行排版整体感、昵称不吃弹幕颜色（深浅两套各量一遍）、表情面板 tab / 尺寸 / 置灰、短语固定行、乐观发送与失败标记、窄屏无横向滚动与热区 ≥ 40px |
+| 覆盖 | 逐条断言名写在对应节里，本表不再另列清单。横切面已覆盖：关注列表（自动加载 / 排序分页 / 两档排布 / 标签名）、账号区与对话框、面板只挤列表且不遮最新一条、右键菜单、时间戳、礼物类消息的两枚开关（四种组合）与独立礼物栏（一条一行 / 金额带单位 / 按 kind 分组的汇总 / 有源头像 / **与弹幕区同一套呈现**：`giftParity*` 一组逐项比行盒 / 头像列 / 身份行 / 正文块与两栏底色、SC 长留言不截断、`giftFollow*` / `giftPaused*` / `giftJumpButton*` 一组验跟随与「回到最新」同源）、**弹幕区与礼物栏的上下分区**（拖分割条改比例并落盘、拖到极限时两栏最小高度成立、比例在重挂后保持、长按 0.5s 换位与三种取消路、关掉礼物栏后分区退化，`splitter*` / `swap*`）、醒目留言卡片（档位令牌 + 金额行加粗 + **卡片只盖内容部**：`scCard*` 一组，含 `scCardBelowIdentity` / `scCardOutsideAvatarCol` / `scCardHoldsBodyAndAmount` / `scCardRowUntouched`）、**选中态整行底色全宽**（`rowSelect*` 一组：行盒左右边界对齐滚动容器、底色从最左到最右且盖住头像列、选中语义不变、松开即收回）、**上下分区的分界线**（`foldLine*` 一组：虚线 + 令牌色 + 对画布 ≥ 3:1）、互动自动消失与系统类消息白名单、筛选面板的两块两列勾选清单（消息类型 / 辅助功能同形态、四枚辅助开关逐枚可切、干净环境下复选框画的即契约默认值）、历史与实时同款、贴底与头像列占位、粉丝牌真彩色与兜底色、本房间舰长标、主站「我的表情」、@ 目标与文本同源、房管权限前置与二次确认、行排版整体感、昵称不吃弹幕颜色（深浅两套各量一遍）、表情面板 tab / 尺寸 / 置灰、短语固定行、乐观发送与失败标记、窄屏无横向滚动与热区 ≥ 40px |
 | 产物 | 快照 JSON + 截图，命名 `danmubox-ui[-narrow]-<theme>-<场景>.png`（**主题后缀必须有**，否则深浅两遍互相覆盖，验收矩阵里只剩一套图）。场景：`-follow` / `-rooms` / `-short-content` / `-room` / `-admin` / `-admin-confirm` / `-account-area` / `-account` / `-account-qr` / `-toast` / `-optimistic` / `-final`。默认写 `$TMPDIR`，可用 `SMOKE_SHOT_DIR` 指定 |
 | 官方口径 | 「官方是怎么做的」这类判据（画不画一个徽标、走哪条渲染分支、哪种视觉细节）**去读官方前端产物**，或从浏览器直接对照官方页面 —— **不许凭印象模仿**。先例：A26 补充（表情权限判定）、A37（粉丝牌配色）、A39（舰长标取哪个字段）、A43（没点亮的粉丝牌不画）。判据落进规格时要写明它出自哪份产物 / 哪条分支，便于复核 |
 | 维护约定 | 场景代码整段是一个模板字符串：里面的注释**不要写反引号**，否则字符串提前结束、语法直接崩 |

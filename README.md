@@ -60,7 +60,7 @@
 | 技术选型 | 已完成（结论见 `docs/decisions/`，9 篇 ADR） |
 | 文档基线 | 已完成：需求 [`REQUIREMENTS.md`](REQUIREMENTS.md)、契约 [`docs/contract.md`](docs/contract.md)、协议与实测校准 [`docs/protocol.md`](docs/protocol.md)，另有架构 / IPC / UI / 登录 / 运维 / 测试 / 路线图各一篇（索引见 §7） |
 | 代码 | 约 11300 行（Rust + TS/TSX）：`danmubox-core`（领域模型 / 端口 / 总线 / 会话缓冲 / 偏好 / 凭据）、`danmubox-bili`（协议 / WS / 鉴权 / WBI / HTTP）、`danmubox-cli`（采集与校准入口）、`apps/desktop`（Tauri 2 + React 19 + Zustand + 虚拟滚动） |
-| 阶段进度 | **阶段 1–4 已退出**；阶段 5 macOS 完成，Android 出包 / 装机 / 启动这一档完成（真机与登录、收发弹幕等链路**未实测**，见 [`docs/operations.md`](docs/operations.md) §5.3），Windows 未完成（见 [`docs/roadmap.md`](docs/roadmap.md) §2.2） |
+| 阶段进度 | **阶段 1–4 已退出**；阶段 5 macOS 完成，Android 出包 / 装机 / 启动这一档完成（真机与登录、收发弹幕等链路**未实测**，见 [`docs/operations.md`](docs/operations.md) §5.3），Windows **CI 出包这一档完成**（2026-09-17：`artifacts-windows` job 在 `windows-latest` 出 NSIS 安装器 / MSI / 免安装 exe；**未装机未真机验**，见 [`docs/roadmap.md`](docs/roadmap.md) §2.2） |
 | 功能面 | 游客态与登录态收弹幕；发弹幕（纯文本 / 表情 / @回复 / 快捷短语）；进场历史回填；礼物（V1+V2、连击聚合、金额统计与排行）；SuperChat；大航海播报；举报（理由清单来自上游）；关注列表与分组；电池余额；多房间标签页；多账号切换与**界面内扫码登录**；房管面板；过滤与 13 项偏好（唯一权威清单见 [`docs/contract.md`](docs/contract.md) §8） |
 | 构建与测试 | `cargo test --workspace` **153 通过**；`cargo clippy --workspace --all-targets -- -D warnings` **零告警**；前端 `npx tsc -b` 通过 |
 | 桌面端产物 | 可出**独立可执行文件**（前端已内嵌，**不再需要 dev server**）：`cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` → `target/release/danmubox-desktop` |

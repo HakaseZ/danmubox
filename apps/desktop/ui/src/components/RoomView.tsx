@@ -587,6 +587,8 @@ export function RoomView({
   const { chatRows, giftRows } = splitGiftRows(rows, prefs);
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
   // 见 splitGiftRows）；折叠态是它自己的本地状态，与偏好无关。
+  // `ui.gift_collapse_cheap` 在 `splitGiftRows` 里对**两头各折一次**（弹幕区与礼物栏都折，
+  // issue 2609171849 第 5 条）—— `chatRows` 因此也可能带一条 `cheap` 桶行，本组件不必额外处理。
   const giftPanel = prefs["ui.gift_panel"];
   // 共享分区的顺序与份额（契约 §8）：两枚都是**持久化**的偏好，重开应用保持。
   const giftPaneOnTop = prefs["ui.gift_pane_on_top"];

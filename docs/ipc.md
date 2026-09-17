@@ -285,9 +285,9 @@ type PrefsSnapshot = {            // contract.md §8 的 18 键全量，键名�
   "ui.gift_panel": boolean;           // 是否显示独立礼物栏（默认 true）
   "ui.gift_pane_on_top": boolean;     // 礼物栏是否在共享分区的上半（默认 false = 礼物在下）
   "ui.gift_pane_ratio": number;       // 礼物栏占共享分区高度的份额（默认 0.35，范围 0.10–0.90）
-  "ui.gift_collapse_cheap": boolean;  // 礼物栏里把 ≤0.1 元的礼物合并成一条（默认 false）
-  "ui.gift_exclude_cheap_stats": boolean; // 把 ≤0.1 元的礼物从折叠汇总 / 统计里剔除（默认 false）
-  "ui.interact_auto_hide": boolean;   // 互动/进场消息显示一会儿后自动消失（默认 true）
+  "ui.gift_collapse_cheap": boolean;  // 把 ≤0.1 元的礼物在**弹幕区与礼物栏两处**各合并成一条（默认 false；纯派生，关掉即复原）
+  "ui.gift_exclude_cheap_stats": boolean; // 把 ≤0.1 元的礼物从统计里剔除（默认 false；统计面只有礼物栏折叠头，两处的行都不动）
+  "ui.interact_auto_hide": boolean;   // 互动/进场消息显示一会儿后自动消失（默认 true；只是不再画，消息留在缓冲里，关掉即原样回来）
   "ui.show_timestamp": boolean;       // 弹幕前显示时间戳（默认 false）
   "composer.phrases": string[];
   "filter.uids": number[];
@@ -377,7 +377,7 @@ type RoomStats = {   // 与 §3.1 同名，事件即它本身
 
 ## 5. Zustand store 形状
 
-单一 store（`create<AppStore>`，无切片拆分）。**store 里存的就是 §3.1 的载荷对象**（snake_case），不做 camelCase 转写；本地实现细节只有两个 UI 专用字段（`send_state` / `send_reason`）。
+单一 store（`create<AppStore>`，无切片拆分）。**store 里存的就是 §3.1 的载荷对象**（snake_case），不做 camelCase 转写；本地实现细节只有三个 UI 专用字段（`send_state` / `send_reason` / `interactTick`）。
 
 ```ts
 type AppStore = {
@@ -396,6 +396,7 @@ type AppStore = {
 
   // 弹幕：只有「当前房间」一份，随一次房内会话生死（离开 / 切房即清空）
   messages: Message[];             // 显示上限 2000 条，见 §8
+  interactTick: number;            // UI 专用：「互动消息自动消失」的到点重算信号（判据在 filtering.interactAutoHidden）
   seeding: boolean;                // 首屏历史回填进行中
   lastSend?: ChatSendResult;       // **只属于当前房间**：切房即清、非当前房间的结果不落（§8）
   roomStats: Record<number, { online?: number; watched?: number }>;

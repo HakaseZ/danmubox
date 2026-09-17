@@ -107,8 +107,9 @@ export function MessageRow({
         ? `${message.uname || "有人"} 进入直播间`
         : "";
 
-  // 互动/进场消息：默认显示一会儿就淡出（store 到点摘除，见 store.scheduleInteractHide）；
-  // 关掉 `ui.interact_auto_hide` 则常驻。
+  // 互动/进场消息：默认显示一会儿就淡出，到点这一行**不再被画**（`filtering.interactAutoHidden`，
+  // 判据 `ts + INTERACT_AUTO_HIDE_MS`）—— 消息仍在会话缓冲里，关掉 `ui.interact_auto_hide`
+  // 就原样回来（issue 2609171849 第 5 条，见 docs/ui.md §4.8）。
   const autoHide = message.kind === "interact" && prefs["ui.interact_auto_hide"];
 
   // 本地乐观行**不加任何待确认视觉**（用户 2026-09-13 的更正：「发出去就是和已发送一样的状态，

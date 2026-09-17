@@ -1,7 +1,17 @@
 // 显示层的纯逻辑：过滤、礼物连击折叠、徽标派生、时间格式化。
 // 这些规则来自 docs/ui.md 与 docs/contract.md §8 的偏好键，放这里便于单测。
 
-import type { FollowedRoom, Message, MessageKind, Prefs } from "./types";
+// 显式带 `.ts` 后缀 + 混用 `type` 修饰符：这个模块要从 `types.ts` 取**值**
+// （`INTERACT_AUTO_HIDE_MS`），而本文件的单测用 `node --test src/filtering.test.ts` 直接跑
+// （Node 的类型擦除**只认带后缀的相对说明符**，它不解析 `./types` 那种无后缀写法）。
+// `tsconfig.app.json` 已开 `allowImportingTsExtensions`，vite 与 tsc 都照这个后缀解析。
+import {
+  INTERACT_AUTO_HIDE_MS,
+  type FollowedRoom,
+  type Message,
+  type MessageKind,
+  type Prefs,
+} from "./types.ts";
 
 export interface Badges {
   anchor: boolean;
@@ -99,12 +109,18 @@ export function formatCount(value: number): string {
 
 export interface DisplayRow {
   message: Message;
-  /** 礼物连击折叠了几条（1 表示未折叠）；只有礼物连击会 > 1。 */
+  /**
+   * 这一行代表几条消息（1 = 未折叠）。>1 有三个来源：礼物**连击**折叠（`toDisplayRows`，
+   * 同一次连击的重复）、**低价礼物桶**（`collapseCheapGiftRows`，带 `cheap` 标记）与
+   * 弹幕**聚合**（不同观众短时间内刷同一句，`aggregate.ts`，带 `senders`）。
+   * 金额同理取 `message.amount`（前两条路径都把它累加成合计）。
+   */
   count: number;
   /**
    * 这一行是**低价礼物桶**（`ui.gift_collapse_cheap` 折叠出来的那一条，见
    * `collapseCheapGiftRows`）：`count` 与 `amount` 都是整桶合计。
-   * 只有礼物栏的那一条合并行带它，其余行（含未折叠的单条低价礼物）都没有。
+   * **两个区域各有一条自己的桶行**（弹幕区与礼物栏各折一次），其余行
+   * （含未折叠的单条低价礼物）都没有这个标记。
    */
   cheap?: boolean;
 }
@@ -198,6 +214,25 @@ export function paginate<T>(
 }
 
 /**
+ * 这条互动/进场行是不是**已经到点、不该再画**（`ui.interact_auto_hide`，docs/ui.md §4.8）。
+ *
+ * 判据只有一条：`ts + INTERACT_AUTO_HIDE_MS <= now` —— 与行上那段淡出动画共用同一个常量
+ * （`types.ts` 的 `INTERACT_AUTO_HIDE_MS`），两者不会错位。`ui.interact_auto_hide` 关着时
+ * **恒假**：关掉开关，早先「消失」的那些行原样回来（顺序、数量都不变）。
+ *
+ * **它只回答「画不画」，不回答「留不留」**：消息一直在会话缓冲里（调用方给的 `messages`），
+ * 「消失」是派生出来的 —— 这正是 issue 2609171849 第 5 条要的那条口径（自动消失不许丢内容）。
+ * 时间由调用方给（默认 `Date.now()`），单测因此与挂钟无关。
+ */
+export function interactAutoHidden(message: Message, prefs: Prefs, now: number): boolean {
+  return (
+    prefs["ui.interact_auto_hide"] &&
+    message.kind === "interact" &&
+    message.ts + INTERACT_AUTO_HIDE_MS <= now
+  );
+}
+
+/**
  * 过滤 + 礼物连击折叠。只折叠**礼物连击**：同一次连击的每条礼物共享 `combo_id`，
  * 合成一行，`count` 记条数、`amount` 累加。
  *
@@ -208,12 +243,23 @@ export function paginate<T>(
  * 自己单独站一行，否则「我这条到底发出去没有」会被折进上一行的 ×N 里。判据取 `local_id < 0`
  * （本地行恒为负，见 `store.insertPending`）而不是 `send_state` —— 乐观行插入时**不带**
  * `send_state`（它与已确认行渲染逐项相同），只有这条负数前缀能一直认出它。
+ *
+ * `now` 只喂给「互动消息自动消失」那一判（见 `interactAutoHidden`）：到点的互动行**不画**，
+ * 但它**仍在 `messages` 里**（调用方传进来的数组一个元素都不少）—— 关掉
+ * `ui.interact_auto_hide` 后同一份输入立刻把这一行原样还回来（issue 2609171849 第 5 条：
+ * 隐藏 / 自动消失只是显示层的事，不许丢内容）。默认 `Date.now()` 只是给调用方便利；
+ * 单测一律显式传时刻，判据因此与挂钟无关。
  */
-export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
+export function toDisplayRows(
+  messages: Message[],
+  prefs: Prefs,
+  now: number = Date.now(),
+): DisplayRow[] {
   const rows: DisplayRow[] = [];
 
   for (const message of messages) {
     if (!passesFilter(message, prefs)) continue;
+    if (interactAutoHidden(message, prefs, now)) continue;
 
     const last = rows[rows.length - 1];
     const pending = message.local_id < 0 ||
@@ -256,22 +302,28 @@ export const GIFT_KINDS: readonly MessageKind[] = ["gift", "superchat", "guard"]
  * | 真 | 假 | 只在弹幕流里 |
  * | 假 | 真 | 只在独立礼物栏里 |
  * | 假 | 假 | 两处都不渲染（用户自己的选择；`filter.kinds` 里的礼物芯片与这个结论无关） |
+ *
+ * **低价礼物桶对两个区域都生效**（`ui.gift_collapse_cheap`，issue 2609171849 第 5 条）：
+ * 弹幕区与礼物栏**各折一次**，走的是同一条 `collapseCheapGiftRows`，桶的形状与落点判据
+ * （取桶里第一条的身份与位置）两处完全一样 —— 「两个区域」指的就是这两栏，见
+ * `docs/ui.md` §5.3「低价礼物桶」段。两处各持自己的行集合：一条礼物在弹幕区折进桶里，
+ * 在礼物栏也折进（另一条）桶里，二者互不影响，也都不动 `filter.kinds` 那一层。
  */
 export function splitGiftRows(
   rows: DisplayRow[],
   prefs: Prefs,
 ): { chatRows: DisplayRow[]; giftRows: DisplayRow[] } {
-  // 礼物栏那一头还要过一道**低价礼物桶**（`ui.gift_collapse_cheap`，见 `collapseCheapGiftRows`）：
-  // 桶只改礼物栏的分组形状 —— 弹幕流那一头（chatRows）与统计口径（`giftStatRows`）都不经过它。
+  // 折叠是**纯派生**：两处的桶都从同一个 `rows` 现折，`messages` 一个元素都不动 ——
+  // 关掉开关下次重算就逐条回来（数量、顺序、金额都回到原样）。
+  const collapse = prefs["ui.gift_collapse_cheap"];
   const panelRows = prefs["ui.gift_panel"]
     ? rows.filter((row) => GIFT_KINDS.includes(row.message.kind))
     : [];
-  const giftRows = prefs["ui.gift_collapse_cheap"]
-    ? collapseCheapGiftRows(panelRows)
-    : panelRows;
-  const chatRows = prefs["ui.gift_in_danmaku"]
+  const giftRows = collapse ? collapseCheapGiftRows(panelRows) : panelRows;
+  const chatBase = prefs["ui.gift_in_danmaku"]
     ? rows
     : rows.filter((row) => !GIFT_KINDS.includes(row.message.kind));
+  const chatRows = collapse ? collapseCheapGiftRows(chatBase) : chatBase;
   return { chatRows, giftRows };
 }
 
@@ -327,7 +379,11 @@ export function isCheapGift(message: Message): boolean {
 }
 
 /**
- * 低价礼物桶（`ui.gift_collapse_cheap`，docs/ui.md §5.3）：礼物栏里的低价礼物合并成**一条**。
+ * 低价礼物桶（`ui.gift_collapse_cheap`，docs/ui.md §5.3）：把低价礼物合并成**一条**。
+ *
+ * **两个区域各折一次**（issue 2609171849 第 5 条）：弹幕区与礼物栏都走这一个函数
+ * （`splitGiftRows` 里对两头各调一次），形状与落点判据两处完全一致。函数本身与「哪一栏」
+ * 无关 —— 它只看行集合。
  *
  * 它与礼物连击折叠（`toDisplayRows`）**不是同一件事，别把两者并到一处**：
  * - 连击折叠折的是**同一个动作的重复**（`combo_id` 相同且相邻），取**最新**一条的身份，
@@ -337,7 +393,11 @@ export function isCheapGift(message: Message): boolean {
  *   `local_id` 也不变），虚拟列表的锚点因此稳定。
  *
  * 两者叠加时（低价礼物本身也在连击）顺序是**先连击、后成桶**：桶里的 `count` 已是连击折叠后的
- * 次数，与礼物栏「数量与弹幕行同口径」那条一致。桶里只有一条时原样返回（本来就是一条）。
+ * 次数，与「数量与弹幕行同口径」那一条一致。桶里只有一条时**原样返回入参**（本来就是一条）。
+ *
+ * **不改入参、不丢内容**：返回的是新数组，桶里那些行的 `message` 一个字段都没被改写
+ * （合并行是 `{...head.message}` 的新对象），`messages` 与 `rows` 都保持原样 —— 关掉开关
+ * 下一次重算就逐条回来（数量、顺序、金额都是原值）。
  *
  * `cheap` 标记只在这一处置位：合并行的 `amount` 是整桶合计，早就超过 100 金瓜子了，
  * 单看金额认不出它是低价（`giftStatRows` 靠这个标记整桶剔除）。
@@ -373,8 +433,17 @@ export function collapseCheapGiftRows(rows: DisplayRow[]): DisplayRow[] {
  * 参与**折叠汇总 / 统计**的礼物行（`ui.gift_exclude_cheap_stats`，契约 §8）：
  * 开时把低价礼物（含折叠后那一条桶）整条剔除，关时原样返回。
  *
- * **只改统计**：礼物栏的条目（`splitGiftRows` 的 giftRows）与弹幕流的分支都不经过这里 ——
+ * **只改统计**：礼物栏的条目（`splitGiftRows` 的 giftRows）与弹幕流的行都不经过这里 ——
  * 「不影响它们作为消息的展示」就是这枚键的定义（契约 §8）。
+ *
+ * 「统计」在本应用里只有**一处**：礼物栏折叠头那份按 kind 分组的汇总（`RoomView` 的
+ * `giftSummaryText`，标题的「礼物 / SC（N）」与三组明细同源）。**弹幕区没有统计面**
+ * （它的礼物行不画金额，见 docs/ui.md §5.3「金额与单位」），所以这枚键在那一栏没有可改的
+ * 东西 —— 这也是它对**两个区域都生效**的确切含义：统计出现在哪，它就管到哪；判定用的是
+ * 与折叠同一枚 `isCheapGift`（`row.cheap` 只是「这条是桶」的标记，桶的金额已被累加、
+ * 单看金额认不出来，所以两个条件都要查）。
+ *
+ * 与折叠一样是**纯派生**：入参 `rows` 不被改写，关掉开关下一次重算统计就逐字回来。
  */
 export function giftStatRows(rows: DisplayRow[], prefs: Prefs): DisplayRow[] {
   if (!prefs["ui.gift_exclude_cheap_stats"]) return rows;

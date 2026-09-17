@@ -1083,8 +1083,10 @@
 }
 
 /* 互动/进场消息：显示一会儿就淡出（`ui.interact_auto_hide` 打开时）。
-   动画时长由行内 `animationDuration` 给（= store 摘除定时器的同一长度），
-   到点后由 store 把这条从列表里摘掉，空间随之回收。 */
+   动画时长由行内 `animationDuration` 给（= `INTERACT_AUTO_HIDE_MS` 的同一长度），
+   到点后这一行**不再被画**（`filtering.interactAutoHidden`，判据是同一个常量），
+   空间随之回收 —— 但消息仍在会话缓冲里：关掉开关同一帧就原样回来
+   （issue 2609171849 第 5 条，见 docs/ui.md §4.8）。 */
 .autoHide {
   animation-name: interactFade;
   animation-timing-function: ease-out;

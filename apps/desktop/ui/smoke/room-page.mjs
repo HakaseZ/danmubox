@@ -6686,6 +6686,164 @@ const MOCK = (theme) => `(function () {
     }
     out.cheapGiftHomeRoomRestored = !!cheapHomeId && cheapActiveRoomId() === cheapHomeId;
 
+    /* ==== switchscope：两枚低价礼物开关的「**两个区域**」与「不丢内容 / 开关可逆」
+       （issue 2609171849 第 5 条；本票 = feat/2609171849-switch-scope，见 docs/ui.md §5.3 与 §4.8）
+
+       「两个区域」= **弹幕区**（行钩子 db-msg-row）与**礼物栏**（db-gift-row）——礼物类消息
+       按 ui.gift_in_danmaku / ui.gift_panel 分别落进这两栏，用户在同一屏里同时看得到（默认两枚
+       都开）。本段把每条口径都**在两处各量一次**：
+         ① 折叠（ui.gift_collapse_cheap）：低价礼物在两处都合并成一条（桶取第一条的身份与位置，
+            ×N 与金额是整桶合计），0.11 元那条与它无关、两处都照旧一行；
+         ② 关掉折叠：两处**逐条回来**，顺序（铅笔 → 铅笔屑 → 橡皮）、条目数、各行金额都回到原值；
+         ③ 剔除统计（ui.gift_exclude_cheap_stats）：只改**统计**（礼物栏折叠头的「礼物 / SC（N）」
+            与分组明细）—— 两个区域的行**一条都不动**；关掉它统计逐字回到原串；
+         ④ 自动消失（ui.interact_auto_hide）：到点那一行**不再画**，但消息没丢 —— 关掉开关它
+            原样回来，再打开又不见（两个方向都可逆）。
+       ⚠ 准入前提全部在本块内自备（§9.3 ②）：切回**空会话**的第二房间（只有本段推的夹具）、
+          三枚开关各自先拨到既定值、礼物栏展开（行数才等于条目数）。
+       ⚠ 整块包一层 try/catch + switchScopeBlockRan（§9.3 ①）：出岔子只作废本块、不带走整场。 */
+    var switchScopeBlockRan = false;
+    try {
+      var ssRoomId = 5555;
+      // 计数用：弹幕区里含某个字样的行有几条（礼物栏那一族用 cheapRowCount / cheapPaneText）。
+      var ssChatRowsWith = function (needle) {
+        return rows().filter(function (r) { return r.innerText.indexOf(needle) >= 0; });
+      };
+      // 面板里的一枚开关拨到指定值（面板自己开合，幂等）：返回「找没找到并拨成功」。
+      var ssToggle = async function (label, value) {
+        var opened = await cheapSetPanel(true);
+        var found = setGiftSwitch(label, value);
+        await sleep(300);
+        await cheapSetPanel(false);
+        return opened && found;
+      };
+
+      var ssTab = cheapTabFor(ssRoomId);
+      out.switchScopeFreshRoomTab = !!ssTab;
+      if (!ssTab) throw new Error("第二房间的标签拿不到（标签条前提失效）");
+      ssTab.click();
+      await sleep(900);
+      out.switchScopeFreshRoomActive = cheapActiveRoomId() === String(ssRoomId);
+      if (!out.switchScopeFreshRoomActive) throw new Error("没切进第二房间");
+
+      out.switchScopeSwitchesSet = (await ssToggle("折叠低价礼物", false)) &&
+        (await ssToggle("剔除低价礼物统计", false)) &&
+        (await ssToggle("互动消息自动消失", true)) &&
+        window.__prefs["ui.gift_collapse_cheap"] === false &&
+        window.__prefs["ui.gift_exclude_cheap_stats"] === false &&
+        window.__prefs["ui.interact_auto_hide"] === true;
+
+      // ---- ① 默认（两枚都关）：两个区域都一条一行
+      cheapPush("gift", "投喂 铅笔", 90);
+      cheapPush("gift", "投喂 铅笔屑", 100);
+      cheapPush("gift", "投喂 橡皮", 110);
+      await sleep(800);
+      var ssPaneOpen = await cheapSetPane(true);
+      out.switchScopeGiftRowsBefore = cheapRowCount();
+      out.switchScopeSummaryBefore = cheapSummary();
+      out.switchScopeBaseline = ssPaneOpen &&
+        ssChatRowsWith("投喂 铅笔").length === 1 &&
+        ssChatRowsWith("投喂 铅笔屑").length === 1 &&
+        ssChatRowsWith("投喂 橡皮").length === 1 &&
+        out.switchScopeGiftRowsBefore === 3 &&
+        cheapPaneText().indexOf("0.09 元") >= 0 &&
+        cheapPaneText().indexOf("0.1 元") >= 0 &&
+        cheapPaneText().indexOf("0.11 元") >= 0 &&
+        out.switchScopeSummaryBefore === "本场 礼物 3 · 0.3 元";
+
+      // ---- ② 折叠开：**两个区域都折**（弹幕区少一行、桶行带 ×2；礼物栏条目 3 → 2）
+      out.switchScopeFoldToggled = (await ssToggle("折叠低价礼物", true)) &&
+        window.__prefs["ui.gift_collapse_cheap"] === true;
+      await cheapSetPane(true);
+      var ssChatBucketRows = ssChatRowsWith("投喂 铅笔");
+      var ssChatBucketCount = ssChatBucketRows.length === 1
+        ? ssChatBucketRows[0].querySelector('[data-testid="db-msg-count"]') : null;
+      out.switchScopeChatPaneFolds = ssChatBucketRows.length === 1 &&
+        ssChatRowsWith("投喂 铅笔屑").length === 0 &&
+        !!ssChatBucketCount && ssChatBucketCount.innerText.indexOf("×2") >= 0;
+      out.switchScopeGiftRowsAfterFold = cheapRowCount();
+      out.switchScopeGiftPaneFolds = out.switchScopeGiftRowsAfterFold === 2 &&
+        cheapPaneText().indexOf("投喂 铅笔屑") < 0 &&
+        cheapPaneText().indexOf("0.19 元") >= 0;
+      out.switchScopeBothPanesFold = out.switchScopeChatPaneFolds && out.switchScopeGiftPaneFolds;
+      // 折叠只管形状：统计逐字不动（含头部那个 N）。
+      out.switchScopeFoldKeepsStats = cheapSummary() === out.switchScopeSummaryBefore;
+      // 0.11 元那条不是低价，两个区域都照旧单独一行。
+      out.switchScopeNonCheapRowUntouched = ssChatRowsWith("投喂 橡皮").length === 1 &&
+        cheapPaneText().indexOf("投喂 橡皮") >= 0;
+
+      // ---- ③ 折叠关回去：两处**逐条回来**（数量 / 顺序 / 金额 / 统计逐项复原）
+      out.switchScopeFoldOff = (await ssToggle("折叠低价礼物", false)) &&
+        window.__prefs["ui.gift_collapse_cheap"] === false;
+      await cheapSetPane(true);
+      var ssPencilRow = rowWith("投喂 铅笔");
+      var ssPencilDustRow = rowWith("投喂 铅笔屑");
+      var ssRubberRow = rowWith("投喂 橡皮");
+      out.switchScopeChatRowsRestored = ssChatRowsWith("投喂 铅笔").length === 1 &&
+        ssChatRowsWith("投喂 铅笔屑").length === 1 && ssChatRowsWith("投喂 橡皮").length === 1;
+      out.switchScopeChatOrderRestored = !!ssPencilRow && !!ssPencilDustRow && !!ssRubberRow &&
+        (ssPencilRow.compareDocumentPosition(ssPencilDustRow) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
+        (ssPencilDustRow.compareDocumentPosition(ssRubberRow) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      out.switchScopeGiftRowsRestored = cheapRowCount() === out.switchScopeGiftRowsBefore;
+      out.switchScopeAmountsRestored = cheapPaneText().indexOf("0.09 元") >= 0 &&
+        cheapPaneText().indexOf("0.1 元") >= 0 && cheapPaneText().indexOf("0.11 元") >= 0;
+      out.switchScopeSummaryRestored = cheapSummary() === out.switchScopeSummaryBefore;
+      out.switchScopeBothPanesRestore = out.switchScopeChatRowsRestored &&
+        out.switchScopeChatOrderRestored && out.switchScopeGiftRowsRestored &&
+        out.switchScopeAmountsRestored && out.switchScopeSummaryRestored;
+
+      // ---- ④ 剔除统计：只改统计，两个区域的行一条不动
+      out.switchScopeExcludeToggled = (await ssToggle("剔除低价礼物统计", true)) &&
+        window.__prefs["ui.gift_exclude_cheap_stats"] === true;
+      await cheapSetPane(true);
+      var ssExcludeSummary = cheapSummary();
+      out.switchScopeExcludeKeepsPanes = ssChatRowsWith("投喂 铅笔").length === 1 &&
+        ssChatRowsWith("投喂 铅笔屑").length === 1 && ssChatRowsWith("投喂 橡皮").length === 1 &&
+        cheapRowCount() === out.switchScopeGiftRowsBefore;
+      out.switchScopeExcludeTouchesStatsOnly = out.switchScopeExcludeKeepsPanes &&
+        ssExcludeSummary === "本场 礼物 1 · 0.11 元" &&
+        cheapDockText().indexOf("（1）") >= 0;
+
+      // ---- ⑤ 剔除关回去：统计逐字回到原串（头部 N 一起回来）
+      out.switchScopeExcludeOff = (await ssToggle("剔除低价礼物统计", false)) &&
+        window.__prefs["ui.gift_exclude_cheap_stats"] === false;
+      out.switchScopeExcludeRestoresStats = cheapSummary() === out.switchScopeSummaryBefore &&
+        cheapDockText().indexOf("（3）") >= 0;
+
+      // ---- ⑥ 自动消失：到点不画，但**内容没丢** —— 关掉开关原样回来，再打开又不见
+      window.__emit("danmubox://message", window.__mk("interact", "", false, {
+        room_id: ssRoomId, uname: "开关票标记", ts: Date.now() - 9000
+      }));
+      await sleep(600);
+      out.switchScopeAutoHideHidesExpired = text().indexOf("开关票标记") < 0;
+      out.switchScopeAutoHideOff = (await ssToggle("互动消息自动消失", false)) &&
+        window.__prefs["ui.interact_auto_hide"] === false;
+      await sleep(400);
+      out.switchScopeAutoHideRestoresContent = text().indexOf("开关票标记") >= 0;
+      out.switchScopeAutoHideOnAgain = (await ssToggle("互动消息自动消失", true)) &&
+        window.__prefs["ui.interact_auto_hide"] === true;
+      await sleep(400);
+      out.switchScopeAutoHideHidesAgain = text().indexOf("开关票标记") < 0;
+      out.switchScopeAutoHideReversible = out.switchScopeAutoHideHidesExpired &&
+        out.switchScopeAutoHideRestoresContent && out.switchScopeAutoHideHidesAgain;
+
+      // ---- 收尾：三枚开关回到契约 §8 的默认值、回到原来的房间（下一段从房间页开始量）
+      out.switchScopeDefaultsRestored = window.__prefs["ui.gift_collapse_cheap"] === false &&
+        window.__prefs["ui.gift_exclude_cheap_stats"] === false &&
+        window.__prefs["ui.interact_auto_hide"] === true;
+      if (cheapHomeId) {
+        cheapTabFor(cheapHomeId).click();
+        await sleep(800);
+      }
+      out.switchScopeHomeRoomRestored = !!cheapHomeId && cheapActiveRoomId() === cheapHomeId;
+      snap();
+      switchScopeBlockRan = true;
+    } catch (e) {
+      out.switchScopeBlockError = String((e && e.stack) || e);
+      switchScopeBlockRan = false;
+    }
+    out.switchScopeBlockRan = switchScopeBlockRan;
+
     /* ---- 开播 / 下播的状态自动更新（用户 2026-09-16：「在开播下播时，状态不会自动更新，
        打开的房间应该实时更新状态，列表应该定期查询状态」）。
 

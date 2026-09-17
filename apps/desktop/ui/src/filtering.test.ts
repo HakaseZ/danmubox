@@ -44,7 +44,12 @@ const PREFS_BASE: Prefs = {
   "filter.uids": [],
   "filter.kinds": [],
   "filter.medal_level_min": 0,
-  "history.buffer_rows": 5000,
+  "history.buffer_rows_danmaku": 5000,
+  "history.buffer_rows_gift": 2000,
+  "history.buffer_rows_superchat": 500,
+  "history.buffer_rows_guard": 200,
+  "history.buffer_rows_interact": 300,
+  "history.buffer_rows_system": 200,
   "ui.recent_watched": {},
 };
 

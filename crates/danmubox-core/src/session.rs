@@ -281,16 +281,21 @@ impl MessageBuffer {
         all
     }
 
+    /// 与 `snapshot()` 同一套次序（`local_id` 升序），但**只克隆命中并留下的那些**：
+    /// 先把各道的引用归并、排序、截尾，再拷出来 —— 读路径的分配量与结果同阶，
+    /// 不随缓冲总条数走。
     pub fn query(&self, query: &HistoryQuery) -> Vec<Message> {
-        let mut hits: Vec<Message> = self
-            .snapshot()
-            .into_iter()
+        let mut hits: Vec<&Message> = self
+            .lanes
+            .iter()
+            .flat_map(|lane| lane.iter())
             .filter(|message| query.matches(message))
             .collect();
+        hits.sort_unstable_by_key(|message| message.local_id);
         if query.limit > 0 && hits.len() > query.limit {
             hits.drain(..hits.len() - query.limit);
         }
-        hits
+        hits.into_iter().cloned().collect()
     }
 
     /// 供适配器/测试直接注入（不经过总线）。

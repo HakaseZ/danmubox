@@ -1,13 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer, type ReactVirtualizer } from "@tanstack/react-virtual";
 
 import { MessageRow } from "./MessageRow";
 import type { MenuPoint } from "./ContextMenu";
+import { aggregateRows } from "../aggregate";
 import type { DisplayRow } from "../filtering";
 import type { Message, Prefs } from "../types";
 import styles from "../app.module.css";
 
 interface Props {
+  /**
+   * 显示行（`filtering.toDisplayRows` 的输出）。弹幕区这一份（`scope === "chat"`）在本组件里
+   * 再过一道**弹幕聚合**（`src/aggregate.ts`，`docs/ui.md` §8.4）：跨观众短时同文本折成一行。
+   * 礼物栏那一份照原样渲染 —— 聚合是弹幕流的事，不过去。
+   */
   rows: DisplayRow[];
   anchorUid?: number;
   prefs: Prefs;
@@ -95,6 +101,14 @@ export function MessageList({
   empty,
 }: Props) {
   const ids = SCOPES[scope];
+  // 弹幕聚合（issue 2609171849 第 7 条，`src/aggregate.ts`）：**只在弹幕区这一份**做。
+  // 礼物栏那一份（`scope === "gift"`）取的就是礼物三族，聚合对它是空操作 —— 但仍然显式分叉：
+  // 少一次遍历，也免得以后有人顺手把礼物行也合进来（`docs/ui.md` §8.4）。
+  // 纯函数 + `useMemo`：与 App 的 `toDisplayRows` 同一条口径，渲染期不做重活。
+  const listRows = useMemo(
+    () => (scope === "chat" ? aggregateRows(rows) : rows),
+    [rows, scope],
+  );
   const scrollerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(prefs["ui.auto_scroll"]);
@@ -102,8 +116,8 @@ export function MessageList({
   const [hovered, setHovered] = useState(false);
   // 面板展开/收起与窗口缩放会改可视高度，回调里要读到最新的「是否跟随」与行数，
   // 但观察器只该建一次（每来一条消息重建一次 ResizeObserver 是纯浪费）。
-  const stateRef = useRef({ following, count: rows.length });
-  stateRef.current = { following, count: rows.length };
+  const stateRef = useRef({ following, count: listRows.length });
+  stateRef.current = { following, count: listRows.length };
   // 上一次滚动位置：用来分辨「用户往上滚」与「布局变化导致的离底变远」（见 onScroll）。
   // 首个滚动事件没有可比的上一次（`null`），按「不在底部就算暂停」处理。
   const prevScrollTopRef = useRef<number | null>(null);
@@ -124,7 +138,7 @@ export function MessageList({
   const scrollerTopRef = useRef<number | null>(null);
 
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: listRows.length,
     getScrollElement: () => scrollerRef.current,
     // 行的实测高度由虚拟列表量准，这里只是**估值**（先估后测，见下面的贴底注释）。
     // 弹幕行改成上下两行（身份行 + 正文行）后，一行 = 2 × 21px 行盒 + 2 × 8px 内边距 ≈ 58px
@@ -136,7 +150,7 @@ export function MessageList({
     // 已经不存在了。**别换成会变的东西**（渲染序号 / `ts` / 上游 id…）：key 一变
     // React 就拆掉这个节点重建，行内 `<img>` 跟着重新挂载、样式重算，
     // 「发送那一刻的那一帧」就没了（这条由冒烟断言 `sendOptimisticEchoSameNode` 钉住）。
-    getItemKey: (index) => rows[index].message.local_id,
+    getItemKey: (index) => listRows[index].message.local_id,
   });
 
   // 跟随最新：仅在 following 且未悬停时把视口钉在末尾（`pinToBottom` 说明了为什么不是
@@ -144,10 +158,10 @@ export function MessageList({
   // 虚拟列表的高度先按 `estimateSize` 估、再由实测修正，滚完若没人再贴一次就会差出一截——
   // 所以下面的 ResizeObserver 同时盯着容器与内容块，任何高度变化都会重新贴底。
   useEffect(() => {
-    if (!following || rows.length === 0) return;
+    if (!following || listRows.length === 0) return;
     if (pauseOnHover && hovered) return;
-    pinToBottom(virtualizer, rows.length);
-  }, [rows.length, following, hovered, pauseOnHover, virtualizer]);
+    pinToBottom(virtualizer, listRows.length);
+  }, [listRows.length, following, hovered, pauseOnHover, virtualizer]);
 
   // 聊天区是唯一生长区：表情/短语/筛选面板向上展开时它变矮。
   // 跟随模式下必须重新贴底，否则最新弹幕会被面板推出视口（issue #8 末条）。
@@ -180,7 +194,7 @@ export function MessageList({
     return () => observer.disconnect();
   }, [virtualizer]);
 
-  const showJumpButton = !following && rows.length > 0;
+  const showJumpButton = !following && listRows.length > 0;
 
   return (
     <div className={styles.chatArea} data-testid={ids.area}>
@@ -217,7 +231,7 @@ export function MessageList({
         {/* 空态（礼物栏用「本场还没有礼物」）：文案由调用方给，判据因此留在调用方那一处
             （哪一套行算「本场」由它决定，见 Props.empty）。它落在滚动容器里，
             与旧版的 `db-gift-body` 空态同一个位置。 */}
-        {rows.length === 0 && empty !== undefined && (
+        {listRows.length === 0 && empty !== undefined && (
           <div className={styles.empty}>{empty}</div>
         )}
         <div
@@ -248,7 +262,7 @@ export function MessageList({
               }}
             >
               <MessageRow
-                row={rows[item.index]}
+                row={listRows[item.index]}
                 anchorUid={anchorUid}
                 prefs={prefs}
                 onMenu={onMenu}
@@ -267,7 +281,7 @@ export function MessageList({
           aria-label="回到最新"
           onClick={() => {
             setFollowing(true);
-            pinToBottom(virtualizer, rows.length);
+            pinToBottom(virtualizer, listRows.length);
           }}
         >
           {/*

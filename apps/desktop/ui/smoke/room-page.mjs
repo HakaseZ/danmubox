@@ -3275,6 +3275,74 @@ const MOCK = (theme) => `(function () {
     out.medalBlockRan = medalBlockOk;
     snap();
 
+    // ---- 弹幕聚合（issue 2609171849 第 7 条，docs/ui.md §8.4 第二条、契约 §4 的三条常量）：
+    //      **不同观众**在短时间窗口里发的**同一条**弹幕折成一行 —— 正文行内「×N」（折了几条）
+    //      紧跟一格「都是谁」（db-msg-senders）。三条读数：
+    //      ① 同文本 + 两位不同观众 → **一行**、「×2」、名单里两位都在；
+    //      ② **不同文本** → 两行（聚合只认同一个键）；
+    //      ③ 同文本但**在窗口外**（5 秒）→ 两行（锚点是这一行的第一条，非滑动）。
+    //      准入前提自己保证（testing.md §9.3 ②）：本段要求停在**房间页**、聊天流在场、且列表
+    //      **跟随最新**（虚拟列表只渲染视口内的行，不跟随则新推的行根本不在 DOM 里）——
+    //      不在底部就点一次「回到最新」，缺 db-msg-list 则当场报错红、不静默通过。
+    //      读数一律**当场重查 DOM**（rows() / querySelector），因此归属于本次运行。
+    //      注：整个场景活在模板串里，注释也**不许出现反引号**（会把模板提前收尾，见 TESTING.md §9.3）。
+    var aggregateBlockRan = false;
+    try {
+      if (!byTestId("db-msg-list")) throw new Error("不在房间页：db-msg-list 不存在");
+      var aggAnchor = byTestId("db-bottom-anchor");
+      if (aggAnchor) {
+        aggAnchor.click();
+        await sleep(400);
+      }
+      var aggRowsOf = function (needle) {
+        return rows().filter(function (r) { return r.innerText.indexOf(needle) >= 0; });
+      };
+      var aggCellOf = function (row, cell) {
+        var el = row ? row.querySelector('[data-testid="' + cell + '"]') : null;
+        return el ? el.innerText.trim() : null;
+      };
+      var aggPush = function (text, uid, uname, ts) {
+        window.__emit("danmubox://message", window.__mk("danmaku", text, false, {
+          uid: uid, uname: uname, ts: ts
+        }));
+      };
+      // ① 两位不同观众、同一文本、相隔 100ms（窗口内）
+      var aggT0 = Date.now();
+      aggPush("聚合样本甲", 71001, "聚合一号", aggT0);
+      aggPush("聚合样本甲", 71002, "聚合二号", aggT0 + 100);
+      await sleep(400);
+      var aggPair = aggRowsOf("聚合样本甲");
+      out.aggregateSameTextRows = aggPair.length;
+      out.aggregateSameTextCount = aggCellOf(aggPair[0], "db-msg-count");
+      out.aggregateSameTextSenders = aggCellOf(aggPair[0], "db-msg-senders");
+      out.aggregateSameText = aggPair.length === 1 &&
+        out.aggregateSameTextCount === "×2" &&
+        (out.aggregateSameTextSenders || "").indexOf("聚合一号") >= 0 &&
+        (out.aggregateSameTextSenders || "").indexOf("聚合二号") >= 0;
+      snap();
+      // ② 不同文本：两条各占一行，且都不是聚合行（没有 ×N / 名单两格）
+      aggPush("聚合样本乙", 71003, "聚合三号", Date.now());
+      aggPush("聚合样本丙", 71004, "聚合四号", Date.now() + 50);
+      await sleep(400);
+      var aggB = aggRowsOf("聚合样本乙");
+      var aggC = aggRowsOf("聚合样本丙");
+      out.aggregateDifferentTextTwoRows =
+        aggB.length === 1 && aggC.length === 1 &&
+        aggCellOf(aggB[0], "db-msg-count") === null &&
+        aggCellOf(aggC[0], "db-msg-senders") === null;
+      // ③ 同文本、但第一条落在 60 秒前（远在 5 秒窗口之外）：不许折
+      aggPush("聚合样本丁", 71005, "聚合五号", Date.now() - 60000);
+      aggPush("聚合样本丁", 71006, "聚合六号", Date.now());
+      await sleep(400);
+      out.aggregateWindowSeparatesRows = aggRowsOf("聚合样本丁").length === 2;
+      snap();
+      aggregateBlockRan = true;
+    } catch (e) {
+      out.aggregateBlockError = String((e && e.stack) || e);
+      snap();
+    }
+    out.aggregateBlockRan = aggregateBlockRan;
+
     // ---- 面板展开会改可视高度：**正在看的位置不能被弹走**
     // 先把列表停在中间（此时不在底部 = 非跟随模式），再展开面板，量同一个行在视口里的
     // 位置变化。跟随模式下重新贴底是**有意**的（见 MessageList 的 ResizeObserver），

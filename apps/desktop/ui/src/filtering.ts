@@ -107,6 +107,12 @@ export function formatCount(value: number): string {
   return String(value);
 }
 
+/** 聚合行上参与的一条观众（`docs/ui.md` §8.4 的弹幕聚合）。 */
+export interface SenderRef {
+  uid: number;
+  uname: string;
+}
+
 export interface DisplayRow {
   message: Message;
   /**
@@ -116,6 +122,11 @@ export interface DisplayRow {
    * 金额同理取 `message.amount`（前两条路径都把它累加成合计）。
    */
   count: number;
+  /**
+   * **弹幕聚合行**参与过的观众（去重、按首次出现顺序，至少两位 —— 只有一位不算聚合，
+   * 因此这个字段缺席就表示「这一行不是聚合行」）。只有 `src/aggregate.ts` 产出它。
+   */
+  senders?: SenderRef[];
   /**
    * 这一行是**低价礼物桶**（`ui.gift_collapse_cheap` 折叠出来的那一条，见
    * `collapseCheapGiftRows`）：`count` 与 `amount` 都是整桶合计。
@@ -238,6 +249,8 @@ export function interactAutoHidden(message: Message, prefs: Prefs, now: number):
  *
  * 这里**不做**「相似消息合并」（同 uid + 同正文 + 时间窗）——用户 2026-09-13 明确
  * 那条功能不是他要的、也没必要，整条删除（见 `docs/requests.md` P49）。
+ * （**跨观众**的同文本聚合是**另一层**：`src/aggregate.ts`，作用在弹幕区这一份行上，
+ * 判据是「不同的人 + 同一个键 + 短窗口」而不是同一个 uid，见 `docs/ui.md` §8.4。）
  *
  * **本地乐观行不参与礼物连击折叠**（用户 2026-09-13 的决定，docs/ui.md §4.4）：刚发出的那条必须
  * 自己单独站一行，否则「我这条到底发出去没有」会被折进上一行的 ×N 里。判据取 `local_id < 0`

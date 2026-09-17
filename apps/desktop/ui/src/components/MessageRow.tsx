@@ -1,6 +1,7 @@
 import { Avatar } from "./Avatar";
 import type { MenuPoint } from "./ContextMenu";
 import { useRef, useSyncExternalStore, type ReactNode } from "react";
+import { sendersText } from "../aggregate";
 import {
   amountText,
   badgesFor,
@@ -240,6 +241,13 @@ export function MessageRow({
         {(count > 1 || message.kind === "gift") && (
           <span className={styles.merged} data-testid={t("count")}>
             ×{count}
+          </span>
+        )}
+        {/* 弹幕聚合行的「都是谁」（§8.4 第二张表）：紧跟 `×N`，同样是正文里的行内一格
+            （复用 `.merged` 的次级文字规格，不另立视觉）。`senders` 缺席 = 这一行不是聚合行。 */}
+        {row.senders !== undefined && row.senders.length >= 2 && (
+          <span className={styles.merged} data-testid={t("senders")}>
+            {sendersText(row.senders)}
           </span>
         )}
         {message.send_state !== undefined && (

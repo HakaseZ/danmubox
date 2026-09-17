@@ -3,6 +3,14 @@
 import { create, type StoreApi } from "zustand";
 
 import { api, describeError, subscribeEvents } from "./ipc";
+// 「哪些消息在列表里」那几条规则住在这个纯模块里（可被 `node --test` 直接钉住，见该文件头）。
+import {
+  adoptSessionSnapshot,
+  appended,
+  dropSessionMessages,
+  insertIncoming,
+  refreshMode,
+} from "./session-messages";
 import { adminDoneText, INTERACT_AUTO_HIDE_MS, SEND_CONFIRM_TIMEOUT_MS, SEND_MATCH_WINDOW_MS } from "./types";
 import type {
   Account,
@@ -28,8 +36,7 @@ import type {
 // 值导入（上面那一组是 `import type`）：发送结果那句话在这里拼，行尾标记与浮片共用同一句。
 import { sendOutcomeText } from "./types";
 
-/** 前端只保留的显示上限；真正的会话缓冲在后端（docs/contract.md §4.3）。 */
-const CLIENT_MESSAGE_CAP = 2000;
+/** 前端日志只保留的行数（`docs/ipc.md` §8）；显示上限 `CLIENT_MESSAGE_CAP` 在 `session-messages.ts`。 */
 const LOG_CAP = 200;
 
 interface AppStore {
@@ -238,15 +245,6 @@ function clearRoomTimers() {
   echoedLocals.clear();
 }
 
-/** 追加一条并守住前端显示上限（真正的会话缓冲在后端，docs/contract.md §4.3）。 */
-function appended(messages: Message[], message: Message): Message[] {
-  const next = [...messages, message];
-  if (next.length > CLIENT_MESSAGE_CAP) {
-    next.splice(0, next.length - CLIENT_MESSAGE_CAP);
-  }
-  return next;
-}
-
 /**
  * 对账：这条上游回推是不是我们刚发、还在等确认的那条？返回它在列表里的下标（没命中 = -1）。
  *
@@ -276,30 +274,6 @@ function matchPending(messages: Message[], incoming: Message): number {
     if (mine.length > 0 && theirs.length > 0 && mine !== theirs) return false;
     return Math.abs(incoming.ts - item.ts) <= SEND_MATCH_WINDOW_MS;
   });
-}
-
-/**
- * 这条弹幕是不是列表里已经有的**同一条**（`docs/ui.md` §4.5）？
- *
- * `(kind, uid, 正文, ts)` 逐字相同 = 上游给的**同一条**，不是「同一个人说了同样的话」：
- * 真人重复发言每条各有自己的上游 `ts`，合并判据（`filtering.ts` 的 `toDisplayRows`）
- * 照旧把它们合成 ×2 —— 那正是合并该管的事。只有「同一条被送了两遍」才会命中这里，
- * 实测有两类来源：
- * - 「断开连接 → 刷新连接」重建会话时，新会话的回填与界面上残留的旧会话行重合；
- * - 同一条弹幕既在进场回填里、又从实时路径来（上游两条路都会带它）。
- *
- * 只认 `danmaku`：它是唯一有「回填 + 实时回推」两条路进来的类型；礼物/互动本来就允许
- * 同一条被上游反复推（连击、榜单刷新），按内容去重会误伤。
- */
-function alreadyListed(messages: Message[], incoming: Message): boolean {
-  if (incoming.kind !== "danmaku") return false;
-  return messages.some(
-    (item) =>
-      item.kind === incoming.kind &&
-      item.uid === incoming.uid &&
-      item.ts === incoming.ts &&
-      item.content === incoming.content,
-  );
 }
 
 /**
@@ -707,6 +681,28 @@ function scheduleInteractHide(store: StoreApi<AppStore>, roomId: number, message
 }
 
 /**
+ * 把界面的 `messages` 换成**该房间当前会话**的快照（`history_query`，契约 §7）。
+ *
+ * 「进房间」与「会话结束后再点刷新」是同一条口径（契约 §4.3：重进是全新会话、缓冲从空开始），
+ * 因此两处共用这一个函数 —— 分开各写一遍，正是「进房间记得换列表、刷新忘了换」这个缺陷的来源。
+ *
+ * 落地复核（审计 P65）：await 期间用户可能已经切到别的房间 —— 那批快照属于上一个房间，
+ * 整批写进 `messages` 就是把 B 的列表换成 A 的。调用方**不因此跳过建连**：这个房间是用户
+ * 点开过的，多标签下各房间各自连着。
+ */
+async function syncSessionMessages(store: StoreApi<AppStore>, roomId: number): Promise<void> {
+  const snapshot = await api.historyQuery(roomId, {
+    limit: 0,
+  });
+  if (store.getState().activeRoomId !== roomId) return;
+  const messages = adoptSessionSnapshot(snapshot, store.getState().messages);
+  store.setState({ messages });
+  if (store.getState().prefs?.["ui.interact_auto_hide"]) {
+    scheduleInteractHide(store, roomId, messages);
+  }
+}
+
+/**
  * 一条房管动作 → **按序执行的一串上游调用**（批量就是多个成员展开的结果）。
  *
  * 写操作只有这一条通道（`runAdmin` 循环 await，失败即停）：单点与批量因此共享同一份
@@ -805,18 +801,11 @@ export const useApp = create<AppStore>((set, get, store) => ({
             }));
             return;
           }
-          // 同一条弹幕的第二份不再入列（`docs/ui.md` §4.5）：合并逻辑会把它画成一行
-          // ×2，看着像「用户重复发言」，其实只是同一条走了两条路。真人重复发言各有
-          // 各的 `ts`，不受影响。
-          if (alreadyListed(current, message)) return;
-          // `local_id` 是会话内的单调序号（契约 §5）。进场时我们会用 `history_query`
-          // 整批覆盖一次，其间到达的事件可能已经包含在那批快照里；此外运行时若被
-          // 重建，序号会从头开始。两种情况下都只能接受「比现有末尾更新」的消息，
-          // 否则同一 local_id 会进列表两次（React 会报重复 key，渲染也会错乱）。
-          // 待确认行用的是负数，排在末尾也不会把这个判定带偏：真实号恒为正、永远更大。
-          const last = current.length > 0 ? current[current.length - 1].local_id : 0;
-          if (message.local_id !== 0 && message.local_id <= last) return;
-          const messages = appended(current, message);
+          // 入列的判据（同一条不重复 + 会话内序号只进不退）在 `session-messages.ts` 的
+          // `insertIncoming`；它只保证**同一次会话内**不重复，会话换代（「断开连接」之后
+          // 再「刷新连接」）时号会从 1 重来，那一路由 `refresh` 换列表。
+          const messages = insertIncoming(current, message);
+          if (messages === null) return;
           set({ messages });
           if (get().prefs?.["ui.interact_auto_hide"]) {
             scheduleInteractHide(store, message.room_id, [message]);
@@ -959,18 +948,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
       adminErrors: {},
     });
     try {
-      const history = await api.historyQuery(roomId, {
-        limit: 0,
-      });
-      // 落地复核（审计 P65）：await 期间用户可能已经切到别的房间 —— 那批历史属于上一个
-      // 房间，整批写进 `messages` 就是把 B 的列表换成 A 的。建连**不跳过**：这个房间是
-      // 用户点开过的，多标签下各房间各自连着。
-      if (get().activeRoomId === roomId) {
-        set({ messages: history });
-        if (get().prefs?.["ui.interact_auto_hide"]) {
-          scheduleInteractHide(store, roomId, history);
-        }
-      }
+      await syncSessionMessages(store, roomId);
       await get().connect(roomId);
     } catch (error) {
       set({ error: describeError(error) });
@@ -1032,7 +1010,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
       await api.roomsDisconnect(roomId);
       // 断开 = 这个房间的会话结束（`docs/ipc.md` §8「离开房间」那一行）：该房间的身份快照与
       // 房管三块一并作废 —— 与 `closeRoom` / `removeRoom` 同款。留着的话，房管入口还按
-      // 上一个会话的身份放行（审计 P70）。弹幕与缓冲不动：重连时按同一会话去重（见 `alreadyListed`）。
+      // 上一个会话的身份放行（审计 P70）。**弹幕留在屏幕上不动**：断开的这一刻只是不再收，
+      // 用户还可能接着看；真要从这个状态回去，只有「刷新」那一档 —— 它会重建一次会话并把
+      // 列表换成新会话的快照（见 `refresh`）。
       set((state) => ({
         roomIdentities: dropRoom(state.roomIdentities, roomId),
         ...(state.activeRoomId === roomId
@@ -1047,11 +1027,25 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   async refresh(roomId) {
+    // 「刷新」有两档（契约 §4.3）：**会话还在** → 原地重连，列表原样不动（`docs/ui.md` §3.2）；
+    // **会话已被「断开连接」结束** → 外壳当场重建一次会话（`lib.rs::refresh_room`），等价重新进房。
+    // 后一档必须换列表：新会话的 `local_id` 从 1 重新编号，而界面还记着上一个会话的号 ——
+    // 新消息会被「不比末尾更大」那一条全数丢掉，房间看着已连接却再也不上屏（`docs/ui.md` §2.4）。
+    const reenter = refreshMode(get().rooms, roomId) === "reenter";
+    // 换列表要**先**把上一个会话的行摘掉：此刻这个房间已经**没有**会话（下面的
+    // `rooms_reconnect` 才把它建起来），因此没有发布者会在这两步之间推东西进来，这一清
+    // 不会带走任何刚到的事件。反过来放在建连之后清，就会把刚推来的那几条抹掉。
+    // 待确认行留着 —— 用户刚发出去的那条不该因为一次刷新消失（见 `dropSessionMessages`）。
+    if (reenter && get().activeRoomId === roomId) {
+      set({ messages: dropSessionMessages(get().messages) });
+    }
     try {
       await api.roomsReconnect(roomId);
-      // 重连可能把已经结束的会话（用户点过「断开连接」）重新建起来，
-      // 也可能只是把当前连接掐了重连——两种情况下 `connected` 都以重拉结果为准，
-      // 否则房间头菜单里的「断开连接」会拿着旧状态一直置灰。
+      // 建连之后再把**新会话**的快照整批落进来（与进房间同一口径，见 `syncSessionMessages`）：
+      // 新会话的进场回填与实时消息从此都有正当的号，照旧入列。
+      if (reenter) await syncSessionMessages(store, roomId);
+      // 重连可能把已经结束的会话重新建起来，也可能只是把当前连接掐了重连——两种情况下
+      // `connected` 都以重拉结果为准，否则房间头菜单里的「断开连接」会拿着旧状态一直置灰。
       const rooms = await reloadRooms();
       if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
     } catch (error) {

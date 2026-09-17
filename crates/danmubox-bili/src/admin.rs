@@ -119,7 +119,10 @@ impl BiliAdmin {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs(params.iter().map(|(k, v)| (*k, v.as_str())))
             .finish();
-        let (value, _) = self.http.get_with_cookies(&format!("{url}?{query}")).await?;
+        let (value, _) = self
+            .http
+            .get_with_cookies(&format!("{url}?{query}"))
+            .await?;
         Ok(value)
     }
 }
@@ -293,7 +296,10 @@ impl RoomAdmin for BiliAdmin {
                 .await?;
             ensure_ok(&value, "GetBlackList")?;
             out.extend(map_blacklisted(&value));
-            let total = value.pointer("/data/total").and_then(Value::as_i64).unwrap_or(0);
+            let total = value
+                .pointer("/data/total")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
             if (out.len() as i64) >= total {
                 break;
             }
@@ -418,7 +424,9 @@ mod tests {
 
     #[test]
     fn silent_list_tolerates_missing_envelope() {
-        assert!(map_silent_users(&json!({"code": 100004, "data": {"data": [], "total": 0}})).is_empty());
+        assert!(
+            map_silent_users(&json!({"code": 100004, "data": {"data": [], "total": 0}})).is_empty()
+        );
         assert!(map_silent_users(&json!({})).is_empty());
         assert!(map_silent_users(&json!({"data": {"data": null}})).is_empty());
     }
@@ -426,7 +434,9 @@ mod tests {
     #[test]
     fn blacklist_maps_real_field_names_and_tolerates_null() {
         // 黑名单为空的响应形状：`data.data` 是 null。
-        assert!(map_blacklisted(&json!({"code": 0, "data": {"data": null, "total": 0}})).is_empty());
+        assert!(
+            map_blacklisted(&json!({"code": 0, "data": {"data": null, "total": 0}})).is_empty()
+        );
         // 实测条目形状（35 条的真实名单）：uid / name / face / operator_name。
         let value = json!({"data": {"data": [{
             "uid": 7, "name": "拉黑的人", "face": "https://i/7.jpg",
@@ -460,7 +470,10 @@ mod tests {
         let strings = json!({"data": {"keyword_list": ["刷屏", "广告"]}});
         assert_eq!(map_keywords(&strings), vec!["刷屏", "广告"]);
 
-        assert!(map_keywords(&json!({"code": 100007, "data": {"keyword_list": [], "max_limit": 0}})).is_empty());
+        assert!(map_keywords(
+            &json!({"code": 100007, "data": {"keyword_list": [], "max_limit": 0}})
+        )
+        .is_empty());
         assert!(map_keywords(&json!({})).is_empty());
     }
 

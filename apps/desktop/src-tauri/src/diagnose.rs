@@ -5,7 +5,6 @@
 //! 因此这里没有临时文件、没有中转目录：桌面端直接写目标路径，Android 直接往
 //! MediaStore 里插一条。
 
-
 use danmubox_core::diagnose::ShellEnv;
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -42,7 +41,11 @@ pub fn shell_env(app: &tauri::AppHandle, engine: &str) -> ShellEnv {
 }
 
 /// 写报告。返回**给用户看的位置**（Android 上是 `/sdcard/Download/<名字>`）。
-pub async fn write_report(app: &tauri::AppHandle, name: &str, text: &str) -> Result<String, String> {
+pub async fn write_report(
+    app: &tauri::AppHandle,
+    name: &str,
+    text: &str,
+) -> Result<String, String> {
     #[cfg(target_os = "android")]
     {
         android_write(app, name, text).await
@@ -76,11 +79,7 @@ pub fn write_report_into(dir: &std::path::Path, name: &str, text: &str) -> Resul
 /// 只写这一个位置：不碰应用私有目录、不写别的目录，因此设备上除了这一份报告
 /// 不会多出任何东西（`docs/operations.md` §4.3）。
 #[cfg(target_os = "android")]
-async fn android_write(
-    app: &tauri::AppHandle,
-    name: &str,
-    text: &str,
-) -> Result<String, String> {
+async fn android_write(app: &tauri::AppHandle, name: &str, text: &str) -> Result<String, String> {
     use android::WriteArgs;
 
     // 用 `try_state` 而不是 `state`：拿不到句柄（插件没注册成功）时给一条能读的错误，
@@ -160,10 +159,23 @@ mod tests {
         assert_eq!(path, dir.join(&name).display().to_string());
         let entries: Vec<String> = std::fs::read_dir(&dir)
             .expect("读目录")
-            .map(|entry| entry.expect("目录项").file_name().to_string_lossy().into_owned())
+            .map(|entry| {
+                entry
+                    .expect("目录项")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect();
-        assert_eq!(entries, vec![name.clone()], "目录里只许有这一个文件：{entries:?}");
-        assert_eq!(std::fs::read_to_string(dir.join(&name)).expect("读回"), text);
+        assert_eq!(
+            entries,
+            vec![name.clone()],
+            "目录里只许有这一个文件：{entries:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(&name)).expect("读回"),
+            text
+        );
 
         std::fs::remove_dir_all(&dir).expect("清理");
     }

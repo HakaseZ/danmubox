@@ -169,7 +169,9 @@ pub fn has_more(value: &Value, page_size: i64) -> bool {
     match flag {
         Some(Value::Bool(flag)) => *flag,
         Some(Value::Number(number)) => number.as_i64().map(|n| n != 0).unwrap_or(false),
-        _ => items(value).map(|list| list.len() as i64 >= page_size).unwrap_or(false),
+        _ => items(value)
+            .map(|list| list.len() as i64 >= page_size)
+            .unwrap_or(false),
     }
 }
 
@@ -215,9 +217,10 @@ pub fn map_status_rooms(value: &Value) -> Vec<FollowedRoom> {
 pub fn merge_followed(live: Vec<FollowedRoom>, rest: Vec<FollowedRoom>) -> Vec<FollowedRoom> {
     let mut merged = live;
     let mut seen: std::collections::HashSet<i64> = merged.iter().map(|r| r.room_id).collect();
-    merged.extend(rest.into_iter().filter(|room| {
-        room.room_id != 0 && seen.insert(room.room_id)
-    }));
+    merged.extend(
+        rest.into_iter()
+            .filter(|room| room.room_id != 0 && seen.insert(room.room_id)),
+    );
     merged
 }
 
@@ -530,7 +533,10 @@ mod tests {
         assert!(!has_more(&json!({ "data": { "list": short } }), 30));
         assert!(!has_more(&json!({ "data": { "list": [] } }), 30));
         // 类型不认识的 has_more 不当作标志位，回落满页规则。
-        assert!(!has_more(&json!({ "data": { "has_more": "1", "list": [] } }), 30));
+        assert!(!has_more(
+            &json!({ "data": { "has_more": "1", "list": [] } }),
+            30
+        ));
     }
 
     // ---- 2026-09-13 实测夹具（真实响应派生 + 脱敏，见 `docs/protocol.md` A28）----
@@ -572,9 +578,14 @@ mod tests {
         // 关注 90 人、当时在播 0 人：上游给在播 0 条，只报「未开播 90」——
         // 用户报的「看不到未开播的关注」根因就在这里。
         let value = fixture("follow-getweblist-raw.json");
-        assert_eq!(value.pointer("/data/count").and_then(Value::as_i64), Some(0));
         assert_eq!(
-            value.pointer("/data/not_living_num").and_then(Value::as_i64),
+            value.pointer("/data/count").and_then(Value::as_i64),
+            Some(0)
+        );
+        assert_eq!(
+            value
+                .pointer("/data/not_living_num")
+                .and_then(Value::as_i64),
             Some(90)
         );
         assert!(map_followed(&value).is_empty(), "本端点不给未开播条目");
@@ -624,7 +635,10 @@ mod tests {
     fn follow_merge_keeps_live_entry_and_dedupes_by_room_id() {
         let mut on_air = followed(7, 1);
         on_air.live_start_at = 1789174974; // 在播侧独有：开播时刻
-        let merged = merge_followed(vec![on_air], vec![followed(7, 1), followed(8, 0), followed(9, 0)]);
+        let merged = merge_followed(
+            vec![on_air],
+            vec![followed(7, 1), followed(8, 0), followed(9, 0)],
+        );
         let ids: Vec<i64> = merged.iter().map(|r| r.room_id).collect();
         assert_eq!(ids, vec![7, 8, 9]);
         assert_eq!(

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import styles from "../app.module.css";
 
@@ -22,16 +22,15 @@ interface Props {
  * - 加载失败（CDN 404 / 防盗链）时退化成昵称首字符的圆形占位，行高与列宽不跳。
  */
 export function Avatar({ url, name, testId }: Props) {
-  const [failed, setFailed] = useState(false);
+  // 「加载失败」记的是**哪个** url 失败，不是一个布尔：`url` 换了就自然不再失败，
+  // 不需要一条「url 变了就把布尔置回 false」的 effect —— 那种写法在换 url 的那一帧
+  // 会先拿上一张图的失败结论画一次占位（多一帧闪烁），也让失败这件事有两个真相源。
+  const [failedUrl, setFailedUrl] = useState<string | undefined>(undefined);
   const id = testId ?? "db-msg-avatar";
-
-  useEffect(() => {
-    setFailed(false);
-  }, [url]);
 
   if (url === undefined || url.length === 0) return null;
 
-  if (failed) {
+  if (failedUrl === url) {
     return (
       <span className={styles.avatarFallback} data-testid={id} title={name}>
         {(name.trim()[0] ?? "?").toUpperCase()}
@@ -47,7 +46,7 @@ export function Avatar({ url, name, testId }: Props) {
       alt=""
       title={name}
       loading="lazy"
-      onError={() => setFailed(true)}
+      onError={() => setFailedUrl(url)}
     />
   );
 }

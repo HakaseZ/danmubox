@@ -363,7 +363,10 @@ mod tests {
     }
 
     fn param<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
-        params.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        params
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
     }
 
     #[test]
@@ -377,7 +380,17 @@ mod tests {
     #[test]
     fn emote_send_sends_the_unique_key_not_the_name() {
         // 用户实测：发名字会被上游当成普通文本。官方实现发的是 emoticon_unique。
-        let params = build_params(7, "这个好耶", None, None, Some(&token()), None, "csrf", "1", 1);
+        let params = build_params(
+            7,
+            "这个好耶",
+            None,
+            None,
+            Some(&token()),
+            None,
+            "csrf",
+            "1",
+            1,
+        );
         assert_eq!(
             param(&params, "msg"),
             Some("official_345"),
@@ -405,7 +418,17 @@ mod tests {
             uname: "被回复的人".into(),
             dmid: "0123456789abcdef".into(),
         };
-        let params = build_params(7, "回复内容", None, None, None, Some(&target), "csrf", "1", 1);
+        let params = build_params(
+            7,
+            "回复内容",
+            None,
+            None,
+            None,
+            Some(&target),
+            "csrf",
+            "1",
+            1,
+        );
         assert_eq!(param(&params, "reply_mid"), Some("42"));
         assert_eq!(param(&params, "reply_uname"), Some("被回复的人"));
         assert_eq!(param(&params, "reply_type"), Some("0"));
@@ -424,9 +447,23 @@ mod tests {
             uname: "被 @ 的人".into(),
             dmid: String::new(),
         };
-        let params = build_params(7, "@被 @ 的人 你好", None, None, None, Some(&target), "csrf", "1", 1);
+        let params = build_params(
+            7,
+            "@被 @ 的人 你好",
+            None,
+            None,
+            None,
+            Some(&target),
+            "csrf",
+            "1",
+            1,
+        );
         assert_eq!(param(&params, "reply_mid"), Some("42"));
-        assert_eq!(param(&params, "replay_dmid"), None, "@ 不是回复，不该带被回复弹幕 id");
+        assert_eq!(
+            param(&params, "replay_dmid"),
+            None,
+            "@ 不是回复，不该带被回复弹幕 id"
+        );
     }
 
     #[test]

@@ -250,7 +250,8 @@ async fn rooms_refresh_status(state: State<'_, AppState>) -> ApiResult<Vec<RoomV
     };
 
     if !ids.is_empty() {
-        let live = Arc::new(BiliLive::with_store(Arc::clone(&state.store)).map_err(ApiError::from)?);
+        let live =
+            Arc::new(BiliLive::with_store(Arc::clone(&state.store)).map_err(ApiError::from)?);
         let mut tasks = tokio::task::JoinSet::new();
         for room_id in ids {
             let live = Arc::clone(&live);
@@ -363,9 +364,9 @@ fn spawn_runtime(
         return Ok(());
     }
     let Some(room) = rooms.meta.get(&room_id).cloned() else {
-        return Err(ApiError::from(danmubox_core::Error::RoomNotFound(
-            format!("房间 {room_id} 未登记"),
-        )));
+        return Err(ApiError::from(danmubox_core::Error::RoomNotFound(format!(
+            "房间 {room_id} 未登记"
+        ))));
     };
     rooms.runtimes.insert(
         room_id,
@@ -408,11 +409,7 @@ fn rooms_reconnect(state: State<'_, AppState>, room_id: i64) -> ApiResult<()> {
         caps,
         state.bus.clone(),
         Arc::clone(&state.counters),
-        || {
-            Ok(Arc::new(BiliLive::with_store(Arc::clone(
-                &state.store,
-            ))?) as Arc<dyn LiveSource>)
-        },
+        || Ok(Arc::new(BiliLive::with_store(Arc::clone(&state.store))?) as Arc<dyn LiveSource>),
     )
 }
 
@@ -471,7 +468,14 @@ async fn chat_send(
 ) -> ApiResult<ChatSendResult> {
     let sender = BiliSender::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     let report = sender
-        .send(room_id, &content, color, None, emote.as_ref(), reply.as_ref())
+        .send(
+            room_id,
+            &content,
+            color,
+            None,
+            emote.as_ref(),
+            reply.as_ref(),
+        )
         .await
         .map_err(ApiError::from)?;
 
@@ -587,7 +591,10 @@ async fn emotes_list(state: State<'_, AppState>, room_id: i64) -> ApiResult<Vec<
     // 传全零会拿不到粉丝牌与大航海那几包。无会话时退回零身份（与上面同语义）。
     let session = {
         let rooms = state.rooms.lock().expect("rooms poisoned");
-        rooms.runtimes.get(&room_id).map(|runtime| runtime.session())
+        rooms
+            .runtimes
+            .get(&room_id)
+            .map(|runtime| runtime.session())
     }
     .unwrap_or(RoomSession {
         room_id,
@@ -631,18 +638,12 @@ async fn admin_mute(
 #[tauri::command]
 async fn admin_unmute(state: State<'_, AppState>, room_id: i64, uid: i64) -> ApiResult<()> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    admin
-        .unmute(room_id, uid)
-        .await
-        .map_err(ApiError::from)
+    admin.unmute(room_id, uid).await.map_err(ApiError::from)
 }
 
 /// 禁言名单（契约 §7）。与黑名单列表同款：只读，非房管时上游 code 原样带回。
 #[tauri::command]
-async fn admin_silent_list(
-    state: State<'_, AppState>,
-    room_id: i64,
-) -> ApiResult<Vec<SilentUser>> {
+async fn admin_silent_list(state: State<'_, AppState>, room_id: i64) -> ApiResult<Vec<SilentUser>> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     admin.silent_list(room_id).await.map_err(ApiError::from)
 }
@@ -659,11 +660,7 @@ async fn admin_blacklist_list(
 
 /// 加入黑名单（契约 §7）。
 #[tauri::command]
-async fn admin_blacklist_add(
-    state: State<'_, AppState>,
-    room_id: i64,
-    uid: i64,
-) -> ApiResult<()> {
+async fn admin_blacklist_add(state: State<'_, AppState>, room_id: i64, uid: i64) -> ApiResult<()> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     admin
         .blacklist_add(room_id, uid)
@@ -673,11 +670,7 @@ async fn admin_blacklist_add(
 
 /// 移出黑名单（契约 §7）。
 #[tauri::command]
-async fn admin_blacklist_del(
-    state: State<'_, AppState>,
-    room_id: i64,
-    uid: i64,
-) -> ApiResult<()> {
+async fn admin_blacklist_del(state: State<'_, AppState>, room_id: i64, uid: i64) -> ApiResult<()> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     admin
         .blacklist_del(room_id, uid)
@@ -1383,7 +1376,10 @@ mod tests {
             Some("发送失败，请先移除该用户黑名单"),
         ))
         .expect("失败必须给出原因");
-        assert!(detail.contains("发送失败，请先移除该用户黑名单"), "{detail}");
+        assert!(
+            detail.contains("发送失败，请先移除该用户黑名单"),
+            "{detail}"
+        );
         assert!(detail.contains("10023"), "{detail}");
     }
 
@@ -1471,8 +1467,15 @@ mod tests {
         );
 
         // ① 进房间：建会话，适配器去连。
-        spawn_runtime(&mut rooms, ROOM, BufferCaps::default(), bus.clone(), Arc::clone(&counters), Arc::clone(&source))
-            .unwrap();
+        spawn_runtime(
+            &mut rooms,
+            ROOM,
+            BufferCaps::default(),
+            bus.clone(),
+            Arc::clone(&counters),
+            Arc::clone(&source),
+        )
+        .unwrap();
         settle().await;
         assert_eq!(attempts.load(Ordering::SeqCst), 1, "进房间必须真的去连");
 
@@ -1520,7 +1523,13 @@ mod tests {
             "刷新之后必须回到「已连接」这一档"
         );
 
-        rooms.runtimes.remove(&ROOM).expect("会话应该在").close().await.unwrap();
+        rooms
+            .runtimes
+            .remove(&ROOM)
+            .expect("会话应该在")
+            .close()
+            .await
+            .unwrap();
     }
 
     /// 回归（应用级 panic）：`rooms_reconnect` 是**同步** command，Tauri 把它跑在
@@ -1549,8 +1558,15 @@ mod tests {
             },
         );
 
-        spawn_runtime(&mut rooms, ROOM, BufferCaps::default(), bus, counters, source)
-            .expect("主线程（无 runtime 上下文）上刷新也必须能把会话建起来");
+        spawn_runtime(
+            &mut rooms,
+            ROOM,
+            BufferCaps::default(),
+            bus,
+            counters,
+            source,
+        )
+        .expect("主线程（无 runtime 上下文）上刷新也必须能把会话建起来");
 
         assert!(
             rooms.runtimes.contains_key(&ROOM),

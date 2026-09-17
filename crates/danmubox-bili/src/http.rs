@@ -59,7 +59,10 @@ const BUVID3: &str = "buvid3";
 ///   两方都没有 → `None`（不设 `Cookie` 头）。
 fn merge_cookie(base: Option<&str>, buvid3: Option<&str>) -> Option<String> {
     let Some(buvid3) = buvid3.map(str::trim).filter(|value| !value.is_empty()) else {
-        return base.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+        return base
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
     };
     let rest = base
         .map(str::trim)
@@ -529,9 +532,9 @@ impl BiliHttp {
             Ok(()) => Ok(()),
             Err(first) => {
                 tracing::debug!(%first, "HTTP 心跳首次失败，重试一次");
-                self.heartbeat_once(&url).await.map_err(|second| {
-                    upstream("webHeartBeat 重试后仍失败", second)
-                })
+                self.heartbeat_once(&url)
+                    .await
+                    .map_err(|second| upstream("webHeartBeat 重试后仍失败", second))
             }
         }
     }
@@ -937,8 +940,7 @@ mod tests {
     #[test]
     fn room_info_without_h5_leaves_nickname_and_title_empty() {
         // `getH5InfoByRoom` 不可达时的形态：两个字段都留空，房间照样登记得出来。
-        let room =
-            map_room_play_info(&fixture(ROOM_PLAY_INFO)["data"], &Value::Null, "1").unwrap();
+        let room = map_room_play_info(&fixture(ROOM_PLAY_INFO)["data"], &Value::Null, "1").unwrap();
         assert_eq!(room.room_id, 5440);
         assert_eq!(room.anchor_uname, "");
         assert_eq!(room.title, "");
@@ -946,8 +948,8 @@ mod tests {
 
     #[test]
     fn room_info_without_room_id_is_not_found() {
-        let err =
-            map_room_play_info(&serde_json::json!({ "title": "x" }), &Value::Null, "9").unwrap_err();
+        let err = map_room_play_info(&serde_json::json!({ "title": "x" }), &Value::Null, "9")
+            .unwrap_err();
         assert_eq!(err.code(), "ROOM_NOT_FOUND");
     }
 
@@ -987,10 +989,7 @@ mod tests {
             "这一拍只该有一次请求（昵称 / 标题那一跳不在这一条路上）"
         );
         let raw = stub.headers.lock().expect("桩请求头").join("\n");
-        assert!(
-            raw.contains("room_id=5440"),
-            "请求要带真实房间号：{raw}"
-        );
+        assert!(raw.contains("room_id=5440"), "请求要带真实房间号：{raw}");
     }
 
     /// 这个端点非 0 code 的语义是「解析不出房间」，定期刷新那条路同样按它报错
@@ -1098,8 +1097,7 @@ mod tests {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
                 // 读到请求头结束再回，避免在客户端发完请求前抢跑（reqwest 会报 broken pipe）。
-                let mut reader =
-                    std::io::BufReader::new(stream.try_clone().expect("克隆桩连接"));
+                let mut reader = std::io::BufReader::new(stream.try_clone().expect("克隆桩连接"));
                 let mut line = String::new();
                 let mut block = String::new();
                 loop {
@@ -1205,7 +1203,11 @@ mod tests {
         for keys in [&first, &second, &third, &fourth] {
             assert!(keys.is_ok(), "并发取 key 都该成功：{keys:?}");
         }
-        assert_eq!(stub.hits.load(Ordering::SeqCst), 1, "并发取 key 只该打一次 nav");
+        assert_eq!(
+            stub.hits.load(Ordering::SeqCst),
+            1,
+            "并发取 key 只该打一次 nav"
+        );
     }
 
     /// 失败降级：`nav` 取不到时错误照旧上抛，且**不写缓存**——下一次调用重新请求，
@@ -1217,7 +1219,10 @@ mod tests {
         reset_wbi_cache().await;
         let http = BiliHttp::new().unwrap().with_nav_url(stub.base.clone());
 
-        let error = http.wbi_keys().await.expect_err("nav 没有 wbi_img 时必须报错");
+        let error = http
+            .wbi_keys()
+            .await
+            .expect_err("nav 没有 wbi_img 时必须报错");
         assert_eq!(error.code(), "UPSTREAM_ERROR");
         let recovered = http.wbi_keys().await.expect("上游恢复后重新取到 key");
         assert_eq!(recovered.0, "0123456789abcdef0123456789abcdef");
@@ -1397,7 +1402,10 @@ mod tests {
             .with_nav_url(stub.base.clone())
             .with_danmu_url(format!("{}/danmu", stub.base));
 
-        let info = http.danmu_info(5440, "BV3-EXPLICIT", &test_diag()).await.expect("票据");
+        let info = http
+            .danmu_info(5440, "BV3-EXPLICIT", &test_diag())
+            .await
+            .expect("票据");
 
         assert_eq!(info.token, "tok");
         assert_eq!(info.hosts, vec!["a.example".to_string()]);
@@ -1432,7 +1440,9 @@ mod tests {
             .with_nav_url(stub.base.clone())
             .with_danmu_url(format!("{}/danmu", stub.base));
 
-        http.danmu_info(5440, "BV3-EXPLICIT", &test_diag()).await.expect("票据");
+        http.danmu_info(5440, "BV3-EXPLICIT", &test_diag())
+            .await
+            .expect("票据");
 
         let raw = stub.headers.lock().unwrap();
         let cookies = cookie_lines(raw.last().expect("getDanmuInfo 的请求头"));
@@ -1468,7 +1478,11 @@ mod tests {
                 Some("SESSDATA=s; buvid3=B"),
             ),
             // 值里含 `=` 不许被截断。
-            (Some("SESSDATA=a=b"), Some("B"), Some("SESSDATA=a=b; buvid3=B")),
+            (
+                Some("SESSDATA=a=b"),
+                Some("B"),
+                Some("SESSDATA=a=b; buvid3=B"),
+            ),
             // 键名大小写敏感（RFC 6265）：`BUVID3` 不是 `buvid3`，不参与让位。
             (
                 Some("sessdata=s; BUVID3=UPPER"),
@@ -1514,7 +1528,10 @@ mod tests {
         assert_eq!(error.code(), "UPSTREAM_ERROR");
         let text = error.to_string();
         assert!(text.contains("vmid=***"), "URL 里的 uid 必须被抹掉：{text}");
-        assert!(!text.contains("7654321"), "uid 不许出现在错误信息里：{text}");
+        assert!(
+            !text.contains("7654321"),
+            "uid 不许出现在错误信息里：{text}"
+        );
         assert!(
             text.contains("/x/relation/followings") && text.contains("ps=50"),
             "接口与分页要留下，否则没法排障：{text}"

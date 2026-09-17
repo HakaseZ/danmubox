@@ -1,8 +1,49 @@
 {
+  // 配置里允许注释（oxlint 支持 jsonc）。
+  //
+  // 规则口径（2026-09-17 定，与 `AGENT.md` §3/§4 的「Lint 零告警」同一条）：
+  //   * `npm run lint` = `oxlint --deny-warnings` —— **告警即失败**，与前端的 clippy 口径对齐；
+  //     新增告警要么真修，要么在下表/行内注明理由，`main` 上不允许带告警合入。
+  //   * 行内 `// oxlint-disable-next-line <规则名>` 用于**单点**误报（规则看不到意图的那一处），
+  //     每一条都必须在同一处写清理由；能整类放行的才写进本文件。
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["react", "typescript", "oxc"],
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    // 这条规则的前提是 **React Compiler**（它报的是「编译器会跳过这个组件/钩子的记忆化」）。
+    // 本仓库没有启用 React Compiler：`vite.config.ts` 只挂了 `@vitejs/plugin-react`，
+    // 没有 `babel-plugin-react-compiler`；也就是说规则描述的那个后果在这里不存在。
+    // 触发点是 `@tanstack/react-virtual` 的 `useVirtualizer`（`components/MessageList.tsx`），
+    // 上游库的 API 形态，不是我们写错了什么。等真引入 React Compiler 时再打开这条。
+    "react/incompatible-library": "off"
+  },
+  "overrides": [
+    {
+      // `smoke/` 是**前端冒烟夹具**：`room-page.mjs` 的正文是塞在模板字符串里的**页面侧源码**，
+      // 反斜杠在模板求值时就被吃掉（`AGENT.md` §9 记着这个坑：写 `/rgba?\(/`，页面里实际是
+      // `/rgba?((/`）。文件里那几处 `\(` 出现在**注释文本**中，是「照抄一遍踩过的坑」，
+      // 不是可疑的转义 —— 规则按「模板串里的多余转义」判它，属于对这段载荷的误读。
+      // 这层载荷本来就该整套换掉（另一票在拆冒烟夹具），所以这里只放行规则、不动文件。
+      "files": ["smoke/**"],
+      "rules": {
+        "eslint/no-useless-escape": "off"
+      }
+    },
+    {
+      // 冒烟夹具已按主题拆成 `scenario/parts/*.mjs`，运行时由组装器**按行原样拼成同一份
+      // 页面侧脚本**（不再塞进模板串）。拆分把原来单体里的**共享作用域**散到了多个文件：
+      // 一个片段声明的符号常被别的片段消费（`00-mock.mjs` 的替身数据、`20-room-list.mjs`
+      // 的取样工具、`23-panels-layout.mjs` 的测量工具…），而规则按**单文件**分析 ⇒ 一律
+      // 误报（2026-09-17 集成时实测 4 处：00-mock 的 4 个声明 + 20-room-list:18 /
+      // 23-panels-layout:252 / 28-gift-dock:450）。
+      // 这段载荷的正确性由**冒烟本身**保证（语法过 `--precheck`、行为过逐条断言），
+      // 所以对这一族文件整类放行；`smoke/scenario/**` 之外（含 `room-page.mjs` 组装器、
+      // `run-headless.mjs` 运行器）规则照旧，真死码仍会被抓到。
+      "files": ["smoke/scenario/**"],
+      "rules": {
+        "eslint/no-unused-vars": "off"
+      }
+    }
+  ]
 }

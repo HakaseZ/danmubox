@@ -560,7 +560,10 @@ mod tests {
     fn log_lines_only_land_inside_the_window() {
         let diag = Diagnoser::new();
         diag.log_line(0, "INFO", "t", "窗口之前");
-        assert!(diag.snapshot(1_000).logs.is_empty(), "没开窗口就一行都不该收");
+        assert!(
+            diag.snapshot(1_000).logs.is_empty(),
+            "没开窗口就一行都不该收"
+        );
 
         let window = diag.begin_window(1_000, 1_000);
         assert_eq!(window.ends_ms, 2_000);
@@ -580,7 +583,10 @@ mod tests {
         diag.begin_window(0, 1_000);
         diag.log_line(500, "WARN", "t", "上一轮");
         diag.note_unknown_cmd(500, "WHATEVER");
-        assert_eq!(diag.snapshot(0).unknown_cmds, vec![("WHATEVER".to_string(), 1)]);
+        assert_eq!(
+            diag.snapshot(0).unknown_cmds,
+            vec![("WHATEVER".to_string(), 1)]
+        );
 
         diag.begin_window(10_000, 1_000);
         let snapshot = diag.snapshot(10_000);
@@ -665,7 +671,10 @@ mod tests {
         attempt.ended(2_500, "僵死：距上次入站帧 90000ms", true);
         attempt.backoff(5_000, 0);
         let record = diag.snapshot(3_000).last_attempt().cloned().unwrap();
-        assert_eq!(record.end_reason.as_deref(), Some("僵死：距上次入站帧 90000ms"));
+        assert_eq!(
+            record.end_reason.as_deref(),
+            Some("僵死：距上次入站帧 90000ms")
+        );
         assert_eq!(record.backoff_ms, Some(5_000));
         assert!(!diag.snapshot(3_000).connected_now(), "结束了就不算连着");
     }
@@ -728,7 +737,10 @@ mod tests {
         assert_eq!(utc_parts(0).human(), "1970-01-01 00:00:00 UTC");
         assert_eq!(utc_parts(0).stamp(), "19700101-000000");
         // 2024-02-29 12:34:56 UTC（闰日；`date -u -r 1709210096` 同值）。
-        assert_eq!(utc_parts(1_709_210_096_000).human(), "2024-02-29 12:34:56 UTC");
+        assert_eq!(
+            utc_parts(1_709_210_096_000).human(),
+            "2024-02-29 12:34:56 UTC"
+        );
         // 2026-09-16 04:12:34 UTC。
         assert_eq!(utc_parts(1_789_531_954_000).stamp(), "20260916-041234");
     }

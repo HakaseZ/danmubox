@@ -27,8 +27,7 @@ use crate::http::BiliHttp;
 use crate::wbi;
 
 /// 直播弹幕举报端点。**未实测**（见模块文档）。
-pub const EP_DM_REPORT: &str =
-    "https://api.live.bilibili.com/xlive/web-ucenter/v1/dMReport/Report";
+pub const EP_DM_REPORT: &str = "https://api.live.bilibili.com/xlive/web-ucenter/v1/dMReport/Report";
 
 /// 举报理由清单端点。**已实测**（2026-09-11，登录态 `code=0`，返回 7 条 `{id, reason}`）。
 pub const EP_FOR_REASON: &str =
@@ -209,7 +208,10 @@ mod tests {
         let message = sample_message();
         let params = report_params(
             &message,
-            &ReportReason { id: 3, reason: "色情低俗".into() },
+            &ReportReason {
+                id: 3,
+                reason: "色情低俗".into(),
+            },
             "CSRF-TOKEN",
             9999,
         );
@@ -259,7 +261,8 @@ mod tests {
 
     #[test]
     fn missing_code_is_an_error_not_a_silent_success() {
-        let error = outcome_from_report(&json!({"message": "无 code"})).expect_err("缺 code 必须报错");
+        let error =
+            outcome_from_report(&json!({"message": "无 code"})).expect_err("缺 code 必须报错");
         assert_eq!(error.code(), "UPSTREAM_ERROR");
     }
 
@@ -269,7 +272,10 @@ mod tests {
         let error = reporter
             .report(
                 &sample_message(),
-                &ReportReason { id: 8, reason: "垃圾广告".into() },
+                &ReportReason {
+                    id: 8,
+                    reason: "垃圾广告".into(),
+                },
             )
             .await
             .unwrap_err();
@@ -298,12 +304,30 @@ mod tests {
 
         let mut message = sample_message();
         message.upstream_id.clear();
-        let error = reporter.report(&message, &ReportReason { id: 8, reason: "垃圾广告".into() }).await.unwrap_err();
+        let error = reporter
+            .report(
+                &message,
+                &ReportReason {
+                    id: 8,
+                    reason: "垃圾广告".into(),
+                },
+            )
+            .await
+            .unwrap_err();
         assert_eq!(error.code(), "BAD_REQUEST");
 
         // 全空白标识同样拒绝，不得静默放行。
         message.upstream_id = "   ".into();
-        let error = reporter.report(&message, &ReportReason { id: 8, reason: "垃圾广告".into() }).await.unwrap_err();
+        let error = reporter
+            .report(
+                &message,
+                &ReportReason {
+                    id: 8,
+                    reason: "垃圾广告".into(),
+                },
+            )
+            .await
+            .unwrap_err();
         assert_eq!(error.code(), "BAD_REQUEST");
     }
 }

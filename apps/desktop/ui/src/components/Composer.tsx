@@ -193,11 +193,15 @@ export function Composer({
   }, [draftKey, draft, replyTo, mention, onPanel]);
 
   // 行菜单送来的动作：@ 与回复各应用一次（token 每次点击都变，不会自激）。
+  // 「从触发方改」在这里不成立：动作的触发方是**行菜单**（在 `RoomView` 里），而 `mention` /
+  // `replyTo` 是 `Composer` 的本地状态（草稿的邻居）；把它提到上层要连带搬走草稿口径，
+  // 那是重做输入区，不是消一条告警。这就是「消费一次性动作」的同步点。
   useEffect(() => {
     if (!pendingAction) return;
     const { kind, message } = pendingAction;
     if (kind === "mention") {
       if (message.uname.length === 0) return;
+      // oxlint-disable-next-line react/set-state-in-effect
       setMention({ mid: message.uid, uname: message.uname });
       setDraft((value) =>
         value.startsWith(`@${message.uname} `) ? value : `@${message.uname} ${value}`,

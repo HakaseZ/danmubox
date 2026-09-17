@@ -122,7 +122,14 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // 礼物栏两枚独立开关（issue 2609152029 #4）。旧键 `ui.gift_panel_mode`
         // （`merged` / `separate`）是一个二选一的门，表达不了「都显示」或「都不显示」，
         // 已删除；存量迁移见 [`LEGACY_GIFT_PANEL_MODE`]。
-        spec("ui.gift_in_danmaku", Ty::Bool, json!(true), None, None, None),
+        spec(
+            "ui.gift_in_danmaku",
+            Ty::Bool,
+            json!(true),
+            None,
+            None,
+            None,
+        ),
         spec("ui.gift_panel", Ty::Bool, json!(true), None, None, None),
         // 礼物栏与弹幕区**共享一块上下分区**时的顺序与份额（issue #8，用户 2026-09-16）：
         // 默认 `false` / `0.35` 是改前的形态（礼物在下、弹幕吃掉绝大部分高度）。
@@ -130,7 +137,14 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // 比例的含义 = 礼物栏占**共享分区**高度的份额，与它在上还是在下无关（换位不改比例）；
         // 落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 其折叠头 / 弹幕区 ≥ 3 行），
         // 因此这里存的是**指针意图**而不是实测像素 —— 同一窗口尺寸下重开必然得到同一画面。
-        spec("ui.gift_pane_on_top", Ty::Bool, json!(false), None, None, None),
+        spec(
+            "ui.gift_pane_on_top",
+            Ty::Bool,
+            json!(false),
+            None,
+            None,
+            None,
+        ),
         spec(
             "ui.gift_pane_ratio",
             Ty::Num,
@@ -143,7 +157,14 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // **默认都是 false**：多数人现有效果不该被这两条辅助开关改掉 —— 折叠会改礼物栏的分组形状、
         // 剔除会改折叠头的统计口径，两者都是「用户自己要才生效」的显示偏好。
         // 判定口径（门槛、`amount <= 0` 不算低价、只认 kind = "gift"）在契约 §8 与 ui.md §5.3。
-        spec("ui.gift_collapse_cheap", Ty::Bool, json!(false), None, None, None),
+        spec(
+            "ui.gift_collapse_cheap",
+            Ty::Bool,
+            json!(false),
+            None,
+            None,
+            None,
+        ),
         spec(
             "ui.gift_exclude_cheap_stats",
             Ty::Bool,
@@ -164,7 +185,14 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // 弹幕时间戳列（需求 §2.1 / 契约 §8）。**曾漏登记在白名单里**：界面、契约、
         // 文档三处都写了它，但 SPECS 没有 → `set_patch` 命中未知键分支返回
         // `BAD_REQUEST`，开关存不下去也读不回来（用户 2026-09-12 核 issue #6 时发现）。
-        spec("ui.show_timestamp", Ty::Bool, json!(false), None, None, None),
+        spec(
+            "ui.show_timestamp",
+            Ty::Bool,
+            json!(false),
+            None,
+            None,
+            None,
+        ),
         // 自定义短语（需求 §2.2）；短语面板里唯一的内容来源（内置颜文字已删，见 issue #19）。
         spec("composer.phrases", Ty::StrArr, json!([]), None, None, None),
         spec("filter.uids", Ty::IntArr, json!([]), None, None, None),
@@ -515,10 +543,7 @@ fn migrate_legacy_gift_panel_mode(prefs: &mut Prefs, file: &Map<String, Value>) 
         mode = %mode,
         "偏好键 ui.gift_panel_mode 已删除，按它的值物化进 ui.gift_in_danmaku / ui.gift_panel"
     );
-    for (key, value) in [
-        ("ui.gift_in_danmaku", in_danmaku),
-        ("ui.gift_panel", panel),
-    ] {
+    for (key, value) in [("ui.gift_in_danmaku", in_danmaku), ("ui.gift_panel", panel)] {
         if !prefs.overrides.contains_key(key) {
             prefs.overrides.insert(key.to_string(), json!(value));
         }
@@ -551,7 +576,10 @@ fn migrate_legacy_buffer_rows(prefs: &mut Prefs, file: &Map<String, Value>) {
         }
     }
 
-    tracing::info!(rows, "偏好键 history.buffer_rows 已删除，按它的值物化进 {KEY}");
+    tracing::info!(
+        rows,
+        "偏好键 history.buffer_rows 已删除，按它的值物化进 {KEY}"
+    );
     prefs.overrides.insert(KEY.to_string(), value);
 }
 
@@ -649,7 +677,10 @@ mod tests {
             prefs.get("history.buffer_rows_danmaku").unwrap(),
             json!(5000)
         );
-        assert_eq!(prefs.get("history.buffer_rows_interact").unwrap(), json!(300));
+        assert_eq!(
+            prefs.get("history.buffer_rows_interact").unwrap(),
+            json!(300)
+        );
         assert_eq!(
             prefs.get("history.buffer_rows_system").unwrap(),
             json!(200),
@@ -1053,7 +1084,10 @@ mod tests {
 
         // 没有旧键就不凭空多出一条 overrides。
         let absent = load_temp("mig-rows-absent", r#"{"ui.theme":"dark"}"#);
-        assert!(absent.overrides().get("history.buffer_rows_danmaku").is_none());
+        assert!(absent
+            .overrides()
+            .get("history.buffer_rows_danmaku")
+            .is_none());
     }
 
     /// 六枚档位键的生效值汇总成 `BufferCaps`：只填两枚时其余五枚走默认值；

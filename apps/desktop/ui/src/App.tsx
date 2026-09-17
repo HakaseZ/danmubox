@@ -1,10 +1,11 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { BACK_PRIORITY, registerBackHandler } from "./back";
 import { AccountManager } from "./components/AccountManager";
 import { RoomList } from "./components/RoomList";
-import { LIVE_DOT_CLASS, LIVE_TEXT, RoomView, liveKindOf } from "./components/RoomView";
+import { RoomView } from "./components/RoomView";
 import { roomTabName, toDisplayRows } from "./filtering";
+import { LIVE_DOT_CLASS, LIVE_TEXT, liveKindOf } from "./liveKind";
 import { useApp } from "./store";
 import styles from "./app.module.css";
 // 房间载荷类型：`RoomView` 这个名字在本文件已经是上面那个组件，类型只好另起一个别名。
@@ -93,8 +94,12 @@ function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsPr
   // 且下一次按下即复位（每一下落在标签上的 `click` 前面一定有它自己的 `pointerdown`）。
   const swallowClick = useRef(false);
   // 松手那一刻要按**最新**的房间列表换算下标（拖动期间列表可能被上游快照改过）。
+  // 写在布局阶段而不是渲染期：渲染期写 ref 会让**被丢弃的那一版渲染**把值漏进来
+  // （React 要求渲染保持纯）。`commit` 只在松手那一刻读它，那时早已过了布局阶段。
   const roomsRef = useRef(rooms);
-  roomsRef.current = rooms;
+  useLayoutEffect(() => {
+    roomsRef.current = rooms;
+  });
 
   /** 指针落在第几个插入位（按每枚标签的中点判）：0 = 最前，标签数 = 最后。 */
   const dropIndexAt = (clientX: number) => {
@@ -370,7 +375,10 @@ export function App() {
   // 系统返回手势第 1 级：账号对话框是盖在最上面的模态，先关它（关法与「✕」同源）。
   // 常驻注册、由**当下状态**决定认不认领（同 RoomView：注册/注销要等 effect，会落后一帧）。
   const accountsOpenRef = useRef(accountsOpen);
-  accountsOpenRef.current = accountsOpen;
+  // 同上：最新值在**布局阶段**写进 ref，渲染保持纯。处理器只在返回手势里读它，那时已经写完。
+  useLayoutEffect(() => {
+    accountsOpenRef.current = accountsOpen;
+  });
   useEffect(
     () =>
       registerBackHandler(BACK_PRIORITY.panel, () => {
@@ -422,10 +430,13 @@ export function App() {
     return () => media.removeEventListener("change", apply);
   }, [prefs]);
 
+  // `interactTick` 在依赖里是**必须**的：互动行到点那一下由它触发重算
+  // （`toDisplayRows` 的第三参默认 `Date.now()`；到点的不画，但消息不丢）。
+  // 回调体里读不到它，规则因此判它「多余」—— 它要的正是「值没变也重算」这件事
+  // （到点的那一刻钟要重新读一次）。整条规则在这一处（依赖数组那一行）按**误报**处理。
   const rows = useMemo(
     () => (prefs ? toDisplayRows(messages, prefs) : []),
-    // `interactTick` 在依赖里是**必须**的：互动行到点那一下由它触发重算
-    // （`toDisplayRows` 的第三参默认 `Date.now()`；到点的不画，但消息不丢）。
+    // oxlint-disable-next-line react/exhaustive-deps
     [messages, prefs, interactTick],
   );
 

@@ -137,8 +137,9 @@ danmubox/
 | 全量测试 | `cargo test --workspace` | 单元 + 集成 |
 | core 单 crate 测试 | `cargo test -p danmubox-core` | 领域模型、端口、会话缓冲、偏好 |
 | bili 单 crate 测试 | `cargo test -p danmubox-bili` | 协议解包、WBI、命令归一化、protobuf |
-| 格式检查 | `cargo fmt --all -- --check` | rustfmt；**存量不通过**（HEAD 上有 59 处 / 14 文件的差异，宿主 rustc 1.88.0 与项目内 1.98.1 结果相同），见 [`AGENT.md`](AGENT.md) §9 备注 |
-| Lint | `cargo clippy --workspace --all-targets -- -D warnings` | warning 视为错误 |
+| 格式检查 | `cargo fmt --all -- --check` | rustfmt；**提交门**：全仓已于 2026-09-17 一次性格式化（修前 127 处 / 18 文件差异），CI 的 `check` job 不带 `continue-on-error` 跑它，见 [`AGENT.md`](AGENT.md) §9 |
+| Lint（Rust） | `cargo clippy --workspace --all-targets -- -D warnings` | warning 视为错误 |
+| Lint（前端） | `npm --prefix apps/desktop/ui run lint` | = `oxlint --deny-warnings`，**告警即失败**；规则集与逐条放行理由在 `apps/desktop/ui/.oxlintrc.json` |
 | 解析房间 | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` | 打印房间元信息 |
 | 看弹幕 | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` | 有凭据走登录态，否则游客态；`--quiet` 只看汇总 |
 | 抓原始载荷 | `DANMUBOX_LOG=debug cargo run -p danmubox-cli -- watch <房间>` | 字段实测校准的采集入口（`docs/protocol.md` 附录 B） |

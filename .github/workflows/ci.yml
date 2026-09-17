@@ -2,7 +2,7 @@
 #
 # 刻意只做三件事（不做矩阵、不做发布流程）：
 #
-#   check             仓库既有的检查：Rust 的 fmt / clippy / test + 前端的 tsc -b + vite build。
+#   check             仓库既有的检查：Rust 的 fmt / clippy / test + 前端的 oxlint + tsc -b + vite build。
 #                     触发：push 到 main、任何 pull_request、手动 workflow_dispatch。
 #   artifacts         出 macOS .dmg 与**已签名的** Android release APK 两个产物并上传。
 #                     触发：仅 workflow_dispatch 与 v* tag —— 每次 push 都出包太贵。
@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   check:
-    name: 检查（fmt / clippy / test / 前端构建）
+    name: 检查（fmt / clippy / test / 前端 lint + 构建）
     runs-on: macos-14
     env:
       CARGO_TERM_COLOR: always
@@ -67,16 +67,23 @@ jobs:
         working-directory: apps/desktop/ui
         run: npm ci
 
+      # 与 `cargo clippy -- -D warnings` 同口径：`npm run lint` = `oxlint --deny-warnings`，
+      # **告警即失败**（2026-09-17 起）。规则集与逐条放行理由都在 `apps/desktop/ui/.oxlintrc.json`，
+      # 命令口径见 `AGENT.md` §3 与 `README.md` §8。放在构建之前：lint 秒级，先炸最便宜的。
+      - name: 前端 lint（oxlint --deny-warnings）
+        working-directory: apps/desktop/ui
+        run: npm run lint
+
       - name: 前端类型检查 + 构建（npm run build = tsc -b && vite build）
         working-directory: apps/desktop/ui
         run: npm run build
 
-      # 存量不通过：AGENT.md §9 备注记的就是这件事（HEAD 上 fmt 本身就有大面积差异，宿主与项目两套
-      # 工具链结果相同）。本分支（dev/2609161236 之上）实测 `cargo fmt --all -- --check` 退出码 1、
-      # 81 处 / 14 文件差异，且没有一处属于本次改动。所以这一步只当**观察哨**：红了不拦 CI。
-      # 等专门那一票把全仓格式化掉之后，再摘掉 continue-on-error 让它变成提交门。
-      - name: cargo fmt（存量不通过，仅报告）
-        continue-on-error: true
+      # **提交门**：全仓 `cargo fmt --all` 已一次性落地（2026-09-17 实测：修前 `--check` 退出码 1、
+      # 127 处 / 18 文件差异；修后两套 rustfmt 都零差异），因此这里**不再有 continue-on-error** ——
+      # 与 clippy 同口径，红了就是有文件没格式化，先跑 `cargo fmt --all` 再提交。
+      # 工具链口径：宿主 stable（rustfmt 1.8.0）与仓库内 `.android-env/` 那套（rustfmt 1.9.0）
+      # 实测结果一致（见 `AGENT.md` §3）。
+      - name: cargo fmt
         run: cargo fmt --all -- --check
 
       - name: cargo clippy

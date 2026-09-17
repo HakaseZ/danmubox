@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer, type ReactVirtualizer } from "@tanstack/react-virtual";
 
 import { MessageRow } from "./MessageRow";
@@ -116,8 +116,12 @@ export function MessageList({
   const [hovered, setHovered] = useState(false);
   // 面板展开/收起与窗口缩放会改可视高度，回调里要读到最新的「是否跟随」与行数，
   // 但观察器只该建一次（每来一条消息重建一次 ResizeObserver 是纯浪费）。
+  // 与 `RoomView.backRef` / `SplitPanes.handlers` 同一套写法：最新值在**布局阶段**写进 ref
+  // （渲染期写会让被丢弃的那一版渲染把值漏进来），观察器回调本来就在提交之后才跑。
   const stateRef = useRef({ following, count: listRows.length });
-  stateRef.current = { following, count: listRows.length };
+  useLayoutEffect(() => {
+    stateRef.current = { following, count: listRows.length };
+  });
   // 上一次滚动位置：用来分辨「用户往上滚」与「布局变化导致的离底变远」（见 onScroll）。
   // 首个滚动事件没有可比的上一次（`null`），按「不在底部就算暂停」处理。
   const prevScrollTopRef = useRef<number | null>(null);

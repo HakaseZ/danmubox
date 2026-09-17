@@ -72,9 +72,10 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 | 全量测试 | `cargo test --workspace` |
 | core 单 crate 测试 | `cargo test -p danmubox-core` |
 | bili 单 crate 测试 | `cargo test -p danmubox-bili` |
-| 格式检查 | `cargo fmt --all -- --check`（**存量不通过**：见 §9 备注） |
-| 格式修复 | `cargo fmt --all`（**慎用**：会把存量差异一并改掉，属另一票的范围） |
-| Lint | `cargo clippy --workspace --all-targets -- -D warnings` |
+| 格式检查 | `cargo fmt --all -- --check`（**提交门**；全仓已于 2026-09-17 一次性格式化，见 §9） |
+| 格式修复 | `cargo fmt --all` |
+| Lint（Rust） | `cargo clippy --workspace --all-targets -- -D warnings` |
+| Lint（前端） | `npm --prefix apps/desktop/ui run lint`（= `oxlint --deny-warnings`，**告警即失败**；规则集与逐条放行理由在 `apps/desktop/ui/.oxlintrc.json`） |
 | 解析房间（CLI） | `cargo run -p danmubox-cli -- resolve <房间号/短号/URL>` |
 | 看弹幕（CLI） | `cargo run -p danmubox-cli -- watch <房间> --seconds 60` |
 | 登录态（CLI） | `cargo run -p danmubox-cli -- session` |
@@ -221,7 +222,8 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 - [ ] **被当作证据的产物必须能自证「属于本次运行」**：截图用独立 `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，冒烟日志落 `.android-env/verify/<票名>-<engine>.log`，Rust 侧用 `cargo test -- --list | grep <新用例名>` 证明新增用例真的在跑；交付里给出这些路径与命令。**不得**拿一个「大概是这次的」旧文件当证据（同一台机上产物互相覆盖是这个仓库反复踩过的坑）。
 - [ ] **多 worktree 并行时，每个 worktree 用本地 `CARGO_TARGET_DIR=$PWD/target`**（见 §3 的口径）：共享 target 目录会让不同 worktree 的产物互相覆盖，表现为假绿 / 假红。改 Rust 的票在自己 worktree 里跑 `cargo test` 时，先确认 `CARGO_TARGET_DIR` 指向本 worktree。
 - [ ] 改动范围与任务描述一致，没有顺带重构无关文件。
-- [ ] `cargo fmt --all -- --check` 通过。**备注（2026-09-15 实测）：本仓库从 HEAD 起就不通过**——差异 **59 处 / 14 文件**（`apps/desktop/src-tauri/src/lib.rs` 11 处、`crates/danmubox-bili/src/cmd.rs` 12 处等），宿主 rustc 1.88.0 / rustfmt 1.8.0 与项目内 rustc 1.98.1 / rustfmt 1.9.0 **两套工具链结果完全相同**，属**存量问题**、不是某一票引入的。因此本条当前**无法当作提交门**（谁也不能在 HEAD 上让它变绿）：提交时只要求「自己改的文件不新增格式差异」，交付里如实写明本条不通过；把全仓一次性格式化属另一票的范围（会动 14 个非本次改动的文件）。
+- [ ] `cargo fmt --all -- --check` 通过（**提交门**，2026-09-17 起）。全仓格式化已于 2026-09-17 一次性落地：**修前**实测 **127 处 / 18 文件**差异（`crates/danmubox-bili/src/ws.rs` 21 处、`cmd.rs` 16 处、`diagnose.rs` 13 处、桌面端 `src-tauri/src/lib.rs` 13 处等），宿主 rustc 1.88.0 / rustfmt 1.8.0 与项目内 rustc 1.98.1 / rustfmt 1.9.0 **两套工具链修完都是零差异**；`ci.yml` 的 `check` job 已摘掉 `continue-on-error`，红了就是有文件没格式化 —— 先跑 `cargo fmt --all` 再提交。
+- [ ] `npm --prefix apps/desktop/ui run lint`（= `oxlint --deny-warnings`）零告警（与上一条同口径：告警即失败，放行只走 `.oxlintrc.json` 里的规则级豁免或**带理由**的行内 `oxlint-disable-next-line`）。
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` 零告警。
 - [ ] `cargo test --workspace` 通过；新增行为有对应验证。
 - [ ] 前端改动通过类型检查，且在 Tauri 应用内目视确认实际界面。**若改动按视口 / 设备分叉**（窄屏、横屏、DPI、移动端），必须确认**该形态在真机上可达**（窗口最小尺寸、断点、设备宽度），并把验证覆盖到**可达面的边界值**——窗口最小宽度是 360 就用 360 验，而不是只验 390。只在无头视口某个宽度里成立的形态，必须在报告里明说「当前入口够不到」。（2026-09-12 教训：窗口 `minWidth` 写死 720 而窄屏断点是 520，冒烟在 390 视口里绿了三次，用户却永远拖不到——断言全绿 ≠ 用户看得见，视口是产品的可达面。）

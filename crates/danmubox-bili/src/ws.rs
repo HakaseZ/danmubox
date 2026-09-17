@@ -838,9 +838,11 @@ where
         let outcome = attempt(node_start).await;
         // 收场先记账再判取消：一键诊断要看到**每一次**尝试的结局，
         // 包括「还没认证就被取消」那一档（`docs/operations.md` §2.9）。
-        outcome
-            .diag
-            .ended(danmubox_core::now_ms(), &end_reason(&outcome.end), outcome.verified);
+        outcome.diag.ended(
+            danmubox_core::now_ms(),
+            &end_reason(&outcome.end),
+            outcome.verified,
+        );
         if cancel.is_cancelled() {
             return Ok(());
         }
@@ -922,9 +924,7 @@ where
             "退避等待"
         );
         // 退避与连续失败次数是重连历史的两根坐标，跟着这一次尝试一起进报告。
-        outcome
-            .diag
-            .backoff(wait.as_millis() as u64, auth_failures);
+        outcome.diag.backoff(wait.as_millis() as u64, auth_failures);
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = tokio::time::sleep(wait) => {}
@@ -950,7 +950,12 @@ impl LiveSource for BiliLive {
 
     async fn room_identity(&self, room_id: i64) -> Result<RoomSession> {
         // 游客态没有「本人身份」可言：不发请求，直接给全零身份。
-        if !self.store.as_ref().map(|s| s.is_logged_in()).unwrap_or(false) {
+        if !self
+            .store
+            .as_ref()
+            .map(|s| s.is_logged_in())
+            .unwrap_or(false)
+        {
             return Ok(RoomSession {
                 room_id,
                 ..Default::default()
@@ -1185,7 +1190,10 @@ mod tests {
         let value = serde_json::json!({
             "data": {"badge": {"admin_level": 2, "is_room_admin": false}}
         });
-        assert!(parse_room_identity(1, &value).is_admin, "admin_level>0 也是房管");
+        assert!(
+            parse_room_identity(1, &value).is_admin,
+            "admin_level>0 也是房管"
+        );
     }
 
     #[test]
@@ -1303,22 +1311,37 @@ mod tests {
     impl futures_util::Sink<WsMessage> for RecordingSink {
         type Error = std::io::Error;
 
-        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(self: Pin<&mut Self>, item: WsMessage) -> std::result::Result<(), Self::Error> {
+        fn start_send(
+            self: Pin<&mut Self>,
+            item: WsMessage,
+        ) -> std::result::Result<(), Self::Error> {
             if let WsMessage::Binary(bytes) = item {
-                self.frames.lock().expect("lock poisoned").push(bytes.to_vec());
+                self.frames
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(bytes.to_vec());
             }
             Ok(())
         }
 
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
     }
@@ -1361,7 +1384,15 @@ mod tests {
         let mut stream = Box::pin(futures_util::stream::iter(items));
 
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &test_diag(),
+            )
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => {
@@ -1395,7 +1426,15 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &test_diag(),
+            )
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "认证成功后应保持运行直到被取消");
@@ -1423,13 +1462,20 @@ mod tests {
         let cancel = Cancel::new();
         let verify = Notify::new();
         // 静默对端：握手成功，一个字节都不发。
-        let mut silent = Box::pin(futures_util::stream::pending::<std::result::Result<
-            WsMessage,
-            tokio_tungstenite::tungstenite::Error,
-        >>());
+        let mut silent = Box::pin(futures_util::stream::pending::<
+            std::result::Result<WsMessage, tokio_tungstenite::tungstenite::Error>,
+        >());
         let started = Instant::now();
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut silent, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut silent,
+                &test_diag(),
+            )
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => assert!(reason.contains("op=8"), "只描述事实：{reason}"),
@@ -1447,7 +1493,11 @@ mod tests {
         let (sink, _bus) = test_sink();
         let cancel = Cancel::new();
         let runner = spawn_auth_failing_loop(&sink, &cancel, &limits, Arc::clone(&times));
-        until(|| times.lock().expect("lock poisoned").len() >= 3, Duration::from_millis(2000)).await;
+        until(
+            || times.lock().expect("lock poisoned").len() >= 3,
+            Duration::from_millis(2000),
+        )
+        .await;
         let when = times.lock().expect("lock poisoned").clone();
         let first_gap = when[1] - when[0];
         let second_gap = when[2] - when[1];
@@ -1461,10 +1511,7 @@ mod tests {
             "退避必须递增（§13.2）：{first_gap:?} → {second_gap:?}"
         );
         // 连续 3 次到达上限：停在原地等人工（返回就等于核心驱动的循环立刻再连一次）。
-        assert!(
-            !runner.is_finished(),
-            "达上限必须停在原地，不得返回"
-        );
+        assert!(!runner.is_finished(), "达上限必须停在原地，不得返回");
         assert_eq!(when.len(), 3, "达上限后不许再有第 4 次：{when:?}");
         tokio::time::sleep(limits.backoff_max * 3).await;
         assert_eq!(
@@ -1487,7 +1534,11 @@ mod tests {
         let times = Arc::new(StdMutex::new(Vec::new()));
         let cancel = Cancel::new();
         let runner = spawn_auth_failing_loop(&sink, &cancel, &limits, Arc::clone(&times));
-        until(|| times.lock().expect("lock poisoned").len() >= 3, Duration::from_millis(2000)).await;
+        until(
+            || times.lock().expect("lock poisoned").len() >= 3,
+            Duration::from_millis(2000),
+        )
+        .await;
         cancel.cancel();
         runner.await.unwrap().unwrap();
         assert_eq!(times.lock().expect("lock poisoned").len(), 3);
@@ -1497,14 +1548,22 @@ mod tests {
         let fresh = Cancel::new();
         let started = Instant::now();
         let runner = spawn_auth_failing_loop(&sink, &fresh, &limits, Arc::clone(&again));
-        until(|| !again.lock().expect("lock poisoned").is_empty(), Duration::from_millis(2000)).await;
+        until(
+            || !again.lock().expect("lock poisoned").is_empty(),
+            Duration::from_millis(2000),
+        )
+        .await;
         assert!(
             started.elapsed() < limits.backoff_initial,
             "手动重连的第一步必须立即发起、不等退避（实测 {:?}）",
             started.elapsed()
         );
         // 计数归零：新一轮照样能连着试满 3 次，而不是一上来就停在 Failed。
-        until(|| again.lock().expect("lock poisoned").len() >= 3, Duration::from_millis(2000)).await;
+        until(
+            || again.lock().expect("lock poisoned").len() >= 3,
+            Duration::from_millis(2000),
+        )
+        .await;
         assert_eq!(
             again.lock().expect("lock poisoned").len(),
             3,
@@ -1598,7 +1657,15 @@ mod tests {
             Box::pin(futures_util::stream::iter(items).chain(futures_util::stream::pending()));
         let started = Instant::now();
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &test_diag(),
+            )
             .await;
         let End::Failed(reason) = &outcome.end else {
             panic!("一直没有入站帧必须判死，实际 {:?}", outcome.end);
@@ -1611,10 +1678,7 @@ mod tests {
             reason.contains(&limits.inbound_stale.as_millis().to_string()),
             "阈值也要在原因里：{reason}"
         );
-        assert!(
-            outcome.verified,
-            "是「认证成功之后不推弹幕」，不是认证问题"
-        );
+        assert!(outcome.verified, "是「认证成功之后不推弹幕」，不是认证问题");
         assert!(started.elapsed() >= limits.inbound_stale, "不得提前判死");
 
         // 判死之后必须接着重连，而且**僵死不是认证失败**：连判 5 次也不许走到 Failed。
@@ -1640,7 +1704,11 @@ mod tests {
                 .await
             })
         };
-        until(|| times.lock().expect("lock poisoned").len() >= 5, Duration::from_millis(3000)).await;
+        until(
+            || times.lock().expect("lock poisoned").len() >= 5,
+            Duration::from_millis(3000),
+        )
+        .await;
         assert!(
             !runner.is_finished(),
             "僵死不等于认证失败：不许把连接停在 Failed"
@@ -1681,7 +1749,15 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream, &test_diag())
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &test_diag(),
+            )
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "有入站帧就不得判僵死");
@@ -1760,7 +1836,12 @@ mod tests {
                     // 传输层失败：认证失败会让连续认证失败计数先到上限而停在 Failed，
                     // 那不是本用例要看的轴。
                     async move {
-                        Attempt::new(&test_diag(), End::Failed("模拟掉线".into()), false, Some(index))
+                        Attempt::new(
+                            &test_diag(),
+                            End::Failed("模拟掉线".into()),
+                            false,
+                            Some(index),
+                        )
                     }
                 })
                 .await

@@ -312,6 +312,10 @@ jobs:
         # 相应地 `icons/icon.ico` 也入库（`tauri icon` 从 `icons/icon.png` 生成，6 个尺寸：
         # 16/24/32/48/64/256）。NSIS 那条路径不读 `bundle.icon`：它只看可选的 `nsis.installerIcon`
         # （本仓库没设 ⇒ 用 NSIS 自己的默认图标；据上游 nsis 模板核对，未真机看过）。
+        #
+        # 图标口径为什么这样定、三端各读到什么、实测记录：docs/operations.md §5.3
+        # 「图标与 `bundle.icon` 的口径」。要把它合并进共享配置，先想清楚 macOS / Android
+        # 那两端的打包输入也跟着变，而且**改完必须手动跑一次本 job 才算验过**。
         shell: bash
         run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'
 

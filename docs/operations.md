@@ -12,7 +12,7 @@
 
 | 平台 | 启动 | 停止 |
 |---|---|---|
-| macOS | 双击 `danmubox.app`（需按 §5.3 先出包）；开发期见下方两种运行方式 | 关闭窗口即退出（本期不做后台保活）；异常残留用活动监视器结束 `danmubox-desktop` |
+| macOS | 双击 `danmubox.app`（需按 §5.3 先出包）；开发期见下方两种运行方式 | 关闭窗口即退出（桌面端不做后台保活；Android 是例外，见 §2.8）；异常残留用活动监视器结束 `danmubox-desktop` |
 | Windows | 开始菜单 / 桌面快捷方式，或运行安装目录下的 `danmubox.exe` | 关闭窗口即退出；异常残留用任务管理器结束 `danmubox.exe` |
 | Android | 桌面图标，或 `adb shell monkey -p dev.kksk.danmubox -c android.intent.category.LAUNCHER 1` | 从最近任务划掉；彻底停止用「设置 → 应用 → danmubox → 强制停止」 |
 
@@ -538,9 +538,8 @@ Rust 侧也没有任何网络变化 API。所以切网之后：
 这不是用户那三条症状的成因（它让重试**更快**）；而把判据改成 `outcome.verified && …` 会让这种场景的重试变慢到 60 秒一档，
 方向与 #6「恢复慢」相反 —— 因此只登记、不改，等用户拍板。
 
-③ **文档口径自相矛盾（建议主流程统一裁决）**：`docs/contract.md` §2 的「不做」表、`AGENT.md` §8 第 10 条（「私自扩大范围：…加保活…」）、
-`docs/operations.md` §5.1 的「不做」一行仍写「不做后台保活」，而 Android 前台服务是用户要求、已实现、已实测的一档
-（`README.md` 的「推送」一行与 [`testing.md`](testing.md) §10.5 已按「例外」口径写）。契约是唯一事实源，这三处建议同步或加一行例外注。
+③ **文档口径自相矛盾（2026-09-17 集成时已统一改掉）**：`docs/contract.md` §2 的「不做」表、`AGENT.md` §8 第 10 条、本节 §5.1 的「不做」一行此前仍写「不做后台保活」，而 Android 前台服务是用户要求、已实现、已实测的一档。
+现三处已按同一口径同步：契约 §2 加 **Android 例外**一行、`AGENT.md` §8 的示例把「加保活」换成「加推送」、本节 §5.1 那行改为「自动更新、推送分发」。契约是唯一事实源，以后这类漂移按同一原则处理。
 **本节没动它们**（超出一票的报告范围）。
 
 #### 2.10.6 还没验证的（别当成结论用）
@@ -666,7 +665,7 @@ grep -nE '(vmid|uid|anchor_id|tuid)=[0-9]' <日志文件>   # 值为 *** 的行�
 |---|---|
 | 分发范围 | **自用，不对外分发**：产物只装自己的设备 |
 | 目标平台 | macOS / Windows / Android（iOS 与折叠屏适配为后期 enhancement；折叠屏的可行性研究见 [`foldable.md`](foldable.md)，**本次不实现**） |
-| 不做 | 自动更新、后台保活（契约 §2） |
+| 不做 | 自动更新、推送分发（后台保活在 Android 是例外，见 §2.8） |
 | 包标识 bundle id | `dev.kksk.danmubox`，三端统一（契约 §1） |
 | 前端产物 | `apps/desktop/ui/` 由 Vite 构建并内嵌进 Tauri 应用（React + TS，见 `architecture.md`） |
 | 引擎 | `danmubox-core`（Rust），薄封装见 `architecture.md` |

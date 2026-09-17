@@ -1901,6 +1901,17 @@
   文档：`docs/protocol.md` §10.6 / §12.3 / A12 / A13 / A33、`docs/contract.md` §5、`docs/ui.md` §5.3、
   冒烟夹具 `gift-sc-guard-rows.json` 的 guard 条目。
 
+> **本轮（批次 `2609171849`：7 条需求 = P125–P131）的验证口径**，如实记录：
+> **Rust**：`cargo test --workspace` **271 passed / 0 failed**（`danmubox-bili` 197 + `danmubox-core` 66 + `danmubox-desktop` 8；批次前 257 ⇒ **+14**）；`cargo clippy --workspace --all-targets -- -D warnings` **零告警**。
+> **前端**：`npx tsc -b` / `npm run build` / `node --check smoke/room-page.mjs` / `run-headless.mjs --precheck` 全过；新增前端单测 `node --test src/filtering.test.ts` **6 tests / 6 pass / 0 fail**。
+> **两引擎无头冒烟（集成树、仓库自带 runner）**：**两引擎各四个视口组合全部断言成立、都 `EXIT=0`** —— Chromium 与 WebKit 各 `wide/dark 759 条布尔断言 / 979 项快照 + narrow/dark 787 / 1015 + wide/light 759 / 979 + narrow/light 787 / 1015 = 3,092 条布尔 / 3,988 项快照`（批次前 2,836 / 3,668 ⇒ **+256 条断言**）。日志与 48 张截图在 `.android-env/verify/`。其中本批新增/改动的几组全绿：`switchScope*`（两个区域的折叠与逐项可逆）、`aggregate*`（跨观众短时同文本聚合）、`rowSelect*` / `foldLine*` / `scCard*`（三处界面）、`cheapGift*`（含按契约 §8 line 487 改正的那条期望值）、`roomStatus*`。
+> **集成阶段抓到 3 个「单票各自绿、合起来才红」的问题**（都已修；写法教训进 [`testing.md`](docs/testing.md) §9.3）：
+> ① T5 的新单测引用了 T3 已删除的偏好键 `history.buffer_rows` ⇒ `tsc` TS2353（按契约 §4/§8 默认值补齐六枚分档键）；
+> ② T3 把 `spawn_runtime` / `refresh_room` 的缓冲形参从 `usize` 换成 `BufferCaps`，却漏了桌面 crate 的**测试模块**三处 ⇒ `cargo clippy --all-targets` E0308 ×3（当时只跑 `cargo check --workspace`，**没带 `--all-targets`**）；
+> ③ T5 的冒烟取数用**纯子串**匹配，而夹具里「投喂 铅笔」是「投喂 铅笔屑」的前缀 ⇒ 命中 2 条而断言要 1 条。③ 经改前实测确认是**取数缺陷、不是实现缺陷**（同一块的 `GiftRowsRestored` / `AmountsRestored` / `SummaryRestored` / `BothPanesFold` 全为真），最终判据取「子串命中，且命中处后面不紧跟汉字」（`charCodeAt` 判区间，不写正则 —— 该文件活在模板串里）。
+> **本批新立的仓库约定**：**前端单测**（`node --test src/*.test.ts`；零新依赖，用 Node 自带的测试运行器与类型剥离），已写进 [`../AGENT.md`](../AGENT.md) §3 与 [`../README.md`](../README.md) —— 此前本仓只有「Rust 单测 + 无头冒烟」两层，这是第三层。
+> **未验证**：真机（尤其国产 ROM 的后台行为、切网是否真会连出三次认证超时）、macOS 最小化时的 App Nap 影响、Windows 端**安装与运行**（[`testing.md`](docs/testing.md) §10.3 的 W-1~W-4）、`WARNING` 提示的真实载荷、`AGGREGATE_MAX_COUNT = 999` 的渲染侧开销，以及既有的 [`protocol.md`](docs/protocol.md) A46–A47 等待样本项。
+
 ## [0.1.0] - 2026-09-11
 
 初始版本。本版本**仅包含文档基线**，不含任何源码、构建配置或可运行产物：

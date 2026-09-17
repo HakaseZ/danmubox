@@ -147,6 +147,18 @@ fn cmd_name(value: &Value) -> String {
     raw.split(':').next().unwrap_or(raw).to_string()
 }
 
+/// 大航海合并器的定时分支（`docs/protocol.md` §10.6）：等到 `deadline` 就放行那条
+/// 「窗口内没等到播报」的购买事件。
+///
+/// `deadline` 为 `None`（没有压着的购买事件）时返回一个**永不就绪**的 future ——
+/// `select!` 因此不会为了它被唤醒，连接空闲时一个多余的定时器都没有。
+async fn guard_flush_when_due(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 /// WS 心跳包体：字面量，见 `docs/protocol.md` §8.1。
 const HEARTBEAT_BODY: &[u8] = b"[object Object]";
 
@@ -463,15 +475,13 @@ impl BiliLive {
         }
     }
 
-    /// 读循环：解包投递，并守住两条时间护栏（`docs/protocol.md` §7.3 认证超时、
-    /// §8.1 僵死判定）。
+    /// 读循环的外层：与 [`Self::read_loop_inner`] 只差**大航海按笔合并器**的生命周期。
     ///
-    /// 返回的 [`Attempt`] 里 `host` 是空的：`host_list` 只有 [`BiliLive::run_once`] 见过，
-    /// 由它补上。
+    /// 合并器要在退出前把还压着的购买事件放出去（[`cmd::GuardMerge::take_pending`]），
+    /// 而内层有 5 条 `return` 出口（取消 / 认证超时 / 僵死 / 对端关闭 / 读失败），
+    /// 统一收在这一层才不会漏 —— 否则那条开通播报会随断连一起消失。
     ///
-    /// 参数多是因为它同时握着「会话内六件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
-    /// 入站流）与诊断采集句柄 `diag` —— 收成结构只会让调用点更长，与 `send::build_params`
-    /// 同一取舍（那里的 `#[allow]` 注释同样说明了这点）。
+    /// 签名与拆分前逐字一致：`ws::tests` 有 6 个用例直接调它。
     #[allow(clippy::too_many_arguments)]
     async fn read_loop<S>(
         &self,
@@ -482,6 +492,50 @@ impl BiliLive {
         limits: &Limits,
         read: &mut S,
         diag: &Arc<DiagAttempt>,
+    ) -> Attempt
+    where
+        S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
+            + Unpin,
+    {
+        let mut guard_merge = cmd::GuardMerge::new();
+        let attempt = self
+            .read_loop_inner(
+                room_id,
+                sink,
+                cancel,
+                verify,
+                limits,
+                read,
+                diag,
+                &mut guard_merge,
+            )
+            .await;
+        for message in guard_merge.take_pending() {
+            sink.publish_message(message);
+        }
+        attempt
+    }
+
+    /// 读循环本体：解包投递，并守住两条时间护栏（`docs/protocol.md` §7.3 认证超时、
+    /// §8.1 僵死判定）。
+    ///
+    /// 返回的 [`Attempt`] 里 `host` 是空的：`host_list` 只有 [`BiliLive::run_once`] 见过，
+    /// 由它补上。
+    ///
+    /// 参数多是因为它同时握着「会话内六件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
+    /// 入站流）、诊断采集句柄 `diag` 与大航海的按笔合并器 —— 收成结构只会让调用点更长，
+    /// 与 `send::build_params` 同一取舍（那里的 `#[allow]` 注释同样说明了这点）。
+    #[allow(clippy::too_many_arguments)]
+    async fn read_loop_inner<S>(
+        &self,
+        room_id: i64,
+        sink: &MessageSink,
+        cancel: &Cancel,
+        verify: &Notify,
+        limits: &Limits,
+        read: &mut S,
+        diag: &Arc<DiagAttempt>,
+        guard_merge: &mut cmd::GuardMerge,
     ) -> Attempt
     where
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
@@ -498,7 +552,15 @@ impl BiliLive {
             } else {
                 auth_deadline
             };
+            // 大航海按笔合并的到期时刻（`docs/protocol.md` §10.6）：只有真压着「等播报的
+            // 购买事件」时才有值，没有时不 arm 分支 —— 移动端不该为此常驻唤醒。
+            let guard_deadline = guard_merge.deadline();
             tokio::select! {
+                _ = guard_flush_when_due(guard_deadline) => {
+                    if let Some(message) = guard_merge.flush(tokio::time::Instant::now()) {
+                        sink.publish_message(message);
+                    }
+                }
                 _ = cancel.cancelled() => {
                     let end = if verified { End::Live } else { End::Cancelled };
                     return Attempt::new(diag, end, verified, None);
@@ -593,6 +655,18 @@ impl BiliLive {
                                         match cmd::dispatch(room_id, &value, &self.counters) {
                                             Some(cmd::Dispatch::Message(message)) => {
                                                 sink.publish_message(message)
+                                            }
+                                            // 大航海：同一笔购买的 `GUARD_BUY` 与
+                                            // `USER_TOAST_MSG` 在这里合成**一条**播报
+                                            // （§10.6 / §12.3），金额取实付那一份。
+                                            Some(cmd::Dispatch::Guard { message, source }) => {
+                                                if let Some(message) = guard_merge.absorb(
+                                                    tokio::time::Instant::now(),
+                                                    message,
+                                                    source,
+                                                ) {
+                                                    sink.publish_message(message);
+                                                }
                                             }
                                             Some(cmd::Dispatch::RoomStats {
                                                 online,

@@ -276,7 +276,7 @@ graph LR
   BUS --> BUF["crates/danmubox-core/src/session.rs:395<br/>collector → 分道 MessageBuffer"]
   BUS --> BRIDGE["apps/desktop/src-tauri/src/lib.rs:821<br/>Tauri 事件桥"]
   BRIDGE --> EVT["danmubox://message 等事件"]
-  EVT --> STORE["apps/desktop/ui/src/store.ts:414<br/>onMessage"]
+  EVT --> STORE["apps/desktop/ui/src/store.ts:775<br/>onMessage"]
 ```
 
 - **一份产出、两处消费**：同一条 `Message` 既进总线（→ 事件桥 → 界面），也进该房间的会话缓冲。两条路径互不阻塞：缓冲写入是 collector 任务内的常量时间操作，广播投递不阻塞发送端。
@@ -299,9 +299,11 @@ graph LR
 
 1. **后端**：`MessageSink::publish_with`（`bus.rs:214`）按 `uid + ts + 正文 + 表情唯一键` 的 64 位指纹（`bus.rs:162`）认同一性，`SEEN_DANMAKU_WINDOW = 256`（`bus.rs:158`）条环形窗口，**只对 `danmaku` 生效**（`bus.rs:215`）——礼物 / 互动允许上游反复推同一条，按内容去重会误伤真实重复。第二份在**进总线之前**就被丢弃，因此事件流与会话缓冲看到同一份事实。
 2. **取消树**：见 §4.6，不让孤儿连接产生第二份。
-3. **前端**：`alreadyListed`（`store.ts:240`，同键同判据）在 `onMessage` 里再挡一道（`store.ts:435`），覆盖「断开 → 刷新连接」重建会话时新回填与界面残留旧行重合这一类。
+3. **前端**：`alreadyListed`（`session-messages.ts:37`，同键同判据）在 `onMessage` 里再挡一道（`store.ts:775` 的 `onMessage` → `insertIncoming`，`session-messages.ts:61`），覆盖「同一条弹幕从回填与实时两条路都到了界面」这一类。
 
-前端另有显示上限（不是去重）：`CLIENT_MESSAGE_CAP = 2000`（`store.ts:30`，`store.ts:191` 起裁剪）—— 真正的会话缓冲在后端。
+**另有一条不是去重、但同属「哪些消息在列表里」的规则**：`local_id` 只在**一次房内会话内**唯一（契约 §5）。「断开连接 → 刷新连接」会重建一次会话、号从 1 重新编号（`lib.rs::refresh_room`），界面因此**先摘掉上一个会话的行、再整批落地新会话的快照**（`store.ts:1029` 的 `refresh` → `store.ts:693` 的 `syncSessionMessages` → `session-messages.ts:87`）—— 否则新消息全被「只收更新的号」那条判成陈旧丢掉（房间看着已连接、弹幕再也不上屏）。判据是 `rooms[].connected`（`session-messages.ts:114` 的 `refreshMode`）。
+
+前端另有显示上限（不是去重）：`CLIENT_MESSAGE_CAP = 2000`（`session-messages.ts:14`，`:17` 起裁剪）—— 真正的会话缓冲在后端。
 
 ## 5. 本地文件
 

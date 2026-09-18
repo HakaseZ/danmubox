@@ -318,15 +318,21 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/ui/package-lock.json
 
-      - name: 缓存 cargo（registry）
-        # 与 macOS 的 artifacts 同口径：不缓存 target（release 产物体积远超缓存收益）
+      - name: 缓存 cargo（registry + target）
+        # **这一行是实测评估，不是定论**（2026-09-18）：把 release `target` 也纳入缓存，
+        # 用两轮真跑取数——首轮填充缓存、次轮走恢复——再决定留不留。
+        # 基线（只缓存 registry，run 35307480216）：`出 Windows 产物` 601s，job 全程 645s；
+        # 代价是这个 target 可能到 GB 级、要占仓库 10 GB 缓存额度（会挤掉其它 job 的缓存），
+        # 且有恢复/保存开销，所以只看净时间，不看单看编译那一步。
+        # key 换成 `cargo-release-`：沿用旧 key 的话，同 key 已存在会直接跳过保存、量不到东西。
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-artifacts-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-artifacts-
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-release-
 
       - name: 前端依赖
         working-directory: apps/desktop/ui

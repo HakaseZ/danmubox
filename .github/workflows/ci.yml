@@ -1,15 +1,15 @@
 # danmubox · GitHub Actions CI
 #
-# 刻意只做三件事（不做矩阵、不做发布流程）：
+# 刻意只做四件事（不做矩阵、不做发布流程）：
 #
 #   check             仓库既有的检查：Rust 的 fmt / clippy / test + 前端的 oxlint + tsc -b + vite build。
 #                     触发：push 到 main、任何 pull_request、手动 workflow_dispatch。
-#   artifacts         出 macOS .dmg 与**已签名的** Android release APK 两个产物并上传。
+#   artifacts         出 macOS .dmg（macos-14）。\n#   artifacts-android 出**已签名的** Android release APK（ubuntu-latest；2026-09-18 从 macOS 挪过来）。
 #                     触发：仅 workflow_dispatch 与 v* tag —— 每次 push 都出包太贵。
 #   artifacts-windows 出 Windows 产物：NSIS 安装器 + MSI + 免安装 .exe。
 #                     触发：与 artifacts 相同（workflow_dispatch 与 v* tag）。
 #
-# check 与 artifacts 都跑在 macos-14（Apple Silicon）：
+# check 与 artifacts 跑在 macos-14（Apple Silicon）：
 #   * 与开发机同平台 —— check 不必在 Linux 上补 WebKitGTK 那一套系统依赖，
 #     命令与 AGENT.md §3 / docs/operations.md §5 里本机验证过的完全一致；
 #   * artifacts 产出的因此天然是 arm64 产物，与 §5.5 的 macOS 口径一致。
@@ -93,7 +93,7 @@ jobs:
         run: cargo test --workspace
 
   artifacts:
-    name: 产物（macOS dmg + Android APK）
+    name: 产物（macOS dmg）
     # 只在手动触发或 v* tag 上跑：出包很贵，不该每次 push 都跑。
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-14
@@ -104,11 +104,57 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Rust 组件与 Android target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/ui/package-lock.json
+
+      - name: 缓存 cargo（registry）
+        # 不缓存 target：macOS 上出的是 release 产物，体积远超缓存收益。本 job 只在手动 / 打 tag 时跑。
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-artifacts-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-artifacts-
+
+      - name: 前端依赖
+        working-directory: apps/desktop/ui
+        run: npm ci
+
+      - name: 出 macOS .dmg
+        # bundle.active=false，靠 --bundles 覆盖；没有应用图标也能出（产物见 target/release/bundle/dmg/）
+        run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
+
+      - name: 上传 macOS .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: danmubox-macos-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  # Android 产物**跑在 Linux 上**（2026-09-18 起；原先并进上面那条 macos-14 job）。
+  # 为什么换：`tauri android build` 本身不需要 macOS，而 macOS runner 在计费口径上是 **×10** 档
+  # （私有仓时这一步要花 150–210 计费分钟，Linux 只要 15–21 分钟；公开仓免费，但启动更快、也不再
+  # 把 macOS 那条稀缺 runner 占 20 分钟）。与 `scripts/android-env.sh` 的**两处 macOS 专属差异**
+  # 都收在本 job 内：cmdline-tools 取 **linux** 包（同版本号 `16111833`）、NDK 的 prebuilt 目录
+  # **按宿主实际探测**（macOS 是 `darwin-x86_64`、Linux 是 `linux-x86_64`，不再写死）。
+  artifacts-android:
+    name: 产物（Android APK）
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Android target（四个 ABI）
         run: |
           set -euo pipefail
-          rustup component add rustfmt clippy
-          # 四个 ABI，与 scripts/android-env.sh 的 DANMUBOX_RUST_TARGETS 一致
+          # 与 scripts/android-env.sh 的 DANMUBOX_RUST_TARGETS 一致
           # （通用 APK 含 arm64-v8a / armeabi-v7a / x86 / x86_64，四个 target 缺一不可）
           rustup target add \
             aarch64-linux-android \
@@ -141,17 +187,16 @@ jobs:
           java-version: "17"
 
       # ⚠️ **不要用 `android-actions/setup-android@v3`**：它会去装上游早已下架的 `tools` 包，
-      # 在 macos-14 上直接失败（2026-09-21 首次真跑实测：`Warning: Failed to find package 'tools'`
-      # → `The process '…/sdkmanager' failed with exit code …` → 整个 job 失败）。
-      # 改成与 `scripts/android-env.sh` **同款口径**：自取同一版本的 cmdline-tools（同 mac_arm64 包、
-      # 同 URL），解压成 `cmdline-tools/latest`（zip 内层就是 `cmdline-tools/`，不落成 `latest` 的话
-      # sdkmanager 找不到自己的根），再用它装我们真正需要的四个组件。
+      # 首次真跑实测直接失败（`Warning: Failed to find package 'tools'` → `sdkmanager` 非零退出）。
+      # 改成与 `scripts/android-env.sh` **同款口径**：自取同一版本的 cmdline-tools（本 job 用 linux 包，
+      # 版本号 `16111833` 与 macOS 那份相同），解压成 `cmdline-tools/latest`（zip 内层就是
+      # `cmdline-tools/`，不落成 `latest` 的话 sdkmanager 找不到自己的根），再用它装四个组件。
       - name: Android cmdline-tools（自取，不经 setup-android）
         run: |
           set -euo pipefail
           tools_zip="$RUNNER_TEMP/commandlinetools.zip"
           curl -fL --retry 3 -o "$tools_zip" \
-            "https://dl.google.com/android/repository/commandlinetools-mac_arm64-16111833_latest.zip"
+            "https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip"
           rm -rf "$ANDROID_HOME/cmdline-tools/latest" "$RUNNER_TEMP/cmdline-tools-unzip"
           mkdir -p "$RUNNER_TEMP/cmdline-tools-unzip" "$ANDROID_HOME/cmdline-tools"
           unzip -q "$tools_zip" -d "$RUNNER_TEMP/cmdline-tools-unzip"
@@ -165,7 +210,6 @@ jobs:
           set -euo pipefail
           # 清单与 `scripts/android-env.sh` 一致（版本取本机实测）：compileSdk 36 → `platforms/android-36`；
           # AGP 8.11 用 `build-tools/35.0.0`；NDK 与本机同版本。不需要 emulator / system-image（CI 不跑模拟器）。
-          # cmdline-tools 版本已被上一步固定，因此包名只写新 CLI 的 "/" 形式（不再需要 ";" 兜底）。
           yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
           sdkmanager --sdk_root="$ANDROID_HOME" --install \
             "platform-tools" "platforms/android-36" "build-tools/35.0.0" "ndk/27.0.12077973"
@@ -180,7 +224,11 @@ jobs:
           ndk="$ANDROID_HOME/ndk/27.0.12077973"
           echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
-          ndk_bin="$ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+          # prebuilt 目录名随宿主平台不同（Linux: linux-x86_64 / macOS: darwin-x86_64），按实际探测，
+          # 这样这份配置在两种宿主上都成立，不再写死。
+          prebuilt="$(ls -1 "$ndk/toolchains/llvm/prebuilt" | head -1)"
+          ndk_bin="$ndk/toolchains/llvm/prebuilt/$prebuilt/bin"
+          echo "NDK prebuilt 目录：$prebuilt"
           cfg="${CARGO_HOME:-$HOME/.cargo}/config.toml"
           mkdir -p "$(dirname "$cfg")"
           # 与 scripts/android-env.sh 的 _dmb_write_cargo_config 同口径：四个 target 的 linker/ar/ranlib
@@ -213,17 +261,6 @@ jobs:
       - name: 前端依赖
         working-directory: apps/desktop/ui
         run: npm ci
-
-      - name: 出 macOS .dmg
-        # bundle.active=false，靠 --bundles 覆盖；没有应用图标也能出（产物见 target/release/bundle/dmg/）
-        run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
-
-      - name: 上传 macOS .dmg
-        uses: actions/upload-artifact@v4
-        with:
-          name: danmubox-macos-dmg
-          path: target/release/bundle/dmg/*.dmg
-          if-no-files-found: error
 
       - name: 生成一次性 release 签名材料
         # 本机的 apps/desktop/src-tauri/gen/android/{keystore.jks,keystore.properties} 是自用私钥，

@@ -1,8 +1,8 @@
 # 登录与鉴权
 
-> 定位：danmubox 与 B 站之间的身份、凭据、签名与失效处理规范，是 `core` 的 `AuthProvider` 端口、`danmubox-bili` 的鉴权实现及所有上层消费面的唯一权威说明。
+> 定位：danmubox 与 ac站之间的身份、凭据、签名与失效处理规范，是 `core` 的 `AuthProvider` 端口、`danmubox-bili` 的鉴权实现及所有上层消费面的唯一权威说明。
 > 读者：实现 `danmubox-bili` 鉴权/协议适配的 Rust 工程师、接 `account_*` 与 `session_status` IPC 的前端作者、审阅凭据落盘方式与安全红线的评审者。
-> 更新时机：B 站登录接口或扫码状态码变更、WBI 签名算法或置换表变更、Cookie 字段集合变更、`config.toml` 字段或权限约定变更、安全红线调整时。
+> 更新时机：ac站登录接口或扫码状态码变更、WBI 签名算法或置换表变更、Cookie 字段集合变更、`config.toml` 字段或权限约定变更、安全红线调整时。
 
 ---
 
@@ -14,9 +14,9 @@
 
 | 层 | 职责 | 禁止 |
 |---|---|---|
-| `danmubox-core` 端口 `AuthProvider` | 定义登录态、凭据读写、扫码流程、`buvid3` 的 trait 与领域模型（§8.6 的脱敏对象） | 出现任何 B 站 URL、字段下标、签名算法；依赖 `tauri` 或 UI |
-| `danmubox-bili`（`AuthProvider` 实现） | 实现扫码、WBI 签名、`getDanmuInfo`、`buvid3`、凭据字段语义；**所有 B 站 URL、字段名、签名只在此出现** | 依赖 `tauri`；把凭据写入日志 |
-| `danmubox-core` 本地文件层 | `config.toml` / `prefs.json` 的读写、原子替换、权限（契约 §4） | 解释 B 站字段的协议语义 |
+| `danmubox-core` 端口 `AuthProvider` | 定义登录态、凭据读写、扫码流程、`buvid3` 的 trait 与领域模型（§8.6 的脱敏对象） | 出现任何 ac站 URL、字段下标、签名算法；依赖 `tauri` 或 UI |
+| `danmubox-bili`（`AuthProvider` 实现） | 实现扫码、WBI 签名、`getDanmuInfo`、`buvid3`、凭据字段语义；**所有 ac站 URL、字段名、签名只在此出现** | 依赖 `tauri`；把凭据写入日志 |
+| `danmubox-core` 本地文件层 | `config.toml` / `prefs.json` 的读写、原子替换、权限（契约 §4） | 解释 ac站字段的协议语义 |
 | `danmubox-cli` / `apps/desktop/src-tauri` | 经 `AuthProvider` 驱动登录，向前暴露**脱敏后**的状态 | 自行读 `config.toml` 拼 Cookie；自行实现签名 |
 | 前端（React/TS） | 渲染二维码、展示登录态、触发命令 | 接触任何 Cookie 值、参与签名计算 |
 
@@ -57,7 +57,7 @@ WS wss://{host}:{wss_port}/sub ──► op=7 认证包（key=token, buvid=buvid
 | 维度 | 游客 `anonymous` | 文件凭据 `cookie` | 扫码 `qrcode` |
 |---|---|---|---|
 | 默认性 | 未登录时的回退态 | 手工编辑 `config.toml` 后的状态（没有程序入口） | **默认入口** |
-| 用户动作 | 无 | 用编辑器把 Cookie 填进 `config.toml`（§8.4） | 手机 B 站 App 扫一次码并确认 |
+| 用户动作 | 无 | 用编辑器把 Cookie 填进 `config.toml`（§8.4） | 手机 ac站 App 扫一次码并确认 |
 | 本地凭据 | 仅 `buvid3` / `buvid4`（非账号凭据） | 该账号的全套字段 | 该账号的全套字段 |
 | 收弹幕 | 可收大部分 `danmaku` / `gift` / `superchat` / `interact` / `guard` / `system` | 完整 | 完整 |
 | 昵称与 UID | **与登录态一样完整**（2026-09-12 实测：`uid` 非 0、昵称不掩码，A3 / A21） | 完整 | 完整 |
@@ -332,7 +332,7 @@ stateDiagram-v2
 
 ## 7. Cookie 字段与用途
 
-下表为 danmubox 关心的字段集合。所有值只在 `danmubox-bili` 与 `core` 的本地文件层内可见；对外（IPC / 日志）一律不可见。表左列是 B 站 Cookie 名，`config.toml` 中的对应键见 §8.1。
+下表为 danmubox 关心的字段集合。所有值只在 `danmubox-bili` 与 `core` 的本地文件层内可见；对外（IPC / 日志）一律不可见。表左列是 ac站 Cookie 名，`config.toml` 中的对应键见 §8.1。
 
 | 字段 | 用途 | 是否必需 | 敏感级别 | 缺失后果 |
 |---|---|---|---|---|
@@ -627,7 +627,7 @@ sid = ""
 
 | 项 | 现状 | 核对方法 |
 |---|---|---|
-| 扫码成功时 `data.code` 的具体数值 | 契约采用 `0`，未经真实扫码确认；因此实现要求 `0` 与 `Set-Cookie` 同时成立才落盘（§6.3） | 本人用手机 B 站 App 扫描一次并确认，记录轮询响应中 `data.code` 与外层 `code`，回填本表 |
+| 扫码成功时 `data.code` 的具体数值 | 契约采用 `0`，未经真实扫码确认；因此实现要求 `0` 与 `Set-Cookie` 同时成立才落盘（§6.3） | 本人用手机 ac站 App 扫描一次并确认，记录轮询响应中 `data.code` 与外层 `code`，回填本表 |
 | 「已扫码待确认」状态码 `86090` | 契约采用，未经确认真实扫码路径 | 同上流程，在扫码后、确认前观察一次响应 |
 | `data.code = 86101` / `86038` | **已实测确认**（2026-09-11） | 无需再核；如上游调整则复核 |
 | `nav` 的身份字段 `data.mid` / `data.uname` / `data.face` | **已实测确认**（2026-09-12）：登录态下三者都有值（`face` 是 `i0.hdslb.com/bfs/face/….jpg`）；未登录时 `code = -101` | 无需再核；`accounts_list` 的身份三格就取这三处（§8.6） |
@@ -653,7 +653,7 @@ sid = ""
 - `architecture.md`：`AuthProvider` 端口的实现位置、`core` / `bili` 的依赖方向与并发模型。
 - `ui.md`：登录界面、扫码状态展示、关注列表与礼物栏的身份徽标渲染。
 - `operations.md`：凭据相关故障的排查决策树与日志脱敏规则。
-- `testing.md`：B 站侧事实的录制、回放与待实测校准流程。
+- `testing.md`：ac站侧事实的录制、回放与待实测校准流程。
 - `roadmap.md`：下期条目与非核心功能的归属。
 - `../REQUIREMENTS.md`：需求基线（用户手写）。
 - `../README.md`：项目边界与非官方声明。

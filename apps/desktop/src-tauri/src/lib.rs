@@ -2,7 +2,7 @@
 //!
 //! 本 crate 只做三件事：把 `danmubox-core` 的端口与引擎挂到 IPC 上、
 //! 把事件总线转发给前端、把错误映射成契约 §7 的错误模型。
-//! **不包含任何 B 站协议知识**（那属于 `danmubox-bili`）。
+//! **不包含任何 ac站协议知识**（那属于 `danmubox-bili`）。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

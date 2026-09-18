@@ -19,7 +19,7 @@
 | 英文名 / crate 前缀 | `danmubox` |
 | 中文名 | 弹幕框 |
 | bundle id | `dev.kksk.danmubox` |
-| 定位 | B 站直播间弹幕客户端，自用不发布 |
+| 定位 | ac站直播间弹幕客户端，自用不发布 |
 | 技术栈 | Tauri 2 + Rust 引擎 + React/TS 前端 |
 
 ## 2. 本期范围
@@ -47,7 +47,7 @@ danmubox/
   rust-toolchain.toml
   crates/
     danmubox-core/          # 领域模型 + 端口(trait) + 事件总线 + 会话编排 + 本地文件（禁止依赖 tauri；禁止依赖任何具体上游实现）
-    danmubox-bili/          # B 站适配器：实现 core 的端口（协议/WS/鉴权/WBI/扫码/表情/举报/关注）
+    danmubox-bili/          # ac站适配器：实现 core 的端口（协议/WS/鉴权/WBI/扫码/表情/举报/关注）
     danmubox-cli/           # 调试与校验入口（阶段 1 用于脱离 UI 验证协议与适配器）
   apps/
     desktop/                # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
@@ -62,10 +62,10 @@ danmubox/
 
 依赖方向（规范性）：`danmubox-bili` → `danmubox-core`；`danmubox-cli` → `core` + `bili`；`apps/desktop/src-tauri` → `core` + `bili`。**`core` 不得依赖 `bili`，也不得依赖 `tauri`。**
 
-**上游隔离（需求直接来源：REQUIREMENTS.md「B 站 API 不可控，可能有逆向需求，需要完全分离」）**
+**上游隔离（需求直接来源：REQUIREMENTS.md「ac站 API 不可控，可能有逆向需求，需要完全分离」）**
 
-- `danmubox-core` 只定义**端口**（trait）与**领域模型**，不含任何 B 站 URL、字段下标、签名算法、protobuf 定义。
-- 所有 B 站相关的 URL、字段名、下标、签名、二维码流程、protobuf schema 一律只出现在 `danmubox-bili`。
+- `danmubox-core` 只定义**端口**（trait）与**领域模型**，不含任何 ac站 URL、字段下标、签名算法、protobuf 定义。
+- 所有 ac站相关的 URL、字段名、下标、签名、二维码流程、protobuf schema 一律只出现在 `danmubox-bili`。
 - 逆向或协议变更时，只改 `danmubox-bili`，`core` 与 `ui` 不动。
 
 | 端口 | 职责 |
@@ -207,7 +207,7 @@ sessdata = ""
 
 - 分档不改变可读内容：`history_query` 与界面看到的仍是**同一批消息、同一个到达顺序**
   （各档归并后按 `local_id` 升序，见 §5）。分档只决定「超出时先丢谁」。
-- B 站只提供「进房间时最近若干条」的接口（`data.room`，上限 10 条，**不可翻页**，见 `protocol.md` 附录 A30），**不提供可翻页的历史回放**。因此跨会话历史只能本地落盘，而本次会话的缓冲仍是内存——这是一个已接受的产品取舍。
+- ac站只提供「进房间时最近若干条」的接口（`data.room`，上限 10 条，**不可翻页**，见 `protocol.md` 附录 A30），**不提供可翻页的历史回放**。因此跨会话历史只能本地落盘，而本次会话的缓冲仍是内存——这是一个已接受的产品取舍。
 - 唯一允许的用途是当前会话内在界面上向上回滚查看（`history_query` 只查当前会话缓冲）。
 - **进场回填**：进入房间时先用 `LiveSource::recent` 取上游能给的「最近若干条」弹幕（`data.room`，上限 10 条，**不可翻页**，见 `protocol.md` 附录 A30），
   标记 `is_history` 后作为本次会话缓冲的**前缀**（先回填、再连接，因此顺序天然是历史在前）；
@@ -402,7 +402,7 @@ sessdata = ""
 
 **展示排序**：`live_status == 1` 置顶（REQUIREMENTS.md 需求）→ **最近观看降序**（用户 2026-09-12 #16；数据是 `ui.recent_watched`，没看过的不计入该档、排在看过的之后）→ `live_start_at` 降序 → `online` 降序 → `room_id` 升序。用户追加要求：**未开播的也要列出**，因此不再只展示直播中的房间。
 
-## 6. B 站协议要点（规范性）
+## 6. ac站协议要点（规范性）
 
 - 包结构：16 字节大端头 `packetLen:u32 | headerLen:u16(=16) | protover:u16 | op:u32 | seq:u32`。
 - **protover 是载荷编码版本**：`0` 裸 JSON / `1` 认证与心跳包的帧头版本 / `2` zlib / `3` brotli。请求固定用 `3`。
@@ -621,7 +621,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 1. 正文中文，标识符/技术名词保留英文。
 2. 文件开头三行引言块：定位 / 读者 / 更新时机。
 3. 表格优先于长段落；接口、字段、常量必须用表格或代码块。
-4. **禁止**出现 `TODO`、`待补充`、`占位`、`XXX` 之类空壳；对 B 站未实测的事实不得凭空编造具体数值。
+4. **禁止**出现 `TODO`、`待补充`、`占位`、`XXX` 之类空壳；对 ac站未实测的事实不得凭空编造具体数值。
 
 > 唯一「待实测校准」表在 [`protocol.md`](protocol.md) 附录 A；本文不再自建。
 > 作业规范（只写 Markdown、不跑 git / 构建 / lint、只改自己负责的文件、引用用相对路径、收敛优先）见 [`../AGENT.md`](../AGENT.md)。

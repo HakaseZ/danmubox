@@ -21,7 +21,7 @@ danmubox/
   rust-toolchain.toml
   crates/
     danmubox-core/          # 领域模型 + 端口(trait) + 事件总线 + 会话编排 + 本地文件
-    danmubox-bili/          # B 站适配器：实现 core 的端口
+    danmubox-bili/          # ac站适配器：实现 core 的端口
     danmubox-cli/           # 调试与校验入口
   apps/
     desktop/                # Tauri 2 应用：src-tauri/ + ui/（React + TS + Vite）
@@ -57,8 +57,8 @@ graph LR
 | `cli` / `desktop → core + bili` | 上层消费面同时依赖领域层与适配层 |
 | `core` 无 UI 依赖 | 不得依赖 `tauri`、不得依赖任何前端运行时 |
 | `core` 不得依赖 `bili` | 不得依赖任何具体上游实现，也不得依赖上层 crate |
-| **上游隔离** | `core` 中不得出现 B 站 URL、字段下标、签名算法、protobuf 定义、二维码流程 |
-| `bili` 唯一出口 | 上述 B 站细节一律只出现在 `danmubox-bili`；逆向或协议变更只改 bili |
+| **上游隔离** | `core` 中不得出现 ac站 URL、字段下标、签名算法、protobuf 定义、二维码流程 |
+| `bili` 唯一出口 | 上述 ac站细节一律只出现在 `danmubox-bili`；逆向或协议变更只改 bili |
 | 上层互不依赖 | `cli` 与 `apps/desktop` 之间不互相依赖；共享逻辑下沉到 `core` |
 | 平台代码隔离 | `#[cfg(target_os = ...)]` 分支尽量收在 `core` 的薄适配层内 |
 
@@ -121,7 +121,7 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 | 注释 | 解释「为什么」，不复述代码；对外 API 必须有 doc comment |
 | 数值 | 时间统一 UTC 毫秒 `i64`；不引入本地时区换算 |
 | 依赖 | 新增依赖必须说明理由并评估体积；能用标准库或已有依赖就不新增 |
-| 公开面 | `pub` 项尽量收窄；跨 crate 只在 `core` 暴露必要的领域 API 与端口，B 站实现细节留在 `bili` |
+| 公开面 | `pub` 项尽量收窄；跨 crate 只在 `core` 暴露必要的领域 API 与端口，ac站实现细节留在 `bili` |
 | 协议解析 | protobuf 用 `prost`，且只允许出现在 `danmubox-bili`；`core` 不引用任何上游 schema |
 
 ## 5. 提交信息格式
@@ -161,6 +161,9 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 
 规则：**先改文档、再改代码，或同一次提交内一起改**。文档与代码不一致视同构建失败。
 
+上游直播平台的称呼：**正文与注释里一律写作 `ac站`**（公开仓降低可搜索性），新写的文档 / 注释照此办理。只有四类可以保留原名：
+URL 与主机名、代码标识符与字符串字面量、界面实际渲染的文案、`smoke/fixtures/**` 里来自上游的夹具值。
+
 ## 7. 操作清单
 
 ### 7.1 新增 crate
@@ -168,7 +171,7 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 1. 确认它确实不能并入现有 crate；能并入就不新建。
 2. 在 `crates/` 下创建目录，crate 名以 `danmubox-` 为前缀。
 3. 在 workspace `Cargo.toml` 的 members 中登记，统一继承 `edition` / `version` / 依赖版本策略。
-4. 声明依赖方向：只允许依赖 `danmubox-core`；需要 B 站能力时依赖 `danmubox-bili`，
+4. 声明依赖方向：只允许依赖 `danmubox-core`；需要 ac站能力时依赖 `danmubox-bili`，
    禁止让 `core` 反向依赖它，也禁止上层 crate 之间横向依赖。
 5. 在 `README.md` §6 目录结构、`AGENT.md` §2、`docs/architecture.md` 依赖图中补上。
 6. 若引入新的共享常量，同步 `docs/contract.md` 对应章节与相关文档，必要时新增 ADR 并更新 ADR 索引。
@@ -181,11 +184,11 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 4. **必经一步**：在 `docs/contract.md` §7 命令表与 `docs/ipc.md` 补命令签名（参数、返回、可能的错误）。
    命令只在这两处登记，AGENT 不另立清单；`accounts_list` / `account_switch` / `rooms_reconnect` 等既有命令同样只在此维护。
 5. 检查事件方向是否需要配对事件，需要时同步契约 §7 与 `docs/ipc.md` 的事件清单。
-6. 不得把 B 站 URL、字段下标或签名细节带进命令参数或返回值；上游差异由 `bili` 归一化。
+6. 不得把 ac站 URL、字段下标或签名细节带进命令参数或返回值；上游差异由 `bili` 归一化。
 
 ### 7.3 新增端口或端口方法
 
-1. 在 `danmubox-core` 定义 trait 与领域类型，签名只使用 core 的类型，不得出现任何 B 站字段。
+1. 在 `danmubox-core` 定义 trait 与领域类型，签名只使用 core 的类型，不得出现任何 ac站字段。
 2. 在 `danmubox-bili` 实现该 trait；URL、字段名、下标、签名、二维码流程、protobuf 全部留在 bili。
 3. 在 `docs/contract.md` §3 端口表补一行，并在 `docs/architecture.md` 的依赖图与职责表同步。
 4. 若该方法需暴露给 UI，登记 IPC 命令到 `docs/contract.md` §7 与 `docs/ipc.md`（见 §7.2）。
@@ -198,11 +201,11 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 |---|---|
 | 1 | 把 `SESSDATA`、`bili_jct`、`DedeUserID` 写入日志、前端明文、仓库文件或崩溃上报 |
 | 2 | 改动协议常量（包头 / op / protover / 心跳间隔 / 退避序列 / 解压上限）而不更新文档 |
-| 3 | 把 B 站细节写进 `core`：URL、字段下标、签名算法、protobuf 定义、二维码流程 |
+| 3 | 把 ac站细节写进 `core`：URL、字段下标、签名算法、protobuf 定义、二维码流程 |
 | 4 | 跨层依赖：`core` 依赖 `tauri`、依赖 `bili` 或任何上层 crate；上层 crate 之间互相依赖 |
 | 5 | 在 `core` 中引入 UI 类型、窗口句柄、前端框架相关代码 |
 | 6 | 把凭据写进 `prefs.json`，或把界面偏好写进 `config.toml` |
-| 7 | 为未实测的 B 站行为编造具体数值；只能以「待实测校准」表格承载并写明核对方法 |
+| 7 | 为未实测的 ac站行为编造具体数值；只能以「待实测校准」表格承载并写明核对方法 |
 | 8 | 提交未完成的空壳实现 / 空实现 / 假 fallback / 被注释掉的死代码 |
 | 9 | 在未知认证回应 `code` 上臆造含义；非 0 一律按认证失败处理 |
 | 10 | 私自扩大范围：加遥测、加推送、加视频解码、加应用商店配置 |
@@ -231,7 +234,7 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 - [ ] **改过冒烟场景（`apps/desktop/ui/smoke/` 下任何进冒烟链路的文件）后，跑一次预检闸**：一行 `node smoke/run-headless.mjs --precheck`（在 `apps/desktop/ui` 下跑，需要先 `npm run build`；**不起浏览器**）。它把三道闸串在起浏览器之前：① 组装器 `room-page.mjs` 与 `scenario/parts/**` **每一份**片段各 `node --check` 一次；② `buildSmokeHtml('dark')` / `buildSmokeHtml('light')` 各真的求值一次；③ 把拼出来的**内联脚本**再编译一次（管「片段单独合法、拼起来不合法」那一类）。任一道不过就带**源文件行号**立刻退出，不会白起一次浏览器、也不会白等一次超时。**历史教训（2026-09-13，提交 `d6580da`）**：当时场景整段活在一个模板字符串里，未转义的反引号**不是语法错**（模板提前收尾、后面那截成了合法表达式，`node --check` 照样通过），模板串里的反斜杠还会被吃掉（写 `/rgba?\(/`，页面里实际是 `/rgba?((/`）—— 2026-09-17 已把场景拆成 `smoke/scenario/parts/**` 的**页内脚本原文**（由 `room-page.mjs` 原样拼接，结构与「原块 → 文件」映射见 `docs/testing.md` §9.1），这层转义坑随之消失；**不要**再把片段塞回模板字符串。
 - [ ] **桌面端二进制只许用仓库规定的方式产出**：`cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle`（`README.md` §6/§8、`docs/operations.md`）。**不要**用裸 `cargo build --release -p danmubox-desktop`：那样产出的二进制**前端加载不出来**——webview 从不导航、窗口全白、日志里既没有「页面加载」也没有任何 IPC；而且它**与源码无关**，极难自查。（2026-09-13 实测 A/B：`tauri build` 产出的那份正常；裸 cargo 构建的、**带**临时日志的与**不带**临时日志的（`git stash` 掉后再构建）**都失败**；换回 `tauri build` 后**同一份源码 + 同一份 dist 立刻正常**。）
 - [ ] **改 Rust 的票，必须真启动一次应用并确认存活 ≥ 10 秒、无 panic**：`cargo test` 自带 runtime，测不出「主线程没有 runtime 上下文」这类崩；前端冒烟跑的是浏览器、不是 Tauri 进程 —— 这两层都挡不住「启动即崩」。（2026-09-13 教训：`97af765` 修的正是这一类；此后凡动 Rust 一律按这条验，报告里写明「启动存活 N 秒、无 panic」。）
-- [ ] 端口边界未被破坏：`core` 仍可独立编译，不依赖 `bili` / `tauri` / 任何上层 crate，且 core 中无 B 站 URL、字段下标、签名或 protobuf。
+- [ ] 端口边界未被破坏：`core` 仍可独立编译，不依赖 `bili` / `tauri` / 任何上层 crate，且 core 中无 ac站 URL、字段下标、签名或 protobuf。
 - [ ] `config.toml` 以 0600 权限写入且只含凭据；界面偏好只落 `prefs.json`；凭据未进日志 / 前端 / 仓库。
 - [ ] 消息缓冲遵守会话语义：只保留当前房内会话、**按 `kind` 分档**（上限 = `history.buffer_rows_*` 六枚，礼物档内部再按金额分级）、离开房间即销毁。
 - [ ] 规范性常量、领域模型、端口、IPC 与偏好键与 `docs/contract.md` 一致。

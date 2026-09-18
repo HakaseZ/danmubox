@@ -14,7 +14,7 @@
 
 ## Context
 
-B 站弹幕 WebSocket 的 16 字节包头中，`protover` 字段决定 body 的编码方式（规范定义见 [`../contract.md`](../contract.md) §6）：
+ac站弹幕 WebSocket 的 16 字节包头中，`protover` 字段决定 body 的编码方式（规范定义见 [`../contract.md`](../contract.md) §6）：
 
 | `protover` | 含义 |
 |---|---|

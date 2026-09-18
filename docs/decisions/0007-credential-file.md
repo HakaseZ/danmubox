@@ -41,7 +41,7 @@ REQUIREMENTS.md 直接要求：「cookie 弄个配置文件存进去，默认扫
 
 ## Decision
 
-**B 站凭据以明文 TOML 存放于数据目录下的 `config.toml`，权限 `0600`，写入采用原子替换；界面偏好单独存放于 `prefs.json`。**
+**ac站凭据以明文 TOML 存放于数据目录下的 `config.toml`，权限 `0600`，写入采用原子替换；界面偏好单独存放于 `prefs.json`。**
 
 | 项 | 取值 |
 |---|---|

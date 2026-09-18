@@ -1,6 +1,6 @@
-//! B 站适配器：把上游协议实现成 `danmubox-core` 的端口。
+//! ac站适配器：把上游协议实现成 `danmubox-core` 的端口。
 //!
-//! 这里是**唯一**允许出现 B 站 URL、字段下标、签名算法与 protobuf 的 crate
+//! 这里是**唯一**允许出现 ac站 URL、字段下标、签名算法与 protobuf 的 crate
 //! （`docs/contract.md` §3 的上游隔离约束）。逆向或协议变更只改这里。
 
 pub mod admin;

@@ -1,4 +1,4 @@
-//! B 站 HTTP 端点：房间解析、`buvid3`、WBI 密钥、`getDanmuInfo`、上游 HTTP 心跳。
+//! ac站 HTTP 端点：房间解析、`buvid3`、WBI 密钥、`getDanmuInfo`、上游 HTTP 心跳。
 //!
 //! 对应 `docs/protocol.md` §2.1、§8.2 与 `docs/auth.md` §3、§4、§5。
 
@@ -44,7 +44,7 @@ const BUVID3: &str = "buvid3";
 ///
 /// 改前 `danmu_info` 走的是「`get_with_cookie` 先设一条，再 `.header(COOKIE, "buvid3=…")`
 /// 追加一条」——`RequestBuilder::header` 是 **append** 语义，请求因此带着**两条**
-/// `Cookie` 头出门（`docs/protocol.md` A46）。B 站按身份三要素（`uid` / `buvid` /
+/// `Cookie` 头出门（`docs/protocol.md` A46）。ac站按身份三要素（`uid` / `buvid` /
 /// 换 token 用的凭据）**同源**认身份，参考实现（`blivedm` 等）只发一条。
 ///
 /// 规则：
@@ -164,7 +164,7 @@ impl CachedWbiKeys {
 static WBI_KEY_CACHE: LazyLock<tokio::sync::Mutex<Option<CachedWbiKeys>>> =
     LazyLock::new(|| tokio::sync::Mutex::new(None));
 
-/// B 站 HTTP 客户端。Cookie 只在进程内传递，绝不写日志。
+/// ac站 HTTP 客户端。Cookie 只在进程内传递，绝不写日志。
 #[derive(Clone)]
 pub struct BiliHttp {
     client: reqwest::Client,
@@ -1379,7 +1379,7 @@ mod tests {
     /// 改前 `danmu_info` 先经 `get_with_cookie` 设了账号 Cookie，又
     /// `.header(COOKIE, "buvid3=…")` 追加了第二条（`RequestBuilder::header` 是 append 语义），
     /// 桩上数到的是两条 `Cookie` 行——把 `.header(COOKIE, …)` 加回 `danmu_info`，
-    /// 本断言立刻变红。B 站按身份三要素（`uid` / `buvid` / 凭据）同源认身份。
+    /// 本断言立刻变红。ac站按身份三要素（`uid` / `buvid` / 凭据）同源认身份。
     /// 测试用的一条诊断记录（`danmu_info` 只往它里面写，不影响请求行为）。
     fn test_diag() -> std::sync::Arc<danmubox_core::diagnose::Attempt> {
         // 用独立采集器分配，避免用例之间互相看见（环里那一条无所谓，断言不看它）。
@@ -1508,7 +1508,7 @@ mod tests {
     }
 
     /// 传输层失败的文案也带着 URL：`reqwest::Error` 的 `Display` 会附上完整地址
-    /// （`… for url (…)`，见 reqwest 0.12 `error.rs` 的 `Display`），而 B 站的查询串里
+    /// （`… for url (…)`，见 reqwest 0.12 `error.rs` 的 `Display`），而 ac站的查询串里
     /// 写着「谁」——`vmid` 就是 `DedeUserID`。这条护栏钉住「UID 不从这条路进错误信息」。
     #[tokio::test]
     async fn transport_error_text_hides_uid_taken_from_the_url() {

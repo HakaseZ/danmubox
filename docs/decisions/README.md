@@ -22,7 +22,7 @@ ADR（Architecture Decision Record）只回答三个问题：**当时面对什�
 | [0001](0001-tauri-over-flutter.md) | 采用 Tauri 2 而非 Flutter 作为客户端外壳 | Accepted | 2026-09-11 |
 | [0002](0002-rust-core-shared-surfaces.md) | `danmubox-core` 不依赖 UI，能力一律经端口暴露 | Accepted | 2026-09-11 |
 | [0003](0003-protover3.md) | 弹幕连接固定协商 `protover=3`（brotli），解码兼容 0/1/2/3 | Accepted | 2026-09-11 |
-| [0004](0004-upstream-isolation.md) | B 站相关实现全部收敛在 `danmubox-bili`，`core` 只定义端口与领域模型 | Accepted | 2026-09-11 |
+| [0004](0004-upstream-isolation.md) | ac站相关实现全部收敛在 `danmubox-bili`，`core` 只定义端口与领域模型 | Accepted | 2026-09-11 |
 | [0005](0005-no-local-database.md) | 不建本地数据库：弹幕只保留在内存环形缓冲，生命周期为一次房内会话 | Accepted | 2026-09-11 |
 | [0006](0006-room-supervisor-tasks.md) | 每个房间一个 supervisor task，事件经 broadcast 广播 | Accepted | 2026-09-11 |
 | [0007](0007-credential-file.md) | 凭据存明文 `config.toml`（0600），偏好另存 `prefs.json` | Accepted | 2026-09-11 |
@@ -74,7 +74,7 @@ ADR（Architecture Decision Record）只回答三个问题：**当时面对什�
 ## Context
 
 当时的约束、需求边界、已排除的选项、以及触发本次决策的外部事实。
-只写可验证的事实，不写未实测的 B 站行为数值；未实测项收敛到「待实测校准」表。
+只写可验证的事实，不写未实测的 ac站行为数值；未实测项收敛到「待实测校准」表。
 
 ## Decision
 

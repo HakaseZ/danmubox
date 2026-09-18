@@ -20,14 +20,14 @@
 |---|---|---|
 | 一 | 以为需要后台保活 | Flutter（iOS 后台保活、原生推送、长列表性能） |
 | 二 | 明确不需要后台保活、不需要推送 | PWA 重回首选（四端一套代码、iOS 自用零签名） |
-| 三 | 需要登录态、WBI 签名、发弹幕，即需要直连 B 站 REST | PWA 被排除（浏览器同源策略，必须服务端中转） |
+| 三 | 需要登录态、WBI 签名、发弹幕，即需要直连 ac站 REST | PWA 被排除（浏览器同源策略，必须服务端中转） |
 | 四 | 接口清单里曾列入「AI 原生接口」，要求无 CORS 的本地通道 | 该条本轮已从需求中置空，但「原生进程 + 无 CORS」的结论保留 |
 | 五 | iOS 端与 Fold8 / 折叠屏移出本期范围 | Flutter 的相对优势收窄，决策落在 Tauri |
 
 关键约束集合：
 
 - 目标平台只有 **macOS / Windows / Android**；iOS 与折叠屏适配是后期 enhancement，本期不做，且二者只增加外壳与布局，不改动引擎与协议层。
-- 需求明确要求「B 站 API 不可控，可能有逆向需求，这部分代码必须完全分离，后续修改不影响核心业务」（REQUIREMENTS.md）。这意味着引擎必须能被切成「领域逻辑」与「上游适配器」两层，并由编译期边界强制。
+- 需求明确要求「ac站 API 不可控，可能有逆向需求，这部分代码必须完全分离，后续修改不影响核心业务」（REQUIREMENTS.md）。这意味着引擎必须能被切成「领域逻辑」与「上游适配器」两层，并由编译期边界强制。
 - 引擎除 UI 外还要被 `danmubox-cli` 这个调试与校验入口复用（见 [`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)）。
 - 自用不发布，不需要应用商店签名流程；不需要后台保活；没有本地数据库（见 [`0005-no-local-database.md`](0005-no-local-database.md)）。
 - 性能不构成决策依据：本期负载只是一个文本列表，峰值数十条每秒，两个框架都不是瓶颈。
@@ -42,7 +42,7 @@
 
 1. **iOS 出局后 Flutter 的优势收窄。** 目标收敛为 macOS / Windows / Android，桌面两端两者都能打，Android 是唯一存在差距的平台；「iOS 一等公民 + 四端像素一致」不再计入，Flutter 的差异化优势被大幅削掉，而代价（Dart 全栈、包体、内存）仍在。
 2. **聊天框是富文本流，HTML/CSS 的表达力与迭代速度优于 Widget 树。** 昵称、粉丝牌、弹幕颜色、SC 卡片、emoji 混排是一屏内的密集富文本排版，用 HTML/CSS 改写快、表达力强；Flutter 的 Widget 布局代码量大，样式细节（字号、透明度、合并相似）的每次调整成本更高。
-3. **Rust 单引擎承载端口 / 适配器隔离。** 上游隔离要在「编译器不让你越界」的层面落实：`danmubox-core` 只定义端口（trait）与领域模型，`danmubox-bili` 是唯一允许出现 B 站 URL、字段下标、签名、protobuf 的 crate，依赖方向 `bili → core` 由 workspace 编译期强制（见 [`0004-upstream-isolation.md`](0004-upstream-isolation.md)）。同一份引擎同时供 UI 与 CLI 消费，不需要为第二个消费面重写协议层。
+3. **Rust 单引擎承载端口 / 适配器隔离。** 上游隔离要在「编译器不让你越界」的层面落实：`danmubox-core` 只定义端口（trait）与领域模型，`danmubox-bili` 是唯一允许出现 ac站 URL、字段下标、签名、protobuf 的 crate，依赖方向 `bili → core` 由 workspace 编译期强制（见 [`0004-upstream-isolation.md`](0004-upstream-isolation.md)）。同一份引擎同时供 UI 与 CLI 消费，不需要为第二个消费面重写协议层。
 
 配套结论（同属本决策范围）：
 
@@ -74,7 +74,7 @@
 |---|---|---|
 | Android WebView 差异 | 不同厂商 WebView 版本行为不一致，可能影响渲染表现 | 核心逻辑全部放 Rust；UI 渐进增强；Android 端纳入手工冒烟清单 |
 | 工具链碎片化 | 三端各自需要额外前置依赖，环境搭建成本高 | 在 [`../operations.md`](../operations.md) 中固化前置条件与版本要求 |
-| 协议变更 | B 站可能调整弹幕协议 | 协议层独立成 `danmubox-bili`，改动不外溢（见 [`0004-upstream-isolation.md`](0004-upstream-isolation.md)） |
+| 协议变更 | ac站可能调整弹幕协议 | 协议层独立成 `danmubox-bili`，改动不外溢（见 [`0004-upstream-isolation.md`](0004-upstream-isolation.md)） |
 
 补充：选型阶段曾把「AI 原生接口 / MCP 生态」列为一条独立理由。该需求**本轮已置空**——AI 与 MCP 本期不做任何实现，只要求架构保持兼容：`core` 的端口与事件总线不得假设消费方是 UI，新能力一律经端口暴露（见 [`0002-rust-core-shared-surfaces.md`](0002-rust-core-shared-surfaces.md)）。因此它不再构成本决策的理由，也不得作为任何实现的依据。
 
@@ -88,7 +88,7 @@
 
 ### 2. PWA（纯 Web，浏览器 / 主屏安装）
 
-否决理由：B 站 REST 接口受 CORS 限制，登录态、WBI 签名、发弹幕都必须服务端中转；纯静态托管无法绕过（除本机开关关闭安全策略，不适合分发）。阶段三即被排除。
+否决理由：ac站 REST 接口受 CORS 限制，登录态、WBI 签名、发弹幕都必须服务端中转；纯静态托管无法绕过（除本机开关关闭安全策略，不适合分发）。阶段三即被排除。
 
 重新启用的条件：只保留游客模式、不做登录与发弹幕、不需要任何非浏览器本地能力时，PWA 仍是四端成本最低的方案。
 

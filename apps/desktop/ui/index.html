@@ -11,7 +11,7 @@
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <!--
-      上游的图片 CDN 有防盗链：来源不是 bilibili 就返回 403，而不带 Referer 才放行。
+      上游的图片 CDN 有防盗链：来源不是 ac站就返回 403，而不带 Referer 才放行。
       界面跑在 localhost / tauri.localhost 上，默认会带上这个来源，于是所有表情图
       被 CDN 拒绝；浏览器再以 ORB（Opaque Response Blocking）拦掉，最终显示成一个问号，
       而且**不留任何控制台线索**。这里统一不发 Referer（实测放行）。

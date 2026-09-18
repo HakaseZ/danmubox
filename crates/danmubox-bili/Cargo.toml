@@ -6,7 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "B 站适配器：实现 danmubox-core 的端口（协议、WS、鉴权、WBI、扫码、表情、举报、关注）"
+description = "ac站适配器：实现 danmubox-core 的端口（协议、WS、鉴权、WBI、扫码、表情、举报、关注）"
 
 [dependencies]
 async-trait = "0.1.92"

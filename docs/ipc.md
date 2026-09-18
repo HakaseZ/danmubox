@@ -572,7 +572,7 @@ sequenceDiagram
 |---|---|---|---|
 | 1 | `contract.md` §7 | 在命令清单里加入新命令名 | 必须（否则命令集合不闭合） |
 | 2 | `crates/danmubox-core/src/ports.rs` | 若需要新引擎能力，先加端口方法（core 内部其余模块见 `architecture.md`） | 视命令而定 |
-| 3 | `crates/danmubox-bili/src/**` | 实现对应端口（B 站侧请求与归一化只落在这里） | 视命令而定 |
+| 3 | `crates/danmubox-bili/src/**` | 实现对应端口（ac站侧请求与归一化只落在这里） | 视命令而定 |
 | 4 | `apps/desktop/src-tauri/src/lib.rs` | 新增 `#[tauri::command]` 函数（参数与返回值按本文 §3 的类型，`ApiError` 从 `core::Error` 映射） | 必须 |
 | 5 | `apps/desktop/src-tauri/src/lib.rs` | 把新命令加进 `tauri::generate_handler![…]` 注册表 | 必须 |
 | 6 | `apps/desktop/ui/src/ipc.ts` | 在 `api` 上加方法；需要错误进日志的用 `call()`，写操作用裸 `invoke` | 必须 |

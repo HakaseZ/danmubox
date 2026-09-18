@@ -8,20 +8,20 @@
 
 ## 1. 分层与依赖方向
 
-系统分四层，依赖只能自上而下单向流动；`danmubox-bili` 是**唯一**允许接触 B 站协议知识的一层。
+系统分四层，依赖只能自上而下单向流动；`danmubox-bili` 是**唯一**允许接触 ac站协议知识的一层。
 
 | 层次 | 组成 | 职责 | 禁止 |
 |---|---|---|---|
-| 表现层 | `apps/desktop/ui`（React + TS + Vite，运行在 Tauri WebView） | 虚拟列表渲染、过滤、交互、乐观更新 | 直接访问 B 站接口；持有 Cookie 明文 |
+| 表现层 | `apps/desktop/ui`（React + TS + Vite，运行在 Tauri WebView） | 虚拟列表渲染、过滤、交互、乐观更新 | 直接访问 ac站接口；持有 Cookie 明文 |
 | 消费面层 | `apps/desktop/src-tauri`、`danmubox-cli` | 把 core 的事件与命令翻译成自己的协议：Tauri IPC、终端文本 | 实现协议解包；直接持有 WS 连接；自带第二套领域模型 |
-| 引擎层 | `danmubox-core` | 领域模型、端口（trait）、事件总线、会话编排（每房间一个 `RoomRuntime` + 会话缓冲）、本地文件读写 | 依赖 `danmubox-bili`；依赖 `tauri`；出现任何 B 站 URL、字段下标、签名算法、protobuf 定义 |
+| 引擎层 | `danmubox-core` | 领域模型、端口（trait）、事件总线、会话编排（每房间一个 `RoomRuntime` + 会话缓冲）、本地文件读写 | 依赖 `danmubox-bili`；依赖 `tauri`；出现任何 ac站 URL、字段下标、签名算法、protobuf 定义 |
 | 适配器层 | `danmubox-bili` | 实现 core 的全部八个端口：协议编解码、WS 生命周期、鉴权/WBI/扫码、房间解析、表情、举报、关注、钱包、房管（禁言 / 黑名单 / 屏蔽词） | 定义领域模型；依赖 `tauri` 或任何 UI 框架 |
 
 依赖方向（规范性，契约 §3）：`danmubox-bili` → `danmubox-core`；`danmubox-cli` → `core` + `bili`；`apps/desktop/src-tauri` → `core` + `bili`。**`core` 不得依赖 `bili`，也不得依赖 `tauri`。**
 
 > **后期想法（本期不实现）**：接入 MCP；为此刻意保持架构兼容——core 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层，本期不定义任何 MCP 工具、协议或端点。
 
-消费面共享 core 的三条硬性规则：**只有 `danmubox-bili` 能触达 B 站**（上层不得自行访问 B 站 REST，也不得自建 WS）；**上层不得再定义第二套 `kind` / 错误码 / 偏好键**（分别取自契约 §5 / §7 / §8）；**凭据只在 `AuthProvider` 实现内解引用使用**，上层拿到的只有会话状态位与脱敏后的账号身份（`Account` 的 `name` / `nickname` / `uid` / `face` / `logged_in` / `active`），永远不含 Cookie 值。
+消费面共享 core 的三条硬性规则：**只有 `danmubox-bili` 能触达 ac站**（上层不得自行访问 ac站 REST，也不得自建 WS）；**上层不得再定义第二套 `kind` / 错误码 / 偏好键**（分别取自契约 §5 / §7 / §8）；**凭据只在 `AuthProvider` 实现内解引用使用**，上层拿到的只有会话状态位与脱敏后的账号身份（`Account` 的 `name` / `nickname` / `uid` / `face` / `logged_in` / `active`），永远不含 Cookie 值。
 
 ## 2. crate 依赖图
 
@@ -60,7 +60,7 @@ graph TD
 |---|---|
 | `core` 不依赖 `bili` | `crates/danmubox-core/Cargo.toml` 依赖表中不存在 `danmubox-bili`；`cargo tree -p danmubox-core` 的输出中不出现它 |
 | `core` 不依赖 `tauri` | `crates/danmubox-core/Cargo.toml` 依赖表中不存在 `tauri`；评审时人工核对 |
-| B 站知识只在 `bili` | 全仓检索 B 站域名、`protover`、`op` 码字面量、`DANMU_MSG` 等字样，命中只允许落在 `crates/danmubox-bili/` 与 `protocol.md` |
+| ac站知识只在 `bili` | 全仓检索 ac站域名、`protover`、`op` 码字面量、`DANMU_MSG` 等字样，命中只允许落在 `crates/danmubox-bili/` 与 `protocol.md` |
 | 上层之间不互相依赖 | `danmubox-cli` 与 `apps/desktop/src-tauri` 互不引用；共享的只有 core 的模型与端口 |
 | `core` 可独立编译与测试 | `danmubox-core` 单独编译不需要 WebView、不需要 Tauri 工具链、不发起网络 |
 
@@ -95,7 +95,7 @@ graph LR
 |---|---|---|
 | `lib` | crate 根：上面的模块清单与公共再导出（`EventBus` / `Cancel` / `RoomRuntime` / `Prefs` / 端口载荷类型等），以及 `now_ms()` 时钟 | 不放实现逻辑；不放上游知识 |
 | `model` | 契约 §5 的领域模型：`Message`（`kind` 六值）、`Room`、`RoomSession`、`Emote` / `EmotePackage` / `EmoteRef`、`FollowedRoom`、`SendOutcome`、`SilentUser` / `BlacklistedUser`、`ReportReason`，以及 `sort_followed` 排序规则 | 不含 IO；不含业务判断；不出现上游字段名 |
-| `ports` | 八个端口 trait 的定义（见 §3）与端口载荷：`SessionState`、`Account`、`QrChallenge` / `QrPoll`、`SendReport`、`EmoteToken`、`ReplyTarget` | 不含任何实现；不含 B 站类型 |
+| `ports` | 八个端口 trait 的定义（见 §3）与端口载荷：`SessionState`、`Account`、`QrChallenge` / `QrPoll`、`SendReport`、`EmoteToken`、`ReplyTarget` | 不含任何实现；不含 ac站类型 |
 | `bus` | 进程内事件扇出：`EventBus`（`broadcast`，容量 `DEFAULT_CAPACITY = 1024`）、`Event`（消息 / 房间 / 状态 / 会话 / 关闭）、`MessageSink`（去重、`local_id` 分配、计数）、`Cancel` 取消令牌、`ConnState` / `Counters` / `RoomStats` | 不缓存消息（缓冲在 `session`）；不做序列化 |
 | `session` | `RoomRuntime` 会话编排：身份 / collector / driver 三个受监督任务、`MessageBuffer` 环形缓冲、`HistoryQuery` 只读查询、手动重连信号；`close()` 广播关闭、取消、abort 三个任务并清空缓冲 | 不解析协议（拿到的已是 `Message`）；不落盘 |
 | `paths` | 跨平台数据目录与文件路径：macOS / Windows / 其他三套 `data_dir()`、`config_path()` / `prefs_path()`，`DANMUBOX_HOME` 覆盖 | 不做 IO；不解析文件内容 |

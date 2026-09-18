@@ -1047,15 +1047,16 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 **发版口径一句话**：三端产物**由 CI 出**（不在本机「发布」），触发只有两种 —— 手动
 `workflow_dispatch`，或推一个 `v*` tag；具体步骤见下方「发一版的操作步骤」。
 
-仓库只有这一套 CI，**三个 job**：`check` 与 `artifacts` 跑在 **`macos-14`（Apple Silicon）**，与开发机同平台 —— `check` 不必在 Linux 上另补 WebKitGTK 那一套系统依赖，命令与 [`../AGENT.md`](../AGENT.md) §3 的本机口径完全一致；`artifacts` 产出的也就天然是 arm64 产物。`artifacts-windows` 则是**唯一**的 Windows 出口，跑在 `windows-latest`（开发机是 macOS，本机出不了 Windows 包，见 §5.3 的 Windows 段）。
+仓库只有这一套 CI，**四个 job**：`check` 与 `artifacts` 跑在 **`macos-14`（Apple Silicon）**，与开发机同平台 —— `check` 不必在 Linux 上另补 WebKitGTK 那一套系统依赖，命令与 [`../AGENT.md`](../AGENT.md) §3 的本机口径完全一致；`artifacts` 产出的也就天然是 arm64 产物。`artifacts-android` 出 Android APK，跑在 **`ubuntu-latest`**（2026-09-18 从 `macos-14` 挪过来：`tauri android build` 不需要 macOS，而 macOS runner 在计费口径上是 ×10 档 —— 私有仓时这一步要花 150–210 计费分钟、Linux 只要 15–21 分钟；公开仓虽免费，Linux 启动更快、也不再占住 macOS runner）。`artifacts-windows` 则是**唯一**的 Windows 出口，跑在 `windows-latest`（开发机是 macOS，本机出不了 Windows 包，见 §5.3 的 Windows 段）。
 
 | job | 做什么 | 触发 |
 |---|---|---|
 | `check` | `rustup component add rustfmt clippy` → `npm ci` → `npm run lint`（= `oxlint --deny-warnings`，**告警即失败**，2026-09-17 接入）→ `npm run build`（= `tsc -b && vite build`）→ `cargo fmt --all -- --check`（**提交门**：2026-09-17 起已摘掉 `continue-on-error`）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` | push 到 `main`、任何 `pull_request`、手动 `workflow_dispatch` |
-| `artifacts` | 出**两个**产物并上传：① macOS `tauri build --bundles dmg` → `.dmg`；② Android `tauri android build --apk --ci` → **已签名的** release APK。跑在 `macos-14` | 仅 `workflow_dispatch` 与 `v*` tag（每次 push 都出包太贵） |
+| `artifacts` | 出 macOS 产物并上传：`tauri build --bundles dmg` → `.dmg`。跑在 `macos-14` | 仅 `workflow_dispatch` 与 `v*` tag（每次 push 都出包太贵） |
+| `artifacts-android` | 出 Android **已签名的** release APK 并上传：`tauri android build --apk --ci`。跑在 `ubuntu-latest`；与 `scripts/android-env.sh` 的两处宿主差异（cmdline-tools 取 linux 包、NDK prebuilt 目录按实际探测）都收在这个 job 内 | 与 `artifacts` 同口径 |
 | `artifacts-windows` | 出**三个**产物并上传：`tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'` → 免安装 `.exe` + NSIS 安装器 + MSI。跑在 `windows-latest`；命令与产物口径见 §5.3 的 Windows 段，那枚 `.ico` 为什么只在命令行覆盖见 §5.3「图标与 `bundle.icon` 的口径」 | 与 `artifacts` 同口径（仅 `workflow_dispatch` 与 `v*` tag） |
 
-缓存：`check` 缓存 `~/.cargo/registry`、`~/.cargo/git` 与 `target/`（键含 `Cargo.lock` 哈希）；三个 job 都用 `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`）。`artifacts` **不缓存** Gradle 与 release `target`：Gradle 依赖缓存近 GB 级、恢复比重新下载还慢，release `target` 还要乘上四个 ABI，收益为负；该 job 本来就只在手动 / 打 tag 时跑。`artifacts-windows` 同理**只缓存 registry 不缓存 `target`**，代价是每次冷编译一遍 release（实测 17m42s）。
+缓存：`check` 缓存 `~/.cargo/registry`、`~/.cargo/git` 与 `target/`（键含 `Cargo.lock` 哈希）；四个 job 都用 `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`）。`artifacts` **不缓存** Gradle 与 release `target`：Gradle 依赖缓存近 GB 级、恢复比重新下载还慢，release `target` 还要乘上四个 ABI，收益为负；该 job 本来就只在手动 / 打 tag 时跑。`artifacts-android` 同样**只缓存 registry 不缓存 `target`**（四个 ABI 的 release 产物同理），也不缓存 Gradle；`artifacts-windows` 同理**只缓存 registry 不缓存 `target`**，代价是每次冷编译一遍 release（实测 17m42s）。
 
 #### 发一版的操作步骤
 
@@ -1066,7 +1067,7 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 | 1 | 把 `[Unreleased]` 收成一个版本 | `../CHANGELOG.md`：整段收进 `## [x.y.z] - YYYY-MM-DD`，`[Unreleased]` 留空（只留占位一行） | 同一个版本内每个 `###` 小节**只出现一次**；各轮的 `> **本轮…的验证口径**` 引用块**逐字保留**（那是「凭什么说做完了」的证据） |
 | 2 | 提版本号 | `apps/desktop/src-tauri/tauri.conf.json` 的 `version` + workspace `Cargo.toml` 的 `[workspace.package] version` | **两处必须同一次改**（四个 crate 用 `version.workspace = true` 继承）。改完跑一次 `cargo check --workspace` 让 `Cargo.lock` 重生成并确认不破编译；产物名里的 `<version>` 随之改变（§5.2 / §5.8） |
 | 3 | 合并到 `main` | `git checkout main && git merge --no-ff <开发分支>` → push | 合并前先 `git status` 看索引（[`../AGENT.md`](../AGENT.md) §3 的「合并前先看索引」）；`check` job 会在这次 push 上跑一遍 |
-| 4 | 打 tag | `git tag -a vx.y.z -m "…" && git push origin vx.y.z` | **tag 才是出包开关**：`artifacts` 与 `artifacts-windows` 的 `if` 是 `startsWith(github.ref, 'refs/tags/v')`，tag 名必须以 `v` 开头 |
+| 4 | 打 tag | `git tag -a vx.y.z -m "…" && git push origin vx.y.z` | **tag 才是出包开关**：`artifacts` / `artifacts-android` / `artifacts-windows` 的 `if` 是 `startsWith(github.ref, 'refs/tags/v')`，tag 名必须以 `v` 开头 |
 | 5 | 取产物 | Actions → 该 run → 页面底部 **Artifacts**：`danmubox-macos-dmg` / `danmubox-android-apk` / `danmubox-windows` | 产物保留期用仓库默认（公开仓库 90 天），要长期留存就自己下下来 —— §5.9 的回滚靠留着上一版产物 |
 
 - **也可以只手动出包不发版**：Actions → `CI` → **Run workflow**（选分支）直接触发两个出包 job，不用 tag、不改 `CHANGELOG`。日常自用构建走这条。

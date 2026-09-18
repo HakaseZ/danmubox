@@ -40,6 +40,8 @@
   三端产物名因此由 `danmubox_0.1.0_*` 变成 `danmubox_0.2.0_*`（**以实际构建为准**）；
   「产物由 CI 出」与「发一版的操作步骤」写进 `docs/operations.md` §5.13。**未打 tag、未发版**（发版动作归主流程）。
 
+- **Android 产物从 `macos-14` 挪到 `ubuntu-latest`**（2026-09-18）：`tauri android build` 本身不需要 macOS，原先并进 macOS 那条 job 只是早期顺手 —— 代价是私有仓口径下这一步按 **×10** 计费（15–21 分钟 ⇒ 150–210 计费分钟），且把稀缺的 macOS runner 占满 20 分钟。因此把 `artifacts` **拆成两条**：`artifacts`（`macos-14`，只出 `.dmg`）与 `artifacts-android`（`ubuntu-latest`，出**已签名的** release APK）。与 `scripts/android-env.sh` 的两处宿主差异都收在新 job 内：cmdline-tools 取 **linux** 包（版本号 `16111833` 与 macOS 那份相同）、NDK 的 prebuilt 目录**按宿主实际探测**（`linux-x86_64` / `darwin-x86_64`），不再写死。规格：[`docs/operations.md`](docs/operations.md) §5.13。
+
 ## [0.2.0] - 2026-09-17
 
 本版汇总自 `0.1.0`（2026-09-11，仅文档基线、不含源码）以来的**全部交付**：阶段 1–4、三端出包（macOS `.dmg` / Windows NSIS 安装器 + MSI + 免安装 exe / Android 已签名 release APK）、GitHub Actions CI（`check` / `artifacts` / `artifacts-windows`），以及 `2609162141` / `2609162056` / `2609171849` 三批需求（含 P125–P131）与更早几批已并入的改动。

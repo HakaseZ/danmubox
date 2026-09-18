@@ -40,6 +40,7 @@
   三端产物名因此由 `danmubox_0.1.0_*` 变成 `danmubox_0.2.0_*`（**以实际构建为准**）；
   「产物由 CI 出」与「发一版的操作步骤」写进 `docs/operations.md` §5.13。**未打 tag、未发版**（发版动作归主流程）。
 
+- **`artifacts-windows` 缓存 release `target`**（2026-09-18，两轮真跑取数后保留）：命中时 Windows job 全程 **281s**、只缓存 registry 时基线 **645s**，净省 **364s**（`出 Windows 产物` 601s → 225s，cargo 9m26s → 3m12s）；代价是该缓存条目 561 MB、缓存步恢复 30s，仓库缓存总占用到 8.46 GiB / 10 GiB。读数与判据见 `docs/operations.md` §5.13。
 - **Android 产物从 `macos-14` 挪到 `ubuntu-latest`**（2026-09-18）：`tauri android build` 本身不需要 macOS，原先并进 macOS 那条 job 只是早期顺手 —— 代价是私有仓口径下这一步按 **×10** 计费（15–21 分钟 ⇒ 150–210 计费分钟），且把稀缺的 macOS runner 占满 20 分钟。因此把 `artifacts` **拆成两条**：`artifacts`（`macos-14`，只出 `.dmg`）与 `artifacts-android`（`ubuntu-latest`，出**已签名的** release APK）。与 `scripts/android-env.sh` 的两处宿主差异都收在新 job 内：cmdline-tools 取 **linux** 包（版本号 `16111833` 与 macOS 那份相同）、NDK 的 prebuilt 目录**按宿主实际探测**（`linux-x86_64` / `darwin-x86_64`），不再写死。规格：[`docs/operations.md`](docs/operations.md) §5.13。
 
 ## [0.2.0] - 2026-09-17

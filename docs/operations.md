@@ -1,27 +1,20 @@
 # 运行与运维
 
-> 定位：danmubox 的日常启动停止、数据文件位置、凭据文件维护、故障排查、三端构建分发与卸载清理。
-> 读者：日常使用与排障的仓库所有者本人；需要读取应用数据目录或在本机出包的维护者。
-> 更新时机：新增/更名环境变量、数据目录或文件名变化、新增 IPC 命令、新增卸载残留位置、新增目标平台或打包步骤时必须同步本文。
-
----
-
 ## 1. 日常操作
 
 ### 1.1 启动与停止
 
 | 平台 | 启动 | 停止 |
 |---|---|---|
-| macOS | 双击 `danmubox.app`（需按 §5.3 先出包）；开发期见下方两种运行方式 | 关闭窗口即退出（桌面端不做后台保活；Android 是例外，见 §2.8）；异常残留用活动监视器结束 `danmubox-desktop` |
+| macOS | 双击 `danmubox.app`（产出见 §1.6 / §5.3）；开发期两种运行方式见下 | 关闭窗口即退出（桌面端不做后台保活；Android 是例外，见 §2.8）；异常残留用活动监视器结束 `danmubox-desktop` |
 | Windows | 开始菜单 / 桌面快捷方式，或运行安装目录下的 `danmubox.exe` | 关闭窗口即退出；异常残留用任务管理器结束 `danmubox.exe` |
 | Android | 桌面图标，或 `adb shell monkey -p dev.kksk.danmubox -c android.intent.category.LAUNCHER 1` | 从最近任务划掉；彻底停止用「设置 → 应用 → danmubox → 强制停止」 |
 
-应用为纯客户端形态，不启动任何本地网络服务：界面通过 Tauri IPC 与引擎通信，二者之间不需要任何访问凭据（契约 §7）。三端打包与产物见 §5。
+应用为纯客户端形态，不启动任何本地网络服务：界面通过 Tauri IPC 与引擎通信，二者之间不需要任何访问凭据（`contract.md` §7）。三端打包与产物见 §5。
 
-#### 桌面端运行方式（2026-09-11 实测）
+#### 桌面端运行方式（依赖 Vite dev server）
 
-**当前 `tauri.conf.json` 里配置了 `devUrl`，因此 debug 与 release 构建都会从 `http://localhost:5173` 加载界面**——
-也就是说**必须先起 Vite dev server**，否则窗口是空白的（且不会有任何报错，只有 `webview 页面加载` 日志缺失）。
+裸 `cargo run` / `cargo build` 产出的二进制**不加载内嵌前端**，而是走 `tauri.conf.json` 的 `build.devUrl`（`http://localhost:5173`）——判据是 `tauri` crate 的 `build.rs`：`dev = !custom-protocol`（仓库 `Cargo.toml` 未声明该 feature；`tauri build` 的产物加载 `tauri://localhost`，见 §1.6）。因此用裸 cargo 起应用**必须先起 Vite dev server**，否则窗口空白且不报错（只有 `webview 页面加载` 日志缺失）。
 
 ```bash
 # 终端 1：前端 dev server（保持运行）
@@ -31,7 +24,7 @@ npm --prefix apps/desktop/ui run dev
 cargo run -p danmubox-desktop
 ```
 
-判断界面有没有真正加载，看这条日志（需要 `DANMUBOX_LOG=debug`）：
+判断界面有没有真正加载（需要 `DANMUBOX_LOG=debug`）：
 
 ```bash
 DANMUBOX_LOG=debug cargo run -p danmubox-desktop
@@ -39,7 +32,7 @@ DANMUBOX_LOG=debug cargo run -p danmubox-desktop
 # 只看到 "web content process terminated" 而没有页面加载 → dev server 没起或端口不对
 ```
 
-要得到**不依赖 dev server 的独立产物**见 §1.6；三端打安装包见 §5。单独 `cargo build --release` **不会**产生可独立运行的产物——它加载不出前端（窗口全白，日志里既无 `webview 页面加载` 也无任何 IPC）；实测 A/B 记录与门槛见 `../AGENT.md` §9。
+单独 `cargo build --release` **不会**产生可独立运行的产物：它同样走 `devUrl`，没有 dev server 时窗口全白，日志里既无 `webview 页面加载` 也无任何 IPC（A/B 记录见 `../AGENT.md` §9）。要独立产物见 §1.6，三端打安装包见 §5。
 
 ### 1.2 日志级别 `DANMUBOX_LOG`
 
@@ -65,27 +58,26 @@ DANMUBOX_LOG=debug cargo run -p danmubox-desktop
 | stdout / stderr | 前台运行时直接可见；桌面端 GUI 启动时 stdout 不可见，用下方重定向办法 |
 | `danmubox://log` | Tauri IPC 事件，供前端调试面板订阅（`ipc.md` §4） |
 
-桌面端不写日志文件（`apps/desktop/src-tauri/src/lib.rs` 的 `fmt_layer` 固定写 stderr），需要留存时用下方重定向。
+桌面端**不写日志文件**：`apps/desktop/src-tauri/src/lib.rs` 的 `fmt_layer` 固定写 stderr（`.with_writer(std::io::stderr)`、`.with_ansi(false)`），需要留存时用下方重定向。
 
-#### 桌面端调试日志落到文件（推荐）
-
-排查界面问题时，把日志写成文件比在应用里翻日志面板方便：
+#### 桌面端调试日志落到文件
 
 ```bash
 mkdir -p target/logs
 DANMUBOX_LOG=debug cargo run -p danmubox-desktop 2>&1 | tee -a target/logs/app.log
 ```
 
-日志**全量**覆盖前后端：Rust 侧的 `tracing` 输出，加上界面里的 JS 错误。桥接由 `apps/desktop/src-tauri/src/lib.rs` 实现：
+日志**全量**覆盖前后端：Rust 侧 `tracing` 输出 + 界面里的 JS 错误。控制台桥在 `apps/desktop/src-tauri/src/lib.rs`（常量 `CONSOLE_BRIDGE` + 命令 `frontend_log`）：
 
-- 页面每次 `PageLoadEvent::Finished` 后，Rust 侧执行 `webview.eval(CONSOLE_BRIDGE)` 注入桥接脚本；
-- 脚本改写 `console.error` / `console.warn`，并监听 `window` 的 `error` 与 `unhandledrejection`；
-- 命中后由脚本**直接**调 `window.__TAURI_INTERNALS__.invoke('frontend_log', { level, message })`（不经 `@tauri-apps/api`）；
-- Rust 侧 `frontend_log` 命令按 level 写进 `tracing` 的 `danmubox::ui` target（`error` / `warn`，其余落 `debug`）。
+| 环节 | 口径 |
+|---|---|
+| 注入 | 页面每次 `PageLoadEvent::Finished` 后 `webview.eval(CONSOLE_BRIDGE)` |
+| 拦截 | 脚本改写 `console.error` / `console.warn`，并监听 `window` 的 `error` 与 `unhandledrejection` |
+| 上报 | 脚本**直接**调 `window.__TAURI_INTERNALS__.invoke('frontend_log', { level, message })`（不经 `@tauri-apps/api`） |
+| 落点 | `frontend_log` 按 level 写进 `tracing` 的 `danmubox::ui` target（`error` / `warn`，其余落 `debug`） |
+| 限流 | `message` 截断到 **2000 字符**（去重键取前 200 字符）；同一条告警 **1s 内只上报一次**——防「渲染 → 告警 → 日志回推 → 重渲染」的反馈环 |
 
-脚本自带两条限流：`message` 截断到 **2000 字符**（去重键取前 200 字符）；同一条告警 **1s 内只上报一次**——防止「渲染 → 告警 → 日志回推 → 重渲染」的反馈环。
-
-判断界面是否真的加载、以及是否出现异常循环，看这几条：
+判断界面是否真的加载、是否出现异常循环：
 
 | 日志 | 含义 |
 |---|---|
@@ -98,21 +90,20 @@ DANMUBOX_LOG=debug cargo run -p danmubox-desktop 2>&1 | tee -a target/logs/app.l
 
 ### 1.3 数据目录与文件位置（三端）
 
-数据目录下只有凭据文件与偏好文件；弹幕只在内存，不落盘（契约 §4.3）。
-（唯一会写到数据目录之外的，是你主动点过「一键诊断」之后的那个报告文件 —— 它落在下载目录，见 §2.9；数据目录本身不因此多出任何东西。）
+数据目录只放两类文件：凭据 `config.toml` 与偏好 `prefs.json`（含备份）。弹幕只在内存，不落盘（`contract.md` §4.3）。唯一写到数据目录之外的是用户主动触发的一键诊断报告（落在下载目录，见 §2.9）。
 
 | 平台 | 数据目录 | 典型内容 |
 |---|---|---|
 | macOS | `~/Library/Application Support/danmubox/` | `config.toml`、`prefs.json`、`prefs.json.bak` |
 | Windows | `%APPDATA%\danmubox\` | 同上 |
-| Android | 应用私有目录（绝对路径随系统与用户而异，以 `app_info` 返回值为准）；由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`，即应用私有 dataDir 本身、**不是**其下的 `files/` 子目录（实测模拟器 android-35 上为 `/data/user/0/dev.kksk.danmubox`） | `config.toml`、`prefs.json`、`prefs.json.bak` |
+| Android | 应用私有目录（绝对路径随系统与用户而异，以 `app_info` 返回值为准）；由外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`，即应用私有 dataDir 本身、**不是**其下的 `files/` 子目录 | `config.toml`、`prefs.json`、`prefs.json.bak` |
 
-- 数据目录本身**不含**弹幕内容：弹幕只在内存环形缓冲中保留（契约 §4.3）。
+- 数据目录本身**不含**弹幕内容：弹幕只在内存环形缓冲中保留（`contract.md` §4.3）。
 - 查看实际数据目录：调用 `app_info`（返回版本、数据目录、构建信息；不含任何凭据值）。
 - Android 上定位数据目录：
 
 ```bash
-adb logcat -s danmubox                              # 启动时打印数据目录
+adb logcat -s danmubox                                          # 启动时打印数据目录
 adb shell dumpsys package dev.kksk.danmubox | grep -i dataDir   # 辅助确认
 ```
 
@@ -120,9 +111,9 @@ adb shell dumpsys package dev.kksk.danmubox | grep -i dataDir   # 辅助确认
 
 ### 1.4 凭据文件 `config.toml`：查看、权限与手工编辑
 
-凭据以**明文 TOML** 存放，靠文件权限（`0600`）与「只在本机数据目录」约束，不加密（契约 §4.1；需求来源与本取舍的完整论证见 [`decisions/0007-credential-file.md`](decisions/0007-credential-file.md)）。
+凭据以**明文 TOML** 存放，靠文件权限（`0600`）与「只在本机数据目录」约束，不加密（`contract.md` §4.1；需求 §2.5）。
 
-文件形态（示例值全部为空串；多账号用 `[profiles.<name>]` 承载，`active_profile` 指定当前生效者，契约 §4.1）：
+文件形态（示例值全部为空串；多账号用 `[profiles.<name>]` 承载，`active_profile` 指定当前生效者）：
 
 ```toml
 active_profile = "default"
@@ -137,7 +128,7 @@ buvid4 = ""
 sid = ""
 ```
 
-启动顺序：读文件 → 取 `active_profile` 指向的账号，其 `sessdata` / `bili_jct` / `dede_user_id` 三者齐全且非空则直接进入登录态；否则走扫码（默认入口），扫码成功后原子写回目标账号（新增账号先按昵称起名，见 `auth.md` §8.4）。
+启动顺序：读文件 → 取 `active_profile` 指向的账号，其 `sessdata` / `bili_jct` / `dede_user_id` 三者齐全且非空则直接进入登录态；否则走扫码（唯一登录入口），扫码成功后原子写回目标账号（新增账号先按昵称起名，见 `auth.md` §8.4）。
 
 #### 查看与权限确认
 
@@ -151,23 +142,21 @@ sid = ""
 
 #### 手工编辑凭据（排障兜底）
 
-界面与 CLI **没有**粘贴 Cookie 的入口（用户 2026-09-13：登录方式只保留扫码与游客）。
-要换掉某份凭据只能编辑这个文件：
+界面与 CLI **没有**粘贴 Cookie 的入口（`contract.md` §4.1；需求 §2.5、§2.13）。要换掉某份凭据只能编辑这个文件：
 
 1. 退出应用（避免写入竞争）。
 2. 备份现有文件（复制为 `config.toml.bak`）。
 3. 从浏览器 DevTools 的 Application → Cookies → `bilibili.com` 复制 `SESSDATA`、`bili_jct`、`DedeUserID`，填入 `active_profile` 指向的 `[profiles.<name>]` 的 `sessdata` / `bili_jct` / `dede_user_id`；其余字段可留空。
-4. 确认文件权限为 `0600`（见上表）。
+4. 确认文件权限为 `0600`（见 §1.4 的权限确认表）。
 5. 重新启动应用：三项齐全即直接进入登录态，无需扫码。
 
-注意这里没有落盘前的护栏：凭据是否有效要到启动复核（或下一次 `nav` 调用）才知道，
-填错就是启动后仍显示未登录（`auth.md` §8.4）。
+注意这里没有落盘前的护栏：凭据是否有效要到启动复核（或下一次 `nav` 调用）才知道，填错就是启动后仍显示未登录（`auth.md` §8.4）。
 
 登出（界面登出，对应 `account_logout`）会清空当前账号的**账号级**凭据并回到游客态：**账号条目保留**（列表里显示为未登录，可再登录回来），`buvid3` / `buvid4` 为设备标识一并保留。
 
 #### 命令行入口
 
-`danmubox-cli` 的账号相关子命令（能力交付的阶段史见 [`../CHANGELOG.md`](../CHANGELOG.md)）：
+`danmubox-cli` 的账号相关子命令：
 
 | 用途 | 命令 |
 |---|---|
@@ -177,13 +166,13 @@ sid = ""
 | 登出 | `danmubox logout [账号名]`（缺省 = 当前账号；只清凭据，条目保留） |
 | 切换 / 删除账号 | `danmubox accounts --use <名字>`、`danmubox accounts --remove <名字>` |
 
-界面与 CLI 的账号入口都只保留扫码与登出：没有「粘贴 Cookie」这一类命令（用户 2026-09-13 移除，见 `auth.md` §8.4）。
+界面与 CLI 的账号入口都只保留扫码与登出（需求 §2.5、§2.13）。
 
 数据目录默认取平台路径（`paths::data_dir`）；调试或多环境并存时可用环境变量 `DANMUBOX_HOME` 覆盖，例如 `DANMUBOX_HOME=/tmp/db danmubox session`。
 
 ### 1.5 偏好文件 `prefs.json`
 
-界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为契约 §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_in_danmaku`、`ui.gift_panel`、`filter.kinds`、`history.buffer_rows_danmaku`）。只存被显式改过的键，缺失的键回落到默认值（契约 §4.2）。
+界面偏好只存 `prefs.json`（不写进 `config.toml`），形态是**单层 JSON 对象**，键为 `contract.md` §8 的唯一权威清单（如 `ui.font_scale`、`ui.theme`、`ui.gift_in_danmaku`、`ui.gift_panel`、`filter.kinds`、`history.buffer_rows_danmaku`）。只存被显式改过的键，缺失的键回落到默认值（`contract.md` §4.2）。
 
 ```json
 {
@@ -205,8 +194,8 @@ sid = ""
 |---|---|
 | 文件缺失 | 按默认值启动 |
 | 单键缺失 | 该键取默认值，其余键照常生效 |
-| 未知键或非法值 | 键清单以契约 §8 为准，清单外或类型/范围不符的键不参与生效值合成；建议只通过界面修改 |
-| 已删除键的残留 | `ui.system_notice` 已删除（开关并进 `filter.kinds` 白名单，契约 §8）：读文件时按它的值把结果物化进 `filter.kinds`（`false` → 去掉 `system`；`true` → 补上），该键本身随即失效，下次写入后从文件里消失。`ui.gift_panel_mode` 同理已删除、由 `ui.gift_in_danmaku` / `ui.gift_panel` 两枚开关取代：读文件时按旧值物化（`separate` → `false` / `true`；`merged` → `true` / `false`），文件里已显式写了新键的那一枚以文件为准。其余已删除键（如 `filter.keywords*`）只是被忽略 |
+| 未知键或非法值 | 键清单以 `contract.md` §8 为准，清单外或类型/范围不符的键不参与生效值合成；建议只通过界面修改 |
+| 已删除键的残留 | `ui.system_notice` 已删除（门并进 `filter.kinds` 白名单）：读文件时按它的值物化进 `filter.kinds`（`false` → 去掉 `system`；`true` → 补上），该键本身随即失效，下次写入后从文件里消失。`ui.gift_panel_mode` 同理已删除、由 `ui.gift_in_danmaku` / `ui.gift_panel` 两枚开关取代：读文件时按旧值物化（`separate` → `false` / `true`；`merged` → `true` / `false`），文件里已显式写了新键的那一枚以文件为准。其余已删除键（如 `filter.keywords*`）只是被忽略 |
 | JSON 解析失败（损坏） | 按默认值启动，并把损坏副本保留为 `prefs.json.bak` |
 | 正常写入 | 原子替换（临时文件 + rename），不会出现写一半的半成品文件 |
 
@@ -219,22 +208,15 @@ npm --prefix apps/desktop/ui i -D @tauri-apps/cli --cache /tmp/npm-cache-danmubo
 cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 ```
 
-产物是 `target/release/danmubox-desktop`（约 13 MB，实测），**前端已内嵌**：
-日志里页面加载的 URL 是 `tauri://localhost` 而不是 `http://localhost:5173`，
-因此不需要再起 Vite，双击即可运行。
+产物是 `<repo>/target/release/danmubox-desktop`（约 13 MB），**前端已内嵌**：日志里页面加载的 URL 是 `tauri://localhost` 而不是 `http://localhost:5173`，因此不需要再起 Vite，双击即可运行。
 
-`tauri.conf.json` 当前 `bundle.active=false` 且 `icon` 为空，所以这一步不产出 `.app` / `.dmg` / APK；
-要出安装包**不用**改这两项：macOS 的 `.dmg` 直接加 `--bundles dmg` 即可（`--bundles` 覆盖 `bundle.active`，
-`icon: []` 也不拦 macOS 出包 —— 2026-09-16 实测），三端步骤与产物见 §5.3，
-`icon` 为什么保持为空、Windows 那枚 `.ico` 为什么在命令行覆盖见 §5.3「图标与 `bundle.icon` 的口径」。
-
----
+`tauri.conf.json` 当前 `bundle.active=false` 且 `bundle.icon=[]`，所以这一步不产出 `.app` / `.dmg` / APK；要出安装包**不用**改这两项：macOS 的 `.dmg` 直接加 `--bundles dmg` 即可（`--bundles` 覆盖 `bundle.active`，`icon: []` 也不拦 macOS 出包）。三端步骤与产物见 §5.3，`icon` 口径见 §5.3「图标与 `bundle.icon` 的口径」。
 
 ## 2. 故障排查决策树
 
 ### 2.1 总览
 
-排障顺序固定为：**登录状态 → 连接状态 → 业务行为**。先确认界面上的登录态与房间连接状态，再进对应小节（认证与扫码见 2.2 / 2.7，连接见 2.3 / 2.5，发送见 2.4，Android 白屏见 2.6）；需要细节时开启 `DANMUBOX_LOG=debug` 复现一次，读日志与 `danmubox://log` 事件。Android 上「退到后台之后」的行为（前台服务保活、那枚常驻通知、电池优化白名单）单独一篇：见 2.8。
+排障顺序固定为：**登录状态 → 连接状态 → 业务行为**。先确认界面上的登录态与房间连接状态，再进对应小节（认证与扫码见 2.2 / 2.7，连接见 2.3 / 2.5，发送见 2.4，Android 白屏见 2.6）；需要细节时开启 `DANMUBOX_LOG=debug` 复现一次，读日志与 `danmubox://log` 事件。Android 上「退到后台之后」的行为（前台服务保活、那枚常驻通知、电池优化白名单）见 2.8；后台能挂多久、丢弹幕与切网断连的判定见 2.10。
 
 ### 2.2 认证失败
 
@@ -255,13 +237,13 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 | 2 | `room_id` 是否为真实房间号 | 短号 / URL 必须先经 `getRoomPlayInfo` 解析为真实 `room_id`；解析失败说明房间输入不合法 → 重新添加房间 |
 | 3 | 日志是否出现 `getDanmuInfo` 失败 | 该接口需 `buvid3` 与 WBI 签名，未登录时易失败 → 见 2.2 |
 | 4 | 是否出现认证回应 `op=8` 且 `code != 0` | 认证未通过，按重连退避处理；记录原始 code，见 2.2 |
-| 5 | 是否反复重连且间隔递增 | 退避为 5s / 10s / 20s / 40s / 60s 封顶，属预期行为；持续不成功则查网络与上游可用性 |
+| 5 | 是否反复重连且间隔递增 | 退避为 5s / 10s / 20s / 40s / 60s 封顶（`contract.md` §4），属预期行为；持续不成功则查网络与上游可用性 |
 | 6 | 网络环境 | 代理 / 防火墙 / 公司网络拦截 WebSocket → 换网络验证 |
 | 7 | 全部正常仍无消息 | 房间可能未开播（`live_status=0`）→ 换一个正在直播的房间交叉验证 |
 
 ### 2.4 弹幕发送失败
 
-发弹幕返回 `SendOutcome`（契约 §5），必须先看它、再看界面表现。前端是**乐观渲染**：点下发送就已经把你那条画在列表里了，因此**不要**以「界面上出现过」判定发送成功 —— 判定只看 `SendOutcome`。没发出去的那条会**留在列表里标成被拒**（正文划线 + 行尾写上游给的原因，`docs/ui.md` §4.4），草稿保留可改再发。
+发弹幕返回 `SendOutcome`（`contract.md` §5），必须先看它、再看界面表现。前端是**乐观渲染**：点下发送就已经把你那条画在列表里了，因此**不要**以「界面上出现过」判定发送成功 —— 判定只看 `SendOutcome`。没发出去的那条会**留在列表里标成被拒**（正文划线 + 行尾写上游给的原因，`ui.md` §4.4），草稿保留可改再发。
 
 | `SendOutcome` | 判定依据 | 含义与动作 |
 |---|---|---|
@@ -285,7 +267,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 
 | 步骤 | 动作 | 说明 |
 |---|---|---|
-| 1 | 点击房间内的「刷新」按钮 | 触发 IPC `rooms_reconnect`，手动发起一次重连（契约 §7） |
+| 1 | 点击房间内的「刷新」按钮 | 触发 IPC `rooms_reconnect`，手动发起一次重连（`contract.md` §7） |
 | 2 | 观察是否恢复收弹幕 | 重连会重新走 `getDanmuInfo` 换取新的连接地址与认证参数 |
 | 3 | 确认缓冲未被清空 | `rooms_reconnect` **不清空**已收缓冲，仍属同一次房内会话；已渲染的行保留 |
 | 4 | 仍无消息 | 检查是否未开播（`live_status=0`）或上游不可用 → 换房间 / 换网络交叉验证 |
@@ -311,7 +293,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 | 2 | `account_qr_poll` 是否在持续轮询 | 前端未轮询 → 检查轮询定时器；建议间隔 2 秒，不得低于 1 秒 |
 | 3 | 二维码是否过期 | 过期后必须重新生成二维码，不能继续轮询旧 key |
 | 4 | `data.code` 语义 | 已知状态按 `auth.md` 的状态机处理；**未知码归入「其他 → 按未确认处理」**，继续轮询，不要猜含义 |
-| 5 | 扫码成功后会话是否刷新 | 成功后登录态应变为已登录——界面重拉 `session_status` 即为已登录（`danmubox://session` 只推房内身份，契约 §7） |
+| 5 | 扫码成功后会话是否刷新 | 成功后登录态应变为已登录——界面重拉 `session_status` 即为已登录（`danmubox://session` 只推房内身份，`contract.md` §7） |
 | 6 | 手机与电脑的端 | 在 Android 端扫码是「同机扫屏」，请用另一台设备显示二维码或截图后扫码 |
 
 ### 2.8 Android 退到后台就不再收弹幕 / 那枚「正在接收弹幕」通知
@@ -320,21 +302,23 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 
 | 环节 | 谁会把它掐掉 | 本项目的对策 |
 |---|---|---|
-| 进程被系统回收 / 冻结 | 内存压力下的 low-memory killer、App Standby | **前台服务**（本节） |
+| 进程被系统回收 / 冻结 | 内存压力下的 low-memory killer、App Standby | **前台服务** |
 | 网络被掐 | Doze（屏幕关、设备静止、未充电） | **只能靠电池优化白名单**（见下），前台服务管不了 |
 
 **是什么**：`gen/android/app/src/main/java/dev/kksk/danmubox/KeepAliveService.kt` —— 一个**只做一件事**的前台服务：挂一枚常驻通知，把本进程的优先级顶到「前台服务」档，让系统在后台/内存紧张时优先回收别的进程。它**不轮询、不上报、不持唤醒锁、不碰网络**：弹幕连接本来就跑在**本进程的 Rust 侧**（tokio），被系统限流的只有 WebView 的定时器与渲染，所以这里没有任何需要替 Rust 侧做的事。
 
 **什么时候起、什么时候停**（全在 `MainActivity`）：
 
-| 时机 | 动作 |
-|---|---|
-| 退到后台（`onStop`，HOME / 切到别的应用）**且页面答「还有活跃连接」** | 起 |
-| 回到前台（`onStart`，点通知 / 点图标 / 从最近任务切回） | 停，通知同时消失 |
-| 应用内退出（根页面按返回 → `finish()`），`isFinishing` | **不起** |
-| 把任务从最近任务里划掉，`onTaskRemoved` | **停**，不留通知 |
+| 时机 | 动作 | 锚点 |
+|---|---|---|
+| 退到后台（`onStop`，HOME / 切到别的应用）**且页面答「还有活跃连接」** | 起 | `MainActivity.onStop` → `askPageForActiveConnection()` → `KeepAliveService.start()` |
+| 回到前台（`onStart`，点通知 / 点图标 / 从最近任务切回） | 停，通知同时消失 | `MainActivity.onStart` → `KeepAliveService.stop()` |
+| 应用内退出（根页面按返回 → `finish()`） | **不起**（`isFinishing` 早退） | `MainActivity.onStop` |
+| 把任务从最近任务里划掉（`onTaskRemoved`） | **停**，不留通知 | `KeepAliveService.onTaskRemoved` |
 
-「有没有活跃连接」是问页面（`window.__danmuboxHasActiveConnection()`，与返回手势同一套 JS 桥，见 `ui/src/keepalive.ts`）——判据复用界面已有连接状态，外壳不自己造状态。**没开过房间就不会有通知**。
+- 「有没有活跃连接」是问页面（`window.__danmuboxHasActiveConnection()`，与返回手势同一套 JS 桥，见 `apps/desktop/ui/src/keepalive.ts`）——判据复用界面已有连接状态（`connected` / `connecting`，退避重连中也算「活跃」），外壳不自己造状态。**没开过房间就不会有通知**。
+- 服务返回 `START_NOT_STICKY`：进程被系统杀掉后不自动重来。
+- 通知渠道 `danmubox-keepalive`、通知 id 1、文案 `正在接收弹幕` / `点按回到应用`（`gen/android/app/src/main/res/values/strings.xml` 的 `keepalive_notification_*`）。文案静态，**不含房间号 / 昵称 / 账号 / 弹幕内容**（通知栏是锁屏可见面，见 §3）。
 
 **怎么关掉它**（三条路，任选）：
 
@@ -348,76 +332,54 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 
 **要不要开电池优化白名单**（设置 → 电池 → 电池优化 → 找到 danmubox → 不优化）：
 
-- **前台服务并不豁免 Doze**。屏幕关掉、设备静止、未充电进入 Doze 后，系统暂停应用的网络访问，长连接会断；断开后靠已有重连退避（5/10/20/40/60s 退避，见 §2.3）恢复，能接上的窗口很窄。
+- **前台服务并不豁免 Doze**。屏幕关掉、设备静止、未充电进入 Doze 后，系统暂停应用的网络访问，长连接会断；断开后靠已有重连退避（5/10/20/40/60s，见 §2.3）恢复，能接上的窗口很窄。
 - 把应用加进白名单（官方叫「部分豁免」）之后，Doze 与 App Standby 期间**仍可用网络、可持 partial wake lock**——这才是「关屏也要一直收」真正的开关。
 - 所以：只在「切出去一会儿再回来」用，可以不开；要**关屏持续收**，就得开。
 - 本应用**不会**弹窗要这个权限（官方那张「可接受用途」表里即时通讯类明确不推荐用 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` 直接要）——需要时自己去设置里加。
 
-**通知权限（Android 13 / API 33 起）**：常驻通知要 `POST_NOTIFICATIONS`，它是**运行时**权限，冷启动时问一次（拒过一次就不再自动弹，免得每次启动都被弹窗堵住）。**拒绝不影响保活**：前台服务照起、进程照顶前台档，只是**通知抽屉里看不到那条通知**（系统行为：这类通知会退回「正在运行的应用」里显示），用户照样能在那里停掉它。
+**通知权限（Android 13 / API 33 起）**：常驻通知要 `POST_NOTIFICATIONS`，它是**运行时**权限，冷启动时问一次（`MainActivity.requestNotificationPermission`；拒过一次就不再自动弹，免得每次启动都被弹窗堵住）。**拒绝不影响保活**：前台服务照起、进程照顶前台档，只是**通知抽屉里看不到那条通知**（系统行为：这类通知会退回「正在运行的应用」里显示），用户照样能在那里停掉它。
 
-**6 小时额度（Android 15 / API 35 起，且 targetSdk ≥ 35）**：`dataSync` 这个前台服务类型每 24 小时只有 **6 小时**总额度（本项目 `targetSdk 36`，落在这一档）。到点系统回调 `Service.onTimeout()`，代码里立刻 `stopSelf()`——**不这么做进程会被系统以 `RemoteServiceException` 崩掉**。额度用尽后**再起**服务会被拒（`ForegroundServiceStartNotAllowedException`；代码里接住、只记一条 logcat，表现为「这次不保活」，不崩）；用户把应用带回前台会重置计时。自用场景下一次蹲播够用。
+**6 小时额度（Android 15 / API 35 起，且 targetSdk ≥ 35；本项目 `targetSdk 36`）**：`dataSync` 这个前台服务类型每 24 小时只有 **6 小时**总额度。到点系统回调 `KeepAliveService.onTimeout()`，代码里立刻 `stopSelf()`——**不这么做进程会被系统以 `RemoteServiceException` 崩掉**。额度用尽后**再起**服务会被拒（`ForegroundServiceStartNotAllowedException`；`KeepAliveService.start()` 接住、只记一条 logcat，表现为「这次不保活」，不崩）；用户把应用带回前台会重置计时。
 
-**厂商 ROM**：以上都是 AOSP 行为。国产 ROM（MIUI / EMUI / ColorOS / OriginOS 等）另有自己的后台管理，可能忽略前台服务、锁屏后清理、或要求单独开「自启动 / 后台运行」白名单——**真机待确认**，见 §9 的卸载检查清单与 [`testing.md`](testing.md) §10.5。
+**厂商 ROM**：以上都是 AOSP 行为。国产 ROM（MIUI / EMUI / ColorOS / OriginOS 等）另有自己的后台管理，可能忽略前台服务、锁屏后清理、或要求单独开「自启动 / 后台运行」白名单——**真机未验证**（`testing.md` §10.5 的口径；待验项见 `roadmap.md` §2）。
 
-**实测（2026-09-16，本地 AVD `danmubox_verify`：android-35 / API 35 / arm64-v8a，包 `dev.kksk.danmubox`，targetSdk 36，**带签名的 release 包**）**：命令与原始输出全部落在 `.android-env/verify/ka-*.txt|png`（`ka-old-*` = 保活前的包，`ka-new-*` = 本提交的包；**该目录随 `scripts/android-env.sh clean` 一起删**）。
+**已实测的结论**（本地 AVD，android-35 / arm64-v8a / 带签名 release 包；命令与原始读数归 `../CHANGELOG.md` 归档区）：
 
-A/B —— 同一个房间（公开测试房间 `1`）、同一台 AVD，都取「按 HOME 之后 ≈200 秒」这一档：
-
-| 检查 | 旧包（保活前） | 新包（本次） |
-|---|---|---|
-| `pidof dev.kksk.danmubox` | HOME 前 3455 → 200 s 后 **3455（进程活着）** | HOME 前 3898 → 200 s 后 **3898** |
-| 到 443 的 ESTABLISHED | HOME 前 3 条 → 200 s 后 **0 条** | HOME 前 4 条 → 200 s 后 **2 条**（其中一条是后台期间新建的，见下） |
-| 前台服务 | 无（这个包里没有） | `ServiceRecord{…dev.kksk.danmubox/.KeepAliveService}`、`isForeground=true foregroundId=1 types=0x00000001`、`uidState: FGS` |
-| 常驻通知 | 无 | `NotificationRecord(… pkg=dev.kksk.danmubox id=1 … channel=danmubox-keepalive … flags=ONGOING_EVENT\|NO_CLEAR\|FOREGROUND_SERVICE)`；`android.title=正在接收弹幕` / `android.text=点按回到应用`；通知抽屉的「静默」组里可见（截图 `ka-new-13-shade.png`） |
-| logcat | —— | 全程只有 2 行：`danmubox-keepalive: 前台服务已启动` / `…已停止`，`FATAL EXCEPTION` 0 |
-
-**这条 A/B 说明了什么、没说明什么（不要过度解读）**：旧包 200 秒后一条连接都不剩，而同一时刻设备上**别的应用**仍持有到 443 的 ESTABLISHED（`ka-old-21-all-device-conn.txt`），所以不是设备断网 —— 旧包那边的进程虽然还在，但已经**不再做事**（冻结/被丢弃）。新包同一档仍有 2 条连接、且那条 WS 在后台期间换过端口（`A038/A028` 消失、`D518 → CA5C0D70` 出现在 12:45）说明**进程确实在跑**（还能发起新连接）。但把窗口拉长到 7.2 分钟（`ka-new-22-after-7min.txt`）后，WS 那条已经掉了、只剩一条 HTTPS 长连 —— **前台服务保住的是「进程不被冻结到连重连都做不了」，不是「连接永远不断」**。模拟器上区分不出真机省电/内存压力下的收益，见 [`testing.md`](testing.md) §10.5。
-
-**起停与两档不该起（同一台 AVD）**：
-
-| 场景 | 结果 |
+| 场景 | 结论 |
 |---|---|
-| 点常驻通知回前台（真点了通知，`input tap` 到 `正在接收弹幕` 上） | 回 `MainActivity`、**pid 不变**（3898）、`KeepAliveService` 消失、通知记录 0 条、logcat 多一行「前台服务已停止」 |
-| 连续两轮「HOME → 回前台」 | 每轮都是「HOME 后：服务 1 个 + 通知 1 条 → 回前台后：0 + 0」，pid 始终 4472，**没有累积、没有重复启动**（`ka-new-70-cycle.txt`） |
-| **没有任何房间**时按 HOME | **不起服务**、无通知、logcat 无 keepalive 行（`ka-new-61-A10-noroom.txt`；截图确认当时确实是空态） |
-| 开着房间但在**根页面按返回**退出应用 | 应用退出（`pidof` 空）、**无服务、无通知**、logcat 无 keepalive 行（`ka-new-50-A10-backexit.txt`） |
+| 退到后台 ≈200 秒 | 进程在、前台服务在（`uidState: FGS`）、常驻通知在；保活前的旧包同一档到 443 的连接归零 |
+| 点常驻通知回前台 | 服务与通知都消失、pid 不变 |
+| 连续两轮「HOME → 回前台」 | 无累积、无重复启动 |
+| 没有任何房间时按 HOME、开着房间但根页面按返回退出 | 都**不起**服务、无通知、logcat 无 keepalive 行 |
+| 通知权限冷启动 | 正常弹系统弹窗，点 Allow 后 `granted=true` |
+| 把 6 小时额度缩到 60 秒（`FGS_INTRODUCE_TIME_LIMITS`） | `onTimeout()` → 自停是**优雅收工**：`RemoteServiceException` / `FATAL EXCEPTION` 均 0 次 |
 
-**通知权限的冷启动路径也实测过**：`pm revoke` + 清 `user-set`/`user-fixed`（等价于全新安装）后冷启动，系统弹窗「Allow danmubox to send you notifications?」出现（`ka-new-80-perm-dialog.xml`），点 Allow 后 `granted=true`，logcat `danmubox-main: 已获得通知权限`。
-
-**Android 15 的 6 小时额度也实测过**（用官方给的测试开关，见 [`about/versions/15/behavior-changes-15`](https://developer.android.com/about/versions/15/behavior-changes-15#datasync-timeout)）：`am compat enable FGS_INTRODUCE_TIME_LIMITS dev.kksk.danmubox` + `device_config put activity_manager data_sync_fgs_timeout_duration 60000`（把 6 小时缩成 60 秒），退到后台后 —— 服务 12:52:58 起、12:53:58 系统回调 `Service.onTimeout()`，代码里那条自停日志与「前台服务已停止」紧接着打出（相隔 8 ms），服务与通知都收干净、进程仍在；**`RemoteServiceException` / `did not stop within` 0 次、`FATAL EXCEPTION` 0 次**（`ka-new-90-ontimeout.txt`）。即：额度耗尽这一刻是**优雅收工**，不是崩溃。（测完已 `device_config delete` + `am compat disable` 复位。）
+**边界**：这条 A/B 证到的是「进程不被冻结到连重连都做不了」，**不是**「连接永远不断」（同一档拉到 7 分钟后 WS 那条仍会掉）；模拟器区分不出真机省电 / 内存压力下的收益。
 
 **排查**：
 
 | 判定顺序 | 观察点 | 结论与动作 |
 |---|---|---|
 | 1 | 通知抽屉里有没有「正在接收弹幕」 | 没有 → 先看 2、3；有 → 保活已在工作 |
-| 2 | `adb shell dumpsys activity services dev.kksk.danmubox` | 没有 `KeepAliveService` → 退到后台那一刻**是否真有活跃连接**（没房间、刚断线都不会起），以及 `adb logcat -s danmubox-keepalive` 里有没有「系统不允许在此时启动前台服务」（= 后台起前台服务被拒 / 6 小时额度用尽） |
-| 3 | `adb shell dumpsys notification --noredact \| grep -i danmubox` | 渠道 `danmubox-keepalive` 在、通知不在 → 十有八九是 `POST_NOTIFICATIONS` 没给（见上） |
-| 4 | 通知在、但长连接断了 | 不是保活的问题，是 Doze 掐了网络 → 加电池优化白名单（见上） |
-| 5 | 连接反复重连 | 见 2.3 与 [`protocol.md`](protocol.md)：退避属预期，持续不成功查网络与上游 |
-| 6 | 后台/切网之后「丢了一段弹幕」、恢复要多久 | 后台能挂多久、丢在哪一环、切网的时间账**都在 2.10**（结论 + 代码路径 + 未验证项） |
+| 2 | `adb shell dumpsys activity services dev.kksk.danmubox` | 没有 `KeepAliveService` → 退到后台那一刻**是否真有活跃连接**（没房间、刚断线都不会起），以及 `adb logcat -s danmubox-keepalive` 里有没有 `系统不允许在此时启动前台服务`（= 后台起前台服务被拒 / 6 小时额度用尽） |
+| 3 | `adb shell dumpsys notification --noredact \| grep -i danmubox` | 渠道 `danmubox-keepalive` 在、通知不在 → 十有八九是 `POST_NOTIFICATIONS` 没给 |
+| 4 | 通知在、但长连接断了 | 不是保活的问题，是 Doze 掐了网络 → 加电池优化白名单 |
+| 5 | 连接反复重连 | 退避属预期（§2.3）；持续不成功查网络与上游可用性（`protocol.md` §13） |
+| 6 | 后台/切网之后「丢了一段弹幕」、恢复要多久 | 见 §2.10 |
 
 ### 2.9 一键诊断：让用户导出一份诊断文件
 
-「连上了却收不到弹幕」这条问题的定位链很长（票据 → 认证 → 首帧 → 之后有没有持续的业务载荷 → 退避重连），
-只能靠用户交出来的材料判断。房间头 `⋯` 菜单里的**一键诊断**就是这条出口
-（实现口径 `contract.md` §4.4、界面 `ui.md` §3.6、IPC §7 `diagnose_start` / `diagnose_export`）。
+「连上了却收不到弹幕」这条问题的定位链很长（票据 → 认证 → 首帧 → 之后有没有持续的业务载荷 → 退避重连），只能靠用户交出来的材料判断。房间头 `⋯` 菜单里的**一键诊断**就是这条出口（采集口径 `contract.md` §4.4、界面 `ui.md` §3.6、IPC `contract.md` §7 `diagnose_start` / `diagnose_export`）。
 
 **怎么让用户做**（三步，可以直接照抄给用户）：
 
 1. 进那个出问题的房间（采集的是**这个进程的连接**，入口因此放在房间页）；
-2. 点房间头 `⋯` →「一键诊断」——**采集 3 分钟**，界面有倒计时，也可以点「提前结束并导出」；
-3. 把导出的文件发过来：桌面端在 `~/Downloads/danmubox-diagnose-<UTC 时间戳>.txt`；
-   Android 在公共下载目录 `/sdcard/Download/danmubox-diagnose-<UTC 时间戳>.txt`，文件名相同。
-   面板上的「复制路径」能拿到完整路径 —— 一次诊断**只产生这一个文件**。
+2. 点房间头 `⋯` →「一键诊断」——**采集 3 分钟**（180 秒），界面有倒计时，也可以点「提前结束并导出」；
+3. 把导出的文件发过来：桌面端在 `~/Downloads/danmubox-diagnose-<UTC 时间戳>.txt`；Android 在公共下载目录 `/sdcard/Download/danmubox-diagnose-<UTC 时间戳>.txt`，文件名相同（`danmubox-diagnose-YYYYMMDD-HHMMSS.txt`，UTC）。面板上的「复制路径」能拿到完整路径 —— 一次诊断**只产生这一个文件**。
 
-采集中与采集后都不需要用户做别的事：**应用不会自动发送任何数据**（本仓无遥测），
-文件也只落在本机；发给谁由用户决定。文件已按 §3 的口径脱敏，可直接外发。
+采集中与采集后都不需要用户做别的事：**应用不会自动发送任何数据**（本仓无遥测），文件只落在本机；文件已按 §3 的口径脱敏，可直接外发。
 
-文件里有什么（`contract.md` §4.4 的清单）：每一次连接尝试的每一环（票据 `getDanmuInfo` 的 `code` 与耗时 /
-候选节点下标 / WS 握手 / 认证包 `op=7` 发出的时刻 / 认证回应 `op=8` 是否到达与延迟 / 首个入站帧 /
-首条业务载荷 / 结束原因 / 退避与连续认证失败次数）、协议计数（收包 / 各类丢弃 / 未识别命令）、
-未识别命令名单、采集窗口内的日志行（带字段）、以及平台与版本信息（OS、应用版本、渲染引擎）。
+文件里有什么（`contract.md` §4.4 的清单）：每一次连接尝试的每一环（票据 `getDanmuInfo` 的 `code` 与耗时 / 候选节点下标 / WS 握手 / 认证包 `op=7` 发出的时刻 / 认证回应 `op=8` 是否到达与延迟 / 首个入站帧 / 首条业务载荷 / 结束原因 / 退避与连续认证失败次数）、协议计数（收包 / 各类丢弃 / 未识别命令）、未识别命令名单、采集窗口内的日志行（带字段）、以及平台与版本信息（OS、应用版本、渲染引擎）。
 
 **读法**（判定顺序与 §2.1 一致，都先看机器可判定的量，再看界面表现）：
 
@@ -430,151 +392,53 @@ A/B —— 同一个房间（公开测试房间 `1`）、同一台 AVD，都取�
 | 5 | 一条连接尝试都没有 | 诊断期间没连过房间（先确认房间页的连接态，再看 §2.3） |
 | 6 | 文件里出现 `***` | 那是脱敏（凭据 / uid / 昵称 / **房间号**，见 §3），不是数据缺失；要定位具体房间让用户自己说 |
 
-**抹的范围**（2026-09-21 按首次实测复盘后的口径）：按「本机已知的房间号 / 短号 / 主播 uid」**逐值**抹，
-但只抹**看起来是标识**的位置 —— 键值对形态（`room_id=5440` / `?id=5440`，一位数字也抹）与**两位以上**的
-独立数字。时间（`13:55:01`）、版本（`0.1.0`）、计数（`共 1 次记录`）、从开始算起的偏移（`+1.56 s` / `+619 ms`）
-与一位数序号（`[1]` / `host_list[0]`）**一律原样保留**：它们正是这份报告存在的理由。
-首次实测（公开测试房间 `1`，它的短号就是 `1`）曾被一刀切抹成 `应用版本：0.***.0` / `13:55:***` / `共 *** 次记录`，
-那份报告没法读；规则与回归用例见 `crates/danmubox-bili/src/redact.rs` 的 `mask_numbers` 与
-`export_redaction_keeps_times_versions_and_counts`。
+**抹的范围**：按「本机已知的房间号 / 短号 / 主播 uid」**逐值**抹，但只抹**看起来是标识**的位置 —— 键值对形态（`room_id=5440` / `?id=5440`，一位数字也抹）与**两位以上**的独立数字。时间（`13:55:01`）、版本（`0.1.0`）、计数（`共 1 次记录`）、从开始算起的偏移（`+1.56 s` / `+619 ms`）与一位数序号（`[1]` / `host_list[0]`）**一律原样保留**：它们正是这份报告存在的理由。规则与回归用例：`crates/danmubox-bili/src/redact.rs` 的 `redact_for_export` / `mask_numbers`，单测 `export_redaction_keeps_times_versions_and_counts`。
 
-**Android 上这枚入口同时补上了 [`testing.md`](testing.md) §10.5 那条遗留**（「设备上没有可打开的业务日志入口」）：
-以前在设备上只能 `adb logcat` 看系统日志，现在是应用自己的业务日志（报告里「采集窗口内的日志」那一节）
-随报告一起落到公共下载目录，用户可以自己打开、自己决定发不发。
+Android 上这枚入口也是设备端唯一可打开的业务日志出口（报告里「采集窗口内的日志」那一节）：报告随文件落到公共下载目录，用户可自己打开、自己决定发不发（此前只能 `adb logcat` 看系统日志，见 `testing.md` §10.5）。
 
-### 2.10 后台能不能挂 7×24 / 安卓后台丢弹幕 / 切网断连：结论与证据（`issue` 2609171849 #2 / #6）
+### 2.10 后台能不能挂 7×24 / 安卓后台丢弹幕 / 切网断连
 
-用户 2026-09-17 三问：① 后台能不能挂 7×24（所有端）；② 安卓退到后台再回前台，「最新的一部分弹幕看不到」，
-要的是**原因**；③ 安卓切网络环境像会断连、之后恢复慢。
+**结论**：三端都**不能承诺 7×24**（Android 最弱：那枚前台服务只保「进程」、不保「网络」）；后台丢弹幕丢的不是某一条，而是**一次断连的整个窗口**，而客户端**没有任何补拉机制**能把它找回来；切网后恢复最坏约 2 分钟量级。
 
-本节是这三问的结论与证据链。**这次只排查、没改行为**（一行连接代码都没动）：下面每一条要么给出
-代码路径（`文件:行`）与仓内已有实测（§2.8 的 AVD A/B、[`protocol.md`](protocol.md) A24 / A30），
-要么明写**未验证**。判定不出的不往结论里塞。
-
-**一句话**：三端都**不能承诺 7×24**（Android 最弱：那枚前台服务只保「进程」、不保「网络」）；
-后台丢弹幕丢的不是某一条，而是**一次断连的整个窗口**，而客户端**没有任何补拉机制**能把它找回来；
-切网时客户端既没有网络变化感知，判死又最坏要 90 秒，之后还有一次 5–60 秒退避。
-
-#### 2.10.1 各端后台能力（现实现状，不是目标）
-
-| 端 | 退到后台之后 | 依据 | 保留条件 / 没验到的 |
+| 症状 | 判定 | 动作 | 锚点 |
 |---|---|---|---|
-| macOS | 进程照常在跑（没有 Android 那种冻结档），**关掉窗口 = 退出应用**；壳里没有保活代码 | `apps/desktop/src-tauri/src/lib.rs` 全文没有 `on_window_event` → 关掉唯一窗口即退出（§1.1、§5.1） | App Nap 会不会拖慢 tokio 的计时器**未验证**（心跳与僵死判定都靠它）；长连最久的一次实测是 A24 的 **2 小时 4 分**（期间上游主动断开 4 次、每次都自动恢复），**7×24 没测过** |
-| Windows | 与 macOS 同一类实现（壳里没有任何平台分支），**未实测** | 同上 | 同 macOS |
-| Android | 退后台（`onStop`）**且页面答「还有活跃连接」**时起一枚 `dataSync` 前台服务 + 常驻通知；回前台（`onStart`）即停 | `MainActivity.kt:114-118`（起）、`:101-104`（停）、`ui/src/keepalive.ts:29-36`（判据，`connecting`/退避中也算「活跃」）、`KeepAliveService.kt:40-49` | **只保进程、不保网络**：Doze 断网要自己去加电池优化白名单（§2.8）；Android 15+（本项目 targetSdk 36）`dataSync` 每 24 小时只有 **6 小时**额度（`KeepAliveService.kt:62-65`）；划掉最近任务就停（`:80-83`）；后台起服务被系统拒绝时只记 logcat、不崩（`:158-170`）；**厂商 ROM 与真机收益未验证**（`testing.md` §10.5 的口径） |
+| 想「挂 7×24」 | 三端都不保证 | 桌面端「开着窗口一直放」是可行用法，但「一条都不断」不能承诺——上游本身会常态轮换断开（`protocol.md` A24）；Android 侧除 §2.8 的电池优化白名单与 6 小时额度外，真机收益未验证 | `protocol.md` A24；§2.8 |
+| 安卓退到后台再回前台，「最新的一部分弹幕看不到」 | 丢的是断连窗口**整段**，且永久丢 | 先按 §2.8 的排查表确认服务与通知是否在；丢的时刻见下一条 | 根因 L2（没有补拉）：`crates/danmubox-core/src/session.rs:263-272`、`:283-305` |
+| 想知道「什么时候丢的」 | 丢的时刻 = 断连时刻 | 日志里 `距上次入站帧已 …ms（阈值 90000ms），判定连接僵死` 或 `连接中断，准备重连`；一键诊断报告里的「距最近一次入站帧」同样能看出（§2.9） | `crates/danmubox-bili/src/ws.rs` 的 `inbound_stale`；`protocol.md` §8.1 |
+| 回前台后多久恢复 | 判死最坏 90 秒 + 一次退避 5–60 秒 + 票据/握手/认证，**没有「立刻重连」这一档** | 要更快只有手动「刷新」（`rooms_reconnect`，§2.5） | `ws.rs:74`（90s）、`:775` / `:948`（退避、封顶 60s）、`:44`（候选拨号 10s）、`crates/danmubox-bili/src/http.rs:197-203`（票据 15s） |
+| 切网后断连、恢复慢 | 确认会断：客户端没有网络变化感知，也没有 TCP keepalive，心跳 `op=2` 写进内核缓冲照样算「发送成功」 | 判死只能靠「入站静默」：对端 RST / close 是秒级，半开最坏 90 秒；恢复时长 = 判死 ≤90s + 退避 5–60s（±20% 抖动）+ 票据 ≤15s + 拨号 ≤10s/候选 + 认证 ≤10s | `ws.rs` 的心跳任务只看写端返回；`ws.rs` 三条读侧收场 |
+| 反复重连几次后**彻底不再自动重连** | 连续 3 次「认证超时」（拨号成功但 10 秒内没有 `op=8`）即停自动重连 | 界面停在「连续 3 次认证失败，已停止自动重连；手动刷新可重置」→ 点「刷新」；取票据失败 / 拨号失败**不计入**这个计数 | `ws.rs` 的认证超时计数；单测 `auth_timeout_is_a_failure_and_backs_off` |
+| 房间看着「已连接」却再也不进来弹幕（点过「断开连接」再点「刷新」之后） | 会话被**重建**（不是重连）：新 `MessageSink` 的 `local_id` 从 1 重来，界面那条单调判定把每一条新弹幕都丢掉 | **返回列表再进房**即恢复（`openRoom` 会用 `history_query` 整批覆盖）；本条为代码判定，未在设备上复现该操作序列 | `crates/danmubox-core/src/bus.rs` 的编号起点；`crates/danmubox-core/src/session.rs` 的重连路径；`apps/desktop/src-tauri/src/lib.rs` 的会话重建；`apps/desktop/ui/src/store.ts` 的单调判定与 `history_query` 覆盖 |
 
-> 所以「挂 7×24」这件事：**Android 做不到**（能用多久也没测过，6 小时额度只是上限之一）；
-> macOS / Windows「开着窗口一直放着」是可行的用法，但「一条都不断」不能承诺 —— 上游本身就会常态轮换断开（A24）。
+**为什么补不回来**（根因三层，缺一不可）：
 
-#### 2.10.2 安卓后台丢弹幕：根因判定
-
-**丢的是「断连窗口」这一整段，不是零散的几条。**成因三层，三层缺一不可：
-
-| 层 | 事实 | 依据 |
+| 层 | 事实 | 锚点 |
 |---|---|---|
-| L1 连接确实会掉 | 退到后台约 7 分钟后，本该在的那条 WS 已经不在了（同一时刻设备上别的应用仍持有到 443 的连接，说明不是设备断网）；上游本身也会常态轮换断开 | §2.8 的 AVD A/B（`ka-new-22-after-7min.txt`）；`protocol.md` A24（2 小时 4 分断 4 次，全部上游发起） |
-| L2 **掉了以后没有补拉**（根因所在） | 进场回填 `LiveSource::recent` **只在会话开始调一次**，在那之后的重连只是重新 `stream()`，不会再取任何历史 | `crates/danmubox-core/src/session.rs:263-272`（回填在 `loop` 之前）、`:283-305`（重连只是换一个子取消信号、再调一次 `stream`） |
-| L3 回到前台**没有「立刻重连」这一档** | 判死靠「90 秒内没有任何入站帧」（`inbound_stale`），判死之后还要等一次退避（5–60 秒，带 ±20% 抖动），再接一次票据 + 握手 + 认证 | `crates/danmubox-bili/src/ws.rs:493`（`last_inbound` 起点）、`:566`（只有入站帧才推进它）、`:520-533`（判死）、`:74`（90s）、`:775` / `:948`（退避）、`:932`（封顶 60s） |
+| L1 连接确实会掉 | 退到后台约 7 分钟后那条 WS 已经不在了（同刻设备上别的应用仍持有到 443 的连接，说明不是设备断网）；上游本身也常态轮换断开 | §2.8 的实测结论；`protocol.md` A24 |
+| L2 **掉了以后没有补拉**（根因所在） | 进场回填 `LiveSource::recent` **只在会话开始时调一次**；在那之后的重连只是重新 `stream()`，不再取任何历史 | `crates/danmubox-core/src/session.rs:263-272`（回填在 `loop` 之前）、`:283-305`（重连只换子取消信号再 `stream`） |
+| L3 回前台**没有「立刻重连」这一档** | 判死靠 90 秒入站静默，判死后还要等一次退避（5–60 秒，带 ±20% 抖动），再接票据 + 握手 + 认证 | `ws.rs` 的 `inbound_stale` 与退避 |
 
-而**上游那边没有可翻页的回放**：`dM/gethistory` 只给最近 **10 条**（`data.room`，`limit` / `page` 等参数实测都不加量），
-**不可翻页**（A30）—— 也就是说，L2 那个洞**在协议层面就补不上**：漏掉的是一屏接一屏的量
-（仓内一次 3 分钟采集的样本是 **185 条消息**，`protocol.md` §5 的 `op=24` 那一行），
-事后最多能捞回最后 10 条，而现在的重连路径连这 10 条都不捞。
-（`dM/gethistory` 还需要完整会话 Cookie：游客态 `3/3 全空`，A30 —— 游客本来就没有回填。）
+上游也没有可翻页的回放：`dM/gethistory` 只给最近 **10 条**（`data.room`）且**不可翻页**（`protocol.md` A30），游客态全空——协议层面就补不上；而现在的重连路径连这 10 条都不捞。
 
-**用户看到的现象正好是 L1 + L3 的叠加**：后台期间断的那一段（L1）永久没了；
-回到前台时连接还没恢复（L3），所以「最新的一部分」还要再空几十秒到两分钟才开始重新出现。
-**「什么时候丢的、为什么丢」在客户端是可以答的**：丢的时刻 = 断连时刻（日志里的
-`距上次入站帧已 …ms（阈值 90000ms），判定连接僵死` 或 `连接中断，准备重连`），丢的内容 = 那一段的推送。
+**会丢与不会丢**（逐环节判定，排除项一并列出）：
 
-#### 2.10.3 逐环节判定：哪些会丢、哪些被排除
-
-| 环节 | 代码路径 | 判定 |
+| 环节 | 判定 | 锚点 |
 |---|---|---|
-| WS 断连窗口内的推送 | 见 2.10.2 L2 | **会丢**，且永久（上游不给回放）→ 根因 |
-| 重连之后的「漏帧」 | 同上：重连只换连接，不补历史 | **会丢**：漏的量 = 断连时长内上游推过的全部 |
-| 本地内存缓冲上限 | 会话缓冲超限丢**最旧**（`session.rs:104-116` 的 `push` → `pop_front`）；总线 `broadcast` 1024 槽、慢订阅者丢最旧（`bus.rs:85-99`）；前端显示上限 2000 条同样丢最旧（`store.ts:32`、`:231-237`） | **不会**丢「最新」→ **排除**（方向与「最新一段看不到」相反） |
-| 去重 / 合并 | 只挡「同一条的第二份」（`bus.rs:231-242` 的指纹窗口），不吞新内容；「合并相似消息」整套已删 | **排除** |
-| 同一次会话内的重连会不会把界面「判旧」而丢掉新弹幕 | 每次连接复用同一个 `MessageSink`（`session.rs:283-306`），界面按 `local_id` 判单调（`store.ts:798-799`） | **不会**：跨多次重连的编号连续不回退（单测 `reconnect_keeps_the_session_numbering_monotonic`，本次新增）。**反例**见 2.10.5 ①：**会话重建**（不是重连）那条路会让它回退 |
-| 事件转发到界面时丢事件 | 转发任务落后只记一笔 `Lagged`（`lib.rs:942`），丢的是**旧**事件；界面重进房间会用 `history_query` 整批覆盖（`store.ts:943-954`） | 不构成**永久**丢失；但**界面自己不会在回前台时重拉**（见 2.10.5 ①），若 webview 侧真丢了事件，那一批在后端缓冲里、界面上却不出现 → **未验证**（要真机） |
-| 认证失败上限停在原地 | 连续 3 次**认证超时**（拨号成功、10 秒内没有 `op=8`）→ 停止自动重连，界面停在 Error，需人工「刷新」 | **会停**：见 2.10.4，判据在 `ws.rs:793-815`（既有单测 `auth_timeout_is_a_failure_and_backs_off`） |
-| 安卓把进程冻结/回收 | 前台服务把 oom_adj 顶到前台档；进程不在缓存态就不会被 Cached Apps Freezer 冻住 | **前台服务能覆盖这一档**（§2.8 实测：旧包 200 秒后连接归零、新包还有连接），但**覆盖不了**网络被掐 |
+| WS 断连窗口内的推送、重连之后的「漏帧」 | **会丢**，且永久（上游不给回放） | L2 |
+| 本地内存缓冲上限 / 广播总线 / 前端显示上限 | **不会**丢「最新」——超限丢的是**最旧**，方向与「最新一段看不到」相反 | `session.rs` 的 `push` → `pop_front`；`bus.rs` 的广播槽；`apps/desktop/ui/src/store.ts` 的显示上限 |
+| 去重 / 合并 | **不会**吞新内容（只挡「同一条的第二份」） | `bus.rs` 的指纹窗口 |
+| 同一次会话内的重连 | **不会**丢（`local_id` 跨重连连续不回退） | `session.rs:283-306`（复用同一 `MessageSink`）；单测 `reconnect_keeps_the_session_numbering_monotonic` |
+| 事件转发到界面时丢事件 | 落后只记一笔 `Lagged`，丢的是**旧**事件；界面重进房间会用 `history_query` 整批覆盖——但界面自己**不会**在回前台时重拉 | `apps/desktop/src-tauri/src/lib.rs` 的 `Lagged`；`store.ts` 的 `history_query` 覆盖 |
+| 安卓把进程冻结 / 回收 | 前台服务覆盖这一档（覆盖不了网络被掐） | §2.8 |
+| 认证失败上限 | 停自动重连，需人工「刷新」 | `ws.rs` 的认证超时计数；单测 `auth_timeout_is_a_failure_and_backs_off` |
 
-#### 2.10.4 切网断连（#6）：确认结论
+**未验项**（别当结论用）：真机（尤其国产 ROM）退到后台期间到底还在不在收弹幕、白名单能否整夜收、macOS 最小化 / 被遮挡时 App Nap 是否拖慢 tokio 计时器、真机切网是否真连出 3 次认证超时、webview 后台被节流时 Rust→JS 事件是否积压。前两项见 `testing.md` §10.5，待办清单见 `roadmap.md` §2。
 
-**确认：会断、而且客户端的恢复不快。**客户端对「网络环境切换」没有任何专门处理 ——
-Kotlin 侧只有 `MainActivity` / `KeepAliveService` / `DiagnosePlugin`，没有 `ConnectivityManager` 监听；
-Rust 侧也没有任何网络变化 API。所以切网之后：
-
-1. 旧 TCP 连接**不会**被主动关掉：我方代码里没有任何地方开 TCP keepalive（`danmubox-bili` 里 grep `keepalive` 零命中），
-   心跳 `op=2` 写进内核缓冲照样「发送成功」（`ws.rs:695-729` 的心跳任务只看写端返回），
-   于是**唯一能发现断开的手段是「入站静默」**（`ws.rs:506-533`）。
-2. 判死延迟：对端发 RST / close 时是**秒级**（`ws.rs:549` / `:557` / `:675` 三条读侧收场）；
-   半开（NAT/换网后没有回包）时是 **90 秒**（`inbound_stale`）。
-3. 恢复一次连接的账（生产值）：判死（≤90s）→ 退避 5–60s（`ws.rs:775` / `:948`，健康会话回 5s、连续失败递增）
-   → `getDanmuInfo`（≤15s，`http.rs:197-203` 的客户端超时）→ 逐个候选拨号（每个 ≤10s，`ws.rs:44`）→ 认证（≤10s）。
-   **合计最坏约 2 分钟量级**，而这期间漏的弹幕按 2.10.2 是永久丢。
-4. 还有一条会**停住不再自动重连**的路径：连续 3 次「认证超时」（`ws.rs:793-815`）。
-   注意它不是「连不上」——取票据失败、拨号失败都走 `End::Failed`，**不计入**这个计数；
-   只有「接上了但 10 秒内没有 `op=8`」才算（典型成因：TCP 被黑洞掉、或上游节点接了连接却不说话）。
-   这时界面停在 `…（连续 3 次认证失败，已停止自动重连；手动刷新可重置）`，**要用户点刷新才会再连**。
-   这条行为在 `crates/danmubox-bili/src/ws.rs` 的单测 `auth_timeout_is_a_failure_and_backs_off`（`ws.rs:1345` 起）里被钉死（含「达上限后不许再有第 4 次」）。
-   **未实测**：真机切网是否真会连出这种三连超时 —— 只有代码路径与单测，没有现场样本。
-
-#### 2.10.5 本次附带发现（**都没改**，留结论给用户/主流程裁决）
-
-① **界面单调序号 × 会话重建 = 那个房间永久静默**（与后台无关的另一条丢弹幕路径，可稳定推出来）：
-界面「断开连接」**不清** `messages`（`store.ts:1011-1028`）→ 再点「刷新」→ 后端发现该房间已经没有会话，
-于是**按新会话重建**（`lib.rs:432-445`）→ 新的 `MessageSink` 把 `local_id` **从 1 重新开始**（`bus.rs:196-203`、`:248`）
-→ 界面那条单调判定 `if (message.local_id <= last) return`（`store.ts:798-799`）把**每一条**新弹幕都丢掉。
-表现：那个房间看着「已连接」，但再也不进来弹幕，直到返回列表再进房（`openRoom` 会用 `history_query` 整批覆盖，`store.ts:943-954`）。
-建议修法（未实施，动的是 `store.ts` / 前端面，属另一票的范围）：`refresh()` 在调用前记下 `rooms[roomId].connected`，
-为 `false`（= 后端没有会话、这次必然是新会话）时按 `openRoom` 的同一口径在重连后重拉一次 `history_query` 覆盖 `messages`。
-**证据等级**：代码判定（三个文件逐条对上），未在真机/界面复现这个操作序列；
-与之对照，2.10.3 那条「同一次会话内的重连不重置编号」有单测钉住 —— 也就是说这条缺陷的边界恰好是「重连 vs 重建会话」。
-
-② **「健康会话」的判据漏了「认证成功过」**（**2026-09-17 已修**，`fix/hygiene-260917-backoff`）：原判据是
-`healthy = started.elapsed() >= HEALTHY_SESSION`（`ws.rs:775`），于是「一次都没连上、只是因为每个候选都拨号超时
-耗掉了 30 秒以上」的尝试也被当成健康会话 → 退避被重置回 5 秒。后果：网络黑洞（每个候选都超时）时
-`5/10/20/40/60` 的升级**实际不生效**，会一直按 5–10 秒的节奏重试。
-现判据为 `healthy = outcome.verified && started.elapsed() >= HEALTHY_SESSION`（`ws.rs:865`；两条**同时**满足才回 5s 起点），
-`architecture.md` §8「健康掉线回落」与 `protocol.md` §13.2 已同步；「连续认证失败到上限就停止自动重连」那条行为
-（`ws.rs:884-903`）一字未动，仍有单测钉着。
-**影响面（修后谁变慢、谁不变）**：变慢的只有「一次尝试**从未认证成功**、却因为拨号逐个超时而拖过 30 秒」这一类
-（网络黑洞；累计时长 = 候选数 × 10s 拨号超时）——它以前每次都回到 5 秒起点，现在按 5/10/20/40/60 递增。
-其余各类**节奏不变**：取票据失败、握手失败、认证超时（10 秒内收场，本来就没拖过阈值）与认证回应非 0 都照旧；
-「认证成功过、活过 30 秒又掉线」这一档也不变（照旧回 5s 起点，这是原本就想要的回落）。
-方向性代价：这与 #6「切网后恢复慢」相反（真机切网若真连出拨号全超时，重试节奏最长会到 60 秒一档）——
-2026-09-17 按「未认证的尝试不得重置退避」拍板修，方向性取舍记在此处备查。
-回归单测（`crates/danmubox-bili/src/ws.rs`）：`unverified_attempt_past_the_healthy_threshold_does_not_reset_the_backoff`
-（改前必失败）与 `verified_attempt_past_the_healthy_threshold_still_resets_the_backoff`（防止把回落整条改没）。
-
-③ **文档口径自相矛盾（2026-09-17 集成时已统一改掉）**：`docs/contract.md` §2 的「不做」表、`AGENT.md` §8 第 10 条、本节 §5.1 的「不做」一行此前仍写「不做后台保活」，而 Android 前台服务是用户要求、已实现、已实测的一档。
-现三处已按同一口径同步：契约 §2 加 **Android 例外**一行、`AGENT.md` §8 的示例把「加保活」换成「加推送」、本节 §5.1 那行改为「自动更新、推送分发」。契约是唯一事实源，以后这类漂移按同一原则处理。
-**本节没动它们**（超出一票的报告范围）。
-
-#### 2.10.6 还没验证的（别当成结论用）
-
-- 真机（尤其国产 ROM）退到后台期间**到底还在不在收弹幕**：模拟器只能证到「进程没被冻到连重连都做不了」（§2.8 结论原文），证不到真机收益。
-- 开了电池优化白名单之后能不能整夜收。
-- macOS 最小化 / 被遮挡时 App Nap 是否影响 tokio 计时器（心跳与 90 秒判死都靠它）。
-- 真机切网是否真的会连出 3 次认证超时（见 2.10.4 第 4 条）。
-- webview 在后台被节流时，Rust→JS 的事件是否积压/丢弃（见 2.10.3 最后一行）。
-
-#### 2.10.7 怎么把它变成实测（给用户的操作）
-
-- **一键诊断**（§2.9）：进那个房间点「一键诊断」→ 把应用退到后台 ≥3 分钟 → 回前台导出。
-  报告里 `last_inbound_ms` / `inbound_frames` **一直不动**就说明后台确实收不到（不是界面问题）；
-  `attempts` 逐次给出票据 / 认证 / 首帧 / 结束原因 / `backoff_ms`，正好能对上 2.10.2 的三层。
-- **模拟器 / 真机按 `testing.md` 的 A-5 / A-9 走**：HOME 前先 `adb shell ss -tnp | grep :01BB` 记下那条 WS，
-  退后台后每 30 秒采一次；回前台时对同一个房间用另一台设备（或官方客户端）比对该窗口的弹幕，
-  就能把「丢了多少」量化出来 —— 这一步是「后台到底丢没丢、丢多少」唯一能落到证据上的做法。
-
----
+**怎么把它变成实测**：进那个房间点「一键诊断」，把应用退到后台 ≥3 分钟再回前台导出（§2.9）——报告里「距最近一次入站帧」一直不动就说明后台确实收不到；也可按 `testing.md` 的 A-5 / A-9 走（HOME 前 `adb shell ss -tnp | grep :01BB` 记下那条 WS，退后台后每 30 秒采一次，回前台时用另一台设备比对该窗口的弹幕）。
 
 ## 3. 日志与敏感信息脱敏规则
 
-安全红线（契约 §4.1 原文，必须原样遵守）：
+安全红线（`contract.md` §4.1 原文，必须原样遵守）：
 
 > `SESSDATA`、`bili_jct`、`DedeUserID` **不得**进日志、不得进前端明文、不得进仓库、不得进崩溃上报。
 
@@ -593,14 +457,11 @@ Rust 侧也没有任何网络变化 API。所以切网之后：
 | `buvid3` / `buvid4` | 设备标识，与账号凭据同时出现可被关联；日志中以掩码或长度描述代替 |
 | 弹幕内容 | 属用户数据，默认不进 `debug` 日志；需要时临时开启更高级别并按脱敏后外发 |
 
-实现方式（改规则只改这一处）：键名表与替换逻辑在 `crates/danmubox-bili/src/redact.rs`，只改写「键名 + 分隔符 + 值」三种成分齐全的地方（上游原话 `CSRF 校验失败` 这类不带分隔符的文本保持原样）。出口只有两个，都在 `crates/danmubox-bili/src/http.rs`：`log_request`（所有 `GET` / `POST` 的 URL 日志）与 `upstream`（上游错误文案——`reqwest::Error` 的 `Display` 会把完整 URL 拼进去）。回显上游 `message` 的几处（`admin` / `send` / `report`）调的是同一个函数。占位符固定 `***`，不用短哈希：uid 只有 10 位数，短哈希能被离线暴力反推，「看起来脱敏」挡不住人。
+实现方式（改规则只改这一处）：键名表与替换逻辑在 `crates/danmubox-bili/src/redact.rs`，只改写「键名 + 分隔符 + 值」三种成分齐全的地方（上游原话 `CSRF 校验失败` 这类不带分隔符的文本保持原样）。出口只有两个，都在 `crates/danmubox-bili/src/http.rs`：`log_request`（所有 `GET` / `POST` 的 URL 日志）与 `upstream`（上游错误文案——`reqwest::Error` 的 `Display` 会把完整 URL 拼进去）。回显上游 `message` 的几处（`admin` / `send` / `report`）调的是同一个函数。占位符固定 `***`，不用短哈希。
 
-一键诊断**导出的文件**走同一处规则、但更严一档：`redact.rs` 的 `redact_for_export` 在整份报告文本上先跑一遍上面的日志口径，
-再抹**房间号**的键名形态（`room_id=` / `roomid=` / `room=`）与「本机已知的房间号 / 短号 / 主播 uid」的**裸数字**
-（`getDanmuInfo` 的查询串是 `?id=…`，`id=` 认不出是不是房间号，因此按值抹）。导出链路因此只有这一个出口，
-与日志共用同一张键名表。
+一键诊断**导出的文件**走同一处规则、但更严一档：`redact.rs` 的 `redact_for_export` 在整份报告文本上先跑一遍上面的日志口径，再抹**房间号**的键名形态（`room_id=` / `roomid=` / `room=`）与「本机已知的房间号 / 短号 / 主播 uid」的**裸数字**（`getDanmuInfo` 的查询串是 `?id=…`，`id=` 认不出是不是房间号，因此按值抹）。导出链路因此只有这一个出口，与日志共用同一张键名表。
 
-> `danmubox::raw`（`docs/protocol.md` 附录 B.1）是唯一的例外：它按设计打印**原始业务载荷**，供协议字段校准用，里面自然带得到发言人的 uid 与昵称。核对字段时用它，分享日志前必须先按上表处理；只想看普通调试信息时别把这个 target 打开。
+> `danmubox::raw`（`protocol.md` 附录 B.1）是唯一的例外：它按设计打印**原始业务载荷**，供协议字段校准用，里面自然带得到发言人的 uid 与昵称。核对字段时用它，分享日志前必须先按上面的规则表处理；只想看普通调试信息时别把这个 target 打开。
 
 分享日志前的自查命令：
 
@@ -615,8 +476,6 @@ grep -nE '(vmid|uid|anchor_id|tuid)=[0-9]' <日志文件>   # 值为 *** 的行�
 ```
 
 提交仓库前：确认无 `config.toml`、无 keystore、无 `.p12`、无导出的 Cookie 文本。
-
----
 
 ## 4. 卸载与残留清理
 
@@ -646,8 +505,8 @@ grep -nE '(vmid|uid|anchor_id|tuid)=[0-9]' <日志文件>   # 值为 *** 的行�
 |---|---|---|
 | 1 | 应用本体 | 长按图标卸载，或 `adb uninstall dev.kksk.danmubox` |
 | 2 | 应用私有数据 | 随卸载自动清除（含 `config.toml`、`prefs.json`）；只想清数据不卸载 → 「设置 → 应用 → danmubox → 存储 → 清除数据」 |
-| 3 | 公共下载目录里的诊断文件 | **只有你主动点过「一键诊断」才会有**：`/sdcard/Download/danmubox-diagnose-*.txt`（§2.9）。想留就留，不想留直接删；应用不往别处写，也不写应用私有目录 |
-| 4 | 开发机上的签名材料 | **不要删除**（保留以便日后覆盖安装）；它不在手机上，属开发机资产。位置：`apps/desktop/src-tauri/gen/android/keystore.jks` 与同目录的 `keystore.properties`——两者被 `gen/android/.gitignore` 忽略，且**不在 `.android-env/` 内**，所以 `scripts/android-env.sh clean` 删不到它们；反过来说，清工具链时**别手工把它们一起删掉**，丢了只能靠卸载重装再回到同一签名。详见 §5.7 与 §5.12 |
+| 3 | 公共下载目录里的诊断文件 | **只有你主动点过「一键诊断」才会有**：`/sdcard/Download/danmubox-diagnose-*.txt`（§2.9）。应用不往别处写，也不写应用私有目录 |
+| 4 | 开发机上的签名材料 | **不要删除**：`apps/desktop/src-tauri/gen/android/keystore.jks` 与同目录的 `keystore.properties`。两者被 `gen/android/.gitignore`（`*.jks` / `keystore.properties`）忽略，且**不在 `.android-env/` 内**，所以 `scripts/android-env.sh clean` 删不到它们；清工具链时**别手工把它们一起删掉**，丢了只能卸载重装（§5.7、§5.12） |
 | 5 | 设备上的安装包 | 手工删除此前 `adb push` / 传输的 APK |
 
 ### 4.4 卸载检查清单
@@ -660,30 +519,22 @@ grep -nE '(vmid|uid|anchor_id|tuid)=[0-9]' <日志文件>   # 值为 *** 的行�
 | 4 | 重装可用 | 重新安装后能正常启动；因凭据已随文件删除，需重新扫码（或按 §1.4 手工编辑凭据文件） |
 | 5 | 诊断文件（只有你导出过才有） | 桌面端 `~/Downloads/danmubox-diagnose-*.txt`、Android `/sdcard/Download/danmubox-diagnose-*.txt`：是**用户自己的产物**，不随卸载删除，要清就手工删 |
 
----
-
 ## 5. 构建与分发
-
-> 定位：danmubox 在 macOS / Windows / Android 三端的构建、签名、打包、安装与自用更新方式。
-> 读者：在本机执行构建 / 重新打包 / 装机的开发者（通常是仓库所有者本人）。
-> 更新时机：新增目标平台、更换包标识或版本策略、新增签名或安装步骤、产物路径变化时必须同步本节。
-
-> 通用构建 / 测试 / lint 命令见 [`../README.md`](../README.md) §8 与 [`../AGENT.md`](../AGENT.md) §3；本节只写三端打包、产物与安装。
 
 ### 5.1 范围与前提
 
 | 项 | 约定 |
 |---|---|
 | 分发范围 | **自用，不对外分发**：产物只装自己的设备 |
-| 目标平台 | macOS / Windows / Android（iOS 与折叠屏适配为后期 enhancement；折叠屏的可行性研究见 [`foldable.md`](foldable.md)，**本次不实现**） |
+| 目标平台 | macOS / Windows / Android（iOS 与折叠屏适配为后期 enhancement，本期不实现，见 `REQUIREMENTS.md` §4） |
 | 不做 | 自动更新、推送分发（后台保活在 Android 是例外，见 §2.8） |
-| 包标识 bundle id | `dev.kksk.danmubox`，三端统一（契约 §1） |
+| 包标识 bundle id | `dev.kksk.danmubox`，三端统一（`contract.md` §1） |
 | 前端产物 | `apps/desktop/ui/` 由 Vite 构建并内嵌进 Tauri 应用（React + TS，见 `architecture.md`） |
 | 引擎 | `danmubox-core`（Rust），薄封装见 `architecture.md` |
 
 ### 5.2 `<target-dir>` 的定义
 
-Rust 产物目录在 workspace 下由 Cargo 决定，本节统一用 `<target-dir>` 表示，避免硬编码：
+Rust 产物目录在 workspace 下由 Cargo 决定，以下统一用 `<target-dir>` 表示，避免硬编码：
 
 | 场景 | `<target-dir>` |
 |---|---|
@@ -691,22 +542,13 @@ Rust 产物目录在 workspace 下由 Cargo 决定，本节统一用 `<target-di
 | `apps/desktop/src-tauri` 使用独立 target 目录 | `<repo>/apps/desktop/src-tauri/target` |
 | 显式指定平台 target 时 | 上述目录下的 `<triple>/release/...` |
 
-本期实测走的是默认情形：§1.6 的独立产物落在 `<repo>/target/release/danmubox-desktop`。
+默认情形下 §1.6 的独立产物落在 `<repo>/target/release/danmubox-desktop`。
 
-`<version>`：本节与 §5.3 / §5.7 / §5.13 里产物名中的版本段，一律取 `apps/desktop/src-tauri/tauri.conf.json`
-的 `version`（唯一事实源，见 §5.8；与 workspace `Cargo.toml` 的 `[workspace.package] version` 同步）。
-当前值是 `0.2.0`，因此 macOS 安装镜像与 Windows 两个安装器的名字分别是
-`danmubox_0.2.0_<arch>.dmg`、`danmubox_0.2.0_x64-setup.exe`、`danmubox_0.2.0_x64_en-US.msi`；
-**提版本号后这些名字随之改变，以实际构建为准**（Android 通用包的本机产物路径为 `app-universal-release.apk`，
-名字里不含版本段，见 §5.3 的 Android 表）。
+`<version>`：§5.2–§5.13 产物名里的版本段，一律取 `apps/desktop/src-tauri/tauri.conf.json` 的 `version`（唯一事实源，见 §5.8；与 workspace `Cargo.toml` 的 `[workspace.package] version` 同步）。当前值是 `0.2.0`，因此 macOS 安装镜像与 Windows 两个安装器的名字分别是 `danmubox_0.2.0_<arch>.dmg`、`danmubox_0.2.0_x64-setup.exe`、`danmubox_0.2.0_x64_en-US.msi`；**提版本号后这些名字随之改变，以实际构建为准**（Android 通用包的本机产物路径为 `app-universal-release.apk`，名字里不含版本段，见 §5.3 的 Android 段）。
 
 ### 5.3 三端构建步骤与产物
 
 #### macOS
-
-日常出包命令与产物见 §1.6（独立可执行文件，前端已内嵌）。需要 `.dmg` 时**不用改 `tauri.conf.json`**：
-`--bundles` 会覆盖 `bundle.active=false`，`icon: []` 也不拦 macOS 出包（2026-09-16 首次实测；
-2026-09-17 复测 `--bundles dmg` 与 `--bundles app` 都 rc=0，见本节末尾的图标口径）。命令与产物如下：
 
 ```bash
 cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
@@ -714,75 +556,49 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
 
 | 产物 | 路径 |
 |---|---|
-| 独立可执行（实测） | `<target-dir>/release/danmubox-desktop`（前端已内嵌，约 13 MB） |
-| 安装镜像（实测 5,147,340 字节，实测那次构建的版本号是 `0.1.0`） | `<target-dir>/release/bundle/dmg/danmubox_<version>_<arch>.dmg`（`<version>` 见 §5.2） |
+| 独立可执行（前端已内嵌，约 13 MB） | `<target-dir>/release/danmubox-desktop` |
+| 安装镜像 | `<target-dir>/release/bundle/dmg/danmubox_<version>_<arch>.dmg`（`<version>` 见 §5.2） |
 
 - `<arch>` 由构建机架构决定（Apple Silicon 为 `aarch64`，Intel 为 `x64`）。
-- 交叉架构可在 Apple Silicon 上追加 `--target x86_64-apple-darwin`，产物落在 `<target-dir>/x86_64-apple-darwin/release/bundle/` 下。
-- 本地运行不需要 DMG，直接从 `.dmg` 里拖出 `.app`，或用 §1.1 的开发期运行方式；要单独出 `.app` 用 `--bundles app`（2026-09-17 实测：`icon: []` 与把图标写进列表两种写法都出得来，差别只在 `.app` 有没有图标）。
-- `.dmg` **不做 Apple 签名与公证**，口径见 §5.5（拷到另一台自用 Mac 时按那一节处理 Gatekeeper）。
+- 交叉架构：在 Apple Silicon 上追加 `--target x86_64-apple-darwin`，产物落在 `<target-dir>/x86_64-apple-darwin/release/bundle/` 下。
+- 要单独出 `.app` 用 `--bundles app`；本地运行不需要 DMG，可直接从 `.dmg` 拖出 `.app`，或用 §1.1 的开发期运行方式。
+- `.dmg` **不做 Apple 签名与公证**，口径见 §5.5。
 
 #### Windows
 
-**开发机是 macOS，本机出不了 Windows 包**（`x86_64-pc-windows-msvc` 要 Windows 上的 MSVC 工具链；
-交叉到 `-gnu` 是另一条路，本仓库不采用）。因此 Windows 产物**只有 CI 一条出口**：`artifacts-windows` job
-（`windows-latest`，触发口径见 §5.13）。下面是那条 job 里逐字在跑的命令（2026-09-17 run `35213437486` 实测出包）：
+开发机是 macOS，**本机出不了 Windows 包**（`x86_64-pc-windows-msvc` 要 Windows 上的 MSVC 工具链；交叉到 `-gnu` 是另一条路，本仓库不采用），因此 Windows 产物**只有 CI 一条出口**：`artifacts-windows` job（`windows-latest`，触发口径见 §5.13）。下面是那条 job 里逐字在跑的命令：
 
 ```bash
 cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
   --config '{"bundle":{"icon":["icons/icon.ico"]}}'
 ```
 
-| 产物 | 路径 | 实测（2026-09-17，run `35213437486`） |
-|---|---|---|
-| 独立可执行（免安装） | `<target-dir>/release/danmubox-desktop.exe` | 16,434,176 字节，PE32+ x86-64 GUI |
-| NSIS 安装器 | `<target-dir>/release/bundle/nsis/danmubox_<version>_x64-setup.exe` | 3,896,645 字节，PE32 GUI（Nullsoft Installer） |
-| WiX MSI | `<target-dir>/release/bundle/msi/danmubox_<version>_x64_en-US.msi` | 5,816,320 字节，OLE 复合文档 |
+| 产物 | 路径 |
+|---|---|
+| 独立可执行（免安装） | `<target-dir>/release/danmubox-desktop.exe` |
+| NSIS 安装器 | `<target-dir>/release/bundle/nsis/danmubox_<version>_x64-setup.exe` |
+| WiX MSI | `<target-dir>/release/bundle/msi/danmubox_<version>_x64_en-US.msi` |
 
-- **`--bundles` 不能省**：`tauri.conf.json` 里 `bundle.active = false`，而 tauri-cli 只在
-  `config.bundle.active || 命令行给了 --bundles` 时才进打包阶段（`tauri-cli/src/build.rs`），
-  所以**光写 `tauri build` 一个安装器都不出**。本节此前写成「默认同时产出 msi 与 nsis」是错的 ——
-  那种默认只在模板工程 `bundle.active = true` 时成立（此条据上游源码 2.11.4 核对，非本仓库实测）。
-- **`.ico` 也是必需的**（新增于本批）。Windows 侧有两处硬要求：① 编译期 `tauri-build` 生成 Windows 资源
-  （winres）时找不到 `.ico` 就中断编译（首次真跑 run `35211873761` 就死在这里，原文：
-  `` `icons/icon.ico` not found; required for generating a Windows Resource file during tauri-build ``）；
-  ② 打包期 MSI（WiX）要求 `bundle.icon` 列表里能找到 `.ico` —— tauri-cli 把 bundler 的 `windows.iconPath`
-  置成空 PathBuf，只能回落到这个列表，空列表会报 `Couldn't find a .ico icon`。
-  为此 `apps/desktop/src-tauri/icons/icon.ico` 入库（6312 字节，`tauri icon` 从既有的 `icons/icon.png` 生成，
-  含 16/24/32/48/64/256 六个尺寸），并用 `--config` 只覆盖 Windows 这一次调用 ——
-  共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动（口径、三端的读法与「为什么不搬进共享配置」
-  见本节末尾的「图标与 `bundle.icon` 的口径」）。
-  NSIS 那条路径不读 `bundle.icon`：它的安装器图标只看可选的 `nsis.installerIcon`（本仓库没设，其模板里
-  `!if "${INSTALLERICON}" != ""` 不成立 ⇒ 用 NSIS 自己的默认图标；据上游模板核对，未真机看过）。
-- **两个安装器文件名里的 `<version>` 段**：上表第三列的字节数是 2026-09-17 那次 run 的实测值，那次构建的版本号是 `0.1.0`（当时文件名写作 `danmubox_0.1.0_x64-setup.exe` / `danmubox_0.1.0_x64_en-US.msi`）；当前版本是 `0.2.0`，名字随之变成 `danmubox_0.2.0_*`，**以实际构建为准**（§5.2 / §5.8）。
-- `--target x86_64-pc-windows-msvc` 是显式指 64 位；在 x86_64 的 Windows 上本就是默认（本轮未单独实测）。
-- `.msi` **只能在 Windows 上构建**（WiX 仅支持 Windows）；NSIS 官方称可在其他平台交叉构建，本仓库不采用。
+- **`--bundles` 不能省**：`tauri.conf.json` 里 `bundle.active = false`，而 tauri-cli 只在 `config.bundle.active || 命令行给了 --bundles` 时才进打包阶段，所以光写 `tauri build` 一个安装器都不出。
+- **`.ico` 是必需的**：① 编译期 `tauri-build` 生成 Windows 资源（winres）时找不到 `.ico` 就中断编译；② 打包期 MSI（WiX）要求 `bundle.icon` 列表里能找到 `.ico`（tauri-cli 把 bundler 的 `windows.iconPath` 置成空 PathBuf，只能回落到这个列表，空列表报 `Couldn't find a .ico icon`）。`apps/desktop/src-tauri/icons/icon.ico` 因此入库（`tauri icon` 从 `icons/icon.png` 生成，六个尺寸 16/24/32/48/64/256），并用 `--config` 只覆盖 Windows 这一次调用（口径见 §5.3「图标与 `bundle.icon` 的口径」）。
+- NSIS 那条路径不读 `bundle.icon`：它的安装器图标只看可选的 `nsis.installerIcon`（本仓库没设 ⇒ 用 NSIS 自己的默认图标）。
+- 两个安装器文件名里的 `<version>` 段随版本号变化（§5.2 / §5.8），**以实际构建为准**。
+- `--target x86_64-pc-windows-msvc` 是显式指 64 位（在 x86_64 的 Windows 上本就是默认）。`.msi` **只能在 Windows 上构建**（WiX 仅支持 Windows）。
+- 装机与运行**未验**：三个产物都只在 runner 上生成过，**没有在任何真 Windows 上装过 / 启动过**；首次安装后能否从「应用和功能」正常卸载（§4.2）、安装器是否需要联网装 WebView2、SmartScreen 行为见 §5.6 与 `testing.md` §10.3 的 W-1~W-4。产物未做代码签名（§5.6）。
 - 自用只保留 NSIS 安装器与免安装 exe，MSI 留一份作备用安装路径。
-- **装机与运行全部未验**：上面三个文件都是 runner 上的构建产物，**没有在任何真 Windows 上装过 / 启动过**。
-  首次安装后能否从「应用和功能」正常卸载（§4）、安装器是否需要联网装 WebView2、SmartScreen 拦截行为，
-  见 §5.6 与 [`testing.md`](testing.md) §10.3 的 W-1~W-4（仍未验）。产物未做代码签名（口径同 §5.6）。
 
-#### 图标与 `bundle.icon` 的口径（2026-09-17 落定）
+#### 图标与 `bundle.icon` 的口径
 
-**口径：共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动；Windows 那一条命令用 `--config`
-只覆盖这一次调用的 `bundle.icon`。** 三端对它的实际读法（每一格都注明是实测还是静态核对）：
+**口径：共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动；Windows 那一条命令用 `--config` 只覆盖这一次调用的 `bundle.icon`。**
 
 | 端 | 读不读 `bundle.icon` | 依据 |
 |---|---|---|
-| macOS | 出包**不要求**它非空；给了图标就用 | **实测（2026-09-17，本机）**：`icon: []` 时 `--bundles dmg` 与 `--bundles app` 都 rc=0，`.app` 里**没有** `Contents/Resources/`、`Info.plist` 也没有 `CFBundleIconFile`（⇒ 系统通用图标）；把 `icons/icon.png` 写进列表后，tauri **自己**从 png 生成 `danmubox.icns`（19,499 字节）并写上 `CFBundleIconFile` —— 两种写法都出得来包 |
-| Windows | **要**（两处硬要求） | 编译期（`tauri-build` → winres）与打包期（WiX / MSI）都得在列表里找到 `.ico`；两次真跑的记录见上一条 bullet |
-| Android | **不读** | `gen/android/app/src/main/AndroidManifest.xml` 的 `android:icon="@mipmap/ic_launcher"` 指向**已入库**的 `gen/android/app/src/main/res/mipmap-*`；`tauri android build` 只重生成 wry 那几个文件与 `tauri.properties` / `tauri.build.gradle.kts`（见下面的 Android 段）。**本轮是静态核对，未跑 APK 复核** |
+| macOS | 出包**不要求**它非空；给了图标就用 | `icon: []` 时 `--bundles dmg` 与 `--bundles app` 都 rc=0，`.app` 里**没有** `Contents/Resources/`、`Info.plist` 也没有 `CFBundleIconFile`（⇒ 系统通用图标）；把 `icons/icon.png` 写进列表后 tauri **自己**从 png 生成 `danmubox.icns` 并写上 `CFBundleIconFile` |
+| Windows | **要**（编译期 winres 与打包期 WiX 两处硬要求） | 见 §5.3 的 Windows 段两条 |
+| Android | **不读** | `gen/android/app/src/main/AndroidManifest.xml` 的 `android:icon="@mipmap/ic_launcher"` 指向**已入库**的 `gen/android/app/src/main/res/mipmap-*`；`tauri android build` 只重生成 wry 那几个文件与 `tauri.properties` / `tauri.build.gradle.kts` |
 
-**为什么留空、为什么只在 Windows 的命令行覆盖**：唯一**硬要求** `.ico` 的是 Windows，而 Windows 出包
-**只有 CI 一条出口**（开发机是 macOS，见上一段）。把这条需求搬进共享配置，等于同时改掉 macOS 与 Android 的
-打包输入 —— 后两者本机能验，Windows 那半边**只能靠一次真跑**；而现有写法已经由 run `35213437486`
-真跑过（那次三个 job 全绿）。所以本轮的取舍是：**不动打包行为**，把这套口径写在这里。
-
-**已知代价（别当成「没有代价」）**：`.app` / `.dmg` 装出来是**系统通用图标**（上表第一行实测）。
-要换成带图标的口径是一次**联动**改动：`tauri.conf.json` 的 `bundle.icon` 写成
-`["icons/icon.png", "icons/icon.ico"]`，并删掉 `artifacts-windows` 那条命令里的 `--config`
-（macOS 侧顺带白拿 `.app` 图标 —— 实测 tauri 会从 png 生成 icns）。但改完**必须**手动触发一次
-`workflow_dispatch` 把 Windows job 真跑一遍才算验过。本轮**没有**做这个改动（未验的那一半不能推定）。
+- 已知代价：`.app` / `.dmg` 装出来是**系统通用图标**（macOS 那一档）。
+- 要换成带图标的口径是一次**联动**改动：`tauri.conf.json` 的 `bundle.icon` 写成 `["icons/icon.png", "icons/icon.ico"]`，并删掉 `artifacts-windows` 那条命令里的 `--config`（macOS 侧顺带得到 `.app` 图标——tauri 会从 png 生成 icns）。改完**必须**手动触发一次 `workflow_dispatch` 把 Windows job 真跑一遍才算验过。
 
 #### Android
 
@@ -795,32 +611,29 @@ CI=true ./ui/node_modules/.bin/tauri android build --apk --ci                  #
 CI=true ./ui/node_modules/.bin/tauri android build --apk --split-per-abi --ci  # 按 ABI 分包
 ```
 
-- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，43 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的四处改（见下表）。
+- **`gen/android` 工程已入库**（`apps/desktop/src-tauri/gen/android/**`，受版本控制 44 个文件，属长期维护的源码），因此**不要再跑 `tauri android init`**：它会覆盖本仓库对模板的四处改（见下表）。
 - `CI=true` 与 `--ci` 一起用，让 Tauri CLI 走非交互路径。
-- **干净克隆可以直接构建**（2026-09-16 起）：`TauriActivity.kt` 与 `app/proguard-tauri.pro` **已入库**（`app/.gitignore` 对这两个路径写了 `!` 例外，其余 `generated/` 内容仍被忽略）。背景：`tauri android build` 只会（重新）生成 `app/src/main/java/…/generated/` 里 **wry** 那几个文件（`WryActivity.kt` 等）与 `app/tauri.properties` / `app/tauri.build.gradle.kts`；这两份则由 `tauri` crate 的 `build.rs` 从它的 `mobile/android-codegen/` 生成（把 `{{package}}` / `$PACKAGE` 替换成本包名），而 `app/.gitignore` 原先把 `generated/` 整个忽略 —— 于是新 worktree 与 CI 的干净检出里 Gradle 会以 `e: …MainActivity.kt: Unresolved reference: TauriActivity`（连带一串「overrides nothing」）失败（本仓实测连续两轮）。同版本 tauri 下这两份内容稳定，入库后干净检出不再需要任何手工补文件步骤；将来升 tauri 版本时 build.rs 会覆盖它们，按 diff 提交即可。
+- **干净克隆可以直接构建**：`TauriActivity.kt` 与 `app/proguard-tauri.pro` **已入库**（`app/.gitignore` 对这两个路径写了 `!` 例外，其余 `generated/` 内容仍被忽略）——`tauri android build` 只会（重新）生成 `app/src/main/java/…/generated/` 里 **wry** 那几个文件与 `app/tauri.properties` / `app/tauri.build.gradle.kts`，少了上面两份，干净检出里 Gradle 会以 `e: …MainActivity.kt: Unresolved reference: TauriActivity` 失败。升 tauri 版本时 `build.rs` 会覆盖它们，按 diff 提交即可。
 - `tauri android dev -- --device <serial>`（真机热重载）**未实测**，本仓库暂不写具体用法。
 
 | 产物 | 路径 |
 |---|---|
-| 通用 APK（实测 52 MB，四个 ABI） | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
+| 通用 APK（四个 ABI） | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
 | 分 ABI APK | `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/<abi>/release/app-<abi>-release.apk`，`<abi>` ∈ `arm64` / `arm` / `x86` / `x86_64`（**不是** `armeabi-v7a` 这一族 Rust triple 名） |
 
-- 没有 `keystore.properties` 时走未签名构建，产物名在 `-release` 之后再带一段 `-unsigned`（AGP 命名规则；本轮**未实测**这条路径）。**未签名的包装不进设备**：`adb install` 报 `INSTALL_PARSE_FAILED_NO_CERTIFICATES`。签名材料与由来见 §5.7。
-- 自用装机只装 APK（不生成 AAB）。
-- 默认构建包含官方支持的四个 ABI；`--split-per-abi` 只改产物粒度，不改编译目标是否已装。
+- 没有 `keystore.properties` 时走未签名构建，产物名在 `-release` 之后再带一段 `-unsigned`（AGP 命名规则）。**未签名的包装不进设备**：`adb install` 报 `INSTALL_PARSE_FAILED_NO_CERTIFICATES`。签名材料与由来见 §5.7。
+- 自用装机只装 APK（不生成 AAB）。默认构建包含官方支持的四个 ABI；`--split-per-abi` 只改产物粒度，不改编译目标是否已装。
 
 **本仓库对上游模板的四处改**（重跑 `tauri android init` 会覆盖，需照下表重新打）：
 
-| 位置 | 上游模板 | 本仓库 | 为什么 |
-|---|---|---|---|
-| `apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/dev/kksk/danmubox/kotlin/BuildTask.kt` | `node tauri android android-studio-script` | 直接调 `ui/node_modules/@tauri-apps/cli/tauri.js`；找不到 CLI 时显式报错 | 模板那条把 `tauri` 当**相对 workingDir 的路径**交给 node 解析，只有 app 根目录是 npm 工程时才成立。本仓前端工程在 `apps/desktop/ui`、`apps/desktop` 下没有 `package.json`，模板原样必然报 `Cannot find module '<…>/src-tauri/tauri'`（2026-09-15 实测） |
-| `apps/desktop/src-tauri/gen/android/app/build.gradle.kts` | **没有** signingConfig | 自建 `signingConfigs.release`，读 `gen/android/keystore.properties`；文件缺失即退回无签名 | 自用 release 包要能覆盖安装，见 §5.7 |
-| `apps/desktop/src-tauri/gen/android/app/src/main/java/dev/kksk/danmubox/MainActivity.kt` | 只调 `enableEdgeToEdge()` | 从原生收 `WindowInsets`（系统栏含 ime）换算成 CSS 变量 `--safe-top` / `--safe-bottom` 下发给页面 | Tauri 的 Android 外壳是 edge-to-edge，而 **WebView 里拿不到系统栏高度**：`env(safe-area-inset-*)` 只报刘海（实测 top=129 / bottom=0 设备像素，同一次实测状态栏 128、手势栏 63）。不补这一步，顶栏会压进状态栏带、输入区会压进手势栏；见下方「已修」条目的实测数字 |
-| `apps/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml` + 新增的 `…/dev/kksk/danmubox/KeepAliveService.kt`（`MainActivity` 里配套的 `onStart` / `onStop` 钩子也属这一组） | 权限只有 `INTERNET`，没有任何 `<service>` | 加 `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` / `POST_NOTIFICATIONS` 三枚权限与 `<service android:name=".KeepAliveService" android:foregroundServiceType="dataSync" android:exported="false" />`；退到后台且有活跃连接时起、回到前台即停 | 后台保活：进程不被系统回收这一环。完整行为（怎么关、耗电、电池优化白名单、Android 15 的 6 小时额度）见 §2.8 |
+| 位置 | 上游模板 | 本仓库 |
+|---|---|---|
+| `gen/android/buildSrc/src/main/java/dev/kksk/danmubox/kotlin/BuildTask.kt` | `node tauri android android-studio-script` | 直接调 `ui/node_modules/@tauri-apps/cli/tauri.js`，找不到 CLI 时显式报错（模板那条按相对 workingDir 解析 `tauri`，本仓前端工程在 `apps/desktop/ui`、`apps/desktop` 下没有 `package.json`，原样必然报 `Cannot find module`） |
+| `gen/android/app/build.gradle.kts` | **没有** signingConfig | 自建 `signingConfigs.release`，读 `gen/android/keystore.properties`；文件缺失即退回无签名（§5.7） |
+| `gen/android/app/src/main/java/dev/kksk/danmubox/MainActivity.kt` | 只调 `enableEdgeToEdge()` | 从原生收 `WindowInsets`（系统栏含 ime）换算成 CSS 变量 `--safe-top` / `--safe-bottom` 下发给页面；`AndroidManifest.xml` 的 `MainActivity` 配 `android:windowSoftInputMode="adjustNothing"`（软键盘避让只由页面自补内边距，见 `ui.md` §9.3）。**WebView 里拿不到系统栏高度**（`env(safe-area-inset-*)` 只报刘海），不补这一步顶栏会压进状态栏带、输入区会压进手势栏 |
+| `gen/android/app/src/main/AndroidManifest.xml` + 新增的 `…/dev/kksk/danmubox/KeepAliveService.kt`（`MainActivity` 里配套的 `onStart` / `onStop` 钩子也属这一组） | 权限只有 `INTERNET`，没有任何 `<service>` | 权限**四枚**：`INTERNET`（模板原有）+ `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` / `POST_NOTIFICATIONS`；加 `<service android:name=".KeepAliveService" android:foregroundServiceType="dataSync" android:exported="false" />`；退到后台且有活跃连接时起、回到前台即停（完整行为见 §2.8） |
 
-实测（2026-09-15，模拟器 android-35）：Gradle 8.14.3 / AGP 8.11.0 / Kotlin 1.9.25；`aapt2 dump badging` 读到 package `dev.kksk.danmubox`、versionCode 1000、versionName 0.1.0（当时版本号；现为 0.2.0，见 §5.8）、minSdk 24、targetSdk / compileSdk 36、`INTERNET` 权限在；带签名包 `apksigner verify` 为 `Verifies`（v2 签名）。
-
-**已修（2026-09-15，提交 `32dcefc`）**：targetSdk 36 强制 edge-to-edge 带来的遮挡。改前实测：状态栏占 y=0..128、手势栏占 y=2337..2400，顶栏整条落在状态栏带里（标题文本 y=68..116、右上主题按钮 y=74..114，与系统电池图标重叠），房间页输入区压在手势栏下（白底画到 y=2399）。改后（同一 AVD）：顶栏文本 y=196..244、主题按钮 y=202..242、房间页顶栏底 0 → 128、房间页标题 52..88 → 180..216、输入区白底止于 2338，`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL。**动的是页面排版而不是窗口**：应用窗口修复前后都是 `[0,0][1080,2400]`，系统栏本身也没变（状态栏仍是 `[0,0][1080,128]`、手势栏仍是 `[0,2337][1080,2400]`）。做法与拒绝「给 WebView 设 padding」的理由见上表第三行与 `MainActivity.kt` 的注释。inset 里含 ime：**小列表页的键盘已验**（内容止于键盘上沿、无 pan 双位移），**登录态下房间页输入区 + 键盘的组合未验**（房间页输入框未登录时禁用，见 [`testing.md`](testing.md) §10.5）。
+**已验**：模拟器 android-35 上可出包、可安装、可启动；`aapt2 dump badging` 读到 package `dev.kksk.danmubox`、minSdk 24、targetSdk / compileSdk 36，带签名包 `apksigner verify` 为 `Verifies`（v2 签名）。读数留档见 `../CHANGELOG.md` 归档区。
 
 ### 5.4 工具链前置条件（对照 Tauri 官方 Prerequisites）
 
@@ -834,7 +647,7 @@ Tauri 官方把依赖分为「系统依赖 + Rust + 移动端附加依赖」三�
 | Visual Studio C++ Build Tools | Windows | 安装器勾选「Desktop development with C++」 | 官方列为 Windows 开发必需项 |
 | WebView2 Runtime | Windows（开发机 + 目标机） | Evergreen Bootstrapper | 官方：Tauri 用 Edge WebView2 渲染，开发与运行都需要 |
 | VBSCRIPT 可选功能 | Windows（仅打 MSI 时） | 设置 → 应用 → 可选功能 → 更多 Windows 功能 → 勾选 VBSCRIPT | 官方：缺它时 `light.exe` 报错 |
-| **Android 工具链（本仓库口径）** | Android | 首次 `scripts/android-env.sh bootstrap`；之后每个新 shell `. scripts/android-env.sh` | **不再需要 Android Studio，也不再需要全局 `ANDROID_HOME` / `JAVA_HOME` / `NDK_HOME`**：官方那套「Android Studio + SDK Manager + 全局环境变量 + `rustup target add`」整体被仓库内的 `.android-env/` 取代（清单见下），宿主侧零安装 |
+| **Android 工具链（本仓库口径）** | Android | 首次 `scripts/android-env.sh bootstrap`；之后每个新 shell `. scripts/android-env.sh` | **不再需要 Android Studio，也不再需要全局 `ANDROID_HOME` / `JAVA_HOME` / `NDK_HOME`**：官方那套「Android Studio + SDK Manager + 全局环境变量 + `rustup target add`」整体被仓库内的 `.android-env/` 取代 |
 | Tauri CLI | 三端 | 前端脚本内 `@tauri-apps/cli`（`./ui/node_modules/.bin/tauri`） | 仓库不额外要求全局安装 `cargo-tauri` |
 
 要点：
@@ -842,7 +655,7 @@ Tauri 官方把依赖分为「系统依赖 + Rust + 移动端附加依赖」三�
 - **macOS 桌面只需 Xcode CLT**（本期不做 iOS 端）。
 - **Windows 目标机需要 WebView2 运行时**。Windows 10/11 较新版本通常已预装；缺失时按 §5.6 处理。
 - **Android 的四个 ABI target 与 NDK 缺一不可**；`--split-per-abi` 只影响打包粒度，不影响编译目标是否已安装。
-- **Android 不再需要 Android Studio，也不需要全局 `ANDROID_HOME` / `JAVA_HOME` / `NDK_HOME`**：工具链全在仓库内，见下。
+- Windows 端在**本机**仍缺 `x86_64-pc-windows-msvc`（或 `-gnu`）target 与对应工具链（macOS 无法交叉编译；`windows-latest` 自带）。出包已绕开这一缺口：走 CI 的 `artifacts-windows`（§5.13）。
 
 #### Android：仓库内工具链 `.android-env/`（`scripts/android-env.sh`）
 
@@ -853,35 +666,35 @@ scripts/android-env.sh clean        # 停 gradle daemon / adb server 后删除�
 scripts/android-env.sh help         # 用法
 ```
 
-装进 `.android-env/`（**仓库内**，已由根 `.gitignore` 忽略）的东西（2026-09-15 实测）：
+装进 `.android-env/`（**仓库内**，已由根 `.gitignore` 忽略）的东西：
 
 | 目录 / 内容 | 说明 |
 |---|---|
-| `jdk17/`（309 MB） | Temurin JDK **17.0.20.1**，`JAVA_HOME` 默认指它 |
-| `jdk21/`（336 MB） | Temurin JDK **21.0.12.1** 备选；`ANDROID_JDK=21` 切过去 |
-| `sdk/`（8.0 GB） | `build-tools;35.0.0`、`cmdline-tools;latest 23.0.0`、`emulator;37.1.11`、`ndk;27.0.12077973`、`platform-tools;37.0.1`、`platforms;android-35`、`platforms;android-36`、`system-images;android-35;google_apis;arm64-v8a` |
-| `rustup/`（993 MB）+ `cargo/`（269 MB） | 项目内 rustup / cargo：rustc 与 cargo **1.98.1**，含四个 android target（`aarch64-linux-android` / `armv7-linux-androideabi` / `i686-linux-android` / `x86_64-linux-android`） |
-| `gradle-home/`（1.8 GB） | `GRADLE_USER_HOME`，内含 `org.gradle.daemon=false` |
-| `android-user/`（2.0 GB） | `ANDROID_USER_HOME` / `ANDROID_AVD_HOME`（AVD 也建在这里） |
+| `jdk17/`、`jdk21/` | Temurin JDK 17 与 21；`JAVA_HOME` 默认指 `jdk17`，`ANDROID_JDK=21` 切到 `jdk21` |
+| `sdk/` | 清单是 `scripts/android-env.sh` 的 `DANMUBOX_SDK_PACKAGES`：`platform-tools`、`platforms/android-35`、`build-tools/35.0.0`、`ndk/27.0.12077973`、`emulator`；另外按 `DANMUBOX_SYSTEM_IMAGE_CANDIDATES` 的候选表探测，装上第一个可用的 `system-images`（`android-34` / `android-35` 的 `google_apis` 或 `default` + `arm64-v8a`）。**`DANMUBOX_SDK_PACKAGES` 里没有 `platforms/android-36`**，而 `app/build.gradle.kts` 的 `compileSdk = 36`：缺它时构建会失败，需另行 `sdkmanager` 装上（CI 里显式装，见 §5.13） |
+| `rustup/` + `cargo/` | 项目内 rustup / cargo：`DANMUBOX_RUST_TOOLCHAIN=stable`（`--profile minimal` + rustfmt + clippy），含四个 android target（`aarch64-linux-android` / `armv7-linux-androideabi` / `i686-linux-android` / `x86_64-linux-android`） |
+| `gradle-home/` | `GRADLE_USER_HOME`，内含 `org.gradle.daemon=false` |
+| `android-user/` | `ANDROID_USER_HOME` / `ANDROID_AVD_HOME`（AVD 也建在这里） |
 | `npm-cache/`、`tmp/` | `npm_config_cache` 与 `TMPDIR` |
 
-总计约 **14 GB**。导出的环境变量：`JAVA_HOME`、`ANDROID_HOME`、`ANDROID_SDK_ROOT`、`NDK_HOME`、`ANDROID_NDK_HOME`、`GRADLE_USER_HOME`、`RUSTUP_HOME`、`CARGO_HOME`、`ANDROID_USER_HOME`、`ANDROID_AVD_HOME`、`npm_config_cache`、`TMPDIR`，并把 `.android-env` 下各 `bin` 前置进 `PATH`（重复 source 不叠加）。**宿主侧不装任何东西**：`~/.gradle`、`~/Library/Android` 都不存在也不会被创建；唯一的宿主足迹是宿主 `cargo` 跑过本 workspace 时留下的几 KB 索引元数据（见 §5.12）。
+总计约 **14 GB**。导出的环境变量：
 
-#### Windows 前置条件（当前缺口）
+| 变量 | 取值 |
+|---|---|
+| `JAVA_HOME` | `.android-env/jdk17`（`ANDROID_JDK=21` → `jdk21`）；同批导出 `DANMUBOX_JDK_VERSION` |
+| `ANDROID_HOME` / `ANDROID_SDK_ROOT` | `.android-env/sdk` |
+| `NDK_HOME` / `ANDROID_NDK_HOME` | `.android-env/sdk/ndk/<版本>` |
+| `GRADLE_USER_HOME` / `RUSTUP_HOME` / `CARGO_HOME` | `.android-env/gradle-home`、`/rustup`、`/cargo` |
+| `ANDROID_USER_HOME` / `ANDROID_AVD_HOME` | `.android-env/android-user`（AVD 在其下 `avd/`） |
+| `npm_config_cache` / `TMPDIR` | `.android-env/npm-cache`、`.android-env/tmp` |
+| `DANMUBOX_ROOT` / `DANMUBOX_ANDROID_ENV_ROOT` | 仓库根、`.android-env` 绝对路径（脚本自身定位用；可用 `DANMUBOX_ROOT=/path/to/danmubox` 覆盖） |
+| `PATH` | 前置 `.android-env` 下各 `bin`（`cargo/bin`、`jdk/bin`、`cmdline-tools/latest/bin`、`platform-tools`、`emulator`、NDK prebuilt `bin`）；重复 source 不叠加 |
 
-Windows 端属独立工程，开工前先补齐（2026-09-12 本机核查）：
-
-| 端 | 缺 | 已有 |
-|---|---|---|
-| Windows | `x86_64-pc-windows-msvc`（或 `-gnu`）target 与对应的链接器 / 工具链（macOS 无法交叉编译） | — |
-
-Android 端这段缺口已在 2026-09-15 关闭：工具链由 `scripts/android-env.sh bootstrap` 装进仓库，出包、装进模拟器与启动均已实测（§5.3）。
-
-Windows 端这段缺口**在本机仍然存在**（开发机是 macOS，装不了 MSVC 工具链；`windows-latest` 则自带），但**出包这条路已于 2026-09-17 绕开**：改走 CI 的 `artifacts-windows` job。产物与实测见 §5.3 与 §5.13。
+**宿主侧不装任何东西**：`~/.gradle`、`~/Library/Android` 都不存在也不会被创建（唯一的宿主足迹见 §5.12）。
 
 ### 5.5 macOS 本地运行与签名策略
 
-自用不发布，因此**不购买 Apple Developer 账号、不做公证（notarization）**：公证需要 Apple 账号凭据（`APPLE_ID` / `APPLE_API_KEY` 等），自用场景不引入该依赖。
+自用不发布，因此**不购买 Apple Developer 账号、不做公证（notarization）**。
 
 | 场景 | 做法 | 结果 |
 |---|---|---|
@@ -900,7 +713,7 @@ xattr -l /path/danmubox.app                   # 查看隔离属性
 
 ### 5.6 Windows SmartScreen 与 WebView2
 
-未签名的安装器从浏览器下载后被打上 Mark-of-the-Web，首次运行触发 SmartScreen「Windows 已保护你的电脑」。自用不发布，**不购买 OV / EV 证书**（都需付费与身份材料，EV 另有硬件令牌要求），产物保持未签名。
+未签名的安装器从浏览器下载后被打上 Mark-of-the-Web，首次运行触发 SmartScreen「Windows 已保护你的电脑」。自用不发布，**不购买 OV / EV 证书**，产物保持未签名。
 
 | 场景 | 处理方式 |
 |---|---|
@@ -921,11 +734,11 @@ xattr -l /path/danmubox.app                   # 查看隔离属性
 | 文件 | 内容 | 状态 |
 |---|---|---|
 | `keystore.jks` | 自用 keystore | 被 `gen/android/.gitignore`（`*.jks`）忽略，**不入库** |
-| `keystore.properties` | 键 `storeFile` / `storePassword` / `keyAlias` / `keyPassword`（`storeFile` 相对 `gen/android/` 解析） | 同上，**不入库** |
+| `keystore.properties` | 键 `storeFile` / `storePassword` / `keyAlias` / `keyPassword`（`storeFile` 相对 `gen/android/` 解析，`app/build.gradle.kts` 的 `signingConfigs.release` 读它） | 同上，**不入库** |
 
 - **这两个文件不在 `.android-env/` 内**，所以 `scripts/android-env.sh clean`（§5.12）删不到它们；反过来说，清工具链时**别手工把它们一起删掉**。
 - **丢了会怎样**：换一份新 keystore 就等于换了签名 → 设备上已装的那个同名应用**装不上**（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），只能先卸载（连带清掉 `config.toml` 凭据，重装后要重新扫码）。两者都在 `.gitignore` 里，**仓库没有任何备份来源**，请自行异地留存。
-- **缺 `keystore.properties` 不阻塞出包**：`app/build.gradle.kts` 的 `signingConfigs.release` 只在文件存在时创建，release 变为无签名（产物名带 `-unsigned`）。这种包装不进设备。
+- **缺 `keystore.properties` 不阻塞出包**：`signingConfigs.release` 只在文件存在时创建，release 变为无签名（产物名带 `-unsigned`）。这种包装不进设备。
 - **CI 出的包用的是另一份一次性签名**（现场 `keytool` 生成，随 run 消失），因此装过本机包的设备要先卸载；见 §5.13。
 
 ```bash
@@ -935,7 +748,7 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 | 情况 | 处置 |
 |---|---|
-| `INSTALL_PARSE_FAILED_NO_CERTIFICATES` | 装的是**未签名**包（没有 `keystore.properties` 的那次构建）→ 按上表确认签名材料在位后重新出包 |
+| `INSTALL_PARSE_FAILED_NO_CERTIFICATES` | 装的是**未签名**包（没有 `keystore.properties` 的那次构建）→ 按 §5.7 的签名材料表确认在位后重新出包 |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名与已装版本不一致 → 先 `adb uninstall dev.kksk.danmubox`（会清数据）再安装 |
 | `INSTALL_FAILED_OLDER_SDK` | 设备 Android 版本低于最低支持版本 → 提高设备系统或调整 `minSdkVersion` 后重建 |
 | 手机上提示「不允许安装未知应用」 | 在「安装未知应用」权限中允许 USB 安装来源 |
@@ -946,17 +759,17 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 | 项 | 规则 |
 |---|---|
-| 版本格式 | SemVer `MAJOR.MINOR.PATCH`，当前版本 **`0.2.0`**（`apps/desktop/src-tauri/tauri.conf.json` 的 `version`；workspace `Cargo.toml` 的 `[workspace.package] version` 与之同步，四个 crate 用 `version.workspace = true` 继承；变更记录见 `../CHANGELOG.md` 的 `[0.2.0]`） |
+| 版本格式 | SemVer `MAJOR.MINOR.PATCH`，当前版本 **`0.2.0`**（`apps/desktop/src-tauri/tauri.conf.json` 的 `version`；workspace `Cargo.toml` 的 `[workspace.package] version` 与之同步，四个 crate 用 `version.workspace = true` 继承） |
 | 单一事实源 | Tauri 配置中的 `version` 为准，三端产物名由它派生（`<version>`，见 §5.2）。**提版本号是「两处同改」**：`tauri.conf.json` 的 `version` + workspace `Cargo.toml` 的 `[workspace.package] version`，改完跑一次 `cargo check --workspace` 让 `Cargo.lock` 重生成 |
 | bundle id | `dev.kksk.danmubox`，三端一致；**一旦装机后不再更改**，否则 Android 无法覆盖安装、数据目录也会错位 |
 | Android versionCode | 采用官方派生规则 `major*1000000 + minor*1000 + patch`；需要连续递增时在 `bundle.android.versionCode` 显式指定 |
 | 预发布 | 自用不做预发布通道；`0.x` 期间 minor 变更允许破坏兼容 |
-| 文档同步 | 每次发版更新 `../CHANGELOG.md`；影响安装 / 数据目录 / 命令的改动同时更新本节与 §1。发版全程的操作步骤见 §5.13 的「发一版的操作步骤」 |
-| 本地文件兼容 | 无迁移；升级不影响 `config.toml` 与 `prefs.json`，弹幕缓冲是内存态、退出即丢（契约 §4.3） |
+| 文档同步 | 每次发版更新 `../CHANGELOG.md`；影响安装 / 数据目录 / 命令的改动同时更新 §5 与 §1。发版全程的操作步骤见 §5.13 的「发一版的操作步骤」 |
+| 本地文件兼容 | 无迁移；升级不影响 `config.toml` 与 `prefs.json`，弹幕缓冲是内存态、退出即丢（`contract.md` §4.3） |
 
 ### 5.9 自用更新方式
 
-不做自动更新：不引入 updater 插件、不搭更新服务器——自用单机，后端发布通道本身是额外维护面。升级即用新产物覆盖安装。
+不做自动更新（不引入 updater 插件、不搭更新服务器）。升级即用新产物覆盖安装。
 
 | 平台 | 更新步骤 | 数据是否保留 |
 |---|---|---|
@@ -972,13 +785,13 @@ adb install -r app-universal-release.apk     # 覆盖安装，保留应用数据
 
 | 指标 | 预期量级 | 依据 |
 |---|---|---|
-| 应用本体（不含内嵌 WebView2 安装器） | 10¹ MB | Tauri 的定位是「小包体」；sidecar 方案已在 [`decisions/0001-tauri-over-flutter.md`](decisions/0001-tauri-over-flutter.md) 否决——它会把包体推回 40MB+，抵消 Tauri 的体积优势 |
+| 应用本体（不含内嵌 WebView2 安装器） | 10¹ MB | Tauri 的定位是「小包体」；sidecar 方案会把包体推回 40MB+，抵消 Tauri 的体积优势（否决理由见 `../CHANGELOG.md` 归档区） |
 | Windows 安装器额外体积 | 0 / ~1.8MB / ~127MB / ~180MB 四档 | Tauri 官方 `webviewInstallMode` 对照表给出的增量：`downloadBootstrapper` 0 / `embedBootstrapper` ~1.8MB / `offlineInstaller` ~127MB / `fixedVersion` ~180MB |
 | 常驻内存 | 10² MB | 结构上由「WebView 渲染进程 + Rust 引擎」构成，其中 WebView 通常是大头；消息仅在内存环形缓冲内保存（按类型分档，六档之和默认 8200 条/房间，见 `contract.md` §4.3），不是主要占用 |
 
-参考来源（官方文档，核对日期 2026-09-11）：Tauri 2 Prerequisites、macOS Application Bundle、Windows Installer（WebView2 安装模式与体积对照）、Android 打包（versionCode 派生规则与产物路径）。
+参考来源：Tauri 2 官方文档的 Prerequisites、macOS Application Bundle、Windows Installer（WebView2 安装模式与体积对照）、Android 打包（versionCode 派生规则与产物路径）。
 
-量级只是锚点，实测值与当时的构建配置（release、是否 `--split-per-abi` / `--target`）登记到文末指针所指的唯一校准表。采样命令：
+量级只是锚点；实测值与当时的构建配置（release、是否 `--split-per-abi` / `--target`）归 `../CHANGELOG.md` 归档区（上游侧待校准项归 `protocol.md` 附录 A）。采样命令：
 
 ```bash
 # 体积
@@ -1006,7 +819,7 @@ time <启动命令>                                       # Android 用 adb shel
 
 ### 5.12 Android 工具链的无痕清除与重建
 
-`.android-env/`（§5.4 那套，约 14 GB）整个在仓库内、且已在根 `.gitignore` 里，因此**删掉它就等于把这台机器上的 Android 工具链卸干净**。不想留了、要给磁盘腾地方、或要换一套干净环境时：
+`.android-env/`（§5.4 那套，约 14 GB）整个在仓库内、且已在根 `.gitignore` 里，因此**删掉它就等于把这台机器上的 Android 工具链卸干净**：
 
 ```bash
 scripts/android-env.sh clean     # 停后台进程 → 打印各目录占用 → 删除整个 .android-env
@@ -1020,8 +833,9 @@ scripts/android-env.sh clean     # 停后台进程 → 打印各目录占用 →
 | 2 | 停 adb server | 若 `.android-env/sdk/platform-tools/adb` 在，跑 `adb kill-server` |
 | 3 | 打印删除前占用 | `du -sh` 总量 + 每个子目录一行的分解 |
 | 4 | `rm -rf .android-env` | 整包删除，并打印释放量 |
+| 5 | 提示 | 本 shell 里之前导出的 `JAVA_HOME` / `ANDROID_HOME` / `PATH` 已失效，需要时重新 `bootstrap` + `. scripts/android-env.sh` |
 
-**删完还剩什么**（2026-09-15 实测）：
+**删完还剩什么**：
 
 | 位置 | 是否还在 | 说明 |
 |---|---|---|
@@ -1029,8 +843,7 @@ scripts/android-env.sh clean     # 停后台进程 → 打印各目录占用 →
 | `apps/desktop/src-tauri/gen/android/**` 其余部分 | 在 | 是要入库的工程源码，与工具链无关 |
 | 宿主侧 `~/.gradle`、`~/Library/Android`、`~/.rustup`、`~/.cargo` | 不存在 | 脚本从不写这些位置；`clean` 前后都一样 |
 | 宿主 rustup/cargo 的索引元数据 | 几 KB | 唯一的宿主足迹：宿主自身那份 `cargo`（非项目内那份）跑过本 workspace 时留下的索引元数据，与 `clean` 无关，清不清都行 |
-| 宿主侧模拟器 / Java 的小文件 | **本次已清理** | 跑过模拟器与 Gradle 之后，宿主 `$HOME` 下仍会出现几个几 KB 的再生文件（它们不看 `ANDROID_USER_HOME`）：`~/.emulator_console_auth_token`、`~/.hawtjni/`（jansi 解包）、`~/.android/emu-last-feature-flags.protobuf`、`~/.android/emu-update-last-check.ini`、`~/.android/modem-nv-ram-<端口>`。`clean` 不碰它们（不在 `.android-env/` 内），不用模拟器时手工收一下即可：`rm -rf ~/.hawtjni ~/.emulator_console_auth_token ~/.android/emu-* ~/.android/modem-nv-ram-*`。2026-09-15 本轮已按此清干净，`~/.android` 只剩原有的 `adbkey` / `adbkey.pub` |
-| 当前 shell 里已导出的 `JAVA_HOME` / `ANDROID_HOME` / `PATH` | 已失效 | `clean` 会提示：本 shell 之前 source 出来的那份变量指向已删除的目录，要重新 `bootstrap` + `. scripts/android-env.sh` |
+| 宿主侧模拟器 / Java 的小文件 | 在 | 跑过模拟器与 Gradle 之后，宿主 `$HOME` 下会出现几个几 KB 的再生文件（它们不看 `ANDROID_USER_HOME`）：`~/.emulator_console_auth_token`、`~/.hawtjni/`（jansi 解包）、`~/.android/emu-last-feature-flags.protobuf`、`~/.android/emu-update-last-check.ini`、`~/.android/modem-nv-ram-<端口>`。`clean` 不碰它们（不在 `.android-env/` 内），不用模拟器时手工收一下：`rm -rf ~/.hawtjni ~/.emulator_console_auth_token ~/.android/emu-* ~/.android/modem-nv-ram-*` |
 
 **要重装**：一条命令重建（可重复执行，已装好的会跳过），再 source 一次即可继续出包：
 
@@ -1044,19 +857,28 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 ### 5.13 发版与产物（GitHub Actions CI，`.github/workflows/ci.yml`）
 
-**发版口径一句话**：三端产物**由 CI 出**（不在本机「发布」），触发只有两种 —— 手动
-`workflow_dispatch`，或推一个 `v*` tag；具体步骤见下方「发一版的操作步骤」。
+**发版口径**：三端产物**由 CI 出**（不在本机「发布」）；触发只有两种 —— 手动 `workflow_dispatch`，或推一个 `v*` tag。
 
-仓库只有这一套 CI，**四个 job**：`check` 与 `artifacts` 跑在 **`macos-14`（Apple Silicon）**，与开发机同平台 —— `check` 不必在 Linux 上另补 WebKitGTK 那一套系统依赖，命令与 [`../AGENT.md`](../AGENT.md) §3 的本机口径完全一致；`artifacts` 产出的也就天然是 arm64 产物。`artifacts-android` 出 Android APK，跑在 **`ubuntu-latest`**（2026-09-18 从 `macos-14` 挪过来：`tauri android build` 不需要 macOS，而 macOS runner 在计费口径上是 ×10 档 —— 私有仓时这一步要花 150–210 计费分钟、Linux 只要 15–21 分钟；公开仓虽免费，Linux 启动更快、也不再占住 macOS runner）。`artifacts-windows` 则是**唯一**的 Windows 出口，跑在 `windows-latest`（开发机是 macOS，本机出不了 Windows 包，见 §5.3 的 Windows 段）。
+| job | `runs-on` | 做什么（命令逐字来自 `ci.yml`） | 触发 |
+|---|---|---|---|
+| `check` | `macos-14` | `rustup component add rustfmt clippy` → `npm ci` → `npm run lint`（= `oxlint --deny-warnings`，**告警即失败**）→ `npm run build`（= `tsc -b && vite build`）→ `cargo fmt --all -- --check`（**提交门**，无 `continue-on-error`）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` | push 到 `main`、任何 `pull_request`、手动 `workflow_dispatch`；**推 `v*` tag 也会触发**（该 job 无 `if`） |
+| `artifacts` | `macos-14` | `tauri build --bundles dmg` → 上传 `danmubox-macos-dmg`（`target/release/bundle/dmg/*.dmg`） | `workflow_dispatch` 或 `refs/tags/v*` |
+| `artifacts-android` | `ubuntu-latest` | 四个 ABI `rustup target add` → JDK 17（temurin）→ 自取 cmdline-tools（**linux** 包 `16111833`；**不用** `android-actions/setup-android@v3`，它会去装上游已下架的 `tools` 包）→ `sdkmanager` 装 `platform-tools` / `platforms/android-36` / `build-tools/35.0.0` / `ndk/27.0.12077973` → 导出 `NDK_HOME` / `ANDROID_NDK_HOME` 与四个 target 的 linker / ar / ranlib 配置（prebuilt 目录**按宿主探测**）→ `npm ci` → `keytool` 生成一次性 release 签名材料 → `tauri android build --apk --ci` → 上传 `danmubox-android-apk`（`apk/*/release/*.apk`） | 同 `artifacts` |
+| `artifacts-windows` | `windows-latest` | `npm ci` → `tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'`（`shell: bash`）→ 上传 `danmubox-windows`（免安装 `.exe` + NSIS 安装器 + MSI） | 同 `artifacts`（仅手动与 `v*` tag） |
 
-| job | 做什么 | 触发 |
+- `concurrency`：`group: ${{ github.workflow }}-${{ github.ref }}`、`cancel-in-progress: true` —— 同一个 ref 上的新一轮推送取消上一轮未完成的运行。
+- `permissions: contents: read`（工作流级）。
+- 三个产物 job 都显式钉 `CARGO_TARGET_DIR: ${{ github.workspace }}/target`；`check` 用默认 target 目录。
+
+缓存：
+
+| job | 缓存 | 不缓存 |
 |---|---|---|
-| `check` | `rustup component add rustfmt clippy` → `npm ci` → `npm run lint`（= `oxlint --deny-warnings`，**告警即失败**，2026-09-17 接入）→ `npm run build`（= `tsc -b && vite build`）→ `cargo fmt --all -- --check`（**提交门**：2026-09-17 起已摘掉 `continue-on-error`）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` | push 到 `main`、任何 `pull_request`、手动 `workflow_dispatch` |
-| `artifacts` | 出 macOS 产物并上传：`tauri build --bundles dmg` → `.dmg`。跑在 `macos-14` | 仅 `workflow_dispatch` 与 `v*` tag（每次 push 都出包太贵） |
-| `artifacts-android` | 出 Android **已签名的** release APK 并上传：`tauri android build --apk --ci`。跑在 `ubuntu-latest`；与 `scripts/android-env.sh` 的两处宿主差异（cmdline-tools 取 linux 包、NDK prebuilt 目录按实际探测）都收在这个 job 内 | 与 `artifacts` 同口径 |
-| `artifacts-windows` | 出**三个**产物并上传：`tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'` → 免安装 `.exe` + NSIS 安装器 + MSI。跑在 `windows-latest`；命令与产物口径见 §5.3 的 Windows 段，那枚 `.ico` 为什么只在命令行覆盖见 §5.3「图标与 `bundle.icon` 的口径」 | 与 `artifacts` 同口径（仅 `workflow_dispatch` 与 `v*` tag） |
-
-缓存：`check` 缓存 `~/.cargo/registry`、`~/.cargo/git` 与 `target/`（键含 `Cargo.lock` 哈希）；四个 job 都用 `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`）。`artifacts` **不缓存** Gradle 与 release `target`：Gradle 依赖缓存近 GB 级、恢复比重新下载还慢，release `target` 还要乘上四个 ABI，收益为负；该 job 本来就只在手动 / 打 tag 时跑。`artifacts-android` 同样**只缓存 registry 不缓存 `target`**（四个 ABI 的 release 产物同理），也不缓存 Gradle。`artifacts-windows` 则**缓存 `target`** —— 2026-09-18 用两轮真跑取数后决定保留：命中那一轮（run `35310180919`）Windows job 全程 **281s**，而只缓存 registry 时（run `35307480216`，基线）是 **645s**，**净省 364s**；其中 `出 Windows 产物` 601s → 225s（cargo 从 9m26s 降到 3m12s，日志里只剩 `danmubox-core` / `danmubox-bili` / `danmubox-desktop` 三条 `Compiling`），代价是缓存步 **30s**（下载 561 MB 约 5s + 解包约 25s），首轮填充（run `35309130614`）则整轮 job **755s**。该缓存条目 **561,457,838 B（561 MB）**；仓库缓存总占用因此到 **8.46 GiB / 10 GiB（84.6%）** ——占用大头是 `check` job 那几条 `macOS-ARM64-cargo-*`（各约 0.9–1.17 GB，且因 `Cargo.lock` 哈希变化同时留有多条），超出额度时按 LRU 淘汰、最先出局的正是这些旧哈希条目。`artifacts` 与 `artifacts-android` **未做**同样处理，也未实测（多 ABI 会让 release 产物成倍变大）。
+| `check` | `~/.cargo/registry`、`~/.cargo/git`、`target/`（键含 `Cargo.lock` 哈希） | — |
+| `artifacts` | `~/.cargo/registry`、`~/.cargo/git` | `target`（release 产物远超缓存收益）、Gradle |
+| `artifacts-android` | 同上（只 registry） | `target`（四个 ABI 的 release 产物同理）、Gradle |
+| `artifacts-windows` | `~/.cargo/registry`、`~/.cargo/git`、`target/` | — |
+| 四个 job 共用 | `actions/setup-node` 内建的 npm 缓存（`apps/desktop/ui/package-lock.json`，node 22） | — |
 
 #### 发一版的操作步骤
 
@@ -1064,16 +886,16 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 | # | 动作 | 落点 / 命令 | 要点 |
 |---|---|---|---|
-| 1 | 把 `[Unreleased]` 收成一个版本 | `../CHANGELOG.md`：整段收进 `## [x.y.z] - YYYY-MM-DD`，`[Unreleased]` 留空（只留占位一行） | 同一个版本内每个 `###` 小节**只出现一次**；各轮的 `> **本轮…的验证口径**` 引用块**逐字保留**（那是「凭什么说做完了」的证据） |
+| 1 | 把 `[Unreleased]` 收成一个版本 | `../CHANGELOG.md`：整段收进 `## [x.y.z] - YYYY-MM-DD`，`[Unreleased]` 留空（只留占位一行） | 同一个版本内每个 `###` 小节**只出现一次** |
 | 2 | 提版本号 | `apps/desktop/src-tauri/tauri.conf.json` 的 `version` + workspace `Cargo.toml` 的 `[workspace.package] version` | **两处必须同一次改**（四个 crate 用 `version.workspace = true` 继承）。改完跑一次 `cargo check --workspace` 让 `Cargo.lock` 重生成并确认不破编译；产物名里的 `<version>` 随之改变（§5.2 / §5.8） |
-| 3 | 合并到 `main` | `git checkout main && git merge --no-ff <开发分支>` → push | 合并前先 `git status` 看索引（[`../AGENT.md`](../AGENT.md) §3 的「合并前先看索引」）；`check` job 会在这次 push 上跑一遍 |
-| 4 | 打 tag | `git tag -a vx.y.z -m "…" && git push origin vx.y.z` | **tag 才是出包开关**：`artifacts` / `artifacts-android` / `artifacts-windows` 的 `if` 是 `startsWith(github.ref, 'refs/tags/v')`，tag 名必须以 `v` 开头 |
+| 3 | 合并到 `main` | `git checkout main && git merge --no-ff <开发分支>` → push | 合并前先 `git status` 看索引（`../AGENT.md` §3）；`check` job 会在这次 push 上跑一遍 |
+| 4 | 打 tag | `git tag -a vx.y.z -m "…" && git push origin vx.y.z` | **tag 才是出包开关**：三条产物 job 的 `if` 是 `github.event_name == 'workflow_dispatch' \|\| startsWith(github.ref, 'refs/tags/v')`，tag 名必须以 `v` 开头 |
 | 5 | 取产物 | Actions → 该 run → 页面底部 **Artifacts**：`danmubox-macos-dmg` / `danmubox-android-apk` / `danmubox-windows` | 产物保留期用仓库默认（公开仓库 90 天），要长期留存就自己下下来 —— §5.9 的回滚靠留着上一版产物 |
 
-- **也可以只手动出包不发版**：Actions → `CI` → **Run workflow**（选分支）直接触发两个出包 job，不用 tag、不改 `CHANGELOG`。日常自用构建走这条。
-- **CI 只把文件挂到 run 的 Artifacts 区**，不发布到任何应用市场 / 包仓库（自用不发布，见 `../CHANGELOG.md` 的版本策略表）。
+- **也可以只手动出包不发版**：Actions → `CI` → **Run workflow**（选分支）直接触发三条出包 job，不用 tag、不改 `CHANGELOG`。日常自用构建走这条。
+- **CI 只把文件挂到 run 的 Artifacts 区**，不发布到任何应用市场 / 包仓库。
 - **版本号不要回退**：Android 的 `versionCode` 由版本号派生（`major*1000000 + minor*1000 + patch`），降版本号要卸载重装、会清数据（§5.7 / §5.9）。
-- **未验**：第 4 步「打 `v*` tag 触发」这条路**至今没有真跑过** —— CI 的两次出包实测都是 `workflow_dispatch` 触发的（§5.13 文末的验证表）。本条按 `.github/workflows/ci.yml` 的 `if` 条件写出，**不是实测**。
+- **未验**：第 4 步「打 `v*` tag 触发」这条路**至今没有真跑过** —— CI 的出包实测都是 `workflow_dispatch` 触发的。本条按 `ci.yml` 的 `if` 条件写出，**不是实测**。
 
 #### 手动触发与取产物
 
@@ -1089,7 +911,7 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 #### 在本机出同样两个产物（macOS / Android）
 
-就是 §5.3 里那两条命令（CI 用的也是它们）。**Windows 不在这一节**：本机是 macOS，出不了 Windows 包，它的产物只在 CI 的 `artifacts-windows` job 上生成（§5.3 的 Windows 段）。
+就是 §5.3 里那两条命令（CI 用的也是它们）。**Windows 不在这一节**：本机是 macOS，出不了 Windows 包，它的产物只在 CI 的 `artifacts-windows` job 上生成。
 
 ```bash
 # ① macOS .dmg（bundle.active=false 靠 --bundles 覆盖；不需要应用图标）
@@ -1107,50 +929,29 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 #### 签名口径差异（**CI 产物与本地产物签名不同**）
 
 - 本机的签名材料是 `gen/android/keystore.jks` + `keystore.properties`（自用私钥，已被 gitignore，**绝不入库、绝不进 CI**，见 §5.7）。
-- CI 上不用也不该用这份私钥：`artifacts` job 用 `keytool -genkeypair` **现场生成一次性 keystore**（写进 `keystore.properties` 的四个键；口令由 `github.run_id` / `run_attempt` 派生，只活在本次 run 里，run 结束即消失），因此 CI 的 APK 签名**有效但与本机不同**。
+- CI 上不用也不该用这份私钥：`artifacts-android` job 用 `keytool -genkeypair` **现场生成一次性 keystore**（写进 `keystore.properties` 的四个键；口令由 `github.run_id` / `run_attempt` 派生，只活在本次 run 里，run 结束即消失），因此 CI 的 APK 签名**有效但与本机不同**。
 - 后果：**设备上已装过本机包时，CI 包装不上**（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）—— 先 `adb uninstall dev.kksk.danmubox` 再装（卸载会清数据，`config.toml` 凭据要重新扫码，见 §4.3 与 §5.7）。
 - macOS 的 `.dmg` 不做 Apple 签名与公证，与 §5.5 的本机口径一致。
-- CI 里的 `keytool` 与 `sdkmanager` 只出现在 *run 步骤的 shell 里*，工作流文件中不含任何口令明文。
+- CI 里的 `keytool` 与 `sdkmanager` 只出现在 run 步骤的 shell 里，工作流文件中不含任何口令明文。
 
 #### 冒烟不在 CI 里跑
 
-`apps/desktop/ui/smoke/run-headless.mjs` 的两引擎冒烟**没有**纳入 CI —— 这是刻意的取舍，不是漏项。先排除一条常见误解：**它不需要真实网络，也不需要真实直播间**（自己 `npm run build` 出 `dist`，页内注入 `__TAURI_INTERNALS__` 替身、假 IPC 与夹具样本，`ui.md` §15）。不纳入的理由是另外三条：
+`apps/desktop/ui/smoke/run-headless.mjs` 的两引擎冒烟**没有**纳入 CI（刻意取舍，不是漏项；它不需要真实网络与真实直播间——自己 `npm run build` 出 `dist`，页内注入 `__TAURI_INTERNALS__` 替身、假 IPC 与夹具样本，见 `testing.md` §9.2）。因此冒烟仍在**本机 / 主流程**跑：
 
-1. **成本**：验证矩阵是 **2 引擎 × 2 视口 × 2 主题**。Chromium 那一路要一台 Chrome for Testing，WebKit 那一路要 `npx playwright install webkit`（数百 MB 的浏览器产物）；再算上宿主机侧旁证链路的 `swift smoke/wkwebview-host.swift`。每个 PR 都跑这一套不划算。
-2. **稳定性**：WebKit 无头在内存紧张时会崩（`page.evaluate: Target crashed`），而且**看起来像「某一段场景必崩」**——脚本自己的注释就记着这个假象（重试上限 1 次，两次都崩才报失败）。它在本机是有兜底的临时现象，放进 CI 就变成随机红，反而掩盖真问题。宿主机侧那条旁证链还有个硬限制：**没有显示会话时 rAF 不持续产帧**，「跟随最新 / 虚拟列表窗口」一类断言会假失败。
-3. **它验的是集成后的那棵树**：[`../AGENT.md`](../AGENT.md) §9 与 [`ui.md`](ui.md) §15 已经把口径定死——全量无头冒烟由**主流程在集成收尾时统一跑一次**，在分支 / PR 上跑结果不可比，也不该由 CI 代替。
-
-所以冒烟仍在**本机 / 主流程**跑（命令与门槛见 [`ui.md`](ui.md) §15、[`testing.md`](testing.md) §9.2 与 §10）：`cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs`（Chromium）与 `node smoke/run-headless.mjs --engine webkit`（宿主引擎）两遍。
+```bash
+cd apps/desktop/ui && npm run build && node smoke/run-headless.mjs                    # Chromium
+cd apps/desktop/ui && node smoke/run-headless.mjs --engine webkit                    # 宿主引擎（macOS = WKWebView）
+```
 
 #### 本地验证到什么程度（如实口径）
 
 | 项 | 状态 |
 |---|---|
-| `npm ci` / `npm run lint` / `npm run build` / 三条 Rust 命令 / `tauri build --bundles dmg` | **本机实测过**，产物路径即上文与 §5.3（`cargo fmt` 全仓已格式化，`AGENT.md` §9 记着修前的存量读数） |
-| `tauri android build --apk --ci` | **本机干净 worktree 上真跑完过**（rc=0；`npm ci` 22 秒 + 构建，合计 381 秒；四个 ABI 全部编出，产物 `…/apk/universal/release/app-universal-release-unsigned.apk`）。那份 worktree 没有本地 keystore，所以是**未签名**产物；CI 里先造一次性 `keystore.properties`，产物名是 `app-universal-release.apk`（上传用的是 `*/release/*.apk` 通配，两种命名都覆盖） |
-| Android 工具链在 **runner 上**的安装 | **已实测（2026-09-16，run `35108747297`）**：首次真跑暴露出 `android-actions/setup-android@v3` 会去装上游早已下架的 `tools` 包（`Failed to find package 'tools'` → job 失败），**已改成自取 cmdline-tools**（同版本同 URL 解压成 `cmdline-tools/latest`，再用 `sdkmanager` 装 `platform-tools` / `platforms/android-36` / `build-tools/35.0.0` / `ndk/27.0.12077973`），复跑该 job 全步骤 success 并上传了两个产物；这条 job 于 2026-09-18 拆出并搬到 `ubuntu-latest`，见下一行 |
-| Android 产物在 **`ubuntu-latest`** 上出（2026-09-18 由 `macos-14` 迁入） | **已真跑（2026-09-18，run `35307480216`，四条 job 全绿）**：`artifacts-android` 全程 **653 秒（10m53s）**，逐步骤 success —— `Android target（四个 ABI）` / `JDK` / `Android cmdline-tools（自取，**linux** 包，版本号 `16111833` 与 macOS 那份相同）` / `装 Android SDK 组件`（含 NDK）/ **`导出 Android 环境变量 + NDK 链接器配置`**（prebuilt 目录按宿主探测到 `linux-x86_64`；写错必挂，故这一步是迁移成败的判据）/ `前端依赖` / `生成一次性 release 签名材料` / `出 Android release APK` / `上传 Android APK`；产物 `danmubox-android-apk` **22,082,868 字节**，job 日志里四个 ABI（`arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64`）、`app-universal-release.apk` 与 `signingConfig` 均出现，即与改前同名同路径的**已签名通用包**。同 run 其余 job 耗时：`检查` 170s、`产物（macOS dmg）` 364s、`产物（Windows…）` 645s。**迁移动机**：原口径下这一步按 macOS runner 的 **×10** 计费（15–21 分钟 ⇒ 150–210 计费分钟），迁到 Linux 后是 ×1 的 10m53s，顺带把 macOS runner 从 20 分钟占用里释放出来 |
-| Windows 产物（`artifacts-windows`） | **已真跑（2026-09-17，run `35213437486`）**：三个 job 全绿，「出 Windows 产物」一步 **18m19s**（11:01:21Z→11:19:40Z）—— 其中 Rust release 编译 17m42s（冷缓存），NSIS `nsis-3.11` 与 WiX `wix314` 都是打包时现场下载后跑 `makensis` / `candle`+`light`，结束时 `Finished 2 bundles`；上传三个文件（名 / 字节数 / 类型见 §5.3）。**未验**：真机安装 / 启动 / 卸载、WebView2 是否需联网、SmartScreen —— 即 [`testing.md`](testing.md) §10.3 的 W-1~W-4 |
-| CI 工作流本身 | **已真跑**：`check` job 在 PR 与 push 上多次 success（冷缓存 3m43s / 热缓存 53s–1m30s）；`artifacts` job 手动触发两次 —— 第一次抓到 setup-android 的失败，修好后第二次全步骤 success 并上传 `danmubox-macos-dmg` / `danmubox-android-apk`；`artifacts-windows` 手动触发两次 —— 第一次（run `35211873761`）死在编译期缺 `icons/icon.ico`，补上该文件与 `--config` 覆盖后第二次（run `35213437486`）**三个 job 全绿**（该 run 全程 24m32s：`check` 1.2m、`artifacts-windows` 20.2m、`artifacts` 24.3m）。**2026-09-18 起 job 数为四**：`artifacts`（`macos-14`，只出 `.dmg`）与 `artifacts-android`（`ubuntu-latest`，出已签名 APK）已拆分，`check` 与 `artifacts-windows` 不变；拆分后的首次全量真跑见 run `35307480216`（四条 job 全绿，全程约 11 分钟：`check` 2.8m / `产物（macOS dmg）` 6.1m / `产物（Android APK）` 10.9m / `产物（Windows…）` 10.8m），推送到 `main` 后的 push 触发 run `35308234674` 亦 success（三条产物 job 按 `if` 正确 `skipped`） |
+| `npm ci` / `npm run lint` / `npm run build` / 三条 Rust 命令 / `tauri build --bundles dmg` | **本机实测过** |
+| `tauri android build --apk --ci` | 本机干净 worktree 上真跑完过（rc=0，四个 ABI 全部编出）；那份 worktree 没有本地 keystore，所以是**未签名**产物 |
+| Android 工具链在 runner 上安装 | **已真跑**（自取 cmdline-tools 的方案取自首次真跑暴露的失败，见 §5.13 的 `artifacts-android` 行） |
+| Android 产物在 `ubuntu-latest` 上出 | **已真跑**（run `35307480216`，四条 job 全绿，产物为已签名通用包） |
+| Windows 产物 | **已真跑出包**（run `35213437486`，三个产物上传）；**未验**：真机安装 / 启动 / 卸载、WebView2 是否需联网、SmartScreen —— 即 `testing.md` §10.3 的 W-1~W-4 |
+| CI 工作流本身 | **已真跑**：`check` 在 PR 与 push 上多次 success；三条产物 job 均手动触发成功；`v*` tag 触发**未真跑**（见 §5.13「发一版的操作步骤」的未验条） |
 
----
-
-## 6. 相关文档
-
-| 文档 | 关联点 |
-|---|---|
-| [`contract.md`](contract.md) | 本地文件、常量、`SendOutcome`、IPC 命令、偏好键的唯一事实源 |
-| [`auth.md`](auth.md) | 三种登录模式、扫码状态机、凭据字段与失效处理 |
-| [`protocol.md`](protocol.md) | WS 包结构、心跳、重连、消息取值路径；唯一「待实测校准」表 |
-| [`ipc.md`](ipc.md) | 前端命令与事件名、调试面板订阅 |
-| [`ui.md`](ui.md) | 房间内「刷新」按钮、连接状态展示、发送失败回滚 |
-| [`architecture.md`](architecture.md) | 进程拓扑、并发模型、可观测性 |
-| [`testing.md`](testing.md) | 三端手工冒烟清单，用于验证排障动作与出包检查是否生效 |
-| [`decisions/0001-tauri-over-flutter.md`](decisions/0001-tauri-over-flutter.md) | 桌面框架选型与包体取舍 |
-| [`../README.md`](../README.md) | 项目定位、三端目标、通用开发命令（§8） |
-| [`../AGENT.md`](../AGENT.md) | 构建 / 测试 / lint 命令与仓库作业规范 |
-| [`../CHANGELOG.md`](../CHANGELOG.md) | 版本变更记录 |
-
----
-
-> 唯一「待实测校准」表在 [`protocol.md`](protocol.md) 附录 A；本文不再自建。
+逐轮读数与耗时留档见 `../CHANGELOG.md` 归档区。

@@ -1,9 +1,5 @@
 # AGENT.md — danmubox AI 编码 agent 作业规范
 
-> 定位：面向参与本仓库的 AI 编码 agent 的强制作业规范。
-> 读者：任何被指派在 danmubox 仓库中读写文件、执行命令的 agent。
-> 更新时机：目录结构、构建命令、代码风格、提交格式、文档同步规则、DoD 任一变化时。
-
 ## 1. 适用范围
 
 - 本文件对仓库内所有 agent 生效，优先级高于任何任务描述中的临时说法。
@@ -29,8 +25,15 @@ danmubox/
   scripts/
     android-env.sh          # 仓库内 Android 工具链：bootstrap / source / clean（`docs/operations.md` §5）
   docs/
-    contract.md
-    decisions/
+    architecture.md         # 分层、端口/适配器、并发、本地文件、可观测性
+    auth.md                 # 登录、凭据、WBI 签名、扫码状态机
+    contract.md             # 规范性契约（唯一事实源）
+    ipc.md                  # Tauri 命令与事件
+    operations.md           # 运维、排障、三端构建分发
+    protocol.md             # ac站协议规格（附录 A 唯一校准表）
+    roadmap.md              # 下期 backlog 与风险
+    testing.md              # 测试策略与冒烟
+    ui.md                   # 前端规格
   REQUIREMENTS.md
   README.md
   AGENT.md
@@ -38,7 +41,7 @@ danmubox/
 ```
 
 - `apps/desktop/src-tauri/gen/android/` 是 **Tauri 生成的工程，但按「长期维护的源码」入库**（40 个文件；根 `.gitignore` 只忽略每次构建都会重生的 `gen/schemas/`）。本仓库在其中改过三处（`BuildTask.kt` 的 CLI 解析、`app/build.gradle.kts` 的 `signingConfigs`、`MainActivity.kt` 的系统栏 inset 下发），**重跑 `tauri android init` 会覆盖它们**——细节与原因见 `docs/operations.md` §5.3。`keystore.jks` / `keystore.properties` 由 `gen/android/.gitignore` 忽略，**永不入库**。
-- `scripts/android-env.sh` 把 Android 工具链装进仓库内的 `.android-env/`（已忽略，可整包删除）；宿主侧不装任何东西，理由见 `docs/decisions/0009-in-repo-android-toolchain.md`。
+- `scripts/android-env.sh` 把 Android 工具链装进仓库内的 `.android-env/`（已忽略，可整包删除）；宿主侧不装任何东西，理由见 `CHANGELOG.md` 归档区（原 `docs/decisions/0009-in-repo-android-toolchain.md`）。
 
 依赖方向（单向，不可违反）：
 
@@ -148,7 +151,7 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 | 场景 | 必须同步的文档 |
 |---|---|
 | 新增 / 重命名 crate | `README.md` §6、`AGENT.md` §2、`docs/architecture.md`、`docs/contract.md` §3 |
-| 改协议常量（包头 / op / protover / WS 与 HTTP 心跳 / 退避 / 解压上限 / 节流） | `docs/protocol.md`、`docs/contract.md` §6、`README.md`、必要时新增 ADR |
+| 改协议常量（包头 / op / protover / WS 与 HTTP 心跳 / 退避 / 解压上限 / 节流） | `docs/protocol.md`、`docs/contract.md` §6、`README.md`；新决策按 §6.5.4 记入当次提交的 `CHANGELOG.md` |
 | 新增 / 改端口或端口方法 | `docs/contract.md` §3、`docs/architecture.md`；若暴露为 IPC，同时改 `docs/ipc.md` |
 | 新增 / 改 IPC 命令或事件 | `docs/ipc.md`、`docs/contract.md` §7 |
 | 改领域模型字段或 `kind` 取值 | `docs/contract.md` §5、`docs/protocol.md`、`docs/ipc.md`、`docs/ui.md` |
@@ -156,7 +159,7 @@ worktree 的构建产物互相覆盖 —— 表现是**假绿 / 假红**（某�
 | 改 `config.toml` 字段或权限 | `docs/contract.md` §4.1、`docs/auth.md`、`docs/operations.md` |
 | 改数据目录 / 日志级别 / 缓冲上限等常量 | `docs/contract.md` §4、`README.md` §9、`docs/operations.md` |
 | 改 Android 构建步骤 / 签名 / 工具链脚本 | `docs/operations.md` §5（含 `scripts/android-env.sh` 的用法与产物路径）、`README.md` §8、`AGENT.md` §2/§3 |
-| 改前端栈或状态管理 | `docs/ui.md`、`docs/ipc.md`、`docs/decisions/` 中对应 ADR |
+| 改前端栈或状态管理 | `docs/ui.md`、`docs/ipc.md`；既有选型依据见 `CHANGELOG.md` 归档区（原 ADR 0008），新决策按 §6.5.4 |
 | 任何对外可见行为变化 | `CHANGELOG.md` 的 Unreleased 段 |
 
 规则：**先改文档、再改代码，或同一次提交内一起改**。文档与代码不一致视同构建失败。
@@ -166,6 +169,67 @@ URL 与主机名、代码标识符与字符串字面量（含 `bilibili.live.gif
 第三方项目与库名（如 `bilibili-API-collect` / `bilibili-api` —— 改名字等于伪造引文）、`smoke/fixtures/**` 里来自上游的夹具值。
 **这五类之外没有别的例外**：不要为了让搜索干净而去改夹具、冒烟断言或第三方库名（2026-09-18 与用户逐条确认：界面与终端里那几处提示文案、
 以及 `issue` 里未提交的第三方库名，一律保持原样）。
+
+## 6.5 文档体系
+
+### 6.5.1 文档登记表
+
+| 文档 | 作用 | 读者 | 更新时机 |
+|---|---|---|---|
+| `README.md` | ac站直播间弹幕客户端（自用不发布），面向三端的聊天框式弹幕工具。 | 项目作者本人，以及被指派参与本仓库编码的 AI agent。 | 项目边界、技术栈、目录结构、文档清单或对外声明发生变化时。 |
+| `AGENT.md` | 面向参与本仓库的 AI 编码 agent 的强制作业规范。 | 任何被指派在 danmubox 仓库中读写文件、执行命令的 agent。 | 目录结构、构建命令、代码风格、提交格式、文档同步规则、DoD 任一变化时。 |
+| `REQUIREMENTS.md` | 本项目的**唯一需求来源**，由项目作者手写维护；工程约定由 [`docs/contract.md`](docs/contract.md) 从本文翻译而来，逐条对应见其 §9 需求溯源。 | 项目作者；以及任何需要确认「这个功能到底做不做」的实现者与 AI 编码 agent。 | 增删或修改需求时。需求变更后必须同步 [`docs/contract.md`](docs/contract.md) 的 §9 需求溯源。 |
+| `CHANGELOG.md` | 项目的对外可见变更流水，按版本倒序排列。 | 项目作者本人，以及被指派参与本仓库的 AI agent。 | 任何对外可见的行为、契约、文档基线或发布策略发生变化时；随改动同一次提交写入 `Unreleased`。 |
+| `docs/contract.md` | 本项目全部共享约定（命名、共享常量、领域模型、端口边界、IPC 与本地文件契约、写作要求）的唯一权威来源。 | 所有实现者与 AI 编码 agent；动手写代码前必须先把本文读完。 | 任何共享常量、模型、接口或数据结构变更，必须先改本文，再改代码与派生文档。 |
+| `docs/protocol.md` | `danmubox-bili` 协议层（proto / ws）的实现依据，规定与 ac站直播弹幕长连接交互的二进制帧格式、认证与双心跳、业务命令归一化、发送侧被吞判定、重连状态机与风控边界。 | 协议层与适配器实现者；排查「连不上 / 收不到弹幕 / 字段为空 / 频繁重连 / 发弹幕被吞」的维护者；需要理解消息来源与语义的 AI agent 使用者。 | 头部布局、`op` / `protover` 语义、认证包或心跳包体、HTTP 心跳地址、`cmd` 与 `kind` 映射、发送判定规则、重连与节流参数发生任何变化时；附录 A 任一「待实测校准」项完成核对并回填结论后。 |
+| `docs/auth.md` | danmubox 与 ac站之间的身份、凭据、签名与失效处理规范，是 `core` 的 `AuthProvider` 端口、`danmubox-bili` 的鉴权实现及所有上层消费面的唯一权威说明。 | 实现 `danmubox-bili` 鉴权/协议适配的 Rust 工程师、接 `account_*` 与 `session_status` IPC 的前端作者、审阅凭据落盘方式与安全红线的评审者。 | ac站登录接口或扫码状态码变更、WBI 签名算法或置换表变更、Cookie 字段集合变更、`config.toml` 字段或权限约定变更、安全红线调整时。 |
+| `docs/architecture.md` | danmubox 的分层、crate 依赖方向、端口/适配器边界、并发模型、本地文件与可观测性总览，回答「代码放哪一层、数据怎么流动、进程怎么起停」。 | 实现与评审 `danmubox-core` / `danmubox-bili` 的开发者、排查连接与性能问题的维护者、需要判断改动落点的 AI 编码 agent。 | 新增或删除 crate、调整 core 的模块边界、改变并发与背压策略、增删端口、改动本地文件形态、改动启动/关闭序列或脱敏规则时，必须同步修改本文；契约 §3 / §4 / §6 变更时本文必须跟随。 |
+| `docs/ipc.md` | 前端与 Rust 引擎之间唯一的命令/事件契约——命令签名、载荷类型、事件集合、Zustand store 形状与乐观发送规则。 | 写 React/TS 前端的开发者、在 `apps/desktop/src-tauri` 增加命令的 Rust 开发者、需要判断「一处改动要同步几个文件」的 AI 编码 agent。 | 新增/删除/改名的命令或事件、改动任何载荷字段、改动 store 形状或乐观发送规则时，必须同步修改本文。 |
+| `docs/ui.md` | 定义弹幕客户端前端的导航结构、房间页布局、连接状态与手动刷新、消息与身份徽标渲染、礼物类消息的两枚显示开关与独立礼物栏、输入区与表情面板、举报入口、虚拟列表与滚动、过滤与样式。 | 前端实现者（React + TS）、负责 IPC 与数据层对接的 Rust 侧、验收者。 | 新增/修改 IPC 命令或事件（`ipc.md`）、新增 `kind`、调整过滤求值顺序、调整偏好键用法、调整布局断点或待实测校准项时。 |
+| `docs/testing.md` | 定义 danmubox 的测试策略——测试金字塔各层范围、协议 fixture、会话缓冲语义、发送结果判定、本地文件、端口层契约、回放、前端与三端手工冒烟，以及明确不测的边界。 | 编写与修改代码的 AI 编码 agent、执行验收的项目所有者、以及排查回归的人。 | 新增协议 `cmd`、会话缓冲或发送结果语义变化、偏好键或 IPC 命令变化、冒烟清单步骤变化时必须同步修改本文。 |
+| `docs/operations.md` | danmubox 的日常启动停止、数据文件位置、凭据文件维护、故障排查、三端构建分发与卸载清理。 | 日常使用与排障的仓库所有者本人；需要读取应用数据目录或在本机出包的维护者。 | 新增/更名环境变量、数据目录或文件名变化、新增 IPC 命令、新增卸载残留位置、新增目标平台或打包步骤时必须同步本文。 |
+| `docs/roadmap.md` | 把阶段划分与下期 backlog 收在一处；阶段 1–4 的交付物、验收标准与退出记录见 [`CHANGELOG.md`](CHANGELOG.md)，本文不重复。 | 项目所有者、参与实现的 AI 编码 agent。 | 阶段状态变化、下期 backlog 或风险表变化时。 |
+
+唯一事实源是 [`docs/contract.md`](docs/contract.md)（命名、常量、领域模型、端口、IPC 命令与事件、本地文件契约、偏好键、协议要点）；面向人的索引见 [`README.md`](README.md) §7。上表是「作用 / 读者 / 更新时机」的唯一登记处：各文档正文不再自述这三行，也不再写「与其他文档的关系 / 相关文档 / 文档索引」小节，分工一律查上表。
+
+### 6.5.2 写作要求（强制）
+
+1. 正文中文，标识符/技术名词保留英文。
+2. 定位 / 读者 / 更新时机三行只在 §6.5.1 的表里登记一份，文档正文不自述（原「文件开头三行引言块」写法作废）。
+3. 表格优先于长段落；接口、字段、常量必须用表格或代码块。
+4. **禁止**出现 `TODO`、`待补充`、`占位`、`XXX` 之类空壳；对 ac站未实测的事实不得凭空编造具体数值。
+5. 约束文档只写约束开发行为的内容：规范性陈述、取值与契约、判据与流程、指针（章节引用与 `path:line`）、一行需求溯源。文档体系自身的说明（定位、写法要求、文档关系、索引、本轮改了什么）集中在本节；决策过程按 §6.5.4 归档。
+6. 唯一的「待实测校准」表在 [`docs/protocol.md`](docs/protocol.md) 附录 A，其它文档不自建。
+
+### 6.5.3 文档清单
+
+| 文件 | 状态 |
+|---|---|
+| `REQUIREMENTS.md` | 需求基线（用户手写） |
+| `README.md` / `AGENT.md` / `CHANGELOG.md` | 本期 |
+| `docs/contract.md` | 规范性契约（唯一事实源） |
+| `docs/protocol.md` / `auth.md` / `architecture.md` / `ipc.md` / `ui.md` | 本期 |
+| `docs/operations.md` / `testing.md` | 本期 |
+| `docs/roadmap.md` | 下期 backlog（等上游样本 / 待拍板 / 更远期）与风险；阶段史见 `CHANGELOG.md` |
+| `docs/requests.md` | **已收掉（2026-09-19），全文见 `CHANGELOG.md` 归档区** |
+| `docs/foldable.md` | **已收掉（2026-09-19），全文见 `CHANGELOG.md` 归档区** |
+| `docs/decisions/*`（9 篇 ADR + README） | **已收掉（2026-09-19），全文见 `CHANGELOG.md` 归档区** |
+| `docs/.archive/` | **不进 git**；仅存放已撤销方案与历史讨论，不参与实现，引用它一律视为无效 |
+
+`docs/foldable.md`、`docs/requests.md`、`docs/decisions/`（共 12 个文件）已于 2026-09-19 收掉，全文进 `CHANGELOG.md` 归档区，§6.5.1 不再登记。
+
+已从仓库移除（不归档、不重建）：`docs/data-model.md`（无数据库）、`docs/api.md`（无 HTTP API）、`docs/overview.md`（正文并入 `contract.md` 与 `ipc.md` / `architecture.md` / `ui.md` / `operations.md`）、`docs/distribution.md`（并入 `docs/operations.md`）。
+
+### 6.5.35 需求入口（2026-09-19 起）
+
+需求**只写 `REQUIREMENTS.md`**。仓库根 `issue` 已于 2026-09-19 停用并清空（原 20 条 + 9 批追加全部并入 `REQUIREMENTS.md`，历史留档见 `CHANGELOG.md` 归档区）；新需求不再追加到 `issue`。
+
+### 6.5.4 决策记录
+
+- 新决策**不另开 ADR**：写在**当次提交的 `CHANGELOG.md` 条目**里，至少含三项 —— 为什么选它、否决了什么（及否决理由）、代价。
+- 决策过程（用户原话与日期、试错经过、改前 / 改后度量、被否决方案的论证）逐字并入 `CHANGELOG.md` 的归档区，不进任何约束文档正文。
+- 既有 `docs/decisions/0001`–`0009` 保留为历史记录（**原件已于 2026-09-19 收掉，全文与 ADR 模板见 `CHANGELOG.md` 归档区**），不再新增编号；`docs/decisions/README.md` 的「更新时机」与 ADR 模板中的三行按本条解释。
+- §6 表与 §7 清单中出现的「新增 ADR」一律按本条执行，本条效力高于那些指向。
 
 ## 7. 操作清单
 
@@ -213,7 +277,7 @@ URL 与主机名、代码标识符与字符串字面量（含 `bilibili.live.gif
 | 9 | 在未知认证回应 `code` 上臆造含义；非 0 一律按认证失败处理 |
 | 10 | 私自扩大范围：加遥测、加推送、加视频解码、加应用商店配置 |
 | 11 | 执行 git 历史改写、删除非本人产出的代码或文档 |
-| 12 | 重新引入本地数据库、弹幕落盘、回看或导出（见 `docs/decisions/0005-no-local-database.md`） |
+| 12 | 重新引入本地数据库、弹幕落盘、回看或导出（见 `CHANGELOG.md` 归档区，原 `docs/decisions/0005-no-local-database.md`） |
 | 13 | 启动任何本地监听服务（HTTP / SSE / 进程外接口） |
 | 14 | 把测试用的房间号、账号标识或任何凭据写进**受版本控制的文件与提交信息**；实测记录只允许写「某个在播房间」这类脱敏描述。唯一例外是公开测试房间 `1`（见 `docs/contract.md` §4） |
 | 15 | **越出测试边界做写操作**。任何会改变上游状态、或对他人可见的**写操作**（发弹幕、房管的禁言 / 拉黑 / 屏蔽词、任何 `POST` 形式的修改），只允许发生在：**公开测试房间 `1`（5440）**，或**用户在当次对话中明确指定的房间**——**一经指定不得更换**。失败即停并报告；**不许**换房间、换账号、换参数重试。只读查询可以更宽，但仍以用户授权为前提。写操作前应先确认目标房间与账号（用上游的权威只读接口核对权限），并把「用哪个账号、对哪个房间」写进报告开头 |
@@ -263,5 +327,5 @@ URL 与主机名、代码标识符与字符串字面量（含 `bilibili.live.gif
 | 测试与冒烟 | `docs/testing.md` |
 | 运维、排障与构建分发 | `docs/operations.md` |
 | 下期 backlog 与风险 | `docs/roadmap.md` |
-| 为什么这样选 | `docs/decisions/` |
-| 这条需求做没做、凭什么 | `docs/requests.md` |
+| 为什么这样选 | `CHANGELOG.md` 归档区（既有 0001–0009）；新决策见 §6.5.4 |
+| 这条需求做没做、凭什么 | `CHANGELOG.md` 归档区（原 `docs/requests.md` 台账） |

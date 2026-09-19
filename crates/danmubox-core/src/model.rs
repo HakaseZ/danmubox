@@ -116,7 +116,7 @@ pub struct Message {
     #[serde(default)]
     pub medal_guard_level: i64,
     pub is_admin: bool,
-    /// 是否来自**进场回填**的历史弹幕（上游 `dM/gethistory`，上限 10+10，
+    /// 是否来自**进场回填**的历史弹幕（上游 `dM/gethistory`；本实现只取 `data.room`、上限 10 条，上游响应里的 `data.admin` 10 条不取，
     /// 见 `docs/protocol.md` 附录 A30）。实时推来的消息恒为 `false`。
     #[serde(default)]
     pub is_history: bool,

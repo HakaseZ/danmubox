@@ -194,18 +194,18 @@ pub struct ConfigStore {
 }
 
 impl ConfigStore {
-    /// 读取凭据文件。文件不存在按「空配置」处理；
-    /// 文件存在但解析失败则报错——**不得**覆盖用户手工编辑过的文件。
+    /// 读取凭据文件。文件不存在按「空配置」处理；文件存在但解析失败则删掉重建为空文件、
+    /// 以游客态继续（契约 §4.1）；读取 / 删除 / 重建失败等其它错误照旧上报。
     pub fn load(path: PathBuf) -> Result<Self> {
         let config = if path.exists() {
             let raw = std::fs::read_to_string(&path)
                 .map_err(|e| Error::Internal(format!("读取 {} 失败: {e}", path.display())))?;
-            toml::from_str::<AppConfig>(&raw).map_err(|e| {
-                Error::Internal(format!(
-                    "{} 解析失败（已保留原文件，未做改动）: {e}",
-                    path.display()
-                ))
-            })?
+            match toml::from_str::<AppConfig>(&raw) {
+                Ok(parsed) => parsed,
+                // 解析失败（契约 §4.1）：删掉重建空文件、以游客态继续，不再让启动失败。
+                // 只处理这一条分支；读取 / 权限 / IO 错误照旧往上抛。
+                Err(_) => reset_corrupt_file(&path)?,
+            }
         } else {
             AppConfig::default()
         };
@@ -430,6 +430,28 @@ impl std::fmt::Debug for ConfigStore {
     }
 }
 
+/// 凭据文件坏掉时的自愈：删掉再建一个空文件（`0600`），并给出空配置以按游客态继续（契约 §4.1）。
+///
+/// 用户裁决（2026-09-19）：**不备份** —— 解析失败的凭据已经用不了，留一份损坏副本只会让
+/// 下次启动再失败一次。删除 / 重建失败（权限、IO）一律照旧上报，不吞。
+///
+/// 日志只写文件路径与处置结论：TOML 的解析错误文本会内嵌出错行的源码片段，凭据值**绝不**进日志。
+fn reset_corrupt_file(path: &Path) -> Result<AppConfig> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(Error::Internal(format!(
+                "删除损坏的 {} 失败: {err}",
+                path.display()
+            )))
+        }
+    }
+    tracing::warn!(path = %path.display(), "凭据文件损坏，已重建为空文件，请重新扫码登录");
+    write_private(path, b"")?;
+    Ok(AppConfig::default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,7 +591,7 @@ mod tests {
             )
             .unwrap();
 
-        // 手工再造一个账号（模拟用户编辑文件）
+        // 手工再造一个账号（绕过登录流程，模拟文件里已经有另一个账号）
         let mut config = store.snapshot();
         config.profiles.insert(
             "work".into(),
@@ -798,20 +820,113 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 凭据文件损坏不该让应用起不来（契约 §4.1）：删掉重建为空文件，并按游客态继续。
     #[test]
-    fn corrupt_file_is_reported_not_overwritten() {
+    fn corrupt_file_is_rebuilt_empty_and_starts_as_guest() {
         let dir = temp_dir("corrupt");
         let path = dir.join("config.toml");
         std::fs::write(&path, b"this is not toml = = =").unwrap();
 
-        let err = ConfigStore::load(path.clone()).unwrap_err();
-        assert_eq!(err.code(), "INTERNAL");
+        let store = ConfigStore::load(path.clone()).unwrap();
+        assert!(!store.is_logged_in(), "损坏即游客态");
+        assert_eq!(store.active_name(), DEFAULT_PROFILE);
+        assert!(store.accounts().is_empty());
+
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "this is not toml = = =",
-            "解析失败时不得改动用户的文件"
+            std::fs::metadata(&path).unwrap().len(),
+            0,
+            "重建后必须是空文件"
+        );
+        // 空文件本身是合法输入：下次启动不再触发自愈，也不会再报一次。
+        ConfigStore::load(path.clone()).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "重建后的凭据文件仍必须是 0600，实际 {mode:o}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 红线（契约 §4.1）：损坏文件的内容不得被回显 —— 日志里只有路径与处置结论。
+    #[test]
+    fn corrupt_file_content_never_reaches_the_logs() {
+        let dir = temp_dir("corrupt-log");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, b"sessdata = \"SENTINEL-LEAK\" = =\n").unwrap();
+
+        let logs = captured_logs(|| {
+            ConfigStore::load(path.clone()).unwrap();
+        });
+
+        assert!(
+            logs.contains("凭据文件损坏"),
+            "自愈必须留下一条 warn：{logs}"
+        );
+        assert!(
+            !logs.contains("SENTINEL-LEAK"),
+            "日志里不得出现文件内容：{logs}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 自愈只归解析失败管：读不出来（这里让目录占住文件路径）照旧报错，也不动现场。
+    #[test]
+    fn other_failures_are_still_reported_and_change_nothing() {
+        let dir = temp_dir("unreadable");
+        let path = dir.join("config.toml");
+        std::fs::create_dir(&path).unwrap();
+
+        let err = ConfigStore::load(path.clone()).unwrap_err();
+        assert_eq!(err.code(), "INTERNAL");
+        assert!(path.is_dir(), "非解析失败的错误不得触发删除重建");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 捕获 `body` 期间本线程打出的日志。
+    ///
+    /// 手写最小订阅者：本 crate 不依赖 `tracing-subscriber`，这里只需要「把事件字段按 debug
+    /// 记下来」这一件事。缓冲区是**线程本地**的，`with_default` 也只在本线程生效，
+    /// 因此并行跑的其它用例不受影响。
+    fn captured_logs(body: impl FnOnce()) -> String {
+        use std::cell::RefCell;
+        use std::fmt::Write as _;
+
+        thread_local! {
+            static CAPTURED: RefCell<String> = const { RefCell::new(String::new()) };
+        }
+
+        struct Capture;
+
+        impl tracing::field::Visit for Capture {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                CAPTURED.with(|out| {
+                    let mut out = out.borrow_mut();
+                    let _ = write!(*out, "{}={value:?} ", field.name());
+                });
+            }
+        }
+
+        impl tracing::Subscriber for Capture {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                event.record(&mut Capture);
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        CAPTURED.with(|out| out.borrow_mut().clear());
+        tracing::subscriber::with_default(Capture, body);
+        CAPTURED.with(|out| out.borrow().clone())
     }
 
     #[test]

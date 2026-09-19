@@ -286,7 +286,7 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `smoke/scenario/fixtures.mjs` | Node 侧：夹具 → 页内数据（**唯一**读 `smoke/fixtures/*.json` 的地方），序列化成页内的 `__SMOKE_DATA` |
 | `smoke/scenario/parts/00-mock.mjs` | 页内 IPC 替身（`__TAURI_INTERNALS__`）与测试钩子（`__emit` / `__mk` / `__addRoom*` …） |
 | `smoke/scenario/parts/10-harness.mjs` | 页内共享工具（`out` / `snap` / `byTestId` / `sleep` / `pressKey` …） |
-| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（`20…36`，共 17 份），**按文件名升序**依次执行 |
+| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（`20…37`，共 18 份），**按文件名升序**依次执行 |
 | `smoke/scenario/parts/90-epilogue.mjs` | 页内收尾（把 `run` 命令接上 `window.__smoke_run`） |
 
 各 part 是**页内脚本的原文**（不是模板字符串里的字符串）：组装器 `readFileSync` 读出后原样拼接，所以片段里写反引号 / 反斜杠 / `${` 都与浏览器里一致 —— **不要**把它们塞回模板字符串。
@@ -312,6 +312,7 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `34-split-panes.mjs` | `splitter` 分割条与长按换位 |
 | `35-cheap-gift.mjs` | `cheapgift` / `switchscope` 两枚低价礼物开关 |
 | `36-status-poll.mjs` | 开播 / 下播状态自动更新（实时事件 + 列表页周期） |
+| `37-account-anchor.mjs` | `anchor` 「我的直播间」区域（账号对话框底部）：未开通不渲染 / 双击才展开「相关配置项」/ 开播下播 / 读失败只留错误行（手工口径 §10.1 C-16、`ui.md` §2.2.2） |
 
 | 夹具 | 出处 | 覆盖什么 |
 |---|---|---|
@@ -418,10 +419,11 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 | C-9 | 切换过滤器（用户 / 类型 / 粉丝牌等级） | 列表即时收敛为匹配项；清空过滤后恢复 |
 | C-10 | 切换筛选面板「辅助功能」块的两枚礼物开关 | 两枚都开（默认）：礼物 / SC / 大航海既在弹幕流里、也在独立礼物栏里；只开弹幕那枚则礼物栏消失；只开礼物栏那枚则弹幕流里不再出现这三类；两枚都关则两处都不出现 |
 | C-11 | 上滑暂停、点击「回到最新」 | 暂停期间不自动滚动；点击后回到最新并恢复跟随 |
-| C-12 | 断开房间连接（房间头 `⋯` →「断开连接」） | 停止接收新弹幕；**本次会话结束、缓冲随之销毁** —— `history_query` 返回空；随后点「刷新连接」= 重建一次会话（缓冲从空开始，界面换成新会话的快照，`ui.md` §2.4）。契约 §4.3、`apps/desktop/src-tauri/src/lib.rs:388-400` |
+| C-12 | 断开房间连接（房间头 `⋯` →「断开连接」） | 停止接收新弹幕；**本次会话结束、缓冲随之销毁** —— `history_query` 返回空；随后点「刷新连接」= 重建一次会话（缓冲从空开始，界面换成新会话的快照，`ui.md` §2.4）。契约 §4.3、`apps/desktop/src-tauri/src/lib.rs:389-400` |
 | C-13 | 退出应用后重新进入同一房间 | 进程退出无残留；重进为全新会话，不显示上一会话的弹幕 |
 | C-14 | 共享分区：拖分割条、长按换位、关掉礼物栏 | 拖动两栏之间的分割条：高度**实时**跟着走，松手后比例留在 `prefs.json`（`ui.gift_pane_ratio`），重开应用仍是这个比例；拖到极限时弹幕区不短于 3 行、礼物栏不短于它的折叠头（不压到 0、不溢出）；长按任一栏 0.5s 后拖到另一栏松手：两栏上下互换且 `ui.gift_pane_on_top` 落盘（拖回本栏或按 ESC 取消）；在筛选面板关掉「独立礼物栏」：礼物栏与分割条一起消失、弹幕区占满整块（`ui.md` §5.4）。鼠标与触摸各做一遍 |
 | C-15 | 低价礼物两枚开关与互动自动消失：两个区域都生效、关掉即复原 | 在一个礼物不多的房间里先看基线：弹幕区与礼物栏各自把每条礼物画成一行。① 勾上「折叠低价礼物」：**两个区域**里低价礼物（≤ 0.1 元）各合并成一条（`×N` 与金额是整桶合计，弹幕区的合并行不画金额），0.11 元那条与 SC / 大航海两处都照旧一行；② 取消勾选：两处**逐条回来**，顺序、条数、每行金额与折叠头的统计都与基线一字不差；③ 勾上「剔除低价礼物统计」：统计（「礼物 / SC（N）」与分组明细）里不再有低价礼物，而**两个区域的行一条都不少**；取消后统计逐字回到基线；④ 互动消息满 8 秒从弹幕区消失后，取消勾选「互动消息自动消失」：**先前消失的那些行原样回来**（再勾上又不见）—— 消失只是不画，不是丢内容（`ui.md` §5.3、§4.8） |
+| C-16 | 「我的直播间」区域（账号对话框底部）：**未开通不显示**、**双击前推流信息不入 DOM** | ① 用**没开通直播间**的账号（或游客态）打开账号对话框：`db-anchor-panel` **不在 DOM 里**（不是渲染成空块、也不报错；口径 `ui.md` §2.2.2）；② 用**已开通直播间**的账号打开：出现标题输入框（`db-anchor-title`）、状态文本（`db-anchor-status`）与开播 / 下播按钮（`db-anchor-live`），标题初值 = 该直播间当前标题，状态文案是 `直播中` / `轮播` / `未开播` 三选一；③ **不双击**状态文本时，`db-anchor-config`、推流地址与推流码**一个字都不在 DOM 里**（用元素检查或 `document.querySelector('[data-testid="db-anchor-config"]')` 确认，不是「看不见」）；④ 双击状态文本才展开 `db-anchor-config`，其中**当前分区**要与 web 端开播页看到的分区一致（**界面不提供分区选择**）；再双击收起，收起后推流信息又从 DOM 消失。**开播 / 下播是写操作**：只允许在**当次指定的、你自己当前账号的直播间**上点（`AGENT.md` §8 第 14–16 条 —— 失败即停、不重试）；开播成功后配置项里出现推流地址 / 推流码，下播后这两行连同推流码一起从 DOM 消失。上游非 0 code（含人脸认证）**原样显示在错误行**、不赋语义、不弹二维码 |
 
 ### 10.2 macOS 专属
 
@@ -429,7 +431,7 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 |---|---|---|
 | M-1 | 双击应用包启动 | Gatekeeper 不阻止（本地签名或 ad-hoc 策略见 [`operations.md`](operations.md)）；应用正常打开 |
 | M-2 | 检查 `config.toml` 位置与权限 | 位于 `~/Library/Application Support/danmubox/`，权限为 0600 |
-| M-3 | 完成 C-1 ~ C-15 | 全部通过 |
+| M-3 | 完成 C-1 ~ C-16 | 全部通过 |
 
 ### 10.3 Windows 专属
 
@@ -438,7 +440,7 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 | W-1 | 安装 / 运行产物 | 不白屏；若目标机无 WebView2，按 [`operations.md`](operations.md) 的说明先安装运行时 |
 | W-2 | 检查 `config.toml` 位置与权限 | 位于 `%APPDATA%\danmubox\`，权限等价于仅当前用户可读写 |
 | W-3 | 首次运行观察 SmartScreen | 出现警告时可按 [`operations.md`](operations.md) 的处理方式继续；不出现功能性阻断 |
-| W-4 | 完成 C-1 ~ C-15 | 全部通过 |
+| W-4 | 完成 C-1 ~ C-16 | 全部通过 |
 
 ### 10.4 Android 专属
 
@@ -446,7 +448,7 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 |---|---|---|
 | A-1 | `adb install` 安装 APK 并启动：`adb shell am start -W -n dev.kksk.danmubox/.MainActivity` | 安装成功；启动命令返回 `Status: ok`，并打印 `TotalTime` 与 `Displayed` 两行 |
 | A-2 | 观察布局 | 无横向溢出、无控件被裁切；竖屏与横屏各看一遍。**系统栏避让**：顶栏（标题 / 主题按钮 / 房间页返回键）不与状态栏或刘海重叠，底部输入区与那排工具键不被手势栏遮挡（edge-to-edge 的 inset 由原生下发 `--safe-top` / `--safe-bottom`，实测数字见 [`operations.md`](operations.md) §5.3） |
-| A-3 | 完成 C-1 ~ C-15 | 全部通过 |
+| A-3 | 完成 C-1 ~ C-16 | 全部通过 |
 | A-4 | 前台连续运行 30 分钟 | 期间持续收弹幕；无崩溃、无明显内存增长 |
 | A-5 | 切到后台再回前台 | 连接按重连策略恢复并继续收弹幕；保活那一步单列在 A-9 / A-10（见 [`operations.md`](operations.md) §2.8） |
 | A-6 | **登录验证（本项目不用相机）**：从账号入口发起扫码，界面在**本机显示二维码**，用**另一台设备**（另一台手机 / 平板 / 相机 App）扫它，确认后回到应用 | 二维码正常显示、轮询期间状态可见；确认后登录态变为已登录（重拉 `session_status` 得 `logged_in=true`）；失败给出可操作提示。**全程不出现相机权限申请**——扫码是「显示二维码给别人扫」，前端不调用 `getUserMedia`，也不声明相机权限 |
@@ -530,5 +532,5 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 |---|---|
 | 凭证 / 日志断言 | 与 §1「凭证零泄漏」同一条：测试与 fixture 中不得出现真实 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`；自动化测试不注入真实凭证；断言日志不含凭证时用关键词检索而非打印凭证本身 |
 | fixture 脱敏与提交前检查 | 与 §8.3 同一条：回放 fixture 按 §8.3 处理（同一用户在多条样本中保持同一映射）；提交前对新增 fixture 与快照做一次敏感关键词检索，命中即修复 |
-| 写操作边界 | 只允许公开测试房间 `1`（5440）或当次明确指定的房间，一经指定不得更换，失败即停不重试；见 [`../AGENT.md`](../AGENT.md) §8 第 14–16 条 |
+| 写操作边界 | 只允许公开测试房间 `1`（5440）或当次明确指定的房间，一经指定不得更换，失败即停不重试；见 [`../AGENT.md`](../AGENT.md) §8 第 14–16 条。<br>**「我的直播间」（改标题 / 开播 / 下播，需求 §2.14）另有更窄的一条**：这类写操作**只对当前登录账号自己的直播间**生效 —— 目标房间由 `AnchorRoom::own()` 现取（`contract.md` §3），**上层不传房间号**，因此不存在「写到别人房间」的路径；失败即停，**不换房间 / 不换账号 / 不换参数重试**；上游非 0 code（含人脸认证那类）**原样带回、不赋语义**（`protocol.md` §18、附录 A66） |
 | 文档同步 | `docs/testing.md` 的作用 / 读者 / 更新时机登记在 [`../AGENT.md`](../AGENT.md) §6.5.1；阶段的验收标准与历史记录见 [`../CHANGELOG.md`](../CHANGELOG.md) |

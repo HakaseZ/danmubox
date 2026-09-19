@@ -26,12 +26,14 @@ import type {
   Emote,
   FollowedRoom,
   Message,
+  OwnRoom,
   Prefs,
   RoomSession,
   RoomView,
   SendOutcome,
   QrState,
   SessionState,
+  StreamEndpoints,
 } from "./types";
 // 值导入（上面那一组是 `import type`）：发送结果那句话在这里拼，行尾标记与浮片共用同一句。
 import { sendOutcomeText } from "./types";
@@ -126,10 +128,39 @@ interface AppStore {
   qr: AccountQr | null;
   qrState: QrState | null;
   qrError: string | null;
+  /**
+   * 我自己直播间（契约 §7 `anchor_room`）。`null` = 未登录 / 该账号**没开通直播间** /
+   * 拉取失败 —— 三种都让对话框里「我的直播间」那块**整块不渲染**
+   * （用户 2026-09-19：「检测到已开通直播间时」才显示）。会话级、不落盘。
+   */
+  anchorRoom: OwnRoom | null;
+  /** 上面那一块的读取 / 写入失败原因（原样 code + message，失败不静默）。 */
+  anchorError: string | null;
+  /**
+   * 本次会话**刚开播**拿到的推流端点（上游 `data.rtmp` 与 `data.protocols[]`）。
+   *
+   * 只在内存：它是账号级凭据（拿到就能向这个直播间推流），**不进 `prefs.json` /
+   * `config.toml`、不落盘、不打日志**；下播即清空（`anchor_live_set(false)` 返回 `null`）。
+   * 「相关配置项」平时一个字都不渲染 —— 展开时它才有值可显示。
+   */
+  anchorEndpoints: StreamEndpoints | null;
   reportReasons: ReportReason[];
   loadReportReasons: () => Promise<void>;
   /** 重拉账号列表（登录态事件、扫码确认、增删改之后都要）。 */
   loadAccounts: () => Promise<void>;
+  /**
+   * 拉我自己直播间（契约 §7 `anchor_room`）。**只在当前账号 `logged_in` 时问上游**；
+   * 未登录直接清空三份状态（切号 / 登出后不许把上一个账号的直播间摆在界面上）。
+   * 没开通（后端返回 `null`）不是错误：`anchorRoom` 置 `null`，那块整块不渲染。
+   */
+  loadAnchorRoom: () => Promise<void>;
+  /** 改直播间标题，成功后就地重读（以远端为准）。返回这一下有没有成，原因进 `anchorError`。 */
+  setAnchorTitle: (title: string) => Promise<boolean>;
+  /**
+   * 开播 / 下播。开播把上游刚下发的推流端点收进内存（`anchorEndpoints`），下播清空它。
+   * 返回这一下有没有成，原因进 `anchorError`（上游非 0 code 原样展示、不赋语义）。
+   */
+  setAnchorLive: (live: boolean) => Promise<boolean>;
   /** 切换当前账号；切换后会话、房间与关注都要按新凭据重来。 */
   switchAccount: (name: string) => Promise<void>;
   /** 删除账号条目；删当前项时后端会自动切走，界面只负责重新拉状态。 */
@@ -649,6 +680,11 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
     balance: undefined,
     seeding: false,
     lastSend: undefined,
+    // 「我的直播间」也是**按凭据**算出来的：留着它，新账号打开对话框会先把上一个账号的
+    // 直播间标题与开播状态摆出来。推流码（`anchorEndpoints`）尤其不能留 —— 那是账号级凭据。
+    anchorRoom: null,
+    anchorEndpoints: null,
+    anchorError: null,
   });
 }
 
@@ -745,6 +781,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
   qr: null,
   qrState: null,
   qrError: null,
+  anchorRoom: null,
+  anchorError: null,
+  anchorEndpoints: null,
   followed: [],
   roomIdentities: {},
   adminSilent: [],
@@ -858,7 +897,11 @@ export const useApp = create<AppStore>((set, get, store) => ({
         // 否则对话框会一直显示过期的「已登录」标记；不递归：只重拉列表，不碰 session。
         onSession: (session) => {
           set({ session });
-          if (!session.logged_in) set({ followed: [] });
+          // 登录态一掉，这两个按凭据算出来的切片就不再成立（`followed` / 「我的直播间」）：
+          // 尤其是推流码 —— 它只该属于**当下**这个账号的这一次会话。
+          if (!session.logged_in) {
+            set({ followed: [], anchorRoom: null, anchorEndpoints: null, anchorError: null });
+          }
           void get().loadAccounts();
         },
         // 房内身份与登录态共用一个事件名（见 ipc.subscribeEvents 的分派）：
@@ -1147,6 +1190,53 @@ export const useApp = create<AppStore>((set, get, store) => ({
       set({ accounts: await api.accountsList() });
     } catch (error) {
       set({ error: describeError(error) });
+    }
+  },
+
+  async loadAnchorRoom() {
+    // 未登录（或会话还没到手）时连上游都不问：直接清空三层状态，那块整块不渲染。
+    if (get().session?.logged_in !== true) {
+      set({ anchorRoom: null, anchorEndpoints: null, anchorError: null });
+      return;
+    }
+    // 换人复核（审计 P67 同款口径）：这份直播间是**按凭据**取的，晚到的旧回包一律丢掉。
+    const epoch = identityEpoch;
+    try {
+      const room = await api.anchorRoom();
+      if (epoch !== identityEpoch) return;
+      // `null` = 没开通直播间，不是错误（契约 §7）：照样置空 `anchorRoom`，界面整块不渲染。
+      set({ anchorRoom: room, anchorError: null });
+    } catch (error) {
+      if (epoch !== identityEpoch) return;
+      // 读不到也不许拿旧的那份顶着：置空 + 留原因（失败不静默）。
+      set({ anchorRoom: null, anchorError: describeError(error) });
+    }
+  },
+
+  async setAnchorTitle(title) {
+    try {
+      await api.anchorTitleSet(title);
+      set({ anchorError: null });
+      // 写成功后就地重读：标题以远端为准，不拿本地草稿当事实（与房管写操作同一口径）。
+      await get().loadAnchorRoom();
+      return true;
+    } catch (error) {
+      // 非 0 code 原样展示、不赋语义（契约 §7）；成功重读失败时原因也落在这里。
+      set({ anchorError: describeError(error) });
+      return false;
+    }
+  },
+
+  async setAnchorLive(live) {
+    try {
+      const endpoints = await api.anchorLiveSet(live);
+      // 开播收下推流端点、下播清空（后端下播返回 `null`）；它只在内存，不落盘（见字段注释）。
+      set({ anchorEndpoints: endpoints, anchorError: null });
+      await get().loadAnchorRoom();
+      return true;
+    } catch (error) {
+      set({ anchorError: describeError(error) });
+      return false;
     }
   },
 

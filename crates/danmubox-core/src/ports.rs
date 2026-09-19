@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::bus::{Cancel, MessageSink};
 use crate::error::Result;
 use crate::model::{
-    BlacklistedUser, Emote, FollowedRoom, Message, ReportReason, Room, RoomSession, SendOutcome,
-    SilentUser,
+    BlacklistedUser, Emote, FollowedRoom, Message, OwnRoom, ReportReason, Room, RoomSession,
+    SendOutcome, SilentUser, StreamEndpoints,
 };
 
 /// 登录态。**不含**任何 Cookie 值（`docs/contract.md` §7）。
@@ -294,4 +294,30 @@ pub trait RoomCatalog: Send + Sync {
 pub trait WalletProvider: Send + Sync {
     /// 电池余额。
     async fn balance(&self) -> Result<i64>;
+}
+
+/// **我自己的直播间**（主播视角，契约 §3）。与 [`LiveSource`] 的分工：
+/// 后者是「看别人的房间」（只读，游客也可用），这里是「管自己的房间」——
+/// 三件写操作：改标题、开播、下播。
+///
+/// 纪律（`AGENT.md` §8.15）：写操作**只允许发生在当前账号自己的直播间**；
+/// 失败即停，不换房间、不换账号、不换参数重试。上游非 0 code **原样带回、不赋语义**
+/// （人脸认证那类码只把原值交给界面，见 `docs/protocol.md` 附录 A66）。
+#[async_trait]
+pub trait AnchorRoom: Send + Sync {
+    /// 取我自己的直播间。该账号**没有开通直播间**时返回 `Ok(None)`——这不是错误，
+    /// 界面据此整块不渲染（用户 2026-09-19：「检测到已开通直播间时」才显示）。
+    async fn own(&self) -> Result<Option<OwnRoom>>;
+
+    /// 改直播间标题（空标题由实现报 `BAD_REQUEST`）。
+    async fn set_title(&self, title: &str) -> Result<()>;
+
+    /// 开播，成功时返回上游下发的推流端点。
+    ///
+    /// **沿用该直播间当前的分区**：实现自己去读房间当前 `area_id`，不由调用方传；
+    /// 上游没给分区时**不发开播请求**，报 `UPSTREAM_ERROR`。
+    async fn go_live(&self) -> Result<StreamEndpoints>;
+
+    /// 下播。
+    async fn end_live(&self) -> Result<()>;
 }

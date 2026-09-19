@@ -72,7 +72,7 @@ danmubox/
 |---|---|---|
 | 日志级别 | 环境变量 `DANMUBOX_LOG`，默认 `info` | `apps/desktop/src-tauri/src/lib.rs:1268`；CLI 同口径 `crates/danmubox-cli/src/main.rs:619` |
 | 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；其余平台 `$HOME/.local/share/danmubox`；`DANMUBOX_HOME` 覆盖以上全部 | `crates/danmubox-core/src/paths.rs:8-65` |
-| Android 数据目录 | 外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，不是其下的 `files/` 子目录）；`danmubox-core` 保持平台无关、不写死平台路径 | `apps/desktop/src-tauri/src/lib.rs:1244-1223` |
+| Android 数据目录 | 外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，不是其下的 `files/` 子目录）；`danmubox-core` 保持平台无关、不写死平台路径 | `lib.rs:1244-1259` |
 | 凭据文件 | `config.toml`，权限 **0600**，见 §4.1 | `crates/danmubox-core/src/config.rs:399-408` |
 | 偏好文件 | `prefs.json`，见 §4.2 | `crates/danmubox-core/src/paths.rs:43` |
 | 诊断导出文件 | `danmubox-diagnose-YYYYMMDD-HHMMSS.txt`（UTC）；桌面写主目录下的 `Downloads`（不存在则回退主目录），Android 经 MediaStore 写公共 `Download`；**一次诊断恰好一个文件**，见 §4.4 | `apps/desktop/src-tauri/src/diagnose.rs:13-17`；`crates/danmubox-core/src/paths.rs:32-45` |
@@ -84,7 +84,7 @@ danmubox/
 | 单包解压上限 | 16 MiB，超限丢弃并计数（防解压炸弹） | `crates/danmubox-bili/src/proto.rs:14` |
 | 发弹幕节流 | 同房间最小间隔 2s；相同内容 5s 内去重 | `crates/danmubox-bili/src/send.rs:20`、`send.rs:22` |
 | 列表页开播状态刷新 | **30 秒**，仅在**房间列表页可见**时进行 | `apps/desktop/ui/src/store.ts:559` |
-| 列表页刷新失败退避 | 失败一次后按 `60 → 120 → 240` 秒翻倍、`240` 秒封顶（成功即复位；正常周期仍是 30 秒），上一拍没回来不发下一拍 | `apps/desktop/ui/src/store.ts:603-582` |
+| 列表页刷新失败退避 | 失败一次后按 `60 → 120 → 240` 秒翻倍、`240` 秒封顶（成功即复位；正常周期仍是 30 秒），上一拍没回来不发下一拍 | `store.ts:603-613` |
 | 弹幕聚合窗口 | **5000 ms**（`AGGREGATE_WINDOW_MS`）；与**锚点**（这一行的第一条）比，**非滑动** | `apps/desktop/ui/src/aggregate.ts:22` |
 | 弹幕聚合条数上限 | **999**（`AGGREGATE_MAX_COUNT`）；到顶即封口，由下一条开一行新的 | `apps/desktop/ui/src/aggregate.ts:30` |
 | 弹幕聚合展示观众数 | **3**（`AGGREGATE_SENDERS_SHOWN`）；其余按「等 N 人」（N = 参与观众总数） | `apps/desktop/ui/src/aggregate.ts:38` |
@@ -197,9 +197,9 @@ sessdata = ""
   **不写**应用私有目录、不写这两个位置之外的任何地方；跑完不留临时文件。
 - **采集窗口固定 180 秒**（`crates/danmubox-core/src/diagnose.rs:29`；可提前结束）；窗口内收集连接事实与日志行，窗口到点或提前结束时导出。
 - **文件必须可安全发给别人**：凭据 / uid / 昵称按 §4.1 的安全红线与 `crates/danmubox-bili/src/redact.rs` 的口径抹成 `***`；
-  **房间号也抹掉**——日志里房间号是刻意保留的排障主键，这份要外发的文件不是（`operations.md` §3；`apps/desktop/src-tauri/src/lib.rs:1013-989`）。
+  **房间号也抹掉**——日志里房间号是刻意保留的排障主键，这份要外发的文件不是（`operations.md` §3；`lib.rs:1013-1025`）。
 - **导出后立即清空**内存里的采集内容（含最近几次连接的事实）。
-- 与 §4.3 **不冲突**：§4.3 禁的是**弹幕内容**的落库 / 回看 / 导出；该文件不含弹幕原文（`danmubox::raw` 那条逐条原始载荷的 debug 日志不进文件，`apps/desktop/src-tauri/src/lib.rs:1146-1112`），只有连接事实与脱敏后的日志行。
+- 与 §4.3 **不冲突**：§4.3 禁的是**弹幕内容**的落库 / 回看 / 导出；该文件不含弹幕原文（`danmubox::raw` 那条逐条原始载荷的 debug 日志不进文件，`lib.rs:1146-1148`），只有连接事实与脱敏后的日志行。
 
 ## 5. 领域模型（规范性）
 

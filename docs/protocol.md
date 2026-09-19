@@ -682,7 +682,7 @@ resp.msg / resp.message == "k"     → blocked_room
 
 识别依据是 `msg` 传唯一键 + `dm_type = 1`；只把表情名当普通文本发出去，上游不会渲染成表情（对照见附录 A31）。
 
-**可发送性**：官方客户端发之前会查 `emoticonDanmakuPermCheck`——`perm === 1` 直接放行；否则按 `identity` 给出解锁条件（`identity === 4` 时是「加入主播的粉丝团」，其余按大航海档位）。即 `perm = 0` 的表情不是不能点，而是**未解锁**（判据与实测见附录 A26 补充之三；实现派生成 `Emote.locked`，`crates/danmubox-bili/src/emote.rs:197-201`、`model.rs:380-340`；置灰展示落点 [`ui.md`](ui.md) §6.3）。
+**可发送性**：官方客户端发之前会查 `emoticonDanmakuPermCheck`——`perm === 1` 直接放行；否则按 `identity` 给出解锁条件（`identity === 4` 时是「加入主播的粉丝团」，其余按大航海档位）。即 `perm = 0` 的表情不是不能点，而是**未解锁**（判据与实测见附录 A26 补充之三；实现派生成 `Emote.locked`，`crates/danmubox-bili/src/emote.rs:197-201`、`model.rs:380-390`；置灰展示落点 [`ui.md`](ui.md) §6.3）。
 
 ### 11.5 举报载荷（官方实现）
 

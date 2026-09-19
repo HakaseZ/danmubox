@@ -390,7 +390,7 @@ sid = ""
 
 ### 8.2 启动顺序（规范性）
 
-1. 读取 `config.toml`，取 `active_profile` 指向的账号。文件缺失 → 以空值继续、按游客链路启动；文件存在但**解析失败** → `ConfigStore::load` 报 `INTERNAL`（`config.rs:199-216`），桌面外壳打印后 `exit(1)`（`apps/desktop/src-tauri/src/lib.rs:1308-1277`），CLI 同样报错退出（`crates/danmubox-cli/src/main.rs:117`）——**不写损坏副本、也不静默降级为游客态**（`prefs.json` 才有 `.bak` 机制，`crates/danmubox-core/src/prefs.rs:424-430`）。
+1. 读取 `config.toml`，取 `active_profile` 指向的账号。文件缺失 → 以空值继续、按游客链路启动；文件存在但**解析失败** → `ConfigStore::load` 报 `INTERNAL`（`config.rs:199-216`），桌面外壳打印后 `exit(1)`（`lib.rs:1308-1313`），CLI 同样报错退出（`crates/danmubox-cli/src/main.rs:117`）——**不写损坏副本、也不静默降级为游客态**（`prefs.json` 才有 `.bak` 机制，`crates/danmubox-core/src/prefs.rs:424-430`）。
 2. 校验该账号的 `sessdata` / `bili_jct` / `dede_user_id` 三者是否**齐全且非空**（`config.rs:62-64` 只判 `is_empty`，不做空白收敛）。
 3. 齐全 → 进入登录态，`mode = "cookie"`，不触发扫码；随后向 `nav` 求证（`code = -101` 则按 §10 失效处理；网络错误**不改**登录态）。`crates/danmubox-bili/src/auth.rs:165-205`。
 4. 不齐全 → `mode = "anonymous"`，登录入口为扫码（默认）。

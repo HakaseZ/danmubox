@@ -286,7 +286,7 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `smoke/scenario/fixtures.mjs` | Node 侧：夹具 → 页内数据（**唯一**读 `smoke/fixtures/*.json` 的地方），序列化成页内的 `__SMOKE_DATA` |
 | `smoke/scenario/parts/00-mock.mjs` | 页内 IPC 替身（`__TAURI_INTERNALS__`）与测试钩子（`__emit` / `__mk` / `__addRoom*` …） |
 | `smoke/scenario/parts/10-harness.mjs` | 页内共享工具（`out` / `snap` / `byTestId` / `sleep` / `pressKey` …） |
-| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（`20…37`，共 18 份），**按文件名升序**依次执行 |
+| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（`20…36`，共 17 份），**按文件名升序**依次执行 |
 | `smoke/scenario/parts/90-epilogue.mjs` | 页内收尾（把 `run` 命令接上 `window.__smoke_run`） |
 
 各 part 是**页内脚本的原文**（不是模板字符串里的字符串）：组装器 `readFileSync` 读出后原样拼接，所以片段里写反引号 / 反斜杠 / `${` 都与浏览器里一致 —— **不要**把它们塞回模板字符串。
@@ -312,7 +312,6 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `34-split-panes.mjs` | `splitter` 分割条与长按换位 |
 | `35-cheap-gift.mjs` | `cheapgift` / `switchscope` 两枚低价礼物开关 |
 | `36-status-poll.mjs` | 开播 / 下播状态自动更新（实时事件 + 列表页周期） |
-| `37-account-anchor.mjs` | `anchor` 「我的直播间」区域（账号对话框底部）：未开通不渲染 / 双击才展开「相关配置项」/ 开播下播 / 读失败只留错误行（手工口径 §10.1 C-16、`ui.md` §2.2.2） |
 
 | 夹具 | 出处 | 覆盖什么 |
 |---|---|---|

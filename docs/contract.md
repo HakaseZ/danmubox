@@ -62,7 +62,6 @@ danmubox/
 | `RoomCatalog` | 关注列表（`followed()`；定义见 `ports.rs:288-291`） |
 | `WalletProvider` | 电池余额（`ports.rs:294-296`） |
 | `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查（`ports.rs:257-285`）。仅房管可用；上游非 0 code 原样带回、不赋语义 |
-| `AnchorRoom` | **我自己的直播间**（主播视角）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此整块不渲染）、`set_title()` 改标题、`go_live()` 开播并返回推流端点、`end_live()` 下播（`ports.rs:307-323`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只允许发生在当前账号自己的直播间**，**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义** |
 
 **架构约束**：`core` 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层。本期不定义任何 MCP 工具、协议或端点。
 
@@ -70,9 +69,9 @@ danmubox/
 
 | 常量 | 值 | 代码位置 |
 |---|---|---|
-| 日志级别 | 环境变量 `DANMUBOX_LOG`，默认 `info` | `apps/desktop/src-tauri/src/lib.rs:1268`；CLI 同口径 `crates/danmubox-cli/src/main.rs:619` |
+| 日志级别 | 环境变量 `DANMUBOX_LOG`，默认 `info` | `apps/desktop/src-tauri/src/lib.rs:1232`；CLI 同口径 `crates/danmubox-cli/src/main.rs:619` |
 | 数据目录 | macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；其余平台 `$HOME/.local/share/danmubox`；`DANMUBOX_HOME` 覆盖以上全部 | `crates/danmubox-core/src/paths.rs:8-65` |
-| Android 数据目录 | 外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，不是其下的 `files/` 子目录）；`danmubox-core` 保持平台无关、不写死平台路径 | `lib.rs:1244-1259` |
+| Android 数据目录 | 外壳在启动最早期把 `DANMUBOX_HOME` 注入为 Tauri `app_data_dir()`（应用私有 dataDir 本身，不是其下的 `files/` 子目录）；`danmubox-core` 保持平台无关、不写死平台路径 | `apps/desktop/src-tauri/src/lib.rs:1208-1223` |
 | 凭据文件 | `config.toml`，权限 **0600**，见 §4.1 | `crates/danmubox-core/src/config.rs:399-408` |
 | 偏好文件 | `prefs.json`，见 §4.2 | `crates/danmubox-core/src/paths.rs:43` |
 | 诊断导出文件 | `danmubox-diagnose-YYYYMMDD-HHMMSS.txt`（UTC）；桌面写主目录下的 `Downloads`（不存在则回退主目录），Android 经 MediaStore 写公共 `Download`；**一次诊断恰好一个文件**，见 §4.4 | `apps/desktop/src-tauri/src/diagnose.rs:13-17`；`crates/danmubox-core/src/paths.rs:32-45` |
@@ -83,13 +82,13 @@ danmubox/
 | 压缩协商 | `protover=3`（brotli）；解码需同时支持 0 / 1 / 2 / 3 | `crates/danmubox-bili/src/proto.rs:24-27` |
 | 单包解压上限 | 16 MiB，超限丢弃并计数（防解压炸弹） | `crates/danmubox-bili/src/proto.rs:14` |
 | 发弹幕节流 | 同房间最小间隔 2s；相同内容 5s 内去重 | `crates/danmubox-bili/src/send.rs:20`、`send.rs:22` |
-| 列表页开播状态刷新 | **30 秒**，仅在**房间列表页可见**时进行 | `apps/desktop/ui/src/store.ts:559` |
-| 列表页刷新失败退避 | 失败一次后按 `60 → 120 → 240` 秒翻倍、`240` 秒封顶（成功即复位；正常周期仍是 30 秒），上一拍没回来不发下一拍 | `store.ts:603-613` |
+| 列表页开播状态刷新 | **30 秒**，仅在**房间列表页可见**时进行 | `apps/desktop/ui/src/store.ts:528` |
+| 列表页刷新失败退避 | 失败一次后按 `60 → 120 → 240` 秒翻倍、`240` 秒封顶（成功即复位；正常周期仍是 30 秒），上一拍没回来不发下一拍 | `apps/desktop/ui/src/store.ts:572-582` |
 | 弹幕聚合窗口 | **5000 ms**（`AGGREGATE_WINDOW_MS`）；与**锚点**（这一行的第一条）比，**非滑动** | `apps/desktop/ui/src/aggregate.ts:22` |
 | 弹幕聚合条数上限 | **999**（`AGGREGATE_MAX_COUNT`）；到顶即封口，由下一条开一行新的 | `apps/desktop/ui/src/aggregate.ts:30` |
 | 弹幕聚合展示观众数 | **3**（`AGGREGATE_SENDERS_SHOWN`）；其余按「等 N 人」（N = 参与观众总数） | `apps/desktop/ui/src/aggregate.ts:38` |
 | 弹幕聚合归一化 | `danmaku` 的正文：去首尾空白 → 连续空白并成一个空格 → 大小写不敏感；**表情弹幕**按 `emote.emoticon_unique`（图不同即不同条） | `apps/desktop/ui/src/aggregate.ts:56-66` |
-| 时间表示 | 统一 UTC 毫秒，类型 `i64` | `crates/danmubox-core/src/lib.rs:32` |
+| 时间表示 | 统一 UTC 毫秒，类型 `i64` | `crates/danmubox-core/src/lib.rs:31` |
 
 **弹幕聚合的约束（issue 2609171849 第 7 条）**：
 
@@ -197,9 +196,9 @@ sessdata = ""
   **不写**应用私有目录、不写这两个位置之外的任何地方；跑完不留临时文件。
 - **采集窗口固定 180 秒**（`crates/danmubox-core/src/diagnose.rs:29`；可提前结束）；窗口内收集连接事实与日志行，窗口到点或提前结束时导出。
 - **文件必须可安全发给别人**：凭据 / uid / 昵称按 §4.1 的安全红线与 `crates/danmubox-bili/src/redact.rs` 的口径抹成 `***`；
-  **房间号也抹掉**——日志里房间号是刻意保留的排障主键，这份要外发的文件不是（`operations.md` §3；`lib.rs:1013-1025`）。
+  **房间号也抹掉**——日志里房间号是刻意保留的排障主键，这份要外发的文件不是（`operations.md` §3；`apps/desktop/src-tauri/src/lib.rs:977-989`）。
 - **导出后立即清空**内存里的采集内容（含最近几次连接的事实）。
-- 与 §4.3 **不冲突**：§4.3 禁的是**弹幕内容**的落库 / 回看 / 导出；该文件不含弹幕原文（`danmubox::raw` 那条逐条原始载荷的 debug 日志不进文件，`lib.rs:1146-1148`），只有连接事实与脱敏后的日志行。
+- 与 §4.3 **不冲突**：§4.3 禁的是**弹幕内容**的落库 / 回看 / 导出；该文件不含弹幕原文（`danmubox::raw` 那条逐条原始载荷的 debug 日志不进文件，`apps/desktop/src-tauri/src/lib.rs:1110-1112`），只有连接事实与脱敏后的日志行。
 
 ## 5. 领域模型（规范性）
 
@@ -290,7 +289,7 @@ sessdata = ""
 
 两个数各自随不同命令到达，因此两侧都可缺省；界面保留上一次的值，不用 0 顶替。人气值（`POPULARITY_CHANGE` / `op=3`）**不再展示**。
 
-`RoomSession`（**本人在该房间的身份**，会话级、不落盘，`model.rs:322`）：
+`RoomSession`（**本人在该房间的身份**，会话级、不落盘，`model.rs:272`）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -306,19 +305,19 @@ sessdata = ""
 
 `Account`（账号，规范性，`ports.rs:63`）：`name`（具名凭据标识，即 `config.toml` 的 profile 名）/ `nickname` / `uid` / `face` / `logged_in` / `active`。**游客态不是账号**——没有凭据就没有条目；`logged_in=false` 表示该账号存在但凭据已清（或已失效），它仍是可切回的槽位。
 
-`locked`（**我**现在能不能用这个表情；`true` = 无权限，界面应**置灰而不是隐藏**，`model.rs:390`）：由上游**表情级 `perm == 0`** 派生（`protocol.md` A26 补充之三：同一房间两个身份不同的账号拿到**完全相同**的 68 个表情，只有舰长专属那批的 `perm` 随身份 0↔1；包级 `pkg_perm`/`unlock_*` 对判定无用）。**字段缺失按可用处理**——置灰是提示不是闸门，真正的拦截在上游发送侧。主站「我的表情」无此概念，恒为 `false`。
+`locked`（**我**现在能不能用这个表情；`true` = 无权限，界面应**置灰而不是隐藏**，`model.rs:340`）：由上游**表情级 `perm == 0`** 派生（`protocol.md` A26 补充之三：同一房间两个身份不同的账号拿到**完全相同**的 68 个表情，只有舰长专属那批的 `perm` 随身份 0↔1；包级 `pkg_perm`/`unlock_*` 对判定无用）。**字段缺失按可用处理**——置灰是提示不是闸门，真正的拦截在上游发送侧。主站「我的表情」无此概念，恒为 `false`。
 
-`Emote`（表情，规范性，`model.rs:363`）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `owned`；`owned` = 主站「我的表情」中用户拥有的包，见 `protocol.md` A35；`room` = UP 主大表情与房间专属表情。**没有 `admin`**——房管没有表情分类，见 `protocol.md` A26）/ `text` / `url` / `room_id`（房间专属时非 0）。
+`Emote`（表情，规范性，`model.rs:313`）：`key` / `emoticon_unique`（上游唯一键，发送表情弹幕时 `msg` 传它）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display` / `package_kind`（`common` / `room` / `medal` / `guard` / `owned`；`owned` = 主站「我的表情」中用户拥有的包，见 `protocol.md` A35；`room` = UP 主大表情与房间专属表情。**没有 `admin`**——房管没有表情分类，见 `protocol.md` A26）/ `text` / `url` / `room_id`（房间专属时非 0）。
 
 `EmoteRef`（弹幕携带的表情，规范性，`model.rs:221`）：`emoticon_unique` / `url`（已规范化）/ `width` / `height` / `is_dynamic` / `in_player_area` / `bulge_display`。
 
 > 为什么存整份而不只存图片地址：**弹幕行里的表情要按原图信息渲染** —— 盒子取哪一档由 `bulge_display` 与 `width / height` 的长宽比定（`ui.md` §4.1）；只留一个 URL 就没法给出正确的盒子。
 
-`SilentUser` / `BlacklistedUser`（房管列表条目，规范性，`model.rs:418`、`model.rs:426`）：`uid` / `uname` / `face`。禁言名单与黑名单各一套——前者是「本直播间禁言」，后者是「拉黑（自动解除关系并禁止互动）」。
+`SilentUser` / `BlacklistedUser`（房管列表条目，规范性，`model.rs:368`、`model.rs:376`）：`uid` / `uname` / `face`。禁言名单与黑名单各一套——前者是「本直播间禁言」，后者是「拉黑（自动解除关系并禁止互动）」。
 
 `ReportReason`（举报理由，规范性，`model.rs:235`）：`id` / `reason`。取自上游 `dMReport/ForReason`，界面只让用户从清单里选。
 
-`Room`（房间元信息，规范性，`model.rs:242`；`rooms_list` 返回的 `RoomView` 是它加上连接态，`apps/desktop/src-tauri/src/lib.rs:102`）：
+`Room`（房间元信息，规范性，`model.rs:242`；`rooms_list` 返回的 `RoomView` 是它加上连接态，`apps/desktop/src-tauri/src/lib.rs:101`）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -329,27 +328,7 @@ sessdata = ""
 | `title` | string | 直播间标题（上游 `getH5InfoByRoom` 的 `data.room_info.title`，与 `FollowedRoom.title` 同义）；空串 = 上游没给 |
 | `live_status` | i32 | 0 未开播 / 1 直播中 / 2 轮播 |
 
-`OwnRoom`（**我自己的**直播间，主播视角，规范性，`model.rs:275`；与 `Room` 是两回事——后者是「我要看的房间」，只读、游客也有）：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `room_id` | i64 | 真实房间号（`room_id_by_uid` 给的那个） |
-| `title` | String | **直播间标题**（上游 `room/v1/Room/get_info` 的 `data.title`）。可改：`anchor_title_set` 作用的就是它 |
-| `live_status` | i32 | 0 未开播 / 1 直播中 / 2 轮播（与 `Room.live_status` 同义；上游 `data.live_status`，实测为 int） |
-| `area_id` | i64 | **当前分区 id**（上游 `data.area_id`）。开播沿用这一份，**界面不做分区选择**。**`0` = 上游没给**——此时**不发开播请求**、报 `UPSTREAM_ERROR`，**不许**拿一个自造的默认分区顶替（`AGENT.md` §8.7） |
-| `area_name` | String | 分区名，形如「娱乐 · 视频唱见」（上游 `parent_area_name` + `area_name` 拼「父 · 子」）；上游没给为空串 |
-
-`StreamEndpoint` / `StreamEndpoints`（**开播成功时**上游下发的推流端点，规范性，`model.rs:300` / `model.rs:307`）：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `rtmp` / `rtmp_backup` / `srt` | `StreamEndpoint \| null` | 三组端点。**给哪几组就带哪几组**，缺的为 `null`——不猜、不补默认值（上游常不给 SRT） |
-
-`StreamEndpoint` 两个字段：`addr`（推流地址）/ `code`（**推流码**）。
-
-**推流码是账号级凭据（规范性）**：`StreamEndpoints.code` 拿到就能向这个直播间推流。它只随 `anchor_live_set` 的**这一次返回值**进界面内存，**不进日志、不落盘、不进 `prefs.json` / `config.toml`**（§4.1 的安全红线一并适用；`AGENT.md` §8.1）。
-
-`FollowedRoom`（关注列表，规范性，`model.rs:395`）：`room_id` / `uname` / `face` / `title` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
+`FollowedRoom`（关注列表，规范性，`model.rs:345`）：`room_id` / `uname` / `face` / `title` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -386,7 +365,7 @@ sessdata = ""
 
 ## 7. Tauri IPC（规范性）
 
-Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/src/lib.rs` 的 `generate_handler!`（`lib.rs:1338`）一一对应；签名、载荷类型与错误码见 [`ipc.md`](ipc.md) §3。
+Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/src/lib.rs` 的 `generate_handler!`（`lib.rs:1302`）一一对应；签名、载荷类型与错误码见 [`ipc.md`](ipc.md) §3。
 
 | 命令 | 用途 |
 |---|---|
@@ -398,11 +377,8 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `account_logout` | 清掉该账号（缺省 = 当前账号）的凭据；**账号条目保留**、`logged_in=false`，即退回游客态。登出别的账号时不重连 |
 | `account_qr_start` | 扫码第一步：取二维码内容并在**本地离线**编成 SVG。不带 `target` = **新增账号**（扫完按昵称命名、重名加后缀，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面须二次确认） |
 | `account_qr_poll` | 扫码轮询：状态 + **确认时**已落盘并设为当前（`active=true`）的那个账号；确认后各房间以新凭据重连 |
-| `anchor_room` | **取当前账号自己的直播间**（§5 `OwnRoom`）。**该账号没有开通直播间 → `null`**（不是错误；界面据此整块不渲染）。登录才成立，游客 → `NOT_LOGGED_IN` |
-| `anchor_title_set` | 改**自己直播间**的标题（`title`）。写操作：**只作用在自己的直播间**；失败即停、不重试 |
-| `anchor_live_set` | 开播 / 下播（`live: bool`）。开播成功返回 §5 `StreamEndpoints`（含**推流码**），下播返回 `null`。分区沿用直播间当前值（**界面不做分区选择**）；上游非 0 code **原样带回、不赋语义** |
 | `rooms_list` | 已登记房间：`RoomView`（= §5 `Room` + 连接态 + 当前会话缓冲条数） |
-| `rooms_refresh_status` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，§4）：按真实 `room_id` 逐个只读上游一次，把最新的 `live_status` 落到登记表并返回最新的 `RoomView` 列表。**只动 `live_status`**（标题 / 昵称另有来源）；单个房间失败只跳过它，**全部失败才报错**（前端据此退避）（`lib.rs:255-280`） |
+| `rooms_refresh_status` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，§4）：按真实 `room_id` 逐个只读上游一次，把最新的 `live_status` 落到登记表并返回最新的 `RoomView` 列表。**只动 `live_status`**（标题 / 昵称另有来源）；单个房间失败只跳过它，**全部失败才报错**（前端据此退避）（`lib.rs:254-280`） |
 | `rooms_add` | 解析房间号 / 短号 / URL 并登记；**不建立连接** |
 | `rooms_remove` | 移除房间；有会话则先关闭（会话缓冲随会话销毁） |
 | `rooms_connect` | 建立房内会话。**幂等**：已有会话时原样返回，同一房间不得并存两份连接 |
@@ -410,7 +386,7 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `rooms_reconnect` | 房间内「刷新」：会话还在（连接中 / 退避中 / 已连接）→ 原地重连，**不清缓冲**，仍属同一次会话；会话已不在（点过断开，或移除后又加回）→ 当场重建一次会话，等价重新进房、缓冲从空开始（两档口径见 §4.3） |
 | `history_query` | 查**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`）；`limit` 缺省 **500**（与 `ipc.md` §3 同）、`0` 表示不截断；无会话返回空数组 |
 | `room_session` | 该房间**当前会话**里的本人身份（`RoomSession`）。无活跃会话（未连接 / 已关闭）→ 返回全零身份而**不报错**；身份在会话建立时并发取一次并缓存，同时经 `danmubox://session` 推送。界面据此决定房管入口是否出现（`is_admin` 不为 `true` 时该入口不渲染，`ui.md` §4.9） |
-| `chat_send` | 发弹幕（`color` / `emote` / `reply` 可选；`emote` 非空即表情弹幕，`protocol.md` §11.4）。返回 `ChatSendResult { room_id, content, outcome, detail? }`（`lib.rs:119`）：`outcome` 是 §5 `SendOutcome` 归一化结论，`detail` 是上游 `message` + `code` 拼的一行、仅 `outcome != ok` 时出现。**界面不等这条命令才画**——返回只用于校验与修正，乐观渲染与对账见 [`ipc.md`](ipc.md) §7 |
+| `chat_send` | 发弹幕（`color` / `emote` / `reply` 可选；`emote` 非空即表情弹幕，`protocol.md` §11.4）。返回 `ChatSendResult { room_id, content, outcome, detail? }`（`lib.rs:118`）：`outcome` 是 §5 `SendOutcome` 归一化结论，`detail` 是上游 `message` + `code` 拼的一行、仅 `outcome != ok` 时出现。**界面不等这条命令才画**——返回只用于校验与修正，乐观渲染与对账见 [`ipc.md`](ipc.md) §7 |
 | `chat_report` | 举报一条弹幕，理由取自 `report_reasons` 的清单 |
 | `report_reasons` | 举报理由清单（每次向上游 `dMReport/ForReason` 现取，条数以上游为准） |
 | `emotes_list` | 按**真实会话身份**加载表情包库（上游据此下发可用包；传零身份会缺粉丝牌与大航海那几包） |
@@ -426,16 +402,14 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `admin_keywords_del` | 删除屏蔽词 |
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令；取数口径见 §5） |
 | `wallet_balance` | 电池余额 |
-| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持（`lib.rs:497-540`） |
+| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持（`lib.rs:496-540`） |
 | `prefs_get` | 读偏好生效值全集（默认值已合并，见 §8） |
 | `prefs_set` | 写偏好补丁；未知键或非法值 → `BAD_REQUEST`，成功返回合并后的生效值全集 |
 | `diagnose_start` | 一键诊断：开始采集连接诊断（窗口 180 秒，见 §4.4）。同步命令：只写窗口的起止时刻，不碰 IO |
-| `diagnose_export` | 一键诊断：渲染并写出**恰好一个**报告文件（§4.4 的位置与命名）、结束采集并清空采集内容。返回 `{ path, name, bytes, attempts, logs, started_ms, ends_ms }`：`path` 是给用户看的位置（桌面端绝对路径、Android 为 `/sdcard/Download/…`）（`lib.rs:992`） |
+| `diagnose_export` | 一键诊断：渲染并写出**恰好一个**报告文件（§4.4 的位置与命名）、结束采集并清空采集内容。返回 `{ path, name, bytes, attempts, logs, started_ms, ends_ms }`：`path` 是给用户看的位置（桌面端绝对路径、Android 为 `/sdcard/Download/…`）（`lib.rs:956`） |
 | `frontend_log` | 前端控制台桥上报：`level` 为 `error` / `warn`（其余按 debug），`target = "danmubox::ui"`。页面 `console.error` / `console.warn` 与未捕获错误经它并入 Rust 侧同一份日志；同一告警 1 秒内只上报一次，防「渲染 → 告警 → 日志 → 重渲染」反馈环（`DANMUBOX_LOG` 见 §4） |
 
-Rust → Frontend 事件（`lib.rs:489`、`lib.rs:918-959`、`lib.rs:1333`）：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
-
-**「我的直播间」不需要配对事件（规范性）**：`anchor_room` / `anchor_title_set` / `anchor_live_set`（§7）**不新增事件名**——上面这七个就是全部。理由：这块状态是**按需现取**的（进账号对话框时问一次），开播 / 下播 / 改标题成功之后由**界面自己重拉** `anchor_room` 刷新标题与开播状态，推送侧没有「我的直播间变了」这条消息面（本仓也确实没有这样一个上游推送）。
+Rust → Frontend 事件（`lib.rs:488`、`lib.rs:888-930`、`lib.rs:1297`）：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
 
 `danmubox://session` 的载荷是 §5 的 `RoomSession`（房内身份，带 `is_admin`）——**登录态不经这个事件**，它由 `session_status` 命令现取（脱敏对象，带 `logged_in`）；事件与命令的分工见 [`ipc.md`](ipc.md) §4。
 
@@ -461,7 +435,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.gift_pane_ratio` | number | `0.35` | 0.10–0.90 | 礼物栏占**共享分区**高度的份额；与它在上面还是下面**无关**（换位不改比例）。落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 它的折叠头、弹幕区 ≥ 3 行），因此存的是**指针意图**——同一窗口尺寸下重开必然得到同一画面 |
 | `ui.gift_collapse_cheap` | boolean | `false` | — | 把单个价值 ≤ 0.1 元（= 100 金瓜子）的礼物合并成**一条**（`false` = 默认，一条一行不变）。**两个区域都生效**：弹幕区与礼物栏**各折一次**（同一份判据、同一种桶形状）；SC / 大航海不在其列。折叠是**纯派生**——原始消息一条不动，关掉即逐条复原。门槛、落点判据与合并行的形状见 [`ui.md`](ui.md) §5.3「低价礼物桶」 |
 | `ui.gift_exclude_cheap_stats` | boolean | `false` | — | 把 ≤ 0.1 元的礼物从**折叠汇总 / 统计**里剔除（`false` = 默认，统计与展示一致）。**只改统计**：这些礼物作为消息的展示（礼物栏条目、弹幕区的行）不受影响。统计面只有**礼物栏折叠头**那一处（弹幕区没有统计面）——这张键**出现在哪就管到哪**，见 [`ui.md`](ui.md) §5.3「剔除的口径」 |
-| `ui.interact_auto_hide` | boolean | `true` | — | 互动/进场消息显示一会儿后自动消失（`false` = 常驻）。消失**只是显示层不画**（判据 `ts + INTERACT_AUTO_HIDE_MS`，`apps/desktop/ui/src/types.ts:626`）：消息仍留在会话缓冲里（§4.3），关掉这枚键先前消失的那些行**原样回来**——「自动消失」不许丢内容，见 [`ui.md`](ui.md) §4.8 |
+| `ui.interact_auto_hide` | boolean | `true` | — | 互动/进场消息显示一会儿后自动消失（`false` = 常驻）。消失**只是显示层不画**（判据 `ts + INTERACT_AUTO_HIDE_MS`，`apps/desktop/ui/src/types.ts:583`）：消息仍留在会话缓冲里（§4.3），关掉这枚键先前消失的那些行**原样回来**——「自动消失」不许丢内容，见 [`ui.md`](ui.md) §4.8 |
 | `ui.show_timestamp` | boolean | `false` | — | 弹幕前是否显示时间戳 |
 | `composer.phrases` | string[] | `[]` | — | 自定义短语（REQUIREMENTS.md §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
 | `filter.uids` | integer[] | `[]` | — | 用户 UID 过滤列表 |
@@ -522,7 +496,6 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | §2.11 界面与布局 | 契约内只承载共享约定：§8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`（共享分区、分割条、长按换位）、§5 `Room.anchor_uname`（不露房间号）；其余在 `ui.md` 与组件层 |
 | §2.12 连接、保活与诊断 | §2（Android 保活例外）、§4 `DANMUBOX_LOG`、§4.4 与 §7 `diagnose_start` / `diagnose_export`、§6（心跳、重连退避与认证失败口径） |
 | §2.13 已删除 | §8 键表不含透明度键与 `filter.keywords*`；§4.1 无「手填 Cookie」导入入口；§4.3 无「最近发送记录」；`composer.phrases` 只承载用户自建短语 |
-| §2.14 我的直播间 | §3 `AnchorRoom`（与 `LiveSource` 的分工 + 写操作纪律）、§5 `OwnRoom` / `StreamEndpoint` / `StreamEndpoints`、§7 `anchor_room` / `anchor_title_set` / `anchor_live_set`（**事件清单不变**）；上游端点与三段式开播见 `protocol.md` §18，未实测登记见其附录 A66；界面落点 [`ui.md`](ui.md) §2.2.2 |
 | §3 架构约束 | §3 依赖方向、上游隔离、端口表 |
 | §4 非目标 | §2 本期范围、§4.3（不建库 / 不回看 / 不导出）、§3（MCP 架构兼容约束） |
 | §5 参考与外部输入 | §1（bundle id） |

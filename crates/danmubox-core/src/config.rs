@@ -823,10 +823,6 @@ mod tests {
     /// 凭据文件损坏不该让应用起不来（契约 §4.1）：删掉重建为空文件，并按游客态继续。
     #[test]
     fn corrupt_file_is_rebuilt_empty_and_starts_as_guest() {
-        // 与 `corrupt_file_content_never_reaches_the_logs` 共用同一条 callsite，串行（见 `captured_logs`）。
-        let _guard = CORRUPT_FILE_LOCK
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
         let dir = temp_dir("corrupt");
         let path = dir.join("config.toml");
         std::fs::write(&path, b"this is not toml = = =").unwrap();
@@ -856,10 +852,6 @@ mod tests {
     /// 红线（契约 §4.1）：损坏文件的内容不得被回显 —— 日志里只有路径与处置结论。
     #[test]
     fn corrupt_file_content_never_reaches_the_logs() {
-        // 与 `corrupt_file_is_rebuilt_empty_and_starts_as_guest` 共用同一条 callsite，串行（见 `captured_logs`）。
-        let _guard = CORRUPT_FILE_LOCK
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
         let dir = temp_dir("corrupt-log");
         let path = dir.join("config.toml");
         std::fs::write(&path, b"sessdata = \"SENTINEL-LEAK\" = =\n").unwrap();
@@ -892,23 +884,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 共用「损坏文件」现场的用例互斥。
-    ///
-    /// `tracing` 的 callsite `Interest` 是**进程级**缓存，与「当前线程有没有订阅者」无关；
-    /// 两条用例并发时，「此刻有没有订阅者」会互相干扰（详见 `captured_logs` 的说明）。
-    static CORRUPT_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// 捕获 `body` 期间本线程打出的日志。
     ///
     /// 手写最小订阅者：本 crate 不依赖 `tracing-subscriber`，这里只需要「把事件字段按 debug
-    /// 记下来」这一件事。缓冲区是**线程本地**的，`with_default` 也只在本线程生效。
-    ///
-    /// **`rebuild_interest_cache()` 不能省**（2026-09-19 修一条真 flaky）：`tracing` 的
-    /// callsite `Interest` 是**进程级**缓存的 —— 同一个测试二进制里，另一条用例先在没有订阅者
-    /// 的情况下走过同一条 callsite（`corrupt_file_is_rebuilt_empty_and_starts_as_guest` 同样
-    /// 读损坏文件），那条 callsite 就被缓存成「不感兴趣」，本函数的 scoped 订阅者此后收不到它。
-    /// 症状是「单独跑绿、全量偶发红」（实测 3 次里红 1 次），与业务代码无关。
-    /// 两道保险：进作用域后重建缓存，且让这两条用例共用 `CORRUPT_FILE_LOCK` 串行。
+    /// 记下来」这一件事。缓冲区是**线程本地**的，`with_default` 也只在本线程生效，
+    /// 因此并行跑的其它用例不受影响。
     fn captured_logs(body: impl FnOnce()) -> String {
         use std::cell::RefCell;
         use std::fmt::Write as _;
@@ -945,11 +925,7 @@ mod tests {
         }
 
         CAPTURED.with(|out| out.borrow_mut().clear());
-        tracing::subscriber::with_default(Capture, || {
-            // 见上方说明：不重建缓存，这条 callsite 可能已被别处缓存成「不感兴趣」。
-            tracing::callsite::rebuild_interest_cache();
-            body();
-        });
+        tracing::subscriber::with_default(Capture, body);
         CAPTURED.with(|out| out.borrow().clone())
     }
 

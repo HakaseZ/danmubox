@@ -266,56 +266,6 @@ impl Room {
     }
 }
 
-/// **我自己的**直播间（主播视角，`docs/contract.md` §5）。
-///
-/// 与 [`Room`] 的分工：`Room` 是「我要看的房间」（只读，游客也有）；这里是
-/// 「我开的房间」——改标题 / 开播 / 下播都作用在它上面。因此它多带**当前分区**：
-/// 开播沿用这一份，界面不做分区选择（用户 2026-09-19：「确保之前在 web 端用的配置可以沿用」）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct OwnRoom {
-    pub room_id: i64,
-    /// 直播间标题（上游 `room/v1/Room/get_info` 的 `data.title`）。
-    pub title: String,
-    /// 0 未开播 / 1 直播中 / 2 轮播（与 [`Room::live_status`] 同义）。
-    pub live_status: i32,
-    /// 当前分区 id（上游 `data.area_id`）。`0` = 上游没给——此时**不开播**，
-    /// 报 `UPSTREAM_ERROR`，不许拿一个自造的默认分区顶替（`AGENT.md` §8.7）。
-    pub area_id: i64,
-    /// 分区名，形如「虚拟主播 · 虚拟日常」；上游没给时为空串。
-    pub area_name: String,
-}
-
-impl OwnRoom {
-    pub fn is_live(&self) -> bool {
-        self.live_status == 1
-    }
-}
-
-/// 一组推流端点（开播成功时上游下发）。
-///
-/// `code` 是**推流码**：拿到它就能向这个直播间推流，因此它是账号级凭据——
-/// 只随 `anchor_live_set` 的这一次返回值进界面内存，**不进日志、不落盘、
-/// 不进 `prefs.json` / `config.toml`**（`AGENT.md` §8.1 的口径）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct StreamEndpoint {
-    pub addr: String,
-    pub code: String,
-}
-
-/// 开播后上游给的全部推流端点：给哪几组就带哪几组，缺的为 `None`（不猜、不补默认）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct StreamEndpoints {
-    /// 主 RTMP 端点（上游 `data.rtmp`）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rtmp: Option<StreamEndpoint>,
-    /// 备用 RTMP 端点（上游 `data.protocols[]` 里第一条 `protocol == "rtmp"`）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rtmp_backup: Option<StreamEndpoint>,
-    /// SRT 端点（上游 `data.protocols[]` 里第一条 `protocol == "srt"`）；上游常常不给。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub srt: Option<StreamEndpoint>,
-}
-
 /// 我在某个房间里的身份（会话级，不落盘）。与 `Message` 的牌区分：
 /// 后者是发送者的牌，这里是**我**在这个房间的牌。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

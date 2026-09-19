@@ -154,49 +154,6 @@ export interface AccountQrPoll {
   account: Account | null;
 }
 
-/**
- * **我自己的**直播间（契约 §5 `OwnRoom`，主播视角；`anchor_room` 的返回）。
- *
- * 与 `Room` 的分工：`Room` 是「我要看的房间」（只读，游客也有）；这里是「我开的房间」——
- * 改标题 / 开播 / 下播都作用在它上面，因此它多带**当前分区**：开播沿用这一份，界面不做
- * 分区选择（用户 2026-09-19：「确保之前在 web 端用的配置可以沿用」）。
- * 该账号**没有开通直播间**时后端返回 `null`（不是错误），界面据此整块不渲染。
- */
-export interface OwnRoom {
-  room_id: number;
-  /** 直播间标题（上游 `data.title`）。 */
-  title: string;
-  /** 0 未开播 / 1 直播中 / 2 轮播（与 `Room.live_status` 同义）。 */
-  live_status: number;
-  /** 当前分区 id；`0` = 上游没给（此时后端不开播并报错，不拿自造默认分区顶替）。 */
-  area_id: number;
-  /** 分区名，形如「虚拟主播 · 虚拟日常」；上游没给时为空串。 */
-  area_name: string;
-}
-
-/**
- * 一组推流端点（`anchor_live_set` 开播成功时上游下发）。
- *
- * `code` 是**推流码**：拿到它就能向这个直播间推流，因此它是账号级凭据 ——
- * 只进界面内存（`store.anchorEndpoints`），**不进 `prefs.json`、不落盘、不打日志**。
- */
-export interface StreamEndpoint {
-  addr: string;
-  code: string;
-}
-
-/**
- * 开播后上游给的全部推流端点：给哪几组就带哪几组。
- *
- * 三个字段**可能整个键都不在**（后端 `skip_serializing_if = "Option::is_none"`），
- * 也可能缺席时为 `null`；消费侧一律用 `??` 取第一个可用的（不猜、不补默认）。
- */
-export interface StreamEndpoints {
-  rtmp?: StreamEndpoint | null;
-  rtmp_backup?: StreamEndpoint | null;
-  srt?: StreamEndpoint | null;
-}
-
 export interface ReplyTarget {
   mid: number;
   uname: string;

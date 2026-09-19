@@ -26,18 +26,8 @@
 
 （本波治理票的新条目见下；后续对外可见变化继续在本段登记。）
 
-### Added
-
-- **「我的直播间」：账号对话框里改标题 / 开播 / 下播，双击状态文本看推流配置**（2026-09-19；需求 `REQUIREMENTS.md` §2.14，用户原话随该节）：
-  账号管理对话框**底部**新增一小块 —— **只在检测到该账号已开通直播间时才显示**（`anchor_room` 返回 `null` = 该账号没开通，整块**不在 DOM 里**；读失败时只留错误行、失败不静默）；区域含**直播间标题（可修改）**、**开播状态**（`直播中` / `轮播` / 未开播）与**开播 / 下播按钮**；**双击状态文本**在最下方展开「相关配置项」（**当前分区 + 推流地址 + 推流码**），**平时隐藏** —— 收起时推流码**一个字都不在 DOM 里**。开播沿用 web 端已有配置：**分区与标题直接取该直播间当前值，界面不做分区选择**。
-  实现：新端口 `AnchorRoom`（`own` / `set_title` / `go_live` / `end_live`，`crates/danmubox-core/src/ports.rs:307`）—— 与只读的 `LiveSource` 分工明确：那个**看别人的**房间（游客也可用），这个**管自己的**房间；三个新命令 `anchor_room` / `anchor_title_set` / `anchor_live_set`（IPC 由 39 条增至 **42 条**，`generate_handler!` 与 `docs/ipc.md` §3 逐条对齐）；上游侧**全部**落在 `crates/danmubox-bili/src/anchor.rs`（七个端点、三段式开播、app 签名与公开 appkey/appsec，**只有这个模块**允许出现这些 URL 与签名）。**事件清单不变**：不新增事件名 —— 状态按需现取，开播 / 下播 / 改标题成功之后由界面重拉 `anchor_room` 刷新。
-  安全与纪律：**推流码是账号级凭据** —— 只随 `anchor_live_set` 的这一次返回值进界面内存，**不进日志、不落盘、不进 `prefs.json` / `config.toml`**；三件写操作**只作用于当前账号自己的直播间**（目标房间由 `own()` 现取，上层不传房间号），**失败即停、不重试**；上游非 0 code（含人脸认证那类）**原样带回、不赋语义**，不做二维码弹窗。
-  规格：`docs/contract.md` §3 / §5 / §7 / §9、`docs/ipc.md` §1 / §2 / §3 / §3.1、`docs/ui.md` §2.2.2 / §2.5、`docs/architecture.md` §1 / §2.1 / §2.2 / §3、`docs/protocol.md` §18 与附录 A66、`docs/testing.md` §10.1 C-16 / §14、`REQUIREMENTS.md` §2.14。
-  **实测状态（照实记，不许升级）**：`room_id_by_uid` 与 `get_info` 的字段形态有 2026-09-19 公开测试房间 `1` 的**只读**实测（`data.area_id` 为 int 且有值、`area_v2_id` 实测为 `null`、`live_status` 为 int）；**2026-09-19 真实登录态下又实测了一轮**（目标 = 该账号**自己的**直播间，由 `own()` 现取）：`click/now` 与 `getHomePageLiveVersion`（**带 app 签名**）均 `code=0` ✓、`Room/update` 改标题**成功**（读原值写回，标题逐字未变）✓、`startLive` 的**请求形状被上游接受**（返回业务码 `60043`「需要人脸认证」，**不是**参数 / 签名错误）✓ —— 本仓按纪律原样带回 code 与 msg、失败即停未重试；**仍未实测**：`startLive` 的成功分支（`data.rtmp` / `data.protocols[]`）、`stopLive`（未曾进入直播态）、`60024` 与 `data.qr`、「该账号没有开通直播间」的响应形态（端点 / 字段 / 签名口径来自两份社区实现 `ChaceQC/bilibili_live_stream_code` 与 `Zeppelinpp/bilibili-streamer`），逐条登记见 `docs/protocol.md` 附录 A66。**冒烟未跑**（用户 2026-09-19：「本轮不做冒烟」）。
-
 ### Changed
 
-- **agent 阅读纪律：默认不读 `CHANGELOG.md`**（2026-09-19）：除非任务涉及过去的改动，否则不读它（它是全仓最大文档、含末尾归档区）；写条目只读 `[Unreleased]` 段，查历史按节定位。见 `AGENT.md` §6.5.5。
 - **凭据文件损坏不再导致应用退出；文档不再引导手工编辑该文件**（2026-09-19）：`config.toml` 解析失败时**删掉重建为空文件并以游客态继续启动**（不备份；读取 / 权限 / IO 失败照旧报错终止），用户裁决见 `docs/contract.md` §4.1；`docs/contract.md` / `docs/auth.md` §8.4 / `docs/operations.md` §1.4 同步删去「手工编辑凭据」的手把手步骤（被删原文逐字归档于本文件归档区末尾）；同口径的一次全局扫描另修掉 10 处单句残留（不进归档区）：`README.md` 2 处、`docs/auth.md` §2 与 §8.5、`docs/operations.md` §2.2 2 处、`docs/ipc.md` §1、`docs/ui.md` §8.5、`docs/protocol.md` §16，以及 `crates/danmubox-bili/src/auth.rs` 的模块注释。
 - **文档规范化重写：约束文档只留约束，决策过程整体归档**（2026-09-19）：11 份约束文档按「只写约束开发行为的内容」重写 ——
   自指说明（定位 / 读者 / 更新时机、写作要求、文档清单与索引、与其他文档的关系）集中到 `AGENT.md` §6.5；

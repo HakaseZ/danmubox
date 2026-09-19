@@ -176,16 +176,6 @@
 | 短语里的内置颜文字 | 短语只留用户自建的条目（已删除，见 CHANGELOG）— `contract.md` §8 `composer.phrases` |
 | 文本框上方的「将发送 xxx」预览 | 没有这个需求（已删除，见 CHANGELOG）— `apps/desktop/ui/src/components/Composer.tsx` |
 
-### 2.14 我的直播间
-
-用户原话：「帮我在账号管理的界面，删除下边在加一个小区域，检测到已开通直播间时，显示自己直播间的直播间标题（可修改）、开播状态，并且在其中集成一个开播/下播按钮。」「应该和 web 端开播是一致的，确保之前在 web 端用的配置可以沿用就行，然后保底加一个双击直播状态提示文本可以在整个区域最下方显示相关配置项的功能，平时隐藏」；开播 / 下播的实现参考社区项目 `ChaceQC/bilibili_live_stream_code` 与 `Zeppelinpp/bilibili-streamer`。
-
-- 账号管理界面**底部**新增一个小区域；**只在检测到该账号已开通直播间时显示**——没开通就不渲染这一块（不是渲染成空块）；**只有读失败时留一行错误提示**（失败不许静默，口径见 `ui.md` §2.2.2）— 落点 `contract.md` §3 `AnchorRoom`、§5 `OwnRoom`、§7 `anchor_room`、`ui.md` §2.2.2
-- 区域里有三样东西：**直播间标题（可修改）**、**开播状态**、**开播 / 下播按钮** — 落点 `contract.md` §7 `anchor_title_set` / `anchor_live_set`、`ui.md` §2.2.2
-- **双击状态提示文本**在最下方展开「相关配置项」：当前分区、推流地址、推流码；**平时隐藏**（不双击不入 DOM）— 落点 `contract.md` §5 `StreamEndpoints`、`ui.md` §2.2.2
-- 开播沿用**之前在 web 端用的配置**：分区与标题直接取该直播间当前值，**界面不做分区选择** — 落点 `contract.md` §5 `OwnRoom`（`area_id` / `area_name`）、`protocol.md` §18
-- 上游非 0 code 原样带回、不赋语义（人脸认证那类码只把原值交给界面，不做二维码弹窗）— 落点 `contract.md` §7、`protocol.md` §18、附录 A66
-
 ## 3. 架构约束
 
 - ac站 API 不可控，可能有后期的逆向需求：这部分代码必须**完全分离**，后续修改不影响核心业务逻辑 — 落点 `contract.md` §3、`architecture.md` §3

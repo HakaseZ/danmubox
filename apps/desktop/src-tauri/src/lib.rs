@@ -8,17 +8,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use danmubox_bili::{
-    BiliAdmin, BiliAnchor, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender,
-    BiliWallet,
+    BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
-    Account, AnchorRoom, AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource,
-    QrPoll, QrState, RoomAdmin, RoomCatalog, SessionState, WalletProvider,
+    Account, AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource, QrPoll,
+    QrState, RoomAdmin, RoomCatalog, SessionState, WalletProvider,
 };
 use danmubox_core::{
     config_path, data_dir, prefs_path, BlacklistedUser, BufferCaps, ConfigStore, Counters, Emote,
-    Event, EventBus, FollowedRoom, HistoryQuery, Message, MessageKind, OwnRoom, Prefs,
-    ReportReason, Room, RoomRuntime, RoomSession, SendOutcome, SilentUser, StreamEndpoints,
+    Event, EventBus, FollowedRoom, HistoryQuery, Message, MessageKind, Prefs, ReportReason, Room,
+    RoomRuntime, RoomSession, SendOutcome, SilentUser,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
@@ -874,41 +873,6 @@ async fn wallet_balance(state: State<'_, AppState>) -> ApiResult<i64> {
     wallet.balance().await.map_err(ApiError::from)
 }
 
-/// 我自己的直播间（主播视角）：标题、开播状态、分区。
-///
-/// **没开通直播间**返回 `null`，不是错误 —— 界面据此整块不显示「我的直播间」。
-#[tauri::command]
-async fn anchor_room(state: State<'_, AppState>) -> ApiResult<Option<OwnRoom>> {
-    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    anchor.own().await.map_err(ApiError::from)
-}
-
-/// 改我直播间的标题。空标题由实现报 `BAD_REQUEST`。
-#[tauri::command]
-async fn anchor_title_set(state: State<'_, AppState>, title: String) -> ApiResult<()> {
-    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    anchor.set_title(&title).await.map_err(ApiError::from)
-}
-
-/// 开播 / 下播（写操作纪律：只作用于当前账号自己的直播间，失败即停不重试）。
-///
-/// 开播成功返回上游下发的推流端点（含推流码），**下播返回 `null`**；
-/// 推流码只随这次返回值进界面内存，不进日志、不落盘。
-#[tauri::command]
-async fn anchor_live_set(
-    state: State<'_, AppState>,
-    live: bool,
-) -> ApiResult<Option<StreamEndpoints>> {
-    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    if live {
-        let endpoints = anchor.go_live().await.map_err(ApiError::from)?;
-        Ok(Some(endpoints))
-    } else {
-        anchor.end_live().await.map_err(ApiError::from)?;
-        Ok(None)
-    }
-}
-
 // ---------------------------------------------------------------- 事件转发
 
 /// 把事件总线上的事件转发给前端（`docs/ipc.md` §4 的五个事件名）。
@@ -1344,9 +1308,6 @@ pub fn run() {
             account_logout,
             account_qr_start,
             account_qr_poll,
-            anchor_room,
-            anchor_title_set,
-            anchor_live_set,
             rooms_list,
             rooms_refresh_status,
             rooms_add,

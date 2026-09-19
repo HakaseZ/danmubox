@@ -21,7 +21,7 @@
 // ——这个假象骗过两个人。崩溃会换新页重试一次并记账（重跑整个场景），两次都崩才报失败。
 //
 // `--from-snapshot <file>`：不起浏览器，只判定一份已有快照（给宿主引擎那条链路用，
-// 见 `smoke/wkwebview-host.swift` 与 docs/ui.md §15）。
+// 见 `smoke/wkwebview-host.swift` 与 docs/testing.md §9）。
 // `--precheck [file]`：只跑**起浏览器之前的两道闸门**（① `node --check` ② 每个主题各构造一次
 // HTML），不起浏览器；不给文件就检查本运行器要跑的那个场景文件。
 //
@@ -508,7 +508,7 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height, them
   let toastShot = false;
   let optimisticShot = false;
   let roomsShot = false;
-  // 宽屏沿用既有文件名（docs/ui.md §15 列了它们），窄屏加 `-narrow`；末尾一律带主题后缀
+  // 宽屏沿用既有文件名（docs/testing.md §9 列了它们），窄屏加 `-narrow`；末尾一律带主题后缀
   const prefix = `${name === "narrow" ? "danmubox-ui-narrow" : "danmubox-ui"}-${theme}`;
   // 300s 上限：正常 35–45s 跑完；环境被拖慢时宁可多等，也不要报一个假的「场景未跑完」
   for (let i = 0; i < 1200; i += 1) {

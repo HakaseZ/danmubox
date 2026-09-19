@@ -44,7 +44,7 @@ DANMUBOX_ANDROID_ENV_NAME=".android-env"
 # 安装进 SDK 的包；system-image 会先探测包名是否存在，不存在则自动降级（见 _dmb_pick_system_image）
 # 注意：cmdline-tools 23.0 起 sdkmanager 已被新的 Android CLI 接管，包名一律写成 "/" 形式
 #（旧版 sdkmanager 的 "platforms;android-35" 与 "platforms/android-35" 一一对应，`sdkmanager --list` 也只输出本形式）
-DANMUBOX_SDK_PACKAGES="platform-tools platforms/android-35 build-tools/35.0.0 ndk/27.0.12077973 emulator"
+DANMUBOX_SDK_PACKAGES="platform-tools platforms/android-35 platforms/android-36 build-tools/35.0.0 ndk/27.0.12077973 emulator"
 DANMUBOX_SYSTEM_IMAGE_CANDIDATES="system-images/android-35/google_apis/arm64-v8a system-images/android-34/google_apis/arm64-v8a system-images/android-35/default/arm64-v8a system-images/android-34/default/arm64-v8a"
 DANMUBOX_NDK_VERSION="27.0.12077973"
 # NDK 里的 clang 包装器名字形如 <triple><api>-clang；API 24 与 Tauri 默认 minSdk 24 对齐

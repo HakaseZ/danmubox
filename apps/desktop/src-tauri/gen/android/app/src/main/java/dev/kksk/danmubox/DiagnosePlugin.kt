@@ -31,7 +31,7 @@ class WriteDownloadArgs {
  * 不碰别的地方：不写应用私有目录、不写外部存储的其它目录，因此设备上除这一份报告
  * 不会多出任何东西（`docs/operations.md` §4.3）。
  *
- * API 29 以下**不支持**：那条路要 `WRITE_EXTERNAL_STORAGE`（本应用只声明 `INTERNET`），
+ * API 29 以下**不支持**：那条路要 `WRITE_EXTERNAL_STORAGE`（本应用未声明存储类权限；权限清单见 `AndroidManifest.xml`），
  * 且 Android 10 之前没有 `MediaStore.Downloads`。这里明确回一句「不支持」，
  * 而不是偷偷写到应用私有目录去（用户口径：不要难找、不要污染设备）。
  */

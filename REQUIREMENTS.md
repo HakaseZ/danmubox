@@ -62,7 +62,7 @@
 ### 2.5 登录与账号
 
 - 两种方式：游客、扫码；**扫码是唯一的登录入口**（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §4.1
-- Cookie 存进配置文件；启动时本地已有 Cookie 则直接读取（手工编辑该文件不在界面能力范围内）— 落点 `contract.md` §4.1
+- Cookie 存进配置文件；启动时本地已有 Cookie 则直接读取（凭据文件由程序管理，界面不提供导入入口）— 落点 `contract.md` §4.1
 - Cookie 失效时提示重登；扫码换号 — 落点 `contract.md` §7 `account_qr_start` / `account_qr_poll`
 - 多账号：**单个配置文件内多 profiles**，可切换 — 落点 `contract.md` §4.1
 - 已登录的用户要能直接切换身份（凭证在后台），不要只能重登（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §7 `account_switch`
@@ -175,7 +175,6 @@
 | 手填 Cookie | 现在的登录方式（游客 / 扫码）很合理，不做导入入口（已删除，见 CHANGELOG）— `contract.md` §4.1 |
 | 短语里的内置颜文字 | 短语只留用户自建的条目（已删除，见 CHANGELOG）— `contract.md` §8 `composer.phrases` |
 | 文本框上方的「将发送 xxx」预览 | 没有这个需求（已删除，见 CHANGELOG）— `apps/desktop/ui/src/components/Composer.tsx` |
-| 「最近发言 / 最近发送记录」面板 | 整条链路已删，输入区只留草稿与自定义短语（已删除，见 CHANGELOG）— `contract.md` §4.3 |
 
 ## 3. 架构约束
 

@@ -2,7 +2,7 @@
 //
 // 这是整份冒烟里**唯一**读 `smoke/fixtures/*.json` 的地方：把真实载荷（或按协议文档字段表构造的
 // 礼物 / SC / 大航海样本）派生成页内 mock 用的形状。夹具的出处与脱敏口径见 docs/testing.md §9.1；
-// 页内那条「夹具必须能失败」的纪律见 docs/ui.md §15 运行纪律第 6 条。
+// 页内那条「夹具必须能失败」的纪律见 docs/testing.md §9.2 运行纪律第 6 条。
 //
 // 出口只有一个：下面的 `pageData` —— 由 smoke/room-page.mjs 序列化成页内 `__SMOKE_DATA`。
 // 页内的断言块只认 mock 里那几个别名（EMOTES / ROW_FIXTURES / fixtureRoom / …），不直接读这一份。

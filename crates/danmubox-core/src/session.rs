@@ -22,7 +22,7 @@ pub struct HistoryQuery {
 impl Default for HistoryQuery {
     fn default() -> Self {
         Self {
-            limit: 200,
+            limit: 500,
             after: None,
             before: None,
             kinds: None,

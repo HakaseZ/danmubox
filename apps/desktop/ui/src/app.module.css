@@ -563,6 +563,94 @@
   align-self: center;
 }
 
+/* --------------------------------------------------------------------------
+   「我的直播间」（用户 2026-09-19：账号行下面再加一块）。
+
+   宽度与间距跟对话框里其他一级块**同一条口径**（用户 2026-09-13 #3）：不写 `width` ——
+   宽度交给 `.accountDialog` 的默认 stretch（写 `fit-content` 会量出一张贴左的窄卡片，与上面的
+   账号行、下面的二维码卡片都不齐）；块间距由 `.accountDialog` 的统一 `gap`（--sp-3）给，
+   因此这里**不另加** `margin-top`。窄屏也不需要额外规则：卡片本身随 `.accountDialog` 变成
+   底部 sheet，里面的按钮 / 输入框由那一段的 `.accountDialog button/input` 热区规则撑到
+   `--tap-min`。
+   -------------------------------------------------------------------------- */
+.anchorPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-4);
+}
+
+/* 一行一件事：标题输入框 + 「保存」/ 状态文本 + 开播下播。 */
+.anchorRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* 输入框吃掉剩余宽度（右边缘与上面的账号行、下面的二维码卡片对齐）。 */
+.anchorRow input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 状态文本是「相关配置项」的开关：光标与焦点提示按按钮给，但它仍是文本（不抢排版）。 */
+.anchorStatus {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-2);
+  color: var(--fg-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.anchorStatus:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
+/* 读 / 写的失败原因：原样展示后端的话（契约 §7），失败不静默。 */
+.anchorError {
+  font-size: var(--fs-2);
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+/* 展开的「相关配置项」：与上面两行同宽，一条分隔线把「配置」与「操作」分开。 */
+.anchorConfig {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-2);
+}
+
+.anchorConfigRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.anchorConfigLabel {
+  flex: 0 0 auto;
+  font-size: var(--fs-2);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+/* 地址 / 推流码又长又没有空格：等宽体 + 任意位置折行，复制按钮不会被挤出卡片。
+   与 `.diagnosePath` 同一档画法（等宽 + 可选中 —— 选不中就没法手工复制）。 */
+.anchorConfigValue {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-2);
+  word-break: break-all;
+  user-select: text;
+}
+
 .addRow {
   display: flex;
   gap: var(--sp-2);

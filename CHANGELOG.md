@@ -26,6 +26,15 @@
 
 （本波治理票的新条目见下；后续对外可见变化继续在本段登记。）
 
+### Added
+
+- **「我的直播间」：账号对话框里改标题 / 开播 / 下播，双击状态文本看推流配置**（2026-09-19；需求 `REQUIREMENTS.md` §2.14，用户原话随该节）：
+  账号管理对话框**底部**新增一小块 —— **只在检测到该账号已开通直播间时才显示**（`anchor_room` 返回 `null` = 该账号没开通，整块**不在 DOM 里**；读失败时只留错误行、失败不静默）；区域含**直播间标题（可修改）**、**开播状态**（`直播中` / `轮播` / 未开播）与**开播 / 下播按钮**；**双击状态文本**在最下方展开「相关配置项」（**当前分区 + 推流地址 + 推流码**），**平时隐藏** —— 收起时推流码**一个字都不在 DOM 里**。开播沿用 web 端已有配置：**分区与标题直接取该直播间当前值，界面不做分区选择**。
+  实现：新端口 `AnchorRoom`（`own` / `set_title` / `go_live` / `end_live`，`crates/danmubox-core/src/ports.rs:307`）—— 与只读的 `LiveSource` 分工明确：那个**看别人的**房间（游客也可用），这个**管自己的**房间；三个新命令 `anchor_room` / `anchor_title_set` / `anchor_live_set`（IPC 由 39 条增至 **42 条**，`generate_handler!` 与 `docs/ipc.md` §3 逐条对齐）；上游侧**全部**落在 `crates/danmubox-bili/src/anchor.rs`（七个端点、三段式开播、app 签名与公开 appkey/appsec，**只有这个模块**允许出现这些 URL 与签名）。**事件清单不变**：不新增事件名 —— 状态按需现取，开播 / 下播 / 改标题成功之后由界面重拉 `anchor_room` 刷新。
+  安全与纪律：**推流码是账号级凭据** —— 只随 `anchor_live_set` 的这一次返回值进界面内存，**不进日志、不落盘、不进 `prefs.json` / `config.toml`**；三件写操作**只作用于当前账号自己的直播间**（目标房间由 `own()` 现取，上层不传房间号），**失败即停、不重试**；上游非 0 code（含人脸认证那类）**原样带回、不赋语义**，不做二维码弹窗。
+  规格：`docs/contract.md` §3 / §5 / §7 / §9、`docs/ipc.md` §1 / §2 / §3 / §3.1、`docs/ui.md` §2.2.2 / §2.5、`docs/architecture.md` §1 / §2.1 / §2.2 / §3、`docs/protocol.md` §18 与附录 A66、`docs/testing.md` §10.1 C-16 / §14、`REQUIREMENTS.md` §2.14。
+  **实测状态（照实记，不许升级）**：`room_id_by_uid` 与 `get_info` 的字段形态有 2026-09-19 公开测试房间 `1` 的**只读**实测（`data.area_id` 为 int 且有值、`area_v2_id` 实测为 `null`、`live_status` 为 int）；**`update` / `click/now` / `getHomePageLiveVersion` / `startLive` / `stopLive` 全部未实测**（端点 / 字段 / 签名口径来自两份社区实现 `ChaceQC/bilibili_live_stream_code` 与 `Zeppelinpp/bilibili-streamer`），逐条登记见 `docs/protocol.md` 附录 A66。**冒烟未跑**（由主流程统一跑）。
+
 ### Changed
 
 - **agent 阅读纪律：默认不读 `CHANGELOG.md`**（2026-09-19）：除非任务涉及过去的改动，否则不读它（它是全仓最大文档、含末尾归档区）；写条目只读 `[Unreleased]` 段，查历史按节定位。见 `AGENT.md` §6.5.5。

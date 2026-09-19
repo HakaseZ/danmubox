@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { Avatar } from "./Avatar";
+import { useApp } from "../store";
 import type { Account, AccountQr, QrState, SessionState } from "../types";
 import styles from "../app.module.css";
 
@@ -66,6 +67,19 @@ const QR_HINT: Record<QrState, string> = {
   expired: "二维码已过期，请重新获取",
 };
 
+/**
+ * 我的直播间的开播状态文案（`OwnRoom.live_status`，与 `Room.live_status` 同义）。
+ * 上游只给这三个数，别的一律说「未开播」——界面不给状态编语义。
+ */
+function liveStatusText(status: number): string {
+  if (status === 1) return "直播中";
+  if (status === 2) return "轮播";
+  return "未开播";
+}
+
+/** 分区名上游没给时的说法（`OwnRoom.area_name` 是空串，不是错误）。 */
+const AREA_FALLBACK = "上游未给出分区";
+
 /** 二次确认的对象：三种都改凭据或删条目，不能点一下就走。 */
 type Confirm =
   | { kind: "rescan"; name: string }
@@ -112,6 +126,89 @@ export function AccountManager({
   onPollQr,
 }: Props) {
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+
+  // 「我的直播间」那一块（用户 2026-09-19：账号行**下面**再加一块）。它整块按**凭据**算出来，
+  // 因此对话框一打开、以及每次换号后各拉一次：`account_switch` 之后 `active_profile` 变了，
+  // 上一份直播间数据必须先走掉再重取。切号 / 登出的清空由 store 的 `resetIdentityState` 负责；
+  // 未登录时这个动作自己会清空三份状态、连上游都不问。
+  const anchorRoom = useApp((store) => store.anchorRoom);
+  const anchorError = useApp((store) => store.anchorError);
+  const anchorEndpoints = useApp((store) => store.anchorEndpoints);
+  const loadAnchorRoom = useApp((store) => store.loadAnchorRoom);
+  const setAnchorTitle = useApp((store) => store.setAnchorTitle);
+  const setAnchorLive = useApp((store) => store.setAnchorLive);
+
+  const loggedIn = session?.logged_in === true;
+  useEffect(() => {
+    void loadAnchorRoom();
+  }, [loadAnchorRoom, loggedIn, session?.active_profile]);
+
+  /**
+   * 标题草稿：初值 = 远端的标题，远端变了就以远端为准（本地草稿不冒充事实）。
+   *
+   * **不用 effect 同步**（`react(set-state-in-effect)` 会告警，且白多一次渲染）：把「这份草稿
+   * 属于哪个直播间」一并存下，**渲染时**判断它还属不属于当前这一个 —— 换了房间/账号，草稿
+   * 自然回到远端值，不需要任何副作用。
+   */
+  const [titleDraft, setTitleDraft] = useState<{ room: number | null; value: string }>({
+    room: anchorRoom?.room_id ?? null,
+    value: anchorRoom?.title ?? "",
+  });
+  /**
+   * 「相关配置项」的展开态：**默认收起**，且只对**当时那个直播间**有效 ——
+   * 收起时推流码一个字都不在 DOM 里，换号/换直播间也自动回到收起（同一条派生规则）。
+   */
+  const [configOpenFor, setConfigOpenFor] = useState<number | null>(null);
+  /**
+   * 进行中的写操作：只禁掉**正在跑的那一个**按钮（改标题与开播 / 下播是两条独立命令，
+   * 谁也不必等谁）。它不进 store —— 这是这一块自己的、随对话框关闭就消失的瞬态。
+   */
+  const [busy, setBusy] = useState<"title" | "live" | null>(null);
+
+  const roomId = anchorRoom?.room_id ?? null;
+  const roomTitle = anchorRoom?.title ?? "";
+  /** 草稿属于当前这个直播间时才用它，否则以远端标题为准（见 `titleDraft` 的说明）。 */
+  const title = titleDraft.room === roomId ? titleDraft.value : roomTitle;
+  const configOpen = roomId !== null && configOpenFor === roomId;
+
+  const liveStatus = anchorRoom?.live_status ?? 0;
+  const live = liveStatus === 1;
+  /** 「改名后才启用」：与远端标题一字不差就没得保存。 */
+  const titleChanged = anchorRoom !== null && title !== anchorRoom.title;
+  /**
+   * 展开时给哪一组推流端点：按 `rtmp → rtmp_backup → srt` 取第一个可用的
+   * （后端对 `None` 是 `skip_serializing_if`，键可能整个不在，也可能为 `null`；不猜、不补默认）。
+   */
+  const endpoint =
+    anchorEndpoints?.rtmp ?? anchorEndpoints?.rtmp_backup ?? anchorEndpoints?.srt ?? null;
+
+  const saveTitle = async () => {
+    setBusy("title");
+    try {
+      // 失败原因是后端原话，落进 `anchorError` 由下面那行显示（成功会就地重读、草稿随之对齐）。
+      await setAnchorTitle(title);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleLive = async () => {
+    setBusy("live");
+    try {
+      await setAnchorLive(!live);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** 复制推流地址 / 推流码：**失败静默** —— 拿不到剪贴板不是这一块要报的错。 */
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // 静默：这里不弹提示、也不写错误条。
+    }
+  };
 
   // 每 2 秒问一次扫码状态（契约 §7）；过期与出错都停下来，交给「重新获取」重来。
   // 轮询回调存 ref：它在父组件里是内联箭头，若进依赖表，任何一次 store 更新都会重开定时器。
@@ -257,6 +354,125 @@ export function AccountManager({
             ))
           )}
         </div>
+
+        {/* 「我的直播间」（用户 2026-09-19：账号行**下面**再来一块）。渲染条件铁面无私：
+            当前账号**已登录** 且（`anchor_room` 真给出了直播间 **或** 上一次读失败）——
+            没开通（后端返回 `null`）与游客态两种情况，这一块整块都不在 DOM 里，
+            绝不把上一个账号的直播间摆出来。
+
+            **读失败必须留痕**：读失败（凭据失效 `-101`、风控 `-352` …）时 `anchor_room` 是 `null`，
+            后端把非 0 code 原样带回（`AGENT.md` §8.9），界面就得把它说出来；若把错误行跟着
+            直播间一起收掉，用户只看得到一块空白、不知为何 —— 那正是 `docs/ui.md` §2.2.1
+            禁止的「失败静默消失」。所以错误行**独立于**直播间数据渲染；而**只有**它渲染：
+            标题行 / 状态行 / 开播下播都不在 DOM 里 —— 没有直播间就没有标题可改、没有开播状态
+            可报，空输入框与「未开播」都是编出来的事实。 */}
+        {loggedIn && (anchorRoom !== null || anchorError !== null) && (
+          <div className={styles.anchorPanel} data-testid="db-anchor-panel">
+            {/* 标题行与状态行只在真拿到直播间时画：`anchorRoom` 为 `null` 时手上没有这一份数据，
+                不能拿状态默认值凑出一行来（错误行在下面）。 */}
+            {anchorRoom !== null && (
+              <>
+                <div className={styles.anchorRow} data-testid="db-anchor-title-row">
+                  <input
+                    data-testid="db-anchor-title"
+                    aria-label="直播间标题"
+                    placeholder="直播间标题"
+                    value={title}
+                    onChange={(event) => setTitleDraft({ room: roomId, value: event.target.value })}
+                  />
+                  <button
+                    data-testid="db-anchor-title-save"
+                    disabled={busy === "title" || !titleChanged}
+                    title={titleChanged ? "保存直播间标题" : "标题没改，不用保存"}
+                    onClick={() => void saveTitle()}
+                  >
+                    保存
+                  </button>
+                </div>
+
+                <div className={styles.anchorRow} data-testid="db-anchor-status-row">
+                  {/* 状态文本是「相关配置项」的开关：双击（主路径）或 Enter / Space 都能开合，
+                      因此它带 role/tabIndex 与 `title` 说明怎么用 —— 一块可点的文字不能让人猜。 */}
+                  <span
+                    data-testid="db-anchor-status"
+                    className={styles.anchorStatus}
+                    role="button"
+                    tabIndex={0}
+                    title="双击查看相关配置项"
+                    onDoubleClick={() => setConfigOpenFor(configOpen ? null : roomId)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      setConfigOpenFor(configOpen ? null : roomId);
+                    }}
+                  >
+                    {liveStatusText(liveStatus)}
+                  </span>
+                  <button
+                    data-testid="db-anchor-live"
+                    disabled={busy === "live"}
+                    title={live ? "结束本场直播" : "开始直播（沿用当前分区）"}
+                    onClick={() => void toggleLive()}
+                  >
+                    {live ? "下播" : "开播"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* 读 / 写的失败原因：后端原话（契约 §7），失败不静默。它**不跟着**上面两行一起收：
+                读失败恰是 `anchorRoom === null` 的那一种，只有这一行能把原因说清楚。 */}
+            {anchorError !== null && (
+              <div className={styles.anchorError} data-testid="db-anchor-error">
+                {anchorError}
+              </div>
+            )}
+
+            {/* 配置项读的是直播间的分区名，同样得有 `anchorRoom` 才画。 */}
+            {anchorRoom !== null && configOpen && (
+              <div className={styles.anchorConfig} data-testid="db-anchor-config">
+                <div className={styles.anchorConfigRow}>
+                  <span className={styles.anchorConfigLabel}>分区</span>
+                  <span className={styles.anchorConfigValue} data-testid="db-anchor-area">
+                    {anchorRoom.area_name.trim().length > 0 ? anchorRoom.area_name : AREA_FALLBACK}
+                  </span>
+                </div>
+                {/* 推流地址 / 推流码只有在**本次会话刚开播**拿到端点时才有：下播（或收起）之后
+                    这两行连同推流码一起从 DOM 里消失，不留残留。 */}
+                {endpoint !== null && (
+                  <>
+                    <div className={styles.anchorConfigRow}>
+                      <span className={styles.anchorConfigLabel}>推流地址</span>
+                      <span className={styles.anchorConfigValue} data-testid="db-anchor-rtmp-addr">
+                        {endpoint.addr}
+                      </span>
+                      <button
+                        data-testid="db-anchor-copy-addr"
+                        title="复制推流地址"
+                        onClick={() => void copy(endpoint.addr)}
+                      >
+                        复制
+                      </button>
+                    </div>
+                    <div className={styles.anchorConfigRow}>
+                      <span className={styles.anchorConfigLabel}>推流码</span>
+                      <span className={styles.anchorConfigValue} data-testid="db-anchor-rtmp-code">
+                        {endpoint.code}
+                      </span>
+                      <button
+                        data-testid="db-anchor-copy-code"
+                        title="复制推流码（拿到它就能向本直播间推流，别外传）"
+                        onClick={() => void copy(endpoint.code)}
+                      >
+                        复制
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {confirmed && (
           <div className={styles.adminConfirm} data-testid="db-account-confirm">

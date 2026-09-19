@@ -9,7 +9,7 @@
 | 表现层 | `apps/desktop/ui`（React + TS + Vite，运行在 Tauri WebView） | 虚拟列表渲染、过滤、交互、乐观更新 | 直接访问 ac站接口；持有 Cookie 明文 |
 | 消费面层 | `apps/desktop/src-tauri`、`danmubox-cli` | 把 core 的事件与命令翻译成自己的协议：Tauri IPC、终端文本 | 实现协议解包；直接持有 WS 连接；自带第二套领域模型 |
 | 引擎层 | `danmubox-core` | 领域模型、端口（trait）、事件总线、会话编排（每房间一个 `RoomRuntime` + 会话缓冲）、本地文件读写 | 依赖 `danmubox-bili`；依赖 `tauri`；出现任何 ac站 URL、字段下标、签名算法、protobuf 定义 |
-| 适配器层 | `danmubox-bili` | 实现 core 的全部八个端口（`crates/danmubox-core/src/ports.rs:87`–`296`）：协议编解码、WS 生命周期、鉴权/WBI/扫码、房间解析、表情、举报、关注、钱包、房管（禁言 / 黑名单 / 屏蔽词） | 定义领域模型；依赖 `tauri` 或任何 UI 框架 |
+| 适配器层 | `danmubox-bili` | 实现 core 的全部九个端口（`crates/danmubox-core/src/ports.rs:87`–`323`）：协议编解码、WS 生命周期、鉴权/WBI/扫码、房间解析、表情、举报、关注、钱包、房管（禁言 / 黑名单 / 屏蔽词）、主播侧（我自己的直播间：改标题 / 开播 / 下播） | 定义领域模型；依赖 `tauri` 或任何 UI 框架 |
 
 依赖方向（规范性，契约 §3）：`danmubox-bili` → `danmubox-core`；`danmubox-cli` → `core` + `bili`；`apps/desktop/src-tauri` → `core` + `bili`。**`core` 不得依赖 `bili`，也不得依赖 `tauri`。**
 
@@ -44,7 +44,7 @@ graph TD
     CLI["danmubox-cli<br/>danmubox &lt;subcommand&gt;"]
   end
 
-  BILI["danmubox-bili<br/>proto / ws / auth / cmd / emote / follow / send / report / admin / wallet / diagnose"]
+  BILI["danmubox-bili<br/>proto / ws / auth / cmd / emote / follow / send / report / admin / wallet / anchor / diagnose"]
   CORE["danmubox-core<br/>model / ports / bus / session / paths / config / prefs / diagnose / error"]
 
   WEB -. "invoke / listen（Tauri IPC）" .-> SHELL
@@ -69,7 +69,7 @@ graph LR
   lib["lib<br/>模块清单 + 公共再导出"]
   error["error<br/>DanmuboxError / Result"]
   model["model<br/>领域模型 + sort_followed"]
-  ports["ports<br/>八个端口 trait（§3）"]
+  ports["ports<br/>九个端口 trait（§3）"]
   bus["bus<br/>EventBus / MessageSink / Cancel"]
   session["session<br/>RoomRuntime + 会话缓冲"]
   paths["paths<br/>数据目录与文件路径"]
@@ -91,9 +91,9 @@ graph LR
 
 | 模块 | 职责 | 边界（不做的事） |
 |---|---|---|
-| `lib` | crate 根：模块清单与公共再导出（`EventBus` / `Cancel` / `RoomRuntime` / `BufferCaps` / `Prefs` / 端口载荷类型等，`lib.rs:17`–`28`），以及 `now_ms()` 时钟（`lib.rs:31`） | 不放实现逻辑；不放上游知识 |
-| `model` | 契约 §5 的领域模型：`Message`（`kind` 六值）、`Room`、`RoomSession`、`Emote` / `EmotePackage` / `EmoteRef`、`FollowedRoom`、`SendOutcome`、`SilentUser` / `BlacklistedUser`、`ReportReason`，以及 `sort_followed` 排序规则 | 不含 IO；不含业务判断；不出现上游字段名 |
-| `ports` | 八个端口 trait 的定义（见 §3）与端口载荷：`SessionState`（`:22`）、`Account`（`:63`）、`QrChallenge` / `QrState` / `QrPoll`（`:41` / `:49` / `:80`）、`SendReport`（`:161`）、`EmoteToken`（`:187`）、`ReplyTarget`（`:204`） | 不含任何实现；不含 ac站类型 |
+| `lib` | crate 根：模块清单与公共再导出（`EventBus` / `Cancel` / `RoomRuntime` / `BufferCaps` / `Prefs` / 端口载荷类型等，`lib.rs:18`–`28`），以及 `now_ms()` 时钟（`lib.rs:32`） | 不放实现逻辑；不放上游知识 |
+| `model` | 契约 §5 的领域模型：`Message`（`kind` 六值）、`Room`、`RoomSession`、`OwnRoom` / `StreamEndpoint` / `StreamEndpoints`（主播侧：我自己的直播间与推流端点）、`Emote` / `EmotePackage` / `EmoteRef`、`FollowedRoom`、`SendOutcome`、`SilentUser` / `BlacklistedUser`、`ReportReason`，以及 `sort_followed` 排序规则 | 不含 IO；不含业务判断；不出现上游字段名 |
+| `ports` | 九个端口 trait 的定义（见 §3）与端口载荷：`SessionState`（`:22`）、`Account`（`:63`）、`QrChallenge` / `QrState` / `QrPoll`（`:41` / `:49` / `:80`）、`SendReport`（`:161`）、`EmoteToken`（`:187`）、`ReplyTarget`（`:204`） | 不含任何实现；不含 ac站类型 |
 | `bus` | 进程内事件扇出：`EventBus`（`broadcast`，容量 `DEFAULT_CAPACITY = 1024`，`bus.rs:80` / `:85`）、`Event`（消息 / 房间 / 关闭 / 状态 / 会话 / 观众数 / 开播状态，`bus.rs:65`）、`MessageSink`（去重、`local_id` 分配、计数，`bus.rs:165`）、`Cancel` 取消令牌（`bus.rs:301`）、`ConnState` / `StatusEvent` / `Counters` / `RoomStats`（`bus.rs:13` / `:19` / `:114` / `:34`） | 不缓存消息（缓冲在 `session`）；不做序列化 |
 | `session` | `RoomRuntime` 会话编排（`session.rs:320`）：身份 / collector / driver 三个受监督任务、`MessageBuffer` 环形缓冲、`HistoryQuery` 只读查询、手动重连信号；`close()` 广播关闭、取消、abort 三个任务并清空缓冲（`session.rs:527`） | 不解析协议（拿到的已是 `Message`）；不落盘 |
 | `paths` | 跨平台数据目录与文件路径：macOS / Windows / 其他三套 `data_dir()`（`paths.rs:8`）、`config_path()` / `prefs_path()`（`:16` / `:43`）、`downloads_dir()`（`:32`，诊断报告用），`DANMUBOX_HOME` 覆盖 | 不做 IO；不解析文件内容 |
@@ -104,11 +104,11 @@ graph LR
 
 ### 2.2 `danmubox-bili` 模块划分
 
-全部十八个文件（`crates/danmubox-bili/src/`，含 crate 根 `lib.rs`）：
+全部十九个文件（`crates/danmubox-bili/src/`，含 crate 根 `lib.rs`）：
 
 | 模块 | 职责 | 实现的端口 |
 |---|---|---|
-| `lib` | crate 根：模块声明与公共再导出（`BiliLive`、`BiliAuth`、`BiliSender`、退避函数等，`lib.rs:24`–`33`），是唯一允许 `bili` 之外代码引用的装配面 | —（装配面） |
+| `lib` | crate 根：模块声明与公共再导出（`BiliLive`、`BiliAuth`、`BiliSender`、`BiliAnchor`、退避函数等，`lib.rs:26`–`35`），是唯一允许 `bili` 之外代码引用的装配面 | —（装配面） |
 | `proto` | 16 字节大端头读写、载荷解码（`0` 裸 JSON / `1` 帧头版本 / `2` zlib / `3` brotli）、`op=5` 子包递归拆分（`proto.rs:88`）、解压上限（`MAX_DECOMPRESSED`，`proto.rs:14`）与丢弃计数 | —（被 `ws` 使用） |
 | `pb` | `INTERACT_WORD_V2` 的 protobuf 字段声明（只声明已用真实流量核对过的 tag） | —（被 `cmd` 使用） |
 | `cmd` | 上游 `cmd` → 领域 `kind` 的归一化：`dispatch`（`cmd.rs:98`）、`SYSTEM_CMDS`（`cmd.rs:24`）、未识别命令计入 `unknown_cmd`（`cmd.rs:185`）（取值表见 `protocol.md` §10） | —（被 `ws` 使用） |
@@ -124,12 +124,13 @@ graph LR
 | `admin` | 房管：禁言名单与禁言 / 解禁、黑名单、屏蔽词 | `RoomAdmin` |
 | `follow` | 关注列表与直播状态补齐；返回前调用 `core::model::sort_followed` 排序 | `RoomCatalog` |
 | `wallet` | 电池余额（金瓜子 / 100） | `WalletProvider` |
+| `anchor` | **主播侧**（我自己的直播间）：`room_id_by_uid` 找自己直播间 + `get_info` 读标题 / 开播状态 / 分区、改标题、开播（三段式 + app 签名 `anchor.rs:72`）/ 下播；非 0 code 原样带回不赋语义（`anchor.rs:110`）。上游知识只在这个模块里（`crates/danmubox-bili/src/anchor.rs:1-40` 的模块文档列了七个端点与「本仓尚未实测」的范围） | `AnchorRoom` |
 | `diagnose` | 一键诊断报告的渲染：把 core 的快照贴上游环节名、经 `redact` 脱敏后成文（`diagnose.rs:21`），供外壳落盘 | —（被外壳使用） |
 | `redact` | 日志与错误文案的**唯一**脱敏出口：`redact()`，占位符 `***`（`redact.rs:20`） | —（被 `http` 等使用） |
 
 ## 3. 端口与适配器（重点）
 
-端口是 core 与 bili 之间**唯一**的接缝：core 只看见 trait 与 `model` 里的领域结构，bili 只负责把上游的原貌翻译成这些结构。端口恰好八个（`ports.rs:87`–`296`）。
+端口是 core 与 bili 之间**唯一**的接缝：core 只看见 trait 与 `model` 里的领域结构，bili 只负责把上游的原貌翻译成这些结构。端口恰好九个（`ports.rs:87`–`323`）。
 
 | 端口（契约 §3） | trait 与方法（`crates/danmubox-core/src/ports.rs`） | 输入 → 输出领域模型 | 实现落点 |
 |---|---|---|---|
@@ -141,6 +142,7 @@ graph LR
 | `RoomAdmin` | trait `:257`；`silent_list` `:259`、`mute` `:263`、`unmute` `:266`、`blacklist` `:269`、`blacklist_add` `:272`、`blacklist_del` `:275`、`keywords` `:278`、`keyword_add` `:281`、`keyword_del` `:284` | `room_id`（写操作另带 uid / 词）→ 名单数组或写操作结果 | `bili::admin` |
 | `RoomCatalog` | trait `:288`；`followed` `:290` | 无输入 → `FollowedRoom[]`（`live_status == 1` 置顶由实现内的 `core::model::sort_followed` 完成） | `bili::follow` |
 | `WalletProvider` | trait `:294`；`balance` `:296` | 无输入 → 余额数值 | `bili::wallet` |
+| `AnchorRoom` | trait `:307`；`own` `:310`、`set_title` `:313`、`go_live` `:319`、`end_live` `:322` | 无输入 → `OwnRoom`（`None` = 该账号没有开通直播间）；标题 → 写操作结果；无输入 → `StreamEndpoints`（开播）/ 写操作结果（下播） | `bili::anchor` |
 
 账号增删只有两条路（**没有** `create_profile` / `remove_profile`）：新增 = `begin_qr(None)` + `poll_qr` 确认时落盘（`ports.rs:103` / `:108`；账号名在确认后按昵称自动生成），删除 = `remove_account`（`ports.rs:120`，不许删最后一个）。
 
@@ -156,6 +158,7 @@ graph LR
 | `RoomAdmin` | 名单条目（uid、昵称等）与写操作的成败、上游 `code` 原文 | 房管接口路径与参数名、禁言时长取值、黑名单按主播 uid 而非房间号、CSRF 参数 |
 | `RoomCatalog` | `FollowedRoom` 的字段（房间号、昵称、头像、标题、`live_status`、分组名、开播时间） | 关注列表分页、未开播条目的补齐、直播状态字段位置 |
 | `WalletProvider` | 一个数值 | 余额接口与单位换算 |
+| `AnchorRoom` | `OwnRoom` 的五个字段（房间号、标题、开播状态、分区 id 与分区名）、`StreamEndpoints` 的三组端点（`addr` / `code`）、写操作的成败与上游 `code` 原文 | 三段式开播的端点与顺序（`click/now` → `getHomePageLiveVersion` → `startLive`）、appkey / appsec 与 app 签名算法、`platform=pc_link`、`csrf` 取自 `bili_jct`、分区名的「父 · 子」拼法、非 0 code 的判定 |
 
 上游改字段下标 / 签名 / 包结构 / 接口路径时，改动收敛为「重写 `bili` 内对应模块 + 调整该端口的映射」；跨层类型是契约 §5 的领域模型，不含上游标识（溯源：REQUIREMENTS.md §3）。
 
@@ -191,15 +194,15 @@ graph TD
   N1 --> BUS
   N2 --> B2
   N2 --> BUS
-  BUS --> S1["Tauri 事件桥（lib.rs:882）<br/>danmubox://message / status / room / room_stats / session"]
+  BUS --> S1["Tauri 事件桥（lib.rs:918）<br/>danmubox://message / status / room / room_stats / session"]
   BUS --> S2["CLI 前台打印 / NDJSON"]
 ```
 
-事件路径是**一份产出、两处消费**：完整数据流见 §4.5，去重为什么必须做在两处见 §4.7。`RoomClosed` 折成一条 `danmubox://status`（`lib.rs:927`）；`danmubox://send` 由发送命令直接 emit（`lib.rs:488`）、`danmubox://log` 由日志桥 emit（`lib.rs:1297`），两者都不经总线。
+事件路径是**一份产出、两处消费**：完整数据流见 §4.5，去重为什么必须做在两处见 §4.7。`RoomClosed` 折成一条 `danmubox://status`（`lib.rs:963`）；`danmubox://send` 由发送命令直接 emit（`lib.rs:489`）、`danmubox://log` 由日志桥 emit（`lib.rs:1333`），两者都不经总线。
 
 | 任务 | 数量 | 生命周期 | 失败影响 |
 |---|---|---|---|
-| 房内会话（身份 `session.rs:384` / collector `:400` / driver `:424` 三个任务） | 每连接房间 1 组 | `rooms_connect` 创建（`apps/desktop/src-tauri/src/lib.rs:332` → `spawn_runtime:355`）；`rooms_disconnect`（`lib.rs:388`）/ `rooms_remove`（`lib.rs:318`）调 `close()`；进程退出由 `Drop` 兜底（`session.rs:542`） | 只影响该房间；其它房间继续工作 |
+| 房内会话（身份 `session.rs:384` / collector `:400` / driver `:424` 三个任务） | 每连接房间 1 组 | `rooms_connect` 创建（`apps/desktop/src-tauri/src/lib.rs:333` → `spawn_runtime:355`）；`rooms_disconnect`（`lib.rs:389`）/ `rooms_remove`（`lib.rs:319`）调 `close()`；进程退出由 `Drop` 兜底（`session.rs:542`） | 只影响该房间；其它房间继续工作 |
 | 心跳定时器（WS 30s + HTTP 60s） | **每次连接尝试**各 1 组（`ws.rs:447` / `:454`） | 随该次连接的作用域收场（`ws.rs:479`–`:481`） | 见 §8 |
 | 事件总线 | 进程内 1 个 | 随进程 | 单个订阅者落后不影响其它订阅者（见 §4.3） |
 
@@ -213,7 +216,7 @@ graph TD
 | 容量 | **按 `kind` 分道**（契约 §4.3）：六档上限各由一枚 `history.buffer_rows_*` 覆盖（`BufferCaps`，`session.rs:75`），礼物档内部再按金额切三档（`gift_tier`，`session.rs:142`），共八道（`Lane::COUNT = 8`，`session.rs:176`）；每道超出丢自己的最旧一条 |
 | 写入 | 只有该房间的 collector 任务写入；`MessageBuffer::push`（`session.rs:252`）先按 `kind`（礼物再按金额）选道（`:259`），再在 `push_back` 后若超该道上限则 `pop_front`（`:264`），常量时间 |
 | 读取 | 只有 `history_query` 命令读，经 `Arc<Mutex<MessageBuffer>>` 的 `query`（`session.rs:287`）：先把各道归并回**到达顺序**（`local_id` 升序）再过滤，供当前会话内向上回滚查看 |
-| 偏好变更 | 六枚 `history.buffer_rows_*` 只在**建立会话时**读取一次（`lib.rs:336` 建会话 / `lib.rs:404` 刷新重建）：改动对下一次 `rooms_connect` 生效，当前会话各档容量不变 |
+| 偏好变更 | 六枚 `history.buffer_rows_*` 只在**建立会话时**读取一次（`lib.rs:337` 建会话 / `lib.rs:405` 刷新重建）：改动对下一次 `rooms_connect` 生效，当前会话各档容量不变 |
 | 不变量 | 不落盘、不跨会话、不导出；除本会话缓冲外，core 不保留任何历史 |
 
 ### 4.3 通道与背压
@@ -229,7 +232,7 @@ graph TD
 
 | 场景 | 行为 |
 |---|---|
-| 订阅者落后（`Lagged`） | collector 记 `warn` 后继续接收（`session.rs:413`）；事件转发器同样只记 `warn`（`lib.rs:935`）——丢弃的是该订阅者落后区间内的消息，界面另有 `history_query` 全量覆盖兜底（§4.5） |
+| 订阅者落后（`Lagged`） | collector 记 `warn` 后继续接收（`session.rs:413`）；事件转发器同样只记 `warn`（`lib.rs:971`）——丢弃的是该订阅者落后区间内的消息，界面另有 `history_query` 全量覆盖兜底（§4.5） |
 | 会话缓冲溢出 | 只丢**该道**最旧一条（`MessageBuffer::push` 的 `pop_front`，`session.rs:264`）：别的档不受影响，互动洪水不会顶掉弹幕 |
 | 上游推送无法识别 | 不打断连接：命中 `SYSTEM_CMDS` 的按 `system` 归一化，其余丢弃并计入 `unknown_cmd`（`cmd.rs:185`） |
 | 前端渲染跟不上 | 前端不向 core 回压：广播投递不等待订阅者，缓冲由后端按 `history.buffer_rows_*` 各档独立裁剪 |
@@ -238,7 +241,7 @@ graph TD
 
 ### 4.4 手动重连
 
-房间内「刷新」按钮的唯一动作是 IPC `rooms_reconnect`（`lib.rs:403` → `refresh_room`，`lib.rs:429`）。
+房间内「刷新」按钮的唯一动作是 IPC `rooms_reconnect`（`lib.rs:405` → `refresh_room`，`lib.rs:431`）。
 
 ```mermaid
 sequenceDiagram
@@ -262,8 +265,8 @@ sequenceDiagram
 | 语义 | 打断当前连接并**立即**重连，不等退避周期；重连前重新走 `getDanmuInfo`，不复用上一轮连接参数 |
 | 缓冲 | 不变。仍属同一次会话，已收到的消息全部保留（`session.rs:505` 的 `reconnect` 只发信号） |
 | 会话 | 不结束、不重建 `RoomSession`；不触发缓冲清空 |
-| 幂等 | 正在建连 / 正在退避 / 已连接三种状态下均可调用；已在连接中时不叠加第二条连接（`lib.rs:430`） |
-| 错误 | 房间未登记 → `ROOM_NOT_FOUND`（`lib.rs:375`）；会话已不在（用户点过「断开连接」，或房间被移除后又加回来）→ **当场重建一次会话**，缓冲从空开始（`lib.rs:430`–`432`）；建连后的失败由 driver 在后台按退避处理（`ws.rs:823`） |
+| 幂等 | 正在建连 / 正在退避 / 已连接三种状态下均可调用；已在连接中时不叠加第二条连接（`lib.rs:431`） |
+| 错误 | 房间未登记 → `ROOM_NOT_FOUND`（`lib.rs:376`）；会话已不在（用户点过「断开连接」，或房间被移除后又加回来）→ **当场重建一次会话**，缓冲从空开始（`lib.rs:431`–`432`）；建连后的失败由 driver 在后台按退避处理（`ws.rs:823`） |
 | 通知 | 连接状态与重连原因经 `danmubox://status` 下发；`StatusEvent.detail` 是**人类可读原因文本**（`bus.rs:19`–`24`），认证失败时只放原始 code，不赋语义 |
 | 退避与抖动 | 与 §8「建连失败 / 中途断开」「健康掉线回落」两行同一条规则：序列 5s / 10s / 20s / 40s / 60s 封顶，健康掉线回到 5s 起点，每次等待另加 ±20% 抖动 |
 | 与自动重连的关系 | 手动重连只是把「下一次尝试」提前到当下：取消当前连接后立即进入下一轮，不等退避、也不改变退避计数的判据 |
@@ -277,9 +280,9 @@ graph LR
   CMD --> SINK["crates/danmubox-core/src/bus.rs:231<br/>publish_with（去重 + local_id）"]
   SINK --> BUS["crates/danmubox-core/src/bus.rs:80<br/>EventBus（broadcast）"]
   BUS --> BUF["crates/danmubox-core/src/session.rs:400<br/>collector → 分道 MessageBuffer"]
-  BUS --> BRIDGE["apps/desktop/src-tauri/src/lib.rs:882<br/>Tauri 事件桥"]
+  BUS --> BRIDGE["apps/desktop/src-tauri/src/lib.rs:918<br/>Tauri 事件桥"]
   BRIDGE --> EVT["danmubox://message 等事件"]
-  EVT --> STORE["apps/desktop/ui/src/store.ts:807<br/>insertIncoming"]
+  EVT --> STORE["apps/desktop/ui/src/store.ts:846<br/>insertIncoming"]
 ```
 
 - **一份产出、两处消费**：同一条 `Message` 既进总线（→ 事件桥 → 界面），也进该房间的会话缓冲。两条路径互不阻塞：缓冲写入是 collector 任务内的常量时间操作，广播投递不阻塞发送端。
@@ -304,15 +307,15 @@ graph LR
 |---|---|---|
 | 1 | 后端 | `MessageSink::publish_with`（`bus.rs:231`）按 `uid + ts + 正文 + 表情唯一键` 的 64 位指纹（`danmaku_fingerprint`，`bus.rs:179`）认同一性，`SEEN_DANMAKU_WINDOW = 256`（`bus.rs:175`）条环形窗口，**只对 `danmaku` 生效**（`bus.rs:232`）——礼物 / 互动允许上游反复推同一条，按内容去重会误伤真实重复。第二份在**进总线之前**就被丢弃，因此事件流与会话缓冲看到同一份事实 |
 | 2 | 取消树 | 见 §4.6：孤儿连接不得产生第二份 |
-| 3 | 前端 | `alreadyListed`（`apps/desktop/ui/src/session-messages.ts:37`，判据 `kind` + `uid` + `ts` + 正文，且只认 `danmaku`；后端指纹另含表情唯一键）在 `onMessage` 里再挡一道（`apps/desktop/ui/src/store.ts:807` → `insertIncoming`，`session-messages.ts:61`），覆盖「同一条弹幕从回填与实时两条路都到了界面」这一类；规则细节见 `ui.md` §4.7 |
+| 3 | 前端 | `alreadyListed`（`apps/desktop/ui/src/session-messages.ts:37`，判据 `kind` + `uid` + `ts` + 正文，且只认 `danmaku`；后端指纹另含表情唯一键）在 `onMessage` 里再挡一道（`apps/desktop/ui/src/store.ts:846` → `insertIncoming`，`session-messages.ts:61`），覆盖「同一条弹幕从回填与实时两条路都到了界面」这一类；规则细节见 `ui.md` §4.7 |
 
-**另有一条不是去重、但同属「哪些消息在列表里」的规则**：`local_id` 只在**一次房内会话内**唯一（契约 §5）。重连若发生会话换代（`refresh_room`，`lib.rs:429`）会重建一次会话、号从 1 重新编号，界面因此**先摘掉上一个会话的行、再整批落地新会话的快照**（`store.ts:1034` 的 `refreshMode` 判据 → `store.ts:1046` → `session-messages.ts:114`）——否则新消息会被「只收更新的号」那条判成陈旧丢掉。判据是 `rooms[].connected`（`session-messages.ts:114`）。
+**另有一条不是去重、但同属「哪些消息在列表里」的规则**：`local_id` 只在**一次房内会话内**唯一（契约 §5）。重连若发生会话换代（`refresh_room`，`lib.rs:431`）会重建一次会话、号从 1 重新编号，界面因此**先摘掉上一个会话的行、再整批落地新会话的快照**（`store.ts:1077` 的 `refreshMode` 判据 → `store.ts:1089` → `session-messages.ts:114`）——否则新消息会被「只收更新的号」那条判成陈旧丢掉。判据是 `rooms[].connected`（`session-messages.ts:114`）。
 
 前端另有显示上限（不是去重）：`CLIENT_MESSAGE_CAP = 2000`（`session-messages.ts:14`，`:17` 起裁剪）—— 真正的会话缓冲在后端。
 
 ## 5. 本地文件
 
-core 自身只读写两个文件，路径解析在 `core::paths`（`paths.rs:8` / `:16` / `:43`）：macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；其余平台 `~/.local/share/danmubox`；可用环境变量 `DANMUBOX_HOME` 覆盖整个数据目录。移动端由外壳在**启动最早期**把 `DANMUBOX_HOME` 钉到应用私有目录（`apps/desktop/src-tauri/src/lib.rs:1268` → `:1209`），core 侧保持平台无关（契约 §4）。
+core 自身只读写两个文件，路径解析在 `core::paths`（`paths.rs:8` / `:16` / `:43`）：macOS `~/Library/Application Support/danmubox`；Windows `%APPDATA%\danmubox`；其余平台 `~/.local/share/danmubox`；可用环境变量 `DANMUBOX_HOME` 覆盖整个数据目录。移动端由外壳在**启动最早期**把 `DANMUBOX_HOME` 钉到应用私有目录（`apps/desktop/src-tauri/src/lib.rs:1304` → `:1209`），core 侧保持平台无关（契约 §4）。
 
 | 文件 | 内容 | 权限 | 写入方式 | 读取容错 |
 |---|---|---|---|---|
@@ -344,15 +347,15 @@ core 自身只读写两个文件，路径解析在 `core::paths`（`paths.rs:8` 
 
 ```mermaid
 sequenceDiagram
-  participant P as 进程入口（lib.rs:1226 run）
+  participant P as 进程入口（lib.rs:1262 run）
   participant F as core::paths + core::prefs
   participant A as ConfigStore / bili::auth
   participant B as core::bus
   participant S as core::session
-  P->>P: 移动端钉数据目录（lib.rs:1268），日志层读 DANMUBOX_LOG（默认 info，lib.rs:1232）
-  P->>A: 读取 config.toml 的 active_profile（lib.rs:1272）；字段齐全则直接进入登录态，否则游客 / 待扫码
-  P->>F: 读取 prefs.json 并与契约 §8 默认值合并成生效值快照（AppState::new，lib.rs:1280 → :83）
-  P->>B: 创建 EventBus（`AppState::new` 内，lib.rs:81，容量 `BUS_CAPACITY = 1024`，lib.rs:28），起事件转发与日志桥（lib.rs:1292 / :1296）
+  P->>P: 移动端钉数据目录（lib.rs:1304），日志层读 DANMUBOX_LOG（默认 info，lib.rs:1304）
+  P->>A: 读取 config.toml 的 active_profile（lib.rs:1308）；字段齐全则直接进入登录态，否则游客 / 待扫码
+  P->>F: 读取 prefs.json 并与契约 §8 默认值合并成生效值快照（AppState::new，lib.rs:1316 → :83）
+  P->>B: 创建 EventBus（`AppState::new` 内，lib.rs:82，容量 `BUS_CAPACITY = 1024`，lib.rs:29），起事件转发与日志桥（lib.rs:1328 / :1296）
   P->>S: 构建 `RoomRuntime` 工厂（`spawn_on`，注入端口实现）
   P->>P: 进入运行态（Tauri 事件循环 / CLI 前台作业）
   Note over S: 房间列表为空，等待 rooms_add / follow_list 进场后再 rooms_connect
@@ -362,15 +365,15 @@ CLI 的顺序是 `init_tracing()`（`crates/danmubox-cli/src/main.rs:617`）→ 
 
 顺序是刻意的：
 
-1. **偏好早于 UI**：UI 首帧就拿到生效值快照（`prefs_get`，`lib.rs:553`），不需要「先渲染再闪一下改样式」。
+1. **偏好早于 UI**：UI 首帧就拿到生效值快照（`prefs_get`，`lib.rs:554`），不需要「先渲染再闪一下改样式」。
 2. **凭据早于任何连接**：连接参数需要登录态参与签名，时序上不会出现「游客连接先建立、登录后重连」。
 
 ### 7.2 关闭
 
 | 步骤 | 动作 | 锚点 |
 |---|---|---|
-| 1 | 收到退出信号（Tauri 窗口关闭 / CLI 作业结束 / Ctrl-C）即进程退出；**没有**「拒绝新命令」的优雅期 | `lib.rs:1226` 的 `.run()`；CLI `main.rs:381` 的 `ctrl_c` 分支 |
-| 2 | 退出路径不逐一 `close()` 已登记会话：`close()` 只在 `rooms_disconnect` / `rooms_remove` 被显式调用 | `lib.rs:388` / `lib.rs:318` |
+| 1 | 收到退出信号（Tauri 窗口关闭 / CLI 作业结束 / Ctrl-C）即进程退出；**没有**「拒绝新命令」的优雅期 | `lib.rs:1262` 的 `.run()`；CLI `main.rs:381` 的 `ctrl_c` 分支 |
+| 2 | 退出路径不逐一 `close()` 已登记会话：`close()` 只在 `rooms_disconnect` / `rooms_remove` 被显式调用 | `lib.rs:389` / `lib.rs:319` |
 | 3 | 进程退出时 `RoomRuntime::Drop` 取消会话令牌并 abort 三个任务 | `session.rs:542` |
 | 4 | 在途连接随取消子令牌收场，**不发**显式 Close 帧（`WsMessage::Close` 只在入站处理） | `session.rs:465`–`469`；`ws.rs:574`–`575`；入站 Close 见 `ws.rs:756` |
 | 5 | 会话缓冲与房间列表随进程消失（不落盘，契约 §4.3） | — |
@@ -402,8 +405,8 @@ CLI 的顺序是 `init_tracing()`（`crates/danmubox-cli/src/main.rs:617`）→ 
 
 | 项 | 规则 |
 |---|---|
-| 开关 | 环境变量 `DANMUBOX_LOG`（契约 §4），`EnvFilter` 解析失败时默认 `info`（`apps/desktop/src-tauri/src/lib.rs:1232`；CLI `main.rs:617`） |
-| 目标 | stderr，固定关闭 ANSI 色（`lib.rs:1236`–`1238`）；同一条日志经 256 容量的广播通道（`lib.rs:1227`）桥接成 Tauri 事件 `danmubox://log`（`lib.rs:1294`–`1298`），前端只保留最近 200 行（`store.ts:40` 的 `LOG_CAP`） |
+| 开关 | 环境变量 `DANMUBOX_LOG`（契约 §4），`EnvFilter` 解析失败时默认 `info`（`apps/desktop/src-tauri/src/lib.rs:1304`；CLI `main.rs:617`） |
+| 目标 | stderr，固定关闭 ANSI 色（`lib.rs:1308`–`1238`）；同一条日志经 256 容量的广播通道（`lib.rs:1263`）桥接成 Tauri 事件 `danmubox://log`（`lib.rs:1330`–`1298`），前端只保留最近 200 行（`store.ts:42` 的 `LOG_CAP`） |
 | 结构 | 时间戳、级别、target、span 路径、消息、结构化字段 |
 | 级别约定 | `error` 需人工介入；`warn` 可自恢复（重连、丢包）；`info` 生命周期事件；`debug` 包级明细（解包长度、op、protover）；`trace` 逐条消息 |
 
@@ -450,7 +453,7 @@ CLI 的顺序是 `init_tracing()`（`crates/danmubox-cli/src/main.rs:617`）→ 
 
 1. 凭据类型不派生 `Debug` / `Display` / `Serialize`（或用手写实现输出固定的脱敏标记），从类型层面杜绝误打印。
 2. 脱敏只有**一个**出口：`bili::redact::redact`（`crates/danmubox-bili/src/redact.rs`），占位符 `***`（`redact.rs:20`）；URL 日志经 `http::log_request`、错误文案经 `http::upstream` 都只调它。理由：上游把「谁」写在查询串里（`vmid` / `uids[]` / `anchor_id`），而 `reqwest::Error` 的 `Display` 会把完整 URL 拼进错误文案——脱敏必须发生在文案成形的那一刻（`redact.rs:1`–`16`）。
-3. 逐条上游原始载荷（`danmubox::raw`）不进一键诊断报告（`lib.rs:1185` 的 `RAW_TARGET` 判断）。
+3. 逐条上游原始载荷（`danmubox::raw`）不进一键诊断报告（`lib.rs:1221` 的 `RAW_TARGET` 判断）。
 
 ### 9.4 一键诊断
 

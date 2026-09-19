@@ -30,3 +30,7 @@ apps/desktop/src-tauri/gen/schemas/
 
 # 归档：不进 git（见 docs/contract.md §11）
 docs/.archive/
+
+# 用户个人素材：不入库（用户 2026-09-19）。停止跟踪但保留本地文件
+/issue
+docs/Galaxy_Z_Fold8/

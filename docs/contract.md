@@ -91,7 +91,7 @@ danmubox/
 | 偏好文件 | `prefs.json`，见 §4.2 |
 | 诊断导出文件 | `danmubox-diagnose-YYYYMMDD-HHMMSS.txt`（UTC）；桌面写主目录下的 `Downloads`（不存在则回退主目录），Android 经 MediaStore 写公共 `Download`；**一次诊断恰好一个文件**，见 §4.4 |
 | 消息内存缓冲 | 单次房内会话内**按 `kind` 分档**的内存缓冲（各档上限 = §8 的 `history.buffer_rows_*`，语义与分档规则见 §4.3），离开房间即销毁 |
-| WS 心跳 | 30 秒（op=2）；连接后首包 60 秒内发出，收到 op=3 回应后重置为 30 秒 |
+| WS 心跳 | 30 秒（op=2）；**认证成功（`op=8` 且 `code=0`）后立即发出首包**——60 秒是硬上界、不是等待时长（见 §6），收到 op=3 回应后重置为 30 秒 |
 | HTTP 心跳 | 60 秒一次，见 §6 |
 | 重连退避 | 5s / 10s / 20s / 40s / 60s 封顶 |
 | 压缩协商 | `protover=3`（brotli）；解码需同时支持 0 / 1 / 2 / 3 |
@@ -229,7 +229,7 @@ sessdata = ""
 得让用户把连接诊断**交得出来**；同一条口径也把 `docs/testing.md` §10.5 那条遗留（Android 侧没有可打开的业务日志入口）一并解决。
 
 - **一次诊断恰好一个文件**：文件名 `danmubox-diagnose-YYYYMMDD-HHMMSS.txt`，时间取 **UTC**（与报告头一致，全仓不引入本地时区换算）。
-- **位置**：macOS / Windows / Linux 写**用户主目录下的 `Downloads`**（该目录不存在时回退到主目录）；Android 经 **MediaStore** 写**公共 `Download`**（API 29+ 不需要任何权限，本应用只声明 `INTERNET`）。
+- **位置**：macOS / Windows / Linux 写**用户主目录下的 `Downloads`**（该目录不存在时回退到主目录）；Android 经 **MediaStore** 写**公共 `Download`**（API 29+ 不需要运行时权限；本应用声明的权限见 §2 的 Android 保活例外，共四枚：`INTERNET` / `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` / `POST_NOTIFICATIONS`，权威清单是 `gen/android/**/AndroidManifest.xml`）。
   **不写**应用私有目录、不写这两个位置之外的任何地方；跑完不留临时文件。
 - **采集窗口固定 180 秒**（可提前结束）；窗口内收集连接事实与日志行，窗口到点或提前结束时导出。
 - **文件必须可安全发给别人**：凭据 / uid / 昵称按 §4.1 的安全红线与 `crates/danmubox-bili/src/redact.rs` 的口径抹成 `***`；
@@ -484,8 +484,8 @@ Frontend → Rust 命令（`invoke`）。本节是**命令名索引**，与 `app
 
 Rust → Frontend 事件：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
 
-`danmubox://session` 是**双载荷**事件名：登录态 `SessionStatus`（带 `logged_in`）与房内身份 `RoomSession`（带 `is_admin`）走同一个名字，
-前端按判别字段分派，**身份载荷不得覆盖登录态**（否则 `logged_in` 变 `undefined`，界面误判成游客）；载荷判别表见 [`ipc.md`](ipc.md) §4。
+`danmubox://session` 的载荷是 §5 的 `RoomSession`（房内身份，带 `is_admin`）——**登录态不经这个事件**，
+它由 `session_status` 命令现取（§8.6 的脱敏对象，带 `logged_in`）；事件与命令的分工见 [`ipc.md`](ipc.md) §4。
 
 `danmubox://room_stats` 的载荷是 §5 的 `RoomStats`（在线人数 / 累计看过，两侧可缺省）。
 
@@ -635,6 +635,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `docs/contract.md` | 本文件（规范性契约） |
 | `docs/protocol.md` / `auth.md` / `architecture.md` / `ipc.md` / `ui.md` | 本期 |
 | `docs/operations.md` / `testing.md` | 本期 |
+| `docs/foldable.md` | 折叠屏可行性研究（**研究结论**，非验收标准、非排期承诺） |
 | `docs/roadmap.md` | 下期 backlog（等上游样本 / 待拍板 / 更远期）与风险；阶段史见 `CHANGELOG.md` |
 | `docs/decisions/*` | 本期 |
 | `docs/.archive/` | **不进 git**；仅存放已撤销方案与历史讨论，不参与实现，引用它一律视为无效 |

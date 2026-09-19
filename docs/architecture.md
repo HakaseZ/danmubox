@@ -250,7 +250,7 @@ sequenceDiagram
   D->>D: 取消当前连接的子令牌并等它在途收场（session.rs:460–464）
   D->>D: 立即进入下一轮：重新取连接参数、重新建连
   Note over D: 不走退避等待；连接前重新 getDanmuInfo
-  D-->>S: 状态事件 Connecting（"手动重连"）→ 事件总线 → danmubox://room
+  D-->>S: 状态事件 Connecting（"手动重连"）→ 事件总线 → danmubox://status
   S->>B: 不触碰缓冲
 ```
 
@@ -261,7 +261,7 @@ sequenceDiagram
 | 会话 | 不结束、不重建 `RoomSession`；不触发缓冲清空 |
 | 幂等 | 正在建连 / 正在退避 / 已连接三种状态下均可调用；已在连接中时不叠加第二条连接 |
 | 错误 | 房间不存在 → `ROOM_NOT_FOUND`；本地上游解析失败 → `UPSTREAM_ERROR`；建连后的失败由 driver 在后台按退避处理 |
-| 通知 | 连接状态与重连原因经 `danmubox://room` 下发（`reason` 区分 `reconnect` / `backoff` / `closed`） |
+| 通知 | 连接状态与重连原因经 `danmubox://status` 下发（`reason` 区分 `reconnect` / `backoff` / `closed`） |
 | 退避与抖动 | 与 §8「建连失败 / 中途断开」「健康掉线回落」两行同一条规则：序列 5s / 10s / 20s / 40s / 60s 封顶，健康掉线回到 5s 起点，每次等待另加 ±20% 抖动 |
 | 与自动重连的关系 | 手动重连只是把「下一次尝试」提前到当下：取消当前连接后立即进入下一轮，不等退避、也不改变退避计数的判据 |
 

@@ -251,7 +251,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 
 | 判定顺序 | 观察点 | 结论与动作 |
 |---|---|---|
-| 1 | 房间连接状态（界面房间头 / `danmubox://room` 事件） | 未发起连接 → 触发 `rooms_connect`；已连接 → 问题在收包不在连接 |
+| 1 | 房间连接状态（界面房间头 / `danmubox://status` 事件） | 未发起连接 → 触发 `rooms_connect`；已连接 → 问题在收包不在连接 |
 | 2 | `room_id` 是否为真实房间号 | 短号 / URL 必须先经 `getRoomPlayInfo` 解析为真实 `room_id`；解析失败说明房间输入不合法 → 重新添加房间 |
 | 3 | 日志是否出现 `getDanmuInfo` 失败 | 该接口需 `buvid3` 与 WBI 签名，未登录时易失败 → 见 2.2 |
 | 4 | 是否出现认证回应 `op=8` 且 `code != 0` | 认证未通过，按重连退避处理；记录原始 code，见 2.2 |
@@ -311,7 +311,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 | 2 | `account_qr_poll` 是否在持续轮询 | 前端未轮询 → 检查轮询定时器；建议间隔 2 秒，不得低于 1 秒 |
 | 3 | 二维码是否过期 | 过期后必须重新生成二维码，不能继续轮询旧 key |
 | 4 | `data.code` 语义 | 已知状态按 `auth.md` 的状态机处理；**未知码归入「其他 → 按未确认处理」**，继续轮询，不要猜含义 |
-| 5 | 扫码成功后会话是否刷新 | 成功后登录态应变为已登录，界面应收到 `danmubox://session` 事件 |
+| 5 | 扫码成功后会话是否刷新 | 成功后登录态应变为已登录——界面重拉 `session_status` 即为已登录（`danmubox://session` 只推房内身份，契约 §7） |
 | 6 | 手机与电脑的端 | 在 Android 端扫码是「同机扫屏」，请用另一台设备显示二维码或截图后扫码 |
 
 ### 2.8 Android 退到后台就不再收弹幕 / 那枚「正在接收弹幕」通知

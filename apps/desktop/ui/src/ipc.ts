@@ -180,8 +180,8 @@ export interface EventHandlers {
   onRoom?: (room: Room) => void;
   onSession?: (session: SessionState) => void;
   /**
-   * 房内身份（`RoomSession`）。引擎把它与登录态**共用** `danmubox://session`
-   * 事件名推出来，因此这里按判别字段分派（见下面的订阅实现）。
+   * 房内身份（`RoomSession`）。引擎经 `danmubox://session` 推的就是它——登录态
+   * 不走事件总线，由 `session_status` 命令现取（见下面的订阅实现）。
    */
   onRoomSession?: (session: RoomSession) => void;
   onSend?: (result: ChatSendResult) => void;
@@ -222,10 +222,10 @@ export async function subscribeEvents(
   if (handlers.onSession || handlers.onRoomSession) {
     unlisteners.push(
       await listen<SessionState | RoomSession>("danmubox://session", (e) => {
-        // 同一个事件名上有两种载荷：登录态 `SessionState`（带 `logged_in`）与
-        // 房内身份 `RoomSession`（带 `is_admin`）。契约 §7 目前只登记了前者，
-        // 身份那侧由引擎推、`ipc.md` 未记；这里按判别字段分派，绝不让身份载荷
-        // 覆盖登录态（否则 `logged_in` 变 undefined，界面会误判成游客）。
+        // 引擎实际只推房内身份 `RoomSession`（带 `is_admin`）——`Event::Session` 的载荷
+        // 类型就定死了是 `RoomSession`（`crates/danmubox-core/src/bus.rs`）；登录态
+        // `SessionState`（带 `logged_in`）**不走事件总线**，由 `session_status` 命令现取。
+        // 这里仍按判别字段分派：多一层防御，将来引擎真补推登录态也不用改这里。
         const payload = e.payload as Partial<SessionState & RoomSession>;
         if (typeof payload.logged_in === "boolean") {
           handlers.onSession?.(payload as SessionState);

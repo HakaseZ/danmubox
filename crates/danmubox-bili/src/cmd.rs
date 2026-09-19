@@ -600,7 +600,7 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
     let decoded = match InteractWordV2::decode(bytes.as_slice()) {
         Ok(decoded) => decoded,
         Err(err) => {
-            // 不因 protobuf 载荷报错（`docs/roadmap.md` S1-AC6）。
+            // 不因 protobuf 载荷报错（阶段目标 S1-AC6，阶段史见 `CHANGELOG.md` 归档区）。
             Counters::bump(&counters.malformed_dropped);
             tracing::debug!(%err, "INTERACT_WORD_V2 protobuf 解码失败，丢弃");
             return None;

@@ -1474,7 +1474,7 @@ mod tests {
         rounds
     }
 
-    /// `docs/roadmap.md` S1-AC9：非 0 认证 code 一律按失败处理，且只记录原始值。
+    /// 阶段目标 S1-AC9（阶段史见 `CHANGELOG.md` 归档区）：非 0 认证 code 一律按失败处理，且只记录原始值。
     #[tokio::test]
     async fn non_zero_verify_code_fails_the_session() {
         let live = BiliLive::new().unwrap();

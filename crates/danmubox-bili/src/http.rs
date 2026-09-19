@@ -482,7 +482,7 @@ impl BiliHttp {
 
         let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
         if code != 0 {
-            // -352 是签名/风控失败，与凭据失效区分（`docs/auth.md` §9.1）。
+            // -352 是签名/风控失败，与凭据失效区分（`docs/auth.md` §4.6）。
             diag.ticket_failed(danmubox_core::now_ms(), &format!("code={code}"));
             return Err(Error::Upstream(format!("getDanmuInfo code={code}")));
         }

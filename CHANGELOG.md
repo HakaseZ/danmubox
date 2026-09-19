@@ -28,6 +28,14 @@
 
 ### Changed
 
+- **文档与代码对齐：修掉 7 处语义冲突，并把 `docs/foldable.md` 登记进契约 §11**（2026-09-19，只改文档与注释、无行为变化）：
+  ① `danmubox://session` 的载荷口径按实现统一为**只有房内身份 `RoomSession`**——登录态不经事件总线，由 `session_status` 命令现取
+  （`contract.md` / `auth.md` ×3 / `ui.md` / 两处前端注释原先写成「双载荷」）；② 连接态一律走 `danmubox://status`
+  （修 `architecture.md` ×2 / `operations.md` / `ui.md` 里误写成 `danmubox://room` 的四处）；③ Android 权限口径由「只声明 `INTERNET`」
+  改为实际四枚：`INTERNET` / `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` / `POST_NOTIFICATIONS`（权威清单是 `AndroidManifest.xml`）；
+  ④ 会话缓冲一律按 `kind` 六档，清掉 `README.md` 与 ADR 0006 里的旧单值 5000（ADR 只留理由、取值改指针）；⑤ `SendOutcome` 的用户文案
+  以 `ui.md` §6.5 为唯一来源，删掉 `auth.md` §11.3 里另写的三档措辞；⑥ WS 心跳首包改为「认证成功即发，60 秒是硬上界」（原先写成「60 秒内发出」易被读成等待时长）；
+  ⑦ `testing.md` 的前端事件清单补上 `danmubox://room_stats`；契约 §11 文档清单补登记 `docs/foldable.md`。
 - **上游平台在文档与注释里的称呼统一为 `ac站`**（2026-09-18，公开仓降低可搜索性）：文档正文与代码注释里
   的品牌字样统一改写为 `ac站`（32 文件 / 121 处，含 `README.md` / `AGENT.md` / `docs/**` / `REQUIREMENTS.md`
   与各 crate 的注释）；URL 与主机名、代码标识符与字符串字面量、界面渲染文案、`smoke/fixtures/**` 里的上游

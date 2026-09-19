@@ -202,7 +202,7 @@ graph TD
 
 ## 9. 前端测试
 
-前端测试用 `vitest` 加 jsdom 环境，mock `@tauri-apps/api` 的 `invoke` 与 `listen`；事件名断言覆盖契约 §7 的 `danmubox://message` / `danmubox://room` / `danmubox://session` / `danmubox://status` / `danmubox://send` / `danmubox://log`。
+前端测试用 `vitest` 加 jsdom 环境，mock `@tauri-apps/api` 的 `invoke` 与 `listen`；事件名断言覆盖契约 §7 的 `danmubox://message` / `danmubox://room` / `danmubox://session` / `danmubox://status` / `danmubox://send` / `danmubox://room_stats` / `danmubox://log`。
 
 **现状**：仓库里**还没有** vitest（`apps/desktop/ui/package.json` 的 devDependencies 里没有它），上表 F-01…F-11 里依赖 jsdom / RTL 的那几档仍是规划。已经落地的第一份前端单测是 **`apps/desktop/ui/src/filtering.test.ts`**（显示层纯逻辑：过滤 / 折叠 / 自动消失那一族），用 **Node 自带的 `node --test` + 类型擦除**直接跑，不需要任何新依赖：
 
@@ -375,7 +375,7 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | A-3 | 完成 C-1 ~ C-13 | 全部通过 |
 | A-4 | 前台连续运行 30 分钟 | 期间持续收弹幕；无崩溃、无明显内存增长 |
 | A-5 | 切到后台再回前台 | 连接按重连策略恢复并继续收弹幕；保活那一步单列在 A-9 / A-10（见 [`operations.md`](operations.md) §2.8） |
-| A-6 | **登录验证（本项目不用相机）**：从账号入口发起扫码，界面在**本机显示二维码**，用**另一台设备**（另一台手机 / 平板 / 相机 App）扫它，确认后回到应用 | 二维码正常显示、轮询期间状态可见；确认后登录态变为已登录并收到 `danmubox://session`；失败给出可操作提示。**全程不出现相机权限申请**——扫码是「显示二维码给别人扫」，前端不调用 `getUserMedia`，也不声明相机权限 |
+| A-6 | **登录验证（本项目不用相机）**：从账号入口发起扫码，界面在**本机显示二维码**，用**另一台设备**（另一台手机 / 平板 / 相机 App）扫它，确认后回到应用 | 二维码正常显示、轮询期间状态可见；确认后登录态变为已登录（重拉 `session_status` 得 `logged_in=true`）；失败给出可操作提示。**全程不出现相机权限申请**——扫码是「显示二维码给别人扫」，前端不调用 `getUserMedia`，也不声明相机权限 |
 | A-7 | 反向确认没有多余权限 | 系统「设置 → 应用 → danmubox → 权限」里**看不到相机、位置、通讯录、存储**这类项；`aapt2 dump badging` 的 `uses-permission` 只应有四枚：`INTERNET`、`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_DATA_SYNC`（后台保活的三枚，见 A-9；**声明即得，没有弹窗**）与 `POST_NOTIFICATIONS`（Android 13+ 唯一的运行时权限，冷启动问一次） |
 | A-8 | **系统返回手势**：房间页里从屏幕左边缘侧滑（`adb shell input swipe 0 <y> 600 <y>`，`y` 取屏中），再换右边缘（`1080 <y>` → `480 <y>`）；然后先开一个面板（如「筛选」）再侧滑；最后回到**根页面**（房间列表页、无面板）按返回 | 侧滑 → 回房间列表（**不**退出应用）；面板开着时侧滑 → 面板关掉、**不**跳页；根页面按返回 → 应用退出（`pidof dev.kksk.danmubox` 为空）。**左右边缘都要试**：返回手势归系统管，两侧是否都能返回由系统设置决定，界面只负责消费它。三级顺序见 [`ui.md`](ui.md) §2.6 |
 | A-9 | **后台保活（有连接那一档）**：装好包后先给通知权限（`adb shell pm grant dev.kksk.danmubox android.permission.POST_NOTIFICATIONS`，等价于首启点「允许」）；进房间（如公开测试房间 `1`）等连接成功；按 HOME 退到后台，**等 ≥3 分钟**；期间查四项 —— ① 进程还在：`adb shell pidof dev.kksk.danmubox`；② 到 443 的长连还在：`/proc/<pid>/fd` 的 socket inode → `/proc/net/tcp{,6}` 里状态 `01`（ESTABLISHED）、远端端口 `01BB`；③ 通知在：`adb shell dumpsys notification --noredact` 里能看到渠道 `danmubox-keepalive` 与那条通知；④ `adb logcat` 无 `FATAL`、无反复重连刷屏。最后点通知回前台 | 四项都在；点通知回到应用后（= 走到 `onStart`）再查一遍：`dumpsys activity services` 里 `KeepAliveService` 消失、`dumpsys notification` 里那条通知消失、进程与连接**不受影响**（服务本身不碰网络）。行为与平台限制见 [`operations.md`](operations.md) §2.8 |

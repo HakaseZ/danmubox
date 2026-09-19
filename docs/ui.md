@@ -324,7 +324,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 ### 3.3 连接状态与按钮可用性
 
-四种连接状态由 `danmubox://room` 与 `danmubox://status` 事件驱动：
+四种连接状态由 `danmubox://status` 事件驱动：
 
 | 状态 | `⋯` 菜单的「刷新连接」 | 说明 |
 |---|---|---|
@@ -352,7 +352,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 命令 | `room_session(roomId)` → `RoomSession`（契约 §7）：`my_medal_level` / `my_medal_name` / `my_guard_level` / `is_admin` |
 | 取数时机 | 进房间且会话就绪后读一次；引擎在会话建立时**并发**取一次并缓存，取到后另经 `danmubox://session` 事件推送（载荷是 `RoomSession`），界面据此更新，不轮询 |
 | 无活跃会话 | 后端返回该房间的**全零身份而不报错**（与 `history_query` 同风格）。界面把「拿不到身份」当**无权限**处理，绝不先放行再等服务端报错 |
-| 与登录态区分 | `danmubox://session` 这一个事件名上同时走登录态（`SessionState`，带 `logged_in`）与房内身份（带 `is_admin`）；界面按判别字段分派，**身份载荷不得覆盖登录态**（`ipc.md` 的事件表待补载荷判别说明） |
+| 与登录态区分 | `danmubox://session` 只推房内身份（`RoomSession`，带 `is_admin`）；登录态（`SessionState`，带 `logged_in`）由 `session_status` 命令现取，**不走事件总线**（契约 §7、`ipc.md` §4） |
 | 生命周期 | 会话级、不落盘；关标签 / 移除房间 / **断开连接**即丢弃（断开即这次会话结束，身份不再成立）；**切房保留** —— 房间并没有断，切回来还是同一次会话，房管入口因此不会白闪一下；会话重建（断开后再连 / 刷新重建）时由引擎重取经 `danmubox://session` 覆盖（`ipc.md` §8.1） |
 
 ### 3.5 「一键诊断」（`⋯` 菜单最后一项）

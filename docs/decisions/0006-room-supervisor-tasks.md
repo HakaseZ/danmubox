@@ -20,7 +20,7 @@
 |---|---|
 | 建连准备 | 短号 / URL → 真实 `room_id`：使用 `getRoomPlayInfo`，一次拿到 `room_id` / `uid` / `live_status` |
 | 连接 | WebSocket 建连 → 发送认证包（`op=7`，帧头 `protover=1`，body 声明 `protover=3`）→ 等待认证回应（`op=8`，`code=0` 为成功） |
-| 保活（WS） | 心跳 `op=2`，帧头 `protover=1`，body 为字面量 `[object Object]`；连接后首包须在 60 秒内发出，收到 `op=3` 回应后重置为 30 秒周期 |
+| 保活（WS） | 心跳 `op=2`，帧头 `protover=1`，body 为字面量 `[object Object]`；认证成功（`op=8` 且 `code=0`）即发首包（60 秒为硬上界、不是等待时长），收到 `op=3` 回应后重置为 30 秒周期 |
 | 保活（HTTP） | 每 60 秒 `GET https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat`，参数 `pf=web` 与 `hb=base64("60|<真实room_id>|1|0")`；缺它连接会被上游判死 |
 | 收包 | `op=5` 业务消息，可能是 zlib / brotli 压缩；解压后可能仍是多子包拼接，需递归拆分（见 [`0003-protover3.md`](0003-protover3.md)） |
 | 归一化 | 按 `cmd` 映射为六种 `kind`，产出统一 `Message`；`INTERACT_WORD_V2` 载荷是 protobuf，`DANMU_MSG_MIRROR` 默认丢弃并计数 |
@@ -41,7 +41,7 @@
 | 任务粒度 | 每房间一个 supervisor task（解析房间、连接、认证、双心跳、收包、解包、归一化、发布） |
 | 房间隔离 | 任一房间的失败（认证失败、网络中断、解析异常）只影响该房间的 task，不影响其他房间与进程 |
 | 消息分发 | `broadcast` 通道；每个房间一条通道，订阅者按房间订阅 |
-| 会话缓冲 | 归一化后的 `Message` 写入该房间的内存环形缓冲（上限 5000 条，随会话销毁）；**不落盘**，见 [`0005-no-local-database.md`](0005-no-local-database.md) |
+| 会话缓冲 | 归一化后的 `Message` 写入该房间的内存环形缓冲（各档上限见 [`../contract.md`](../contract.md) §4.3 / §8，随会话销毁）；**不落盘**，见 [`0005-no-local-database.md`](0005-no-local-database.md) |
 | 缓冲归属 | 缓冲属会话；supervisor 是「每房间状态」的唯一所有者，不跨任务共享 |
 | 慢消费者 | 不阻塞 supervisor：订阅者落后时收到 `Lagged` 并自行跳帧追赶，丢弃的是该订阅者自己的历史，不是全局事件 |
 | 通道容量 | 有界，容量作为实现常量固定；具体取值见 [`../architecture.md`](../architecture.md) |

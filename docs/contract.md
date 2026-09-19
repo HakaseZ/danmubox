@@ -129,7 +129,7 @@ sessdata = ""
 - 形态：**明文 TOML**。自用场景不加密，靠文件权限（0600）与"只在本机数据目录"约束。
 - 启动顺序（规范性）：读文件 → 取 `active_profile` 指向的 profile，其 `sessdata` / `bili_jct` / `dede_user_id` 齐全且非空则直接进入登录态；否则走扫码（默认入口）→ 成功后原子写回该 profile（临时文件 + rename）。判定见 `config.rs:62-64`、`config.rs:382-393`。
 - **多账号（规范性）**：同一文件用 `[profiles.<name>]` 承载多份凭据，`active_profile` 指定当前生效者。切换账号 = 改 `active_profile` + 以新凭据重建连接，**不复制多份文件**。
-- 凭据文件是**明文 TOML**，用户可以自己编辑（`auth.md` §8.4）；但界面与 CLI **不提供**「手填 Cookie」的导入入口：登录方式只保留扫码与游客。
+- 凭据文件是**明文 TOML**（字段表见 `auth.md` §8.1），**由程序管理**；界面与 CLI 都不提供「手填 Cookie」的导入入口（登录只保留扫码与游客）。**解析失败时删掉重建为空文件并以游客态启动**、不备份（`config.rs` 的 `reset_corrupt_file`）；读取 / 权限 / IO 失败照旧上报。
 - **不得**在该文件中存放任何非凭据内容：界面偏好走 `prefs.json`。TOML 往返会丢注释与排版，程序每次改偏好都重写凭据文件是事故面。
 - 安全红线（规范性，所有文档必须原样复述）：`SESSDATA`、`bili_jct`、`DedeUserID` **不得**进日志、不得进前端明文、不得进仓库、不得进崩溃上报。文档与脚本中的示例一律用占位值。
 - **测试用的房间号与账号标识同样不得进 git**（提交信息与受版本控制的文件都算）；实测记录只写「某个在播房间」这类脱敏描述。测试后可复用的房间属于使用者的私产，不进仓库。
@@ -384,7 +384,7 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `rooms_connect` | 建立房内会话。**幂等**：已有会话时原样返回，同一房间不得并存两份连接 |
 | `rooms_disconnect` | 断开并关闭会话；缓冲随之销毁 |
 | `rooms_reconnect` | 房间内「刷新」：会话还在（连接中 / 退避中 / 已连接）→ 原地重连，**不清缓冲**，仍属同一次会话；会话已不在（点过断开，或移除后又加回）→ 当场重建一次会话，等价重新进房、缓冲从空开始（两档口径见 §4.3） |
-| `history_query` | 查**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`）；无会话返回空数组 |
+| `history_query` | 查**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`）；`limit` 缺省 **500**（与 `ipc.md` §3 同）、`0` 表示不截断；无会话返回空数组 |
 | `room_session` | 该房间**当前会话**里的本人身份（`RoomSession`）。无活跃会话（未连接 / 已关闭）→ 返回全零身份而**不报错**；身份在会话建立时并发取一次并缓存，同时经 `danmubox://session` 推送。界面据此决定房管入口是否出现（`is_admin` 不为 `true` 时该入口不渲染，`ui.md` §4.9） |
 | `chat_send` | 发弹幕（`color` / `emote` / `reply` 可选；`emote` 非空即表情弹幕，`protocol.md` §11.4）。返回 `ChatSendResult { room_id, content, outcome, detail? }`（`lib.rs:118`）：`outcome` 是 §5 `SendOutcome` 归一化结论，`detail` 是上游 `message` + `code` 拼的一行、仅 `outcome != ok` 时出现。**界面不等这条命令才画**——返回只用于校验与修正，乐观渲染与对账见 [`ipc.md`](ipc.md) §7 |
 | `chat_report` | 举报一条弹幕，理由取自 `report_reasons` 的清单 |

@@ -5,7 +5,7 @@
 - 唯一运行模式：页面运行在 Tauri WebView 中，命令走 `invoke("命令名", 参数)`，事件走 `listen("danmubox://事件名", handler)`（`apps/desktop/ui/src/ipc.ts:59`、`apps/desktop/ui/src/ipc.ts:192`）。
 - `vite dev` 下 WebView 内 `@tauri-apps/api` 同样可用；前端的数据路径只有 `invoke` / `listen` 这一条（唯一例外见 §4.1 的控制台桥）。
 - 命令名与事件名的集合是**封闭**的，与 `contract.md` §7 逐条一致（命令清单 §3、事件清单 §4）。新增面必须同时改 `contract.md` §7、`docs/ipc.md` 与实现；不允许前端私自定义字符串。
-- 凭据的改动路径只有直接编辑 `config.toml` 这一条（`contract.md` §4.1、`auth.md` §8.4）；没有「手填 Cookie」命令。
+- 凭据文件由程序写回（`contract.md` §4.1、`auth.md` §8.4）；没有「手填 Cookie」命令。
 - IPC 是 core 的一个消费面：core 的端口与事件总线**不得**假设消费方是 UI；新增能力先落 core 端口，再决定是否暴露成命令。
 - 需求溯源：REQUIREMENTS.md §2.1–§2.10 与 §2.12 的 IPC 面落在 `docs/ipc.md` 与 `contract.md` §7；逐条映射见 `contract.md` §9。
 

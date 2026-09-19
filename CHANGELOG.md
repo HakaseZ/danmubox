@@ -28,6 +28,7 @@
 
 ### Changed
 
+- **凭据文件损坏不再导致应用退出；文档不再引导手工编辑该文件**（2026-09-19）：`config.toml` 解析失败时**删掉重建为空文件并以游客态继续启动**（不备份；读取 / 权限 / IO 失败照旧报错终止），用户裁决见 `docs/contract.md` §4.1；`docs/contract.md` / `docs/auth.md` §8.4 / `docs/operations.md` §1.4 同步删去「手工编辑凭据」的手把手步骤（被删原文逐字归档于本文件归档区末尾）；同口径的一次全局扫描另修掉 10 处单句残留（不进归档区）：`README.md` 2 处、`docs/auth.md` §2 与 §8.5、`docs/operations.md` §2.2 2 处、`docs/ipc.md` §1、`docs/ui.md` §8.5、`docs/protocol.md` §16，以及 `crates/danmubox-bili/src/auth.rs` 的模块注释。
 - **文档规范化重写：约束文档只留约束，决策过程整体归档**（2026-09-19）：11 份约束文档按「只写约束开发行为的内容」重写 ——
   自指说明（定位 / 读者 / 更新时机、写作要求、文档清单与索引、与其他文档的关系）集中到 `AGENT.md` §6.5；
   决策过程叙述、修前症状与改前/改后度量**逐字搬入本文件末尾的 `[Archive]` 区**；上游未实测事实归 `protocol.md` 附录 A
@@ -8206,3 +8207,35 @@ graph TD
 | 33 | AOSP 模拟器皮肤解析源码 | https://raw.githubusercontent.com/aosp-mirror/platform_external_qemu/main/android/skin/file.c （同目录 `window.c`） | `layout` 的节点与解析（`parts` / `layouts` / `background` / `foreground` / `buttons` / `display` / `event`）；`skin_layout_event_decode` 解析 `"<TYPE>:<CODE>:<VALUE>"` 且认得 `EV_SW = 0x05`；缺省 `event` 就是 `0x05:0:1`（源码注释 close keyboard by default）；`window.c` 在窗口创建 / 重置到该 layout 时经 `generic_event(type, code, value)` 派发 |
 | 34 | Linux 内核 uapi 事件码 | https://raw.githubusercontent.com/torvalds/linux/master/include/uapi/linux/input-event-codes.h | `EV_SW = 0x05`、`SW_LID = 0x00`（set = lid shut）、`SW_TABLET_MODE = 0x01` —— 用来解释 `EV_SW:0:1` 的 code 0 即 `SW_LID` |
 
+---
+
+### 2026-09-19 第二批（随「凭据文件由程序管理」口径删除的手工编辑步骤，逐字留档）
+
+来源：`docs/auth.md` §8.4（原「手工编辑凭据文件」的 4 步）与 `docs/operations.md` §1.4（原「手工编辑凭据（排障兜底）」的 5 步）。两段都在同一次改动里被替换为「程序管理 + 损坏即重置」的口径。
+
+```text
+### 8.4 手工编辑凭据文件（没有程序入口）
+
+界面与 CLI **不提供**导入 Cookie 的入口：登录方式只保留扫码与游客（`REQUIREMENTS.md` §2.5、§2.13）。要把某份凭据换掉，只能自己编辑 `config.toml`：
+
+1. 退出应用（避免写入竞争）。
+2. 备份现有文件（自行复制一份）。
+3. 从浏览器 DevTools 的 Application → Cookies → `bilibili.com` 复制 `SESSDATA` / `bili_jct` / `DedeUserID`，填进 `active_profile` 指向的 `[profiles.<name>]` 的 `sessdata` / `bili_jct` / `dede_user_id`；其余字段可留空。
+4. 保存后重启应用：三项齐全即直接进入登录态，无需扫码（§8.2 的启动顺序会复核）。
+
+
+#### 手工编辑凭据（排障兜底）
+
+界面与 CLI **没有**粘贴 Cookie 的入口（`contract.md` §4.1；需求 §2.5、§2.13）。要换掉某份凭据只能编辑这个文件：
+
+1. 退出应用（避免写入竞争）。
+2. 备份现有文件（复制为 `config.toml.bak`）。
+3. 从浏览器 DevTools 的 Application → Cookies → `bilibili.com` 复制 `SESSDATA`、`bili_jct`、`DedeUserID`，填入 `active_profile` 指向的 `[profiles.<name>]` 的 `sessdata` / `bili_jct` / `dede_user_id`；其余字段可留空。
+4. 确认文件权限为 `0600`（见 §1.4 的权限确认表）。
+5. 重新启动应用：三项齐全即直接进入登录态，无需扫码。
+
+注意这里没有落盘前的护栏：凭据是否有效要到启动复核（或下一次 `nav` 调用）才知道，填错就是启动后仍显示未登录（`auth.md` §8.4）。
+
+登出（界面登出，对应 `account_logout`）会清空当前账号的**账号级**凭据并回到游客态：**账号条目保留**（列表里显示为未登录，可再登录回来），`buvid3` / `buvid4` 为设备标识一并保留。
+
+```

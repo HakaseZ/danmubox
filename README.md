@@ -46,7 +46,7 @@
 | AI 原生接口 | 需求置空，本期不实现；只保留「后期接入 MCP」的架构兼容能力（`core` 的端口与事件总线不得假设消费方是 UI） |
 | 词云 | 非核心功能，列入下期 |
 | 视频流解码 | 不拉流、不解码、不播放视频，只消费弹幕协议 |
-| iOS 端、Fold8 / 折叠屏适配 | 后期 enhancement，本期不纳入（折叠屏的可行性研究已完成，见 [`docs/foldable.md`](docs/foldable.md)，**未实现**） |
+| iOS 端、Fold8 / 折叠屏适配 | 后期 enhancement，本期不纳入（折叠屏的可行性研究已完成、**未实现**；研究原文见 [`CHANGELOG.md`](CHANGELOG.md) 归档区） |
 | 推送 | **不做**：后台保活已用 Android **前台服务**实现（退到后台且还有活跃房间连接时起一枚常驻通知，回到前台即停，见 [`docs/operations.md`](docs/operations.md) §2.8），但**不接 FCM、不建自建推送**，也不做开机自启、定时唤醒、账户同步这类保活手段 |
 | 应用商店发布 | 自用产物，不签名公证、不上架 |
 | 系统级悬浮弹幕层 | 只做窗口内聊天框 UI，不做桌面悬浮层 |
@@ -66,7 +66,7 @@
 | 桌面端产物 | 可出**独立可执行文件**（前端已内嵌，**不再需要 dev server**）：`cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` → `target/release/danmubox-desktop` |
 | 移动端产物 | 可出 **APK**（工具链全在仓库内，见 §8 与 [`docs/operations.md`](docs/operations.md) §5.3）：`. scripts/android-env.sh` + `cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci` → `apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`（实测 52 MB / 四个 ABI）。**已验**：装进 Android 模拟器（android-35）启动成功、冷启动 TotalTime 1013ms、进公开测试房间 `1` 连接成功、数据目录与 `prefs.json` 落在应用私有目录；**未验**：真机、扫码登录、发弹幕、收弹幕（3.5 分钟内未观测到弹幕） |
 
-实测校准的进展与仍缺样本的项，统一记在 [`docs/protocol.md`](docs/protocol.md) 附录 A；待办清单见 [`docs/roadmap.md`](docs/roadmap.md) §8。
+实测校准的进展与仍缺样本的项，统一记在 [`docs/protocol.md`](docs/protocol.md) 附录 A；待办清单见 [`docs/roadmap.md`](docs/roadmap.md) §2。
 
 ## 4. 目标平台
 
@@ -114,18 +114,6 @@ danmubox/
 | [`docs/testing.md`](docs/testing.md) | 测试金字塔、协议 fixture、回放、端口契约、三端冒烟 | 实现者 |
 | [`docs/operations.md`](docs/operations.md) | 日常操作、故障排查决策树、脱敏规则、卸载与残留清理、**三端构建与分发** | 作者 |
 | [`docs/roadmap.md`](docs/roadmap.md) | 当前阶段状态、下期 backlog（等样本 / 待拍板 / 更远期）、风险 | 作者、agent |
-| [`docs/foldable.md`](docs/foldable.md) | 折叠屏（Galaxy Z Fold8）适配的**可行性研究**：结论「需改造」、要动多少、怎么验；**未实现** | 作者、agent |
-| [`docs/requests.md`](docs/requests.md) | 需求与 issue 归档台账：对话中提出的需求 + 仓库根 `issue` 的逐条对照（状态 / 证据 / 落点） | 作者、agent |
-| [`docs/decisions/README.md`](docs/decisions/README.md) | ADR 索引与模板 | 作者、agent |
-| [`docs/decisions/0001-tauri-over-flutter.md`](docs/decisions/0001-tauri-over-flutter.md) | 选型：范围收敛到三端后 Tauri 胜出 | 作者 |
-| [`docs/decisions/0002-rust-core-shared-surfaces.md`](docs/decisions/0002-rust-core-shared-surfaces.md) | core 无 UI 依赖，端口化后由各消费面共享 | 实现者 |
-| [`docs/decisions/0003-protover3.md`](docs/decisions/0003-protover3.md) | 连接协商 `protover=3`（brotli），解码兼容 0/1/2/3 | 实现者 |
-| [`docs/decisions/0004-upstream-isolation.md`](docs/decisions/0004-upstream-isolation.md) | ac站实现全部隔离在 `danmubox-bili`，core 只留端口 | 实现者 |
-| [`docs/decisions/0005-no-local-database.md`](docs/decisions/0005-no-local-database.md) | 不建库不落盘，弹幕仅保留单次房内会话的内存缓冲 | 实现者 |
-| [`docs/decisions/0006-room-supervisor-tasks.md`](docs/decisions/0006-room-supervisor-tasks.md) | 每房间一个 supervisor task + broadcast | 实现者 |
-| [`docs/decisions/0007-credential-file.md`](docs/decisions/0007-credential-file.md) | 凭据存明文 `config.toml`（0600），不进日志 / 前端 / 仓库 | 实现者 |
-| [`docs/decisions/0008-frontend-stack.md`](docs/decisions/0008-frontend-stack.md) | React + TS + Vite + TanStack Virtual + Zustand + CSS Modules | 前端实现者 |
-| [`docs/decisions/0009-in-repo-android-toolchain.md`](docs/decisions/0009-in-repo-android-toolchain.md) | Android 工具链装进仓库内 `.android-env/`（`scripts/android-env.sh`），不用 Android Studio + 全局 SDK | 作者、agent |
 
 ## 8. 开发命令
 

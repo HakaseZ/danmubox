@@ -1,9 +1,5 @@
 # 测试方案（Testing）
 
-> 定位：定义 danmubox 的测试策略——测试金字塔各层范围、协议 fixture、会话缓冲语义、发送结果判定、本地文件、端口层契约、回放、前端与三端手工冒烟，以及明确不测的边界。
-> 读者：编写与修改代码的 AI 编码 agent、执行验收的项目所有者、以及排查回归的人。
-> 更新时机：新增协议 `cmd`、会话缓冲或发送结果语义变化、偏好键或 IPC 命令变化、冒烟清单步骤变化时必须同步修改本文。
-
 ## 1. 总体原则
 
 | 原则 | 说明 |
@@ -14,7 +10,7 @@
 | 凭证零泄漏 | 任何 fixture、快照、日志断言中都不得出现真实 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3` |
 | 确定性 | 时间、随机抖动、随机数与文件系统路径一律可注入或伪造，测试不做时序赌博 |
 
-所有取值以 `docs/contract.md` 为准；本文只描述测试方式，不重复也不改写契约常量。
+所有取值以 `docs/contract.md` 为准：测试不重复也不改写契约常量。
 
 ## 2. 测试金字塔
 
@@ -25,24 +21,38 @@ graph TD
   C --> D[单元测试：协议编解码、kind 映射、退避与节流计算、偏好合并、前端组件]
 ```
 
-| 层 | 范围 | 工具（规划） | 运行时机 |
+| 层 | 范围 | 工具 | 运行时机 |
 |---|---|---|---|
-| 单元测试 | 协议编解码、`cmd` → `kind` 映射、退避与节流计算、偏好合并、Zustand store、UI 组件 | `cargo test`；前端 `vitest` + React Testing Library | 每次改动后必跑 |
-| 集成测试 | 会话状态机与缓冲生命周期、`SendOutcome` 归一化（经假适配器）、`config.toml` / `prefs.json` 读写 | `cargo test`（Rust 集成测试目录） | 每次改动后必跑 |
+| 单元测试 | 协议编解码、`cmd` → `kind` 映射、退避与节流计算、偏好合并、Zustand store、UI 组件 | `cargo test`；前端显示层纯逻辑 `node --test`（`vitest` / RTL 未引入，见 §9） | 每次改动后必跑 |
+| 集成测试 | 会话状态机与缓冲生命周期、`SendOutcome` 归一化（经假适配器）、`config.toml` / `prefs.json` 读写 | `cargo test`（当前落位是各 `src/*.rs` 内联的 `#[cfg(test)] mod tests`） | 每次改动后必跑 |
 | 回放 / 契约测试 | 真实流量 fixture 重放、端口层契约、IPC 契约 | `cargo test` + fixture 目录 | 每次改动后必跑（不使用真实凭证） |
-| 手工冒烟 | 三端真机安装运行、登录、扫码、发弹幕、刷新、表情、举报、关注列表 | 人工按清单执行 | 每个阶段退出前，以及分发产物变更后 |
+| 手工冒烟 | 三端真机安装运行、登录、扫码、发弹幕、刷新、表情、举报、关注列表 | 人工按 §10 清单执行 | 每个阶段退出前，以及分发产物变更后 |
 
-目录约定（规划路径，本期为文档阶段不创建）：协议与适配器测试放 `crates/danmubox-bili/tests/`，二进制 fixture 放同级 `tests/fixtures/`；会话、本地文件与端口契约测试放 `crates/danmubox-core/tests/`；前端测试与被测文件同目录，命名 `*.test.ts` / `*.test.tsx`。
+目录约定：协议与适配器测试放 `crates/danmubox-bili/tests/`，二进制 fixture 放同级 `tests/fixtures/`；会话、本地文件与端口契约测试放 `crates/danmubox-core/tests/`；前端测试与被测文件同目录，命名 `*.test.ts` / `*.test.tsx`。**三个 `tests/` 目录尚未创建**（仓库里没有 `crates/*/tests/`，也没有 `apps/desktop/src-tauri/tests/`）；在建立之前，新增测试按现有同文件内联写法落位（`#[cfg(test)] mod tests`）。
 
-现状（与上段规划的差距）：上述三个测试目录与前端的 `*.test.ts` 均尚未创建，已有 Rust 测试全部是各 `src/*.rs` 内的 `#[cfg(test)] mod tests`（`crates/danmubox-core/src/` 六个文件、`crates/danmubox-bili/src/` 十五个文件、`apps/desktop/src-tauri/src/lib.rs`）；已落地的端到端验证在 `apps/desktop/ui/smoke/`（`run-headless.mjs` + `room-page.mjs` + `scenario/**` 的页内片段 + `fixtures/`；目录结构与「原块 → 文件」映射见 §9.1，引擎门槛见 `AGENT.md` §9）。新增测试先按规划落位，在规划目录建立前按现有同文件内联写法。
+现有测试文件（实际落位）：
+
+| 位置 | 文件 |
+|---|---|
+| `crates/danmubox-core/src/`（10 个 `.rs` 中的 7 个） | `bus.rs`、`config.rs`、`diagnose.rs`、`model.rs`、`paths.rs`、`prefs.rs`、`session.rs` |
+| `crates/danmubox-bili/src/`（18 个 `.rs` 中的 17 个） | `admin.rs`、`asset.rs`、`auth.rs`、`cmd.rs`、`diagnose.rs`、`emote.rs`、`follow.rs`、`history.rs`、`http.rs`、`pb.rs`、`proto.rs`、`redact.rs`、`report.rs`、`send.rs`、`wallet.rs`、`wbi.rs`、`ws.rs` |
+| `apps/desktop/src-tauri/src/`（3 个 `.rs` 中的 2 个） | `lib.rs`、`diagnose.rs` |
+| `apps/desktop/ui/src/` | `filtering.test.ts`、`session-messages.test.ts` |
+| `apps/desktop/ui/smoke/` | `run-headless.mjs`、`room-page.mjs`、`wkwebview-host.swift`、`scenario/fixtures.mjs`、`scenario/parts/*.mjs`（20 份：`00-mock` / `10-harness` / `20…36` / `90-epilogue`）、`fixtures/*.json`（10 份） |
+
+无测试的文件：`crates/danmubox-core/src/{lib,ports,error}.rs`、`crates/danmubox-bili/src/lib.rs`、`crates/danmubox-cli/src/main.rs`、`apps/desktop/src-tauri/src/main.rs`。端到端验证落在 `apps/desktop/ui/smoke/`（目录结构与夹具出处见 §9.1，引擎门槛见 `AGENT.md` §9）。
 
 ## 3. 协议层测试（`danmubox-bili`）
+
+现有落位：`crates/danmubox-bili/src/proto.rs`（12 条）、`cmd.rs`（38 条）、`ws.rs`（21 条）等文件的 `mod tests`。§3.2 的编号是清单契约，与现有用例不是一一对应；§3.3 的映射断言主要在 `cmd.rs`。
+
+现有夹具位置：Rust 用例直接用 `include_str!` 读**无头冒烟那份** `apps/desktop/ui/smoke/fixtures/`，没有 crate 内的 `tests/fixtures/` —— `crates/danmubox-bili/src/http.rs:892-895`（`room-play-info.json` / `room-h5-info.json`）、`follow.rs:547-557`（`follow-getweblist-raw.json` / `follow-followings-raw.json` / `follow-status-raw.json`）。`cmd.rs:1096-1100` 只在注释里提到 `danmaku-rows.json` 的同款载荷，该用例的样本是代码内构造的。夹具是两侧共用的唯一来源，改夹具会同时影响 `cargo test` 与冒烟。
 
 ### 3.1 包结构断言基础
 
 所有协议用例都基于同一套字节构造器：给「头字段 + body 字节」产出完整包，再交给解包器。断言对象是解包产出的事件序列与错误计数，而不是内部缓冲区状态。
 
-包头字段布局、`protover`（载荷编码版本）与 `op`（包类型）的取值口径以 `docs/protocol.md` 为准，本文不重复；用例只按该口径构造字节并断言产出。
+包头字段布局、`protover`（载荷编码版本）与 `op`（包类型）的取值口径以 `docs/protocol.md` 为准，测试不重复；用例只按该口径构造字节并断言产出。
 
 ### 3.2 必须构造的 fixture 清单
 
@@ -63,7 +73,7 @@ graph TD
 | P-13 | 认证包（登录态） | `op=7`，body JSON 含 `uid`、`roomid`、`protover`、`buvid`、`platform="web"`、`type=2`、`key` | 序列化后的字段名与取值与契约 §6 的认证包定义逐项相符 |
 | P-14 | 认证包（游客态） | 同 P-13，但 `uid=0`、`key` 为空字符串 | 字段存在且取值为空，不省略 `key` |
 | P-15 | 认证回应成功 | `op=8`，body `{"code":0}` | 会话状态机进入已认证，开始计时心跳 |
-| P-16 | 认证回应失败 | `op=8`，`code` 为非 0 值（取值来自实测样本） | 判定为认证失败，走重连退避；只记录原值，不为未知 code 赋予具体含义 |
+| P-16 | 认证回应失败 | `op=8`，`code` 为非 0 值（非 0 取值集合待实测，见 `protocol.md` 附录 A15） | 判定为认证失败，走重连退避；只记录原值，不为未知 code 赋予具体含义 |
 | P-17 | 人气值包 | `op=3` | 更新房间热度类状态；不产生消息 |
 | P-18 | 未知 `cmd` | `op=5`，JSON 中 `cmd` 不在契约 §5 映射表内 | 计入 unknown 计数并继续；不 panic、不产生错误级日志风暴 |
 | P-19 | 空 body 包 | `packetLen=16`，无 body | 按无操作处理；不 panic |
@@ -109,16 +119,18 @@ graph TD
 
 ## 5. `SendOutcome` 判定测试（`danmubox-bili` + `danmubox-core` 归一化）
 
-用假上游响应驱动发送链路（不连真实网络），逐态断言归一化结果。契约 §5 的判定规则如下；其中 `rate_limited` / `medal_required` / `muted` 对应的上游 `code` 来自实测样本，测试以 fixture 承载，不得硬编码臆测值。
+现有落位：`crates/danmubox-bili/src/send.rs` 的 `mod tests`（15 条）—— O-01（`success_is_ok` / `zero_code_without_marker_is_ok`）、O-02（`platform_swallow_maps_to_blocked_platform`）、O-03（`room_swallow_maps_to_blocked_room`）、O-07（`unknown_error_codes_are_failed_without_invented_meaning`）、O-08（`swallowed_content_is_read_from_the_extra_json_string` / `swallowed_content_is_none_when_absent_or_broken`）、O-09（`swallow_marker_wins_over_nonzero_code`）、O-10（`throttle_enforces_min_interval`）、O-11（`throttle_deduplicates_identical_content_within_window`），另有 `blocked_attempt_does_not_refresh_the_window`。O-04…O-06、O-12 尚无对应用例。
+
+用假上游响应驱动发送链路（不连真实网络），逐态断言归一化结果。判定规则的实现是 `crates/danmubox-bili/src/send.rs::outcome_from_response`（`send.rs:36-53`）：**被吞标记优先于 `code`**，`msg` / `message` 为 `"f"` / `"k"` 分别落 `blocked_platform` / `blocked_room`，`code == 0` 落 `ok`，其余一律 `failed` 并原样带回 `code` 与 `msg`。当前实现只产出这四个取值；`rate_limited` / `medal_required` / `muted` 在枚举里保留（`crates/danmubox-core/src/model.rs:209-217`）但**上游对应 `code` 未实测**（`protocol.md` 附录 A17），O-04…O-06 的样本到位前不得硬编码臆测值。本地节流常量：`MIN_INTERVAL` 2 秒、`DEDUP_WINDOW` 5 秒（`send.rs:20-22`）。
 
 | 编号 | 用例 | 做法 | 期望 |
 |---|---|---|---|
-| O-01 | 成功 | 上游返回成功 | `ok` |
+| O-01 | 成功 | 上游返回 `code=0` | `ok` |
 | O-02 | 被平台吞 | 上游响应 `msg` 或 `message` 为 `"f"` | `blocked_platform` |
 | O-03 | 被直播间吞 | 上游响应 `msg` 或 `message` 为 `"k"` | `blocked_room` |
-| O-04 | 频率限制 | 上游返回对应错误码（实测样本） | `rate_limited` |
-| O-05 | 粉丝牌等级不足 | 上游返回对应错误码（实测样本） | `medal_required` |
-| O-06 | 已被禁言 | 上游返回对应错误码（实测样本） | `muted` |
+| O-04 | 频率限制 | 上游返回对应错误码（取值待实测，见 `protocol.md` 附录 A17） | `rate_limited` |
+| O-05 | 粉丝牌等级不足 | 上游返回对应错误码（取值待实测，见 `protocol.md` 附录 A17） | `medal_required` |
+| O-06 | 已被禁言 | 上游返回对应错误码（取值待实测，见 `protocol.md` 附录 A17） | `muted` |
 | O-07 | 其他失败 | 上游返回未归类的错误 | `failed`，且必须携带原始 `code` 与 `message` |
 | O-08 | 被吞回显提取 | 被吞响应的 `data.mode_info.extra` 为 JSON 字符串 | 从其中的 `content` 取出回显文本；`extra` 缺失或非 JSON 时不 panic |
 | O-09 | 判定优先级 | 响应同时含 `"f"` / `"k"` 与一个一般错误码 | `blocked_platform` / `blocked_room` 优先于一般错误归类 |
@@ -127,6 +139,8 @@ graph TD
 | O-12 | 未登录发送 | 无 `bili_jct` 时调用 `chat_send` | 返回明确失败，不发起上游请求 |
 
 ## 6. 本地文件测试（`danmubox-core`）
+
+现有落位：`crates/danmubox-core/src/config.rs` 的 `mod tests`（14 条）与 `prefs.rs` 的 `mod tests`（16 条）；表中条目与现有用例不是一一对应（如 F-03 原子替换目前没有对应用例），逐条按表内「期望」列落位。
 
 ### 6.1 凭据文件 `config.toml`
 
@@ -151,6 +165,8 @@ graph TD
 
 ## 7. 端口层与适配器契约测试（`danmubox-core`）
 
+现有落位：`crates/danmubox-core/src/session.rs` 的 `mod tests` 里有三个只实现 `LiveSource` 的替身（`FakeSource` / `DroppingSource` / `CountingSource`，`session.rs:866`、`:1137`、`:1233`），C-01 / C-03 的口径已落在它们上；C-02 的依赖边界目前靠 `AGENT.md` §9 的 DoD 条目把关（依赖检查），没有自动化用例。
+
 目标是证明 `core` 只依赖端口（trait），换掉 ac站适配器不影响核心；全部用例使用假适配器，不触及任何上游实现。
 
 | 编号 | 用例 | 做法 | 期望 |
@@ -158,10 +174,12 @@ graph TD
 | C-01 | 假适配器跑通 core | 用只实现端口 trait 的假 `LiveSource` 投递事件 | 会话编排、缓冲、事件总线可完整运行，不引用任何 ac站字段 |
 | C-02 | core 不依赖具体上游 | 依赖检查 | `core` 不依赖 `bili`、不依赖 `tauri`，且不含 ac站 URL / 字段下标 / 签名 / protobuf 定义 |
 | C-03 | 事件总线不假设消费方是 UI | 以一个非 UI 的测试订阅者消费事件 | 事件契约与 UI 无关；测试订阅者可独立接收同一事件流 |
-| C-04 | 端口方法覆盖 | 逐个端口 | `AuthProvider` / `LiveSource` / `DanmakuSender` / `DanmakuReporter` / `EmoteProvider` / `RoomCatalog` / `WalletProvider` 均有最小契约用例与失败路径 |
+| C-04 | 端口方法覆盖 | 逐个端口 | `AuthProvider` / `LiveSource` / `DanmakuSender` / `DanmakuReporter` / `EmoteProvider` / `RoomAdmin` / `RoomCatalog` / `WalletProvider` 均有最小契约用例与失败路径（八个 trait 的定义见 `crates/danmubox-core/src/ports.rs:87`、`:124`、`:213`、`:229`、`:238`、`:257`、`:288`、`:294`） |
 | C-05 | 换适配器不改 core | 用另一个假适配器实现替换 | `core` 的编排与测试无需改动即通过 |
 
 ## 8. 回放测试（录制真实流量）
+
+现状：录制与重放链路**尚未实现** —— `crates/danmubox-cli` 没有录制开关，仓库里也没有 `fixtures/replay/` 目录。实现前不得按下面声明的产物写断言。
 
 ### 8.1 录制方法
 
@@ -178,7 +196,7 @@ graph TD
 
 | 字段 | 说明 |
 |---|---|
-| 文件头 | `mode` 取值为 `guest` 或 `logged-in`（录制时的登录模式）、`recorded_at=YYYY-MM-DD`、`encoding=brotli`（请求协商的载荷版本为 3） |
+| 文件头 | `mode` 取值为 `guest` 或 `logged-in`（录制时的登录模式）、`recorded_at=YYYY-MM-DD`、`encoding=brotli`（请求协商的载荷版本为 3；认证包在 body 里声明 `protover=3`，见 `crates/danmubox-bili/src/ws.rs:409-413`） |
 | 每行 | `offset_ms` + 制表符 + `base64(原始包字节)`，`offset_ms` 为相对录制起点的毫秒偏移 |
 | 命名 | 形如 `fixtures/replay/room-20260911-01.txt`，不出现真实房间号以外的个人信息 |
 
@@ -204,14 +222,21 @@ graph TD
 
 前端测试用 `vitest` 加 jsdom 环境，mock `@tauri-apps/api` 的 `invoke` 与 `listen`；事件名断言覆盖契约 §7 的 `danmubox://message` / `danmubox://room` / `danmubox://session` / `danmubox://status` / `danmubox://send` / `danmubox://room_stats` / `danmubox://log`。
 
-**现状**：仓库里**还没有** vitest（`apps/desktop/ui/package.json` 的 devDependencies 里没有它），上表 F-01…F-11 里依赖 jsdom / RTL 的那几档仍是规划。已经落地的第一份前端单测是 **`apps/desktop/ui/src/filtering.test.ts`**（显示层纯逻辑：过滤 / 折叠 / 自动消失那一族），用 **Node 自带的 `node --test` + 类型擦除**直接跑，不需要任何新依赖：
+**现状**：仓库里**还没有** vitest（`apps/desktop/ui/package.json` 的 devDependencies 里没有它），F-01…F-11 里依赖 jsdom / RTL 的那几档仍是规划。已落地的前端单测是显示层纯逻辑的两份，用 **Node 自带的 `node --test` + 类型擦除**直接跑，不需要任何新依赖：
+
+| 文件 | 被测模块 | 覆盖 |
+|---|---|---|
+| `apps/desktop/ui/src/filtering.test.ts` | `filtering.ts` | 过滤 / 折叠 / 自动消失那一族（低价礼物两枚开关对两个区域都生效、四种机制都可逆且不丢内容） |
+| `apps/desktop/ui/src/session-messages.test.ts` | `session-messages.ts` | 会话换代后的消息列表规则（同一条只入列一次、`history_query` 快照落地、会话重建后新消息不再被 `local_id` 判丢） |
 
 ```bash
-cd apps/desktop/ui && node --test src/filtering.test.ts
+cd apps/desktop/ui
+node --test src/filtering.test.ts
+node --test src/session-messages.test.ts
 node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑某几条
 ```
 
-两条写法要求（Node 的类型擦除限制，踩过就懂）：① 相对导入要**带 `.ts` 后缀**（`./filtering.ts`）——Node 不解析无后缀的 ESM 说明符；`tsconfig.app.json` 已开 `allowImportingTsExtensions`，tsc 与 vite 都照这个后缀解析。② 测试文件要在文件头写 `/// <reference types="node" />`：`tsconfig.app.json` 的 `types` 只有 `vite/client`（应用代码不该看见 Node 全局），三斜线引用只影响这一个编译单元。**新增的显示层纯逻辑测试按这个形态落**（名字仍是 `*.test.ts`，与被测文件同目录），等将来真引入 vitest 时再迁移。
+两条写法要求（Node 的类型擦除限制）：① 相对导入要**带 `.ts` 后缀**（`./filtering.ts`）——Node 不解析无后缀的 ESM 说明符；`tsconfig.app.json` 已开 `allowImportingTsExtensions`，tsc 与 vite 都照这个后缀解析。② 测试文件要在文件头写 `/// <reference types="node" />`：`tsconfig.app.json` 的 `types` 只有 `vite/client`（应用代码不该看见 Node 全局），三斜线引用只影响这一个编译单元。**新增的显示层纯逻辑测试按这个形态落**（名字仍是 `*.test.ts`，与被测文件同目录），等将来真引入 vitest 时再迁移。
 
 | 编号 | 用例 | 做法 | 期望 |
 |---|---|---|---|
@@ -232,13 +257,28 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 
 ### 9.1 房间页无头冒烟的目录结构与夹具出处（`apps/desktop/ui/smoke/`）
 
-无头冒烟（入口 `smoke/run-headless.mjs`，跑法见 [`ui.md`](ui.md) §15）用的夹具分两类，
-**每一份都必须在文件头的 `_note` / `sources` 里写明自己是哪一类**——夹具是「能失败」的前提，
-出处不明的夹具等于把真实故障藏起来（`AGENT.md` §8 第 7 条）。
+跑法（在 `apps/desktop/ui` 下）：
 
-**场景的目录结构（2026-09-17 拆分）**：此前整个场景是 `smoke/room-page.mjs` 里的**一个模板字符串**
-（文件 7293 行，是全仓最大的单个文件；页内 979 项读数 = 一次宽屏快照的项数）。现在拆成
-「按主题的多个片段 + 一个薄组装器」：
+```bash
+npm run build
+node smoke/run-headless.mjs                    # Chromium（默认）：Chrome for Testing 走 CDP
+node smoke/run-headless.mjs --engine webkit    # WebKit（宿主引擎）：Playwright，同一份场景 / 同一套断言
+node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（先 npm run build）
+```
+
+冒烟页 = 真实的 `dist` 产物 + 注入的 `__TAURI_INTERNALS__` 替身（假 IPC、假样本），跑完整房间页并断言几何与副作用。
+
+**验证矩阵 = 2 引擎 × 2 视口 × 2 主题**（同一份场景代码、同一套断言）：
+
+| 维 | 取值 | 口径 |
+|---|---|---|
+| 引擎 | Chromium（默认）/ WebKit（`--engine webkit`） | 应用跑在 macOS 的 WKWebView 里，**Chromium 的绿只证明「在 Chromium 里成立」**，宿主引擎不得缺席（`@property` 注册自定义属性、网格 `minmax()`、`em` 求值时机两边确有差异）；跑 WebKit 需一次性 `npm i -D playwright && npx playwright install webkit` |
+| 视口 | 1440×900（宽屏）/ 360×844（窄屏） | 360 是窗口能达到的最小宽度，即可达面边界值；用 `Emulation.setDeviceMetricsOverride` 改设备指标，窄屏**不是**另写一套脚本 |
+| 主题 | `SMOKE_THEMES`（默认 `dark,light`） | 写进 mock 的 `ui.theme` 并传进 `buildSmokeHtml(theme)`，深浅各跑一遍；`SMOKE_THEMES=dark` 只供单档调试，验收矩阵要求两档都跑 |
+
+夹具分两类，**每一份都必须在文件头的 `_note` / `sources` 里写明自己是哪一类**——夹具是「能失败」的前提，出处不明的夹具等于把真实故障藏起来（`AGENT.md` §8 第 7 条）。
+
+场景 = 一个薄组装器 + 按主题切的多个片段：
 
 | 文件 | 作用 |
 |---|---|
@@ -246,15 +286,14 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | `smoke/scenario/fixtures.mjs` | Node 侧：夹具 → 页内数据（**唯一**读 `smoke/fixtures/*.json` 的地方），序列化成页内的 `__SMOKE_DATA` |
 | `smoke/scenario/parts/00-mock.mjs` | 页内 IPC 替身（`__TAURI_INTERNALS__`）与测试钩子（`__emit` / `__mk` / `__addRoom*` …） |
 | `smoke/scenario/parts/10-harness.mjs` | 页内共享工具（`out` / `snap` / `byTestId` / `sleep` / `pressKey` …） |
-| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（下表），**按文件名升序**依次执行 |
+| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（`20…36`，共 17 份），**按文件名升序**依次执行 |
 | `smoke/scenario/parts/90-epilogue.mjs` | 页内收尾（把 `run` 命令接上 `window.__smoke_run`） |
 
-各 part 是**页内脚本的原文**（不是模板字符串里的字符串）：组装器 `readFileSync` 读出后原样拼接，所以
-片段里写反引号 / 反斜杠 / `${` 都与浏览器里一致 —— **不要**把它们塞回模板字符串（§9.3 的两个坑正是从那来的）。
+各 part 是**页内脚本的原文**（不是模板字符串里的字符串）：组装器 `readFileSync` 读出后原样拼接，所以片段里写反引号 / 反斜杠 / `${` 都与浏览器里一致 —— **不要**把它们塞回模板字符串。
 
-原块 → 新文件（主题边界照现场的块切；左列是拆分前的块名；`out.*` 前缀与快照字段名一字未动）：
+场景块 → 覆盖主题（右列的块名即快照字段前缀；`out.*` 前缀与快照字段名一字未动）：
 
-| 新文件 | 原块 |
+| part 文件 | 覆盖主题（块名 / 快照前缀） |
 |---|---|
 | `20-room-list.mjs` | `step1` / `follow` / `theme` / 主页边距 / 未开播取样 / 关注项排布与分页 |
 | `21-room-header.mjs` | `step2` / `step3` / 房间头 / 状态点三态 / 图标规范 / 标题循环滚动 / 电池 / `layout` 的贴底与头像列 |
@@ -280,6 +319,12 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | `emotes.json` / `follow-*-raw.json` / `follow-list.json` / `room-play-info.json` / `room-h5-info.json` | **由真实响应派生**：只读抓取的上游响应固化（脱敏口径见各文件 `_note`） | 表情分组与尺寸、关注列表（在播 / 未开播）、房间名与标题 |
 | `gift-sc-guard-rows.json` | **按协议文档字段表构造**（`docs/protocol.md` §10.2 / §10.3 / §10.6），**不是**真实抓包派生——`AGENT.md` §8 第 16 条禁止为测试发送礼物 / 醒目留言 / 大航海，这类事件在本项目里拿不到授权样本 | 礼物 / SC / 大航海的**头像渲染**、独立礼物栏的**一条一行 + 金额（各组带单位）**、两枚显示开关的**四种组合**、SC **卡片**（档位令牌、金额行加粗）、礼物栏与弹幕区**同一套呈现**（行几何 / 底色逐项相等、SC 长留言不截断、跟随与「回到最新」同源）。其中 `superchat-low` 的正文**刻意写长**（40 个汉字）：360 宽下它必然折成两行，因此在旧礼物栏的单行布局里会被截断 —— 这条样本是「SC 显示不全」的复现件 |
 
+夹具细则（写死在夹具与解析器里，改之前先读）：
+
+1. `smoke/fixtures/danmaku-rows.json` 是**完整原始 `DANMU_MSG` 载荷**（正文弹幕 / 表情包弹幕 / 无空格长 ASCII 串），脱敏只做三件事：昵称 / 牌名 / 主播名 → **等长掩码**（CJK 与全角 → `＊`、ASCII → `x`）、`uid` / 哈希 → `<redacted>`、CDN 只脱敏哈希段；`emoticon_unique` 的房间号段 → `room_<redacted>_<id>`（**房间号不入库**）。
+2. 冒烟侧 `messageFromDanmakuPayload()`（`smoke/scenario/fixtures.mjs:236`）照搬 `crates/danmubox-bili/src/cmd.rs::danmaku` 的取值路径派生成 `Message`（**不得另写一套解析**），只把图换成本地内联替身（固有尺寸与真图一致）；`local_id` 借 `__mk` 分配（`smoke/scenario/parts/00-mock.mjs:187`；store 只接受比末尾更大的 `local_id`，契约 §5）。
+3. 关注列表夹具由真实响应派生：`follow-getweblist-raw.json`（直播侧只给在播）/ `follow-followings-raw.json`（主站关注关系）/ `follow-status-raw.json`（批量房间接口，含未开播）→ `follow-list.json`（70 条，`fixtures.mjs:203-205`），mock 里另加 **3 条自造条目**（在播 / 有标题 / 无标题各一，`parts/00-mock.mjs:122-126`）；脱敏口径与断言见 `protocol.md` A28。
+
 构造类夹具的约束（写死在文件里，改夹具前先读）：
 
 1. **只借字段名与语义，数值是布局用的假值**：昵称是自造假名、uid 是自造固定值、头像只写脱敏后的
@@ -290,20 +335,36 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 3. **解析不在冒烟这一层**：`SEND_GIFT_V2` 的载荷是 protobuf，冒烟不解 `data.pb`（那是 Rust 侧的
    `cargo test`）；冒烟注入的是归一化后的 `Message`，验的是「字段到手之后画得对不对」。
 
-### 9.2 冒烟与证据的四条常驻规矩（用户 2026-09-16 定）
+**宿主引擎的旁证链路（系统 WKWebView 本尊）**：Playwright 的 WebKit 只是 WebKit 的一个构建，因此另有一条零构建差异的链路，跑同一个冒烟页、同一份快照：
+
+```bash
+cd apps/desktop/ui
+npm run build && node smoke/room-page.mjs            # 生成冒烟页（默认 /tmp/danmubox-ui-smoke.html）
+swift smoke/wkwebview-host.swift /tmp/danmubox-ui-smoke.html "$TMPDIR/wk-host" 1440 900 wide
+swift smoke/wkwebview-host.swift /tmp/danmubox-ui-smoke.html "$TMPDIR/wk-host" 360 844 narrow
+node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
+```
+
+它是**旁证、不是主闸门**：没有显示会话时 rAF 不持续产帧（实测 2.2s 只触发 1 次），所以「跟随最新 / 虚拟列表窗口」这类按帧推进的断言会假失败——工具会把这条局限打在 stderr 上，别读成产品问题；**几何 / 尺寸 / 溢出 / 颜色**那一类成立，这正是它的价值（`--avatar` 那起事故就是靠它钉死的）。每次只跑一个视口；完整断言一律以 `run-headless.mjs --engine webkit` 为准。
+
+### 9.2 冒烟与证据的常驻规矩
 
 | 规矩 | 内容 | 落点 |
 |---|---|---|
-| ① **子 agent 不跑冒烟** | 全量无头冒烟由**主流程**在集成收尾时统一跑一次；子 agent 只跑**不启浏览器**的秒级闸（`npx tsc -b` / `npm run build` / `node smoke/run-headless.mjs --precheck` —— 预检里面已逐份做过 `node --check`，见 §9.1）与自己改动相关的机制级验证，并在交付里**明写「冒烟未跑」** | `AGENT.md` §9 DoD 的前两条；`docs/ui.md` §15 运行纪律第 2 条 |
-| ② **冒烟不再串行** | 每个 agent 各起**独立**无头浏览器、并行跑，不抢锁（旧的「同一台机上必须串行」**作废**） | `docs/ui.md` §15 运行纪律第 1 条 |
-| ③ **产物来源标记** | 被当作证据的产物必须能自证「属于本次运行」——见下表 | `docs/ui.md` §15 运行纪律第 3 条 |
-| ④ **每 worktree 本地 `target`** | `CARGO_TARGET_DIR=$PWD/target`，**不得共享**（共享会让不同 worktree 的构建产物互相覆盖 → 假绿 / 假红） | `AGENT.md` §3 / §9；`docs/ui.md` §15 运行纪律第 7 条 |
+| ① **子 agent 不跑冒烟** | 全量无头冒烟由**主流程**在集成收尾时统一跑一次；子 agent 只跑**不启浏览器**的秒级闸（`npx tsc -b` / `npm run build` / `node smoke/run-headless.mjs --precheck` —— 预检里面已逐份做过 `node --check`，见 §9.1）与自己改动相关的机制级验证，并在交付里**明写「冒烟未跑」** | `AGENT.md` §9 DoD |
+| ② **冒烟并行跑** | 每个 agent 各起**独立**无头浏览器、并行跑，不抢锁（旧的「同一台机上必须串行」**作废**）；并发压内存导致 WebKit `Target crashed` 可重试但上限 **1 次**，且必须**重跑整个场景**，两次都崩才报失败 | `AGENT.md` §9 |
+| ③ **产物来源标记** | 被当作证据的产物必须能自证「属于本次运行」 | `AGENT.md` §9 |
+| ④ **每 worktree 本地 `target`** | `CARGO_TARGET_DIR=$PWD/target`，**不得共享**（共享会让不同 worktree 的构建产物互相覆盖 → 假绿 / 假红） | `AGENT.md` §3 / §9 |
+| ⑤ **运行器自保** | 每一步（CDP 调用 / 连调试端口 / 导航 / 起浏览器）都有超时；退出（正常、断言失败、`SIGINT` / `SIGTERM` / `SIGHUP`）必收自己起的进程组，启动前清掉上次的孤儿（只杀自己标记的 `ppid==1` 遗留物）。浏览器候选依次自检：`CHROME_BIN` → omp 自带的 Chrome for Testing → 系统 Chrome，起一台先拍一张 `about:blank` 验它真会产帧。截图是证据不是断言，产不出帧时告警并跳过 | `apps/desktop/ui/smoke/run-headless.mjs` |
+| ⑥ **夹具要能失败** | 夹具从**真实载荷**派生（`smoke/fixtures/*.json`），**禁止手写 JSON**（`AGENT.md` §8 第 7 条）；样本尺寸必须与真图一致：头像用原图 **512×512**，表情用真实固有尺寸。构造类夹具的例外与约束见 §9.1 | `AGENT.md` §8 第 7 条 |
+| ⑦ **改 Rust 的票必须真启动一次** | 真启动应用、确认存活 **≥ 10 秒**无 panic —— `cargo test` 与前端冒烟都挡不住「启动即崩」（`target` 口径见 ④；前端产物必须用 `tauri build` 产出，别用裸 `cargo build --release`） | `AGENT.md` §9 |
+| ⑧ **改过冒烟场景就跑一次预检** | 在 `apps/desktop/ui` 下 `npm run build && node smoke/run-headless.mjs --precheck`（**不起浏览器**）：① 组装器 `room-page.mjs` 与**每一份**场景片段各 `node --check` 一次（片段是页内函数体的原文，查语法时包一层 async 函数）；② 每个主题各构造一次 HTML；③ 把拼出来的**内联脚本**（mock + 全部场景块）再编译一次，抓「拼起来才不合法」的错（片段被从中间切开、字符串没闭合），失败时带**源文件行号**（`组装结果第 N 行 = 某片段第 M 行`）直接退出。**只跑 `node --check smoke/room-page.mjs` 不算过** —— 组装器本身很短，场景在 `scenario/parts/**` 里 | `apps/desktop/ui/smoke/run-headless.mjs` |
 
 ③ 的执行口径（本仓库的产物命名与落点）：
 
 | 类型 | 命名 / 路径 | 说明 |
 |---|---|---|
-| 前端冒烟截图 | `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，文件 `danmubox-ui[-narrow]-<theme>-<场景>.png` | **主题后缀必须有**；同目录被两次运行共用时深浅两遍会互相覆盖（`ui.md` §15「产物」行） |
+| 前端冒烟截图 | `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，文件 `danmubox-ui[-narrow]-<theme>-<场景>.png` | **主题后缀必须有**：同目录被两次运行共用时深浅两遍会互相覆盖。默认写 `$TMPDIR`；场景名：`-follow` / `-rooms` / `-short-content` / `-room` / `-admin` / `-admin-confirm` / `-account-area` / `-account` / `-account-qr` / `-toast` / `-optimistic` / `-final` |
 | 前端冒烟日志 | `.android-env/verify/<票名>-<engine>.log` | 已用实例：`splitter-chromium.log` / `splitter-webkit.log`、`tabstrip-webkit-light.log`、`filtergrid-chromium.log` |
 | Android 探针 | `.android-env/verify/<票名>-*.png` / `*.txt` / `*.log` | 已用实例：保活 `ka-*`、返回手势 `back-*`、脱敏对照 `redact-*.log`（出处 `operations.md` §5.3） |
 | Rust 新增用例自证 | `cargo test -- --list \| grep <新用例名>` | 证明用例真的会被跑到（而不是被 `cfg` 掉或写错名字） |
@@ -311,23 +372,36 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 
 > `.android-env/` 整体**未跟踪**，且 `scripts/android-env.sh clean` 会连它一起删 —— 需要长期留存的证据先拷出去（`operations.md` §5.12）。
 
+**判据：视口与渲染引擎都是产品的可达面**，不是测试的自由参数。新增「只在某些视口 / 引擎成立」的行为，必须先确认用户能到达它（窗口最小尺寸、断点、入口）；够不到就在报告里明说「该形态仅在某些视口成立、当前入口够不到」，不许当成已验证。两个反例（2026-09-12）：① 窄屏形态在无头视口里全绿，而窗口 `minWidth: 720` 让用户永远够不到它（现钉 360px，`ui.md` §9.1）；② 弹幕行把 `--avatar` 挪进 `.row` 后，行外共用的 `Avatar` 组件按原图 512 渲染，而样本把头像写成空串 / 32×32 小图，于是两个引擎都是绿的（**先怀疑引擎，但要用证据落地** —— 第二个反例的根因与引擎无关）。
+
 ### 9.3 新增断言块的写法（工程约定）
 
-改冒烟场景时（`smoke/scenario/parts/**` 里任一主题块）,新增或改动的断言块必须满足三条 —— 它们是**准入条件**,不是风格偏好:
+改冒烟场景时（`smoke/scenario/parts/**` 里任一主题块），新增或改动的断言块必须满足三条 —— 它们是**准入条件**，不是风格偏好：
 
 | 条 | 要求 | 为什么 |
 |---|---|---|
-| ① **自包 `try/catch` + `xxxBlockRan`** | 块内任何一步(取元素、点击、读快照)抛异常都**只作废本块**,不许终止整场场景。报告里某块 `...BlockRan=false` 时,该块的读数一律按**未验证**记账、不许当通过 | 2026-09-21 实测教训:批次 `2609162141` 的 `roomStatus*` 块第一行 `byTestId("db-account").click()` 在**房间页**必抛(`db-account` 只在列表页渲染),那段没有 `try/catch` ⇒ 整场场景当场死掉、两引擎全红,排查花了数轮 |
-| ② **准入前提自己保证** | 不许假定上一块留下的页面/主题/房间状态:需要列表页就先进列表页、需要某房间就先进那个房间、需要某主题就在块内确认 | 同款事故的另一种形态:断言**前提**过期(找不到元素)会让整块恒假,读起来像实现坏了 |
-| ③ **读数能自证归属本次运行** | 块名/断言名与产物落点按 §9.2 ③ 的命名口径,带批次或票号可追溯 | 见 §9.2 ③ |
+| ① **自包 `try/catch` + `xxxBlockRan`** | 块内任何一步（取元素、点击、读快照）抛异常都**只作废本块**，不许终止整场场景；`catch` 也必须走到 `snap()`。报告里某块 `...BlockRan=false` 时，该块的读数一律按**未验证**记账、不许当通过 | 一个块的前提不成立（如 `byTestId("db-account")` 只在列表页渲染、房间页必抛）不该带走整场场景与其它块的读数 |
+| ② **准入前提自己保证** | 不许假定上一块留下的页面 / 主题 / 房间状态：需要列表页就先进列表页、需要某房间就先进那个房间、需要某主题就在块内确认 | 断言**前提**过期（找不到元素）会让整块恒假，读起来像实现坏了 |
+| ③ **读数能自证归属本次运行** | 块名 / 断言名与产物落点按 §9.2 ③ 的命名口径，带批次或票号可追溯 | 见 §9.2 ③ |
 
-> 反例(本项目实测过的两种):把「点了没反应」写成块级 `throw`(整场带走);把「前提是 A 页」写成隐式假定(块恒假)。两种都会让一份**完全正确**的实现显示成红。
+> 两种会让**完全正确**的实现显示成红的写法：把「点了没反应」写成块级 `throw`（整场带走）；把「前提是 A 页」写成隐式假定（块恒假）。
 
-> **两个实测坑（2026-09-17，同一天各有票踩到）**：① 场景块**自己把状态摆正**再量（要列表页就先进列表页、要某个房间就先进那个房间、要滚到底就先滚），别依赖上一块的收尾 —— 上一块换写法时，你这段会**静默恒假**；② 当日另有三个票被「整场塞进模板串」咬到（注释里的**反引号**让模板串提前收尾）—— 这一条已随 2026-09-17 的拆分消失：场景块现在是 `smoke/scenario/parts/**` 里的**页内脚本原文**，由 `smoke/room-page.mjs` 原样拼接，反引号 / 反斜杠 / `${` 都照原样进页面（文件头的注释也终于能正常写反引号了）。
+**页内断言契约**（写进场景块时按这张表）：
+
+| 项 | 规则 |
+|---|---|
+| 断言口径 | 只依赖**对外可观察**的行为：DOM 文本、`getBoundingClientRect` 几何、`Range.getClientRects()` 行盒、`getComputedStyle` 定位 / 滚动、IPC 调用记录。定位一律走 `data-testid`（`ui.md` §2.3 的稳定钩子），**不依赖 CSS 类名** |
+| 快照即契约 | 快照字段名（`step*` 与 `layout*` / `row*` / `panel*` / `fixture*` / `follow*` / `send*` / `live*` / `emote*` / `admin*` / `narrow*` / `wide*` 等前缀）是断言契约，改名等于改断言。视口专属断言按 `narrow_*` / `wide_*` 命名：同一份场景两个视口都跑，**断言集合相同、没有例外名单**（面板在窄屏同样是文档流里的一块，所以 `layoutOnlyChatShrank` 与 `layoutNewestNotCovered` 在两边都必须为真） |
+| 几何记账 | 行盒 / 身份行 / 正文行 / 折行行盒 / 表情图渲染盒与原图尺寸 / 横向溢出量逐项入快照（`fixtureTextRow` / `fixtureEmoteRow` / `fixtureAsciiRow` / `rowScale` / `layoutPanelScrollStablePx` 等）。判据是「量出来的」，不靠人眼：贴底间隙、三行昵称左边缘一致、徽标在昵称右侧且间距 = `--sp-1`、正文在身份行下方且左边缘与昵称一致、折行后每个行盒左边缘相等、头像顶边 = 身份行顶边、头像 1.25 / 身份牌 0.9 / 表情 1.1 × 行盒（`rowScaleCoherent`）、正文可用宽度 ≥ 视口一半（`fixtureTextBodyKeepsHalfViewport`）、表情图见方 + `contain` 且不随原图尺寸变。每条的具体断言名见 `ui.md` 对应节的「冒烟按 … 断言」 |
+| 覆盖 | 逐条断言名写在 `ui.md` 对应节里，本表不再另列清单。横切面已覆盖：关注列表（自动加载 / 排序分页 / 两档排布 / 标签名）、账号区与对话框、面板只挤列表且不遮最新一条、右键菜单、时间戳、礼物类消息的两枚开关（四种组合）与独立礼物栏（一条一行 / 金额带单位 / 按 kind 分组的汇总 / 有源头像 / **与弹幕区同一套呈现**：`giftParity*` 一组逐项比行盒 / 头像列 / 身份行 / 正文块与两栏底色、SC 长留言不截断、`giftFollow*` / `giftPaused*` / `giftJumpButton*` 一组验跟随与「回到最新」同源，`smoke/scenario/parts/28-gift-dock.mjs:235-288`）、**弹幕区与礼物栏的上下分区**（拖分割条改比例并落盘、拖到极限时两栏最小高度成立、比例在重挂后保持、长按 0.5s 换位与三种取消路、关掉礼物栏后分区退化，`splitter*` / `swap*`，`parts/34-split-panes.mjs`）、醒目留言卡片（档位令牌 + 金额行加粗 + **卡片只盖内容部**：`scCard*` 一组，含 `scCardBelowIdentity` / `scCardOutsideAvatarCol` / `scCardHoldsBodyAndAmount` / `scCardRowUntouched`，`parts/28-gift-dock.mjs:177-193`）、**选中态整行底色全宽**（`rowSelect*` 一组：行盒左右边界对齐滚动容器、底色从最左到最右且盖住头像列、选中语义不变、松开即收回，`parts/28-gift-dock.mjs:350-453`）、**上下分区的分界线**（`foldLine*` 一组：虚线 + 令牌色 + 对画布 ≥ 3:1）、互动自动消失与系统类消息白名单、筛选面板的两块两列勾选清单（消息类型 / 辅助功能同形态、四枚辅助开关逐枚可切、干净环境下复选框画的即契约默认值）、历史与实时同款、贴底与头像列占位、粉丝牌真彩色与兜底色、本房间舰长标、主站「我的表情」、@ 目标与文本同源、房管权限前置与二次确认、行排版整体感、昵称不吃弹幕颜色（深浅两套各量一遍）、表情面板 tab / 尺寸 / 置灰、短语固定行、乐观发送与失败标记、窄屏无横向滚动与热区 ≥ 40px |
+| 官方口径 | 「官方是怎么做的」这类判据（画不画一个徽标、走哪条渲染分支、哪种视觉细节）**去读官方前端产物**，或从浏览器直接对照官方页面 —— **不许凭印象模仿**。先例：A26 补充（表情权限判定）、A37（粉丝牌配色）、A39（舰长标取哪个字段）、A43（没点亮的粉丝牌不画）。判据落进规格时要写明它出自哪份产物 / 哪条分支，便于复核 |
+| 维护约定 | 场景 = `smoke/scenario/parts/**` 里的**页内脚本原文**，由 `smoke/room-page.mjs` 按文件名升序拼接（见 §9.1）。**加一条断言**就改对应主题块；新起一块才要在组装器的 `BLOCKS` 里登记一行 —— 多登记少登记都会在构造页面时当场抛错 |
+| 产物 | 命名与场景名见 §9.2 ③ |
+| 失败判读 | 退出码非 0 时打印不成立的布尔字段名（带 `wide:` / `narrow:` 前缀）；`EXPECTED_FALSE` 里列的是「本来就该是 false」的字段（如系统类消息默认不在 `filter.kinds` 白名单里、因此 `system` 行默认不渲染）。实现见 `apps/desktop/ui/smoke/run-headless.mjs:53`（集合）与 `:889`（打印）、`:597`（宿主引擎快照） |
 
 ## 10. 三端手工冒烟清单
 
-每步都可执行，且都给出预期结果；执行时逐步勾选并留证（截图或终端输出）。留证按 §9.2 的口径命名（截图走独立 `SMOKE_SHOT_DIR`、日志落 `.android-env/verify/<票名>-<engine>.log`），**一份证据要能自证是哪次运行产出的**。三端共用的前置条件：已构建产物、能访问网络、准备一个正在开播的真实直播间，以及一个可用于登录的账号。构建产物、签名 / 安装与工具链前置条件见 [`operations.md`](operations.md)（命令出处见 `README.md` §8，交付门槛见 `AGENT.md` §9）；本节只列验收步骤，不重复它们。
+每步都可执行，且都给出预期结果；执行时逐步勾选并留证（截图或终端输出）。留证按 §9.2 ③ 的口径命名（截图走独立 `SMOKE_SHOT_DIR`、日志落 `.android-env/verify/<票名>-<engine>.log`），**一份证据要能自证是哪次运行产出的**。三端共用的前置条件：已构建产物、能访问网络、准备一个正在开播的真实直播间，以及一个可用于登录的账号。构建产物、签名 / 安装与工具链前置条件见 [`operations.md`](operations.md)（命令出处见 `README.md` §8，交付门槛见 `AGENT.md` §9）。
 
 ### 10.1 共用步骤
 
@@ -344,10 +418,10 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | C-9 | 切换过滤器（用户 / 类型 / 粉丝牌等级） | 列表即时收敛为匹配项；清空过滤后恢复 |
 | C-10 | 切换筛选面板「辅助功能」块的两枚礼物开关 | 两枚都开（默认）：礼物 / SC / 大航海既在弹幕流里、也在独立礼物栏里；只开弹幕那枚则礼物栏消失；只开礼物栏那枚则弹幕流里不再出现这三类；两枚都关则两处都不出现 |
 | C-11 | 上滑暂停、点击「回到最新」 | 暂停期间不自动滚动；点击后回到最新并恢复跟随 |
-| C-15 | 低价礼物两枚开关与互动自动消失：两个区域都生效、关掉即复原 | 在一个礼物不多的房间里先看基线：弹幕区与礼物栏各自把每条礼物画成一行。① 勾上「折叠低价礼物」：**两个区域**里低价礼物（≤ 0.1 元）各合并成一条（`×N` 与金额是整桶合计，弹幕区的合并行不画金额），0.11 元那条与 SC / 大航海两处都照旧一行；② 取消勾选：两处**逐条回来**，顺序、条数、每行金额与折叠头的统计都与基线一字不差；③ 勾上「剔除低价礼物统计」：统计（「礼物 / SC（N）」与分组明细）里不再有低价礼物，而**两个区域的行一条都不少**；取消后统计逐字回到基线；④ 互动消息满 8 秒从弹幕区消失后，取消勾选「互动消息自动消失」：**先前消失的那些行原样回来**（再勾上又不见）—— 消失只是不画，不是丢内容（`ui.md` §5.3、§4.8） |
-| C-14 | 共享分区：拖分割条、长按换位、关掉礼物栏 | 拖动两栏之间的分割条：高度**实时**跟着走，松手后比例留在 `prefs.json`（`ui.gift_pane_ratio`），重开应用仍是这个比例；拖到极限时弹幕区不短于 3 行、礼物栏不短于它的折叠头（不压到 0、不溢出）；长按任一栏 0.5s 后拖到另一栏松手：两栏上下互换且 `ui.gift_pane_on_top` 落盘（拖回本栏或按 ESC 取消）；在筛选面板关掉「独立礼物栏」：礼物栏与分割条一起消失、弹幕区占满整块（`ui.md` §5.4）。鼠标与触摸各做一遍 |
-| C-12 | 断开房间连接 | 停止接收新弹幕；当前会话缓冲仍可查询 |
+| C-12 | 断开房间连接（房间头 `⋯` →「断开连接」） | 停止接收新弹幕；**本次会话结束、缓冲随之销毁** —— `history_query` 返回空；随后点「刷新连接」= 重建一次会话（缓冲从空开始，界面换成新会话的快照，`ui.md` §2.4）。契约 §4.3、`apps/desktop/src-tauri/src/lib.rs:388-400` |
 | C-13 | 退出应用后重新进入同一房间 | 进程退出无残留；重进为全新会话，不显示上一会话的弹幕 |
+| C-14 | 共享分区：拖分割条、长按换位、关掉礼物栏 | 拖动两栏之间的分割条：高度**实时**跟着走，松手后比例留在 `prefs.json`（`ui.gift_pane_ratio`），重开应用仍是这个比例；拖到极限时弹幕区不短于 3 行、礼物栏不短于它的折叠头（不压到 0、不溢出）；长按任一栏 0.5s 后拖到另一栏松手：两栏上下互换且 `ui.gift_pane_on_top` 落盘（拖回本栏或按 ESC 取消）；在筛选面板关掉「独立礼物栏」：礼物栏与分割条一起消失、弹幕区占满整块（`ui.md` §5.4）。鼠标与触摸各做一遍 |
+| C-15 | 低价礼物两枚开关与互动自动消失：两个区域都生效、关掉即复原 | 在一个礼物不多的房间里先看基线：弹幕区与礼物栏各自把每条礼物画成一行。① 勾上「折叠低价礼物」：**两个区域**里低价礼物（≤ 0.1 元）各合并成一条（`×N` 与金额是整桶合计，弹幕区的合并行不画金额），0.11 元那条与 SC / 大航海两处都照旧一行；② 取消勾选：两处**逐条回来**，顺序、条数、每行金额与折叠头的统计都与基线一字不差；③ 勾上「剔除低价礼物统计」：统计（「礼物 / SC（N）」与分组明细）里不再有低价礼物，而**两个区域的行一条都不少**；取消后统计逐字回到基线；④ 互动消息满 8 秒从弹幕区消失后，取消勾选「互动消息自动消失」：**先前消失的那些行原样回来**（再勾上又不见）—— 消失只是不画，不是丢内容（`ui.md` §5.3、§4.8） |
 
 ### 10.2 macOS 专属
 
@@ -355,7 +429,7 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 |---|---|---|
 | M-1 | 双击应用包启动 | Gatekeeper 不阻止（本地签名或 ad-hoc 策略见 [`operations.md`](operations.md)）；应用正常打开 |
 | M-2 | 检查 `config.toml` 位置与权限 | 位于 `~/Library/Application Support/danmubox/`，权限为 0600 |
-| M-3 | 完成 C-1 ~ C-13 | 全部通过 |
+| M-3 | 完成 C-1 ~ C-15 | 全部通过 |
 
 ### 10.3 Windows 专属
 
@@ -364,90 +438,90 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | W-1 | 安装 / 运行产物 | 不白屏；若目标机无 WebView2，按 [`operations.md`](operations.md) 的说明先安装运行时 |
 | W-2 | 检查 `config.toml` 位置与权限 | 位于 `%APPDATA%\danmubox\`，权限等价于仅当前用户可读写 |
 | W-3 | 首次运行观察 SmartScreen | 出现警告时可按 [`operations.md`](operations.md) 的处理方式继续；不出现功能性阻断 |
-| W-4 | 完成 C-1 ~ C-13 | 全部通过 |
+| W-4 | 完成 C-1 ~ C-15 | 全部通过 |
 
 ### 10.4 Android 专属
 
 | 步骤 | 操作 | 预期结果 |
 |---|---|---|
-| A-1 | `adb install` 安装 APK 并启动 | 安装成功，应用图标可启动 |
+| A-1 | `adb install` 安装 APK 并启动：`adb shell am start -W -n dev.kksk.danmubox/.MainActivity` | 安装成功；启动命令返回 `Status: ok`，并打印 `TotalTime` 与 `Displayed` 两行 |
 | A-2 | 观察布局 | 无横向溢出、无控件被裁切；竖屏与横屏各看一遍。**系统栏避让**：顶栏（标题 / 主题按钮 / 房间页返回键）不与状态栏或刘海重叠，底部输入区与那排工具键不被手势栏遮挡（edge-to-edge 的 inset 由原生下发 `--safe-top` / `--safe-bottom`，实测数字见 [`operations.md`](operations.md) §5.3） |
-| A-3 | 完成 C-1 ~ C-13 | 全部通过 |
+| A-3 | 完成 C-1 ~ C-15 | 全部通过 |
 | A-4 | 前台连续运行 30 分钟 | 期间持续收弹幕；无崩溃、无明显内存增长 |
 | A-5 | 切到后台再回前台 | 连接按重连策略恢复并继续收弹幕；保活那一步单列在 A-9 / A-10（见 [`operations.md`](operations.md) §2.8） |
 | A-6 | **登录验证（本项目不用相机）**：从账号入口发起扫码，界面在**本机显示二维码**，用**另一台设备**（另一台手机 / 平板 / 相机 App）扫它，确认后回到应用 | 二维码正常显示、轮询期间状态可见；确认后登录态变为已登录（重拉 `session_status` 得 `logged_in=true`）；失败给出可操作提示。**全程不出现相机权限申请**——扫码是「显示二维码给别人扫」，前端不调用 `getUserMedia`，也不声明相机权限 |
 | A-7 | 反向确认没有多余权限 | 系统「设置 → 应用 → danmubox → 权限」里**看不到相机、位置、通讯录、存储**这类项；`aapt2 dump badging` 的 `uses-permission` 只应有四枚：`INTERNET`、`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_DATA_SYNC`（后台保活的三枚，见 A-9；**声明即得，没有弹窗**）与 `POST_NOTIFICATIONS`（Android 13+ 唯一的运行时权限，冷启动问一次） |
 | A-8 | **系统返回手势**：房间页里从屏幕左边缘侧滑（`adb shell input swipe 0 <y> 600 <y>`，`y` 取屏中），再换右边缘（`1080 <y>` → `480 <y>`）；然后先开一个面板（如「筛选」）再侧滑；最后回到**根页面**（房间列表页、无面板）按返回 | 侧滑 → 回房间列表（**不**退出应用）；面板开着时侧滑 → 面板关掉、**不**跳页；根页面按返回 → 应用退出（`pidof dev.kksk.danmubox` 为空）。**左右边缘都要试**：返回手势归系统管，两侧是否都能返回由系统设置决定，界面只负责消费它。三级顺序见 [`ui.md`](ui.md) §2.6 |
 | A-9 | **后台保活（有连接那一档）**：装好包后先给通知权限（`adb shell pm grant dev.kksk.danmubox android.permission.POST_NOTIFICATIONS`，等价于首启点「允许」）；进房间（如公开测试房间 `1`）等连接成功；按 HOME 退到后台，**等 ≥3 分钟**；期间查四项 —— ① 进程还在：`adb shell pidof dev.kksk.danmubox`；② 到 443 的长连还在：`/proc/<pid>/fd` 的 socket inode → `/proc/net/tcp{,6}` 里状态 `01`（ESTABLISHED）、远端端口 `01BB`；③ 通知在：`adb shell dumpsys notification --noredact` 里能看到渠道 `danmubox-keepalive` 与那条通知；④ `adb logcat` 无 `FATAL`、无反复重连刷屏。最后点通知回前台 | 四项都在；点通知回到应用后（= 走到 `onStart`）再查一遍：`dumpsys activity services` 里 `KeepAliveService` 消失、`dumpsys notification` 里那条通知消失、进程与连接**不受影响**（服务本身不碰网络）。行为与平台限制见 [`operations.md`](operations.md) §2.8 |
-| A-11 | **一键诊断（导出到公共下载目录）**：进一个房间，点房间头 `⋯` →「一键诊断」，等倒计时（或点「提前结束并导出」）；然后 `adb shell ls -l /sdcard/Download` 与 `adb pull /sdcard/Download/danmubox-diagnose-*.txt` | ① 目录里**恰好一个** `danmubox-diagnose-<UTC 时间戳>.txt`（没有临时文件、没有第二个）；② 面板上显示的就是该路径（点「复制路径」能粘贴出来）；③ `adb pull` 出来的文件可读、含「结论速览 / 连接尝试 / 协议计数 / 采集窗口内的日志」，且凭据、uid、昵称、**房间号**都是 `***`（口径 `contract.md` §4.4、`operations.md` §2.9） |
 | A-10 | **后台保活（不该起的那两档）**：① 不打开任何房间（停在房间列表页）→ 按 HOME；② 开着房间，但在**根页面按返回**退出应用（A-8 的最后一档） | 两档都**不该**出现 `KeepAliveService`，通知抽屉里也不该有那条常驻通知（① 没连接；② `isFinishing`，用户是主动退出）。检查方式同 A-9 的 ③ |
+| A-11 | **一键诊断（导出到公共下载目录）**：进一个房间，点房间头 `⋯` →「一键诊断」，等倒计时（或点「提前结束并导出」）；然后 `adb shell ls /sdcard/Download`（`-l` 可看体积）与 `adb pull /sdcard/Download/danmubox-diagnose-*.txt` | ① 目录里**恰好一个** `danmubox-diagnose-<UTC 时间戳>.txt`（没有临时文件、没有第二个）；② 面板上显示的就是该路径（点「复制路径」能粘贴出来）；③ `adb pull` 出来的文件可读、含「结论速览 / 连接尝试 / 协议计数 / 采集窗口内的日志」，且凭据、uid、昵称、**房间号**都是 `***`（口径 `contract.md` §4.4、`operations.md` §2.9） |
 
 ### 10.5 Android：无真机时的验证边界
 
-2026-09-15 的实测在一台**本地 AVD**上做的（`danmubox_verify`：pixel_6、1080×2400 @420dpi、`android-35` + `google_apis` + `arm64-v8a`，由 `scripts/android-env.sh` 装出的 emulator 与 system-image 创建）。下面把「模拟器已经能验到哪一步」与「哪些必须真机」分开写，避免把前者的绿当成整条链路的绿。
+区分「模拟器已验到哪一步」与「哪些必须真机」；实测环境是本地 AVD `danmubox_verify`（pixel_6、1080×2400 @420dpi、`android-35` + `google_apis` + `arm64-v8a`，由 `scripts/android-env.sh` 创建）。**不得把模拟器上的绿当成整条链路的绿。**
 
-**模拟器上已验**（命令与产物路径见 [`operations.md`](operations.md) §5.3）：
+**模拟器上已验**（命令、原始输出与产物路径见 [`operations.md`](operations.md) §5.3，落点 `.android-env/verify/`）：
 
-| 项 | 证据 |
+| 项 | 结论 |
 |---|---|
-| 构建出带签名的通用 APK | 产物路径与体积见 `operations.md` §5.3；`apksigner verify` 为 `Verifies`（v2 签名） |
-| 安装 | `adb install` 成功（**未签名的包会失败**：`INSTALL_PARSE_FAILED_NO_CERTIFICATES`） |
-| 启动 | `adb shell am start -W -n dev.kksk.danmubox/.MainActivity`：COLD `TotalTime` **1013ms**、`Displayed +1s13ms` |
-| 无崩溃 | **有例外，此处按 2026-09-16 日志审计的实测改写**：启动 / 进房 / 前台运行的窗口内 `adb logcat` 无 crash、无 panic；但**用户点返回退出应用**的那次优雅退出会在 teardown 阶段命中 `--------- beginning of crash` + `F libc: FORTIFY: pthread_mutex_lock called on a destroyed mutex`（已核到 3 份退出日志各一次：`back-logcat.txt:899-905`、`logcat-v2.txt:1500-1506`、`v2-repro-backexit.log:341-347`），其后紧跟 `Zygote: Process … exited cleanly (0)` 与 `ActivityManager: … has died`；`force-stop` 那一档（`v2-repro-forcestop.log`）**没有**命中。**旧文写的「全程零 crash」不成立**；成因未查（登记为待办，见本节末），从现象看它发生在退出路径上、不影响退出结果与已落盘数据 |
-| 数据目录落点 | 点主题按钮后设备上出现 `/data/user/0/dev.kksk.danmubox/prefs.json`（`-rw-------`，内容 `{ "ui.theme": "light" }`）——即外壳注入的 `DANMUBOX_HOME` 生效（注入前 core 会落到 `$HOME/.local/share/danmubox`，而设备上连 `/.local` 都没有） |
+| 构建出带签名的通用 APK | `apksigner verify` 为 `Verifies`（v2 签名）；未签名的包 `adb install` 会失败（`INSTALL_PARSE_FAILED_NO_CERTIFICATES`） |
+| 安装与启动 | `adb install` 成功；`adb shell am start -W -n dev.kksk.danmubox/.MainActivity` 冷启动读到 COLD `TotalTime` **1013ms**、`Displayed +1s13ms` |
+| 崩溃 | 启动 / 进房 / 前台运行窗口内无 crash、无 panic；**例外**：用户点返回退出应用的那次优雅退出会在 teardown 阶段命中 `--------- beginning of crash` + `F libc: FORTIFY: pthread_mutex_lock called on a destroyed mutex`（见遗留登记表），其后紧跟 `Zygote: Process … exited cleanly (0)` 与 `ActivityManager: … has died`；`force-stop` 那一档不命中 |
+| 数据目录落点 | 设备上出现 `/data/user/0/dev.kksk.danmubox/prefs.json`（`-rw-------`）——外壳注入的 `DANMUBOX_HOME` 生效（未注入时 core 会落到 `$HOME/.local/share/danmubox`） |
 | 出网与进房 | 进公开测试房间 `1` 成功，HTTPS 出网正常（能拿到真实直播标题） |
-| 系统栏避让（A-2 的前半） | 提交 `32dcefc` 前后逐值实测：顶栏文本 `y=68..116` → `196..244`、主题按钮 `74..114` → `202..242`、房间页顶栏底 `0` → `128`、房间页标题 `52..88` → `180..216`、房间页输入区白底 `2399` → `2338`（= 手势栏上沿 2337），状态栏图标仍在 47..80、互不相交。**动的是页面排版，不是窗口**：应用窗口修复前后都是 `[0,0][1080,2400]`，系统栏本身也没变（状态栏仍 `[0,0][1080,128]`、手势栏仍 `[0,2337][1080,2400]`）；`am start -W` COLD `TotalTime` 515ms、logcat 无 FATAL（数字与做法见 [`operations.md`](operations.md) §5.3） |
-| 软键盘（列表页输入框） | 键盘弹起时页面内容止于键盘上沿、无「pan + inset 双位移」——**只在小列表页的输入框上验过**；房间页那一档见下表 |
-| 系统返回手势（A-8） | 手势导航的 AVD 上逐档实测：**左右边缘侧滑都回房间列表**，进程全程不退（`pidof` 3660 → 3660 / 4198 → 4198）；**面板开着时侧滑只关面板、仍停在房间页**（筛选面板，左右两边各一次；DOM 断言 `db-room-header` 真、`db-list-page` 假、`db-panel` 假）；根页面 `input keyevent 4` 后 `pidof` 为空、`dumpsys activity activities` 里 danmubox 的 `ActivityRecord` 8 → 0（焦点回 launcher）；`logcat` 无 `FATAL` / panic。**边缘那一条是系统手势区**（原生下发的 `--gesture-left` / `--gesture-right`，实测两侧各 29.7 CSS px）：从边缘起手的返回会先把 DOWN 发给页面（实测 `down(0,457)` → `cancel(31,457)`），页面的「点面板外关面板」因此要放过这一条，否则一次侧滑会变成「关面板 + 又退一级」两件事（见 [`ui.md`](ui.md) §2.6）。截图与 logcat 落在 `.android-env/verify/back-0*.png` / `back-logcat.txt` |
+| 系统栏避让（A-2 的前半） | 顶栏文本 / 主题按钮 / 房间页标题 / 输入区白底均不与状态栏（`[0,0][1080,128]`）或手势栏（`[0,2337][1080,2400]`）相交；**动的是页面排版，不是窗口**（应用窗口前后都是 `[0,0][1080,2400]`） |
+| 软键盘（列表页输入框） | 键盘弹起时页面内容止于键盘上沿、无「pan + inset 双位移」——**只在小列表页的输入框上验过**；房间页那一档列在「必须真机」表 |
+| 系统返回手势（A-8） | 左右边缘侧滑都回房间列表且进程不退；面板开着时侧滑只关面板、仍停在房间页；根页面按返回退出应用（`pidof` 为空）。**边缘那一条是系统手势区**（原生下发 `--gesture-left` / `--gesture-right`，两侧各 29.7 CSS px）：从边缘起手的返回会先把 DOWN 发给页面再 `cancel`，「点面板外关面板」因此要放过这一条，否则一次侧滑会变成「关面板 + 又退一级」两件事（见 [`ui.md`](ui.md) §2.6） |
 | 界面目视 | 启动页 / 账号面板 / 房间页截图落在 `.android-env/verify/`（**该目录随 `clean` 一起删**，需要留存先拷出去） |
-| **后台保活（A-9 / A-10）** | AVD 上逐档实测（`ka-*` 前缀的原始输出与截图在 `.android-env/verify/`；口径与结论见 [`operations.md`](operations.md) §2.8）：退到后台 200 秒后进程在、`KeepAliveService` 是 `isForeground=true foregroundId=1 types=0x00000001`、常驻通知在 `dumpsys notification` 里、到 443 的 ESTABLISHED 还有 2 条、logcat 全程只有成对的「前台服务已启动/已停止」且 0 条 `FATAL EXCEPTION`（**指保活那个观测窗口内**；退出应用那一刻的 FORTIFY 见上表「无崩溃」行的更正）；拉长到 7.2 分钟时进程与服务仍在、通知仍在；点通知回前台后服务与通知都消失、pid 不变；**A-10 两档都为空**（没房间、根页面按返回退出）；通知权限的冷启动弹窗与 Android 15 `onTimeout`（把 6 小时额度缩成 60 秒）也各实测一次 |
+| **后台保活（A-9 / A-10）** | 退到后台 200 秒后进程在、`KeepAliveService` 为前台服务、常驻通知在、到 443 的 ESTABLISHED 仍在；拉长到 7.2 分钟仍成立；点通知回前台后服务与通知消失、pid 不变；**A-10 两档都为空**；通知权限的冷启动弹窗与 Android 15 `onTimeout`（6 小时额度缩成 60 秒）各实测一次（口径与结论见 [`operations.md`](operations.md) §2.8） |
 
 **必须真机（或目前根本验不了）**：
 
 | 项 | 为什么 |
 |---|---|
-| 收弹幕 | 本轮进房后 **3.5 分钟内未观测到弹幕**（公开测试房间可能未开播或是轮播）→ **弹幕链路在 Android 上属未验**，不得据此宣称已通 |
+| 收弹幕 | 本轮进房后 3.5 分钟内未观测到弹幕（公开测试房间可能未开播或是轮播）→ **弹幕链路在 Android 上属未验**，不得据此宣称已通 |
 | 扫码登录（A-6） | 需要**另一台设备**扫屏上的二维码；本机不能自扫 |
 | 发弹幕 / 举报 / 房管等写操作 | 依赖登录态，且受 [`../AGENT.md`](../AGENT.md) §8 的写操作边界约束 |
 | 四个分 ABI 包的安装 | 本轮只装过通用包；`arm64` / `arm` / `x86` / `x86_64` 四份**均未安装验证** |
-| 登录态下的房间输入区 + 软键盘 | inset 是连 ime 一起算的，但房间页输入框在未登录时是禁用的，**「登录态的房间输入区 + 键盘」这个组合本轮没实测**（列表页那档验过，见上表），不得拿它推定 |
+| 登录态下的房间输入区 + 软键盘 | inset 连 ime 一起算，但房间页输入框在未登录时禁用，**这个组合本轮没实测**（列表页那档已验），不得拿它推定 |
 | 真机差异 | 厂商 ROM / 系统 WebView 版本、折叠与展开、真实触摸与输入法、I/O 与内存表现——模拟器都不等价（按 [`../AGENT.md`](../AGENT.md) §9，「可达面」包含真机形态） |
 | 系统栏避让的真机形态 | 只在一台 AVD 上验过（手势导航、无挖孔）；**三键导航栏更高**、挖孔 / 刘海位置各机型不同，只有真机能覆盖这些形态 |
-| A-4 / A-5 的完整口径 | 需要「有弹幕的直播间 + 真实前后台切换」，在模拟器上只能验「不崩」，验不了「切后台回来还能持续收」 |
-| **后台保活的收益（A-9 的 A/B）** | 模拟器上能证到「前台服务真的起着 + 进程没被冻结到不动」（旧包 200 秒后连接归零、新包还有连接且能在后台新建一条），但**证不到真机上的收益**：省电策略、内存压力下的回收、Cached Apps Freezer 的时机、以及**厂商 ROM 的后台管理**（MIUI / EMUI / ColorOS 等可能忽略前台服务、锁屏清理、要求单独开自启动白名单）都只有真机能覆盖。**不得把模拟器上的绿当成真机上的绿** |
+| A-4 / A-5 的完整口径 | 需要「有弹幕的直播间 + 真实前后台切换」，模拟器上只能验「不崩」，验不了「切后台回来还能持续收」 |
+| **后台保活的收益（A-9 的 A/B）** | 模拟器上能证到「前台服务真的起着 + 进程没被冻结到不动」，但**证不到真机上的收益**：省电策略、内存压力下的回收、Cached Apps Freezer 的时机、以及**厂商 ROM 的后台管理**（MIUI / EMUI / ColorOS 等可能忽略前台服务、锁屏清理、要求单独开自启动白名单）都只有真机能覆盖 |
 
-工具链本身也可无痕清除后再重建（`scripts/android-env.sh clean` / `bootstrap`，见 [`operations.md`](operations.md) §5.12），因此「换一台开发机重来一遍」这件事不需要真机即可走完到 A-1。
+工具链本身可无痕清除后再重建（`scripts/android-env.sh clean` / `bootstrap`，见 [`operations.md`](operations.md) §5.12），因此「换一台开发机重来一遍」不需要真机即可走完到 A-1。
 
-**本轮日志审计登记的两条遗留（均未修、也还没开票，写在 `CHANGELOG.md` 的 `[0.2.0]` 里）**：
+遗留登记（未决项由 [`roadmap.md`](roadmap.md) §2.1 / §2.2 承载）：
 
-| 遗留 | 现象与证据 | 状态 |
-|---|---|---|
-| 退出应用时的 `FORTIFY: pthread_mutex_lock called on a destroyed mutex` | 见上表「无崩溃」那一行的三条证据（3 份退出日志各命中一次，进程随后 `exited cleanly (0)`） | **未修**：成因未查（疑似 Rust 侧某个在 teardown 阶段已被销毁却仍被触碰的锁），不属本批范围，需另开票；也不得再写成「零 crash」 |
-| Android 侧**没有可开启的业务日志入口** | 设备上应用自身的业务日志**零覆盖**，排查只能靠 `adb logcat`（系统日志）；`DANMUBOX_LOG=debug` 目前只影响 Rust 侧的 stdout | **已解决（2026-09-21，一键诊断）**：房间头 `⋯` →「一键诊断」采集 3 分钟后把报告写到**公共下载目录**（`/sdcard/Download/danmubox-diagnose-<UTC 时间戳>.txt`），里面有连接事实与**采集窗口内那一段业务日志**（带字段、已脱敏），用户自己能打开、自己决定发不发（口径 `operations.md` §2.9、`contract.md` §4.4）。本条按新形态验收：模拟器上 `adb shell ls /sdcard/Download` 恰好一个文件、`adb pull` 出来内容与脱敏都对 —— 见 §10.4 的 A-11 |
+| 遗留 | 状态 |
+|---|---|
+| 退出应用时的 `FORTIFY: pthread_mutex_lock called on a destroyed mutex` | **未修**：成因未查（疑似 Rust 侧 teardown 阶段仍被触碰的已销毁锁）。证据：3 份退出日志各命中一次（`back-logcat.txt:899-905`、`logcat-v2.txt:1500-1506`、`v2-repro-backexit.log:341-347`），进程随后 `exited cleanly (0)`。**不得写成「零 crash」** |
+| Android 侧业务日志入口 | **已闭环**：房间头 `⋯` →「一键诊断」把采集窗口内的业务日志写进公共下载目录（验收见 §10.4 A-11；口径 `operations.md` §2.9、`contract.md` §4.4） |
 
 ### 10.6 无头冒烟的已知偏差（**保留断言、不放松**）
 
-这里登记的是「**断言是对的、实现确实还差一点**」的项。规矩：**不许**为了让套件变绿而放松或删掉这些断言；`node smoke/run-headless.mjs` 的退出码在这些项修好之前**就是 1**，读的人应当把它当成「已知的 N 条」而不是「新出的红」。
+本表登记「**断言是对的、实现确实还差一点**」的项。规矩：**不许**为了让套件变绿而放松或删掉这些断言；退出码非 0 时先对照本表，把已登记的条目与「新出的红」分开读。
 
-| 断言 | 实测偏差 | 结论与去向 |
-|---|---|---|
-| ~~`immersiveExitKeepsReadingPosition`~~（沉浸态里滚到中段再退出沉浸，当前阅读位置不许被弹回；容差 `< 8px`）—— **已修，issue #4** | 真因**不是**「量错行」，也**不是**「锚点上方各行重算偏移改了它在内容坐标系里的位置」（那两个猜测都被测量否定）：退出沉浸时**滚动容器自己的顶边下移了 88.1px** —— 房间头 57 + 房间标签条 31.1 回到弹幕区**上方**（88.1 与末行行高 `layoutLastRowHeightPx` 81.1 只是同量级，**不是**一行）。容器里的内容一动没动：`scrollTop` 不变、锚点行的内容坐标不变、它相对容器顶边的偏移 1px → 1px。旧口径按「容器**内**的偏移」做差分，在真机上恒等于 0 —— 这就是上一版探针修法（`88.1 → 0.0` 的独立探针）放进全量场景零效果的原因：那个探针量的是内容坐标在动，与真路径不是同一件事 | **已修**：`MessageList` 冻结视口时另记**滚动容器自己的顶边**，`ResizeObserver` 回调里按它的位移补 `scrollTop`（容器挪多少补多少；容器**内**的那部分交给虚拟列表自己的 item 尺寸锚定）。口径落进 [`ui.md`](ui.md) §7.3 第 5 行。**两种试过、不可用的写法**：① 按「锚点行在容器**内**的偏移」差分 → 真机上恒为 0（就是那条「全量场景零效果」）；② 按「锚点行的**屏幕**位移」差分 → 本条转绿，却把虚拟列表刚做完的修正再补一次：礼物栏展开那一段 `giftFollowPinnedToBottom` / `giftNewestRowVisible` 转红（实测 `scrollTop` 437 → 261、离底 176px、跳按钮挂住） |
+| 断言 | 状态与去向 |
+|---|---|
+| `immersiveExitKeepsReadingPosition`（沉浸态里滚到中段再退出沉浸，当前阅读位置不许被弹回；容差 `< 8px`） | **已修**：`MessageList` 冻结视口时另记**滚动容器自己的顶边**，`ResizeObserver` 回调里按它的位移补 `scrollTop`；口径落进 [`ui.md`](ui.md) §7.3 第 5 行 |
 
-> **更正（2026-09-21）**：本表此前还登记过两条 —— `swapDoesNotEatNextTap` 与低价礼物那一段 11 条（`cheapGift*`）。集成收尾时逐条**改前实测**判定它们是**冒烟自身的量法失效**（新房间标签的 `data-room-id` 是**字符串**而入参是**数字** ⇒ 标签根本没点下去；`db-gift-body` 已被改造成**行内**正文格 ⇒ 空礼物栏时开合两态都取不到它），**不是**「断言对、实现差」 ⇒ 按本表的定义**不属于本表**，已移除（其中一条期望值另按 `contract.md` §8 line 487 改正是字面量算术错）。逐条证据见 `docs/requests.md` E17；写法教训写进 §9.3。
-> **当前状态（2026-09-21，集成树）**：本表**无未修项** —— `node smoke/run-headless.mjs` 在 **Chromium 与 WebKit 两引擎、各四个视口组合上都是 `EXIT=0`、失败清单为空**（各 3668 项快照 / 48 张截图，见 `CHANGELOG.md` 本轮的验证口径）。
+**当前状态**：本表无未修项 —— `node smoke/run-headless.mjs` 在 Chromium 与 WebKit 两引擎、各四个视口组合上都是 `EXIT=0`、失败清单为空（各 3668 项快照 / 48 张截图，验证口径见 [`../CHANGELOG.md`](../CHANGELOG.md) 归档区）。
+
+**不属本表的两类**（按定义排除，不进「已知的 N 条」）：① **冒烟自身的量法失效**（如标签的 `data-room-id` 是字符串而入参是数字 ⇒ 标签根本没点下去；取元素取到了已被改造成行内格的节点 ⇒ 两态都取不到）；② **期望值本身的字面量算术错**。逐条证据见 [`../CHANGELOG.md`](../CHANGELOG.md) 归档区；写法教训见 §9.3。
 
 ## 13. 明确不测的边界
 
 | 不测对象 | 原因 | 替代手段 |
 |---|---|---|
 | 真实 ac站服务器的实时行为 | 不可控、有风控、需真实凭证 | 录制 fixture 重放 + 手工冒烟 |
-| 举报 / 表情 / 关注列表 / 电池余额的上游端点行为 | 未实测、依赖登录态 | fixture 契约测试 + 阶段 3 / 阶段 4 手工冒烟 |
+| 举报 / 表情 / 关注列表 / 电池余额的上游端点行为 | **未做自动化覆盖**（举报只有手工跑通记录；与官方逐字一致与码集合枚举未实测，见 `protocol.md` 附录 A27） | fixture 契约测试 + 阶段 3 / 阶段 4 手工冒烟 |
 | 直播视频流解码 | 非目标功能 | 不实现，故不测 |
-| iOS 端与 Fold8 / 折叠屏 | 后期 enhancement，本期不纳入范围（折叠屏只做了可行性研究，见 [`foldable.md`](foldable.md)，**未实现**） | 触发后单独设计验收；折叠屏的验证路径与「只能真机拍板」的缺口清单见 `foldable.md` §6 |
+| iOS 端与 Fold8 / 折叠屏 | 后期 enhancement，本期不纳入范围（折叠屏只做了可行性研究，**未实现**） | 触发后单独设计验收；现状、验证路径与「只能真机拍板」的缺口见 [`roadmap.md`](roadmap.md) §2.3 |
 | 系统级悬浮弹幕层、通知推送 | 非目标功能 | 不实现，故不测。**后台保活已不在这一行**：`issue` 2609160959 #10 已实现（前台服务 + 常驻通知，见 [`operations.md`](operations.md) §2.8），验证边界见 §10.5 —— **模拟器已验、真机未验**；推送仍未做 |
 | Tauri 框架本体与系统 WebView 渲染引擎 | 第三方实现 | 以最小冒烟覆盖「能启动、能渲染」 |
 | UI 像素级视觉回归、跨平台字体渲染差异 | 自用项目，收益低 | 保留结构化渲染断言与人工目视 |
-| 真实网络抖动与风控限流触发 | 不可复现 | 用可注入时钟测退避序列；现象记录进校准表 |
+| 真实网络抖动与风控限流触发 | 不可复现 | 用可注入时钟测退避序列；现象记录进 [`protocol.md`](protocol.md) 附录 A 的待实测校准表 |
 | 崩溃上报路径 | 本期不接入外部上报 | 不适用 |
 
 ## 14. 测试数据与安全
@@ -457,8 +531,4 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | 凭证 / 日志断言 | 与 §1「凭证零泄漏」同一条：测试与 fixture 中不得出现真实 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`；自动化测试不注入真实凭证；断言日志不含凭证时用关键词检索而非打印凭证本身 |
 | fixture 脱敏与提交前检查 | 与 §8.3 同一条：回放 fixture 按 §8.3 处理（同一用户在多条样本中保持同一映射）；提交前对新增 fixture 与快照做一次敏感关键词检索，命中即修复 |
 | 写操作边界 | 只允许公开测试房间 `1`（5440）或当次明确指定的房间，一经指定不得更换，失败即停不重试；见 [`../AGENT.md`](../AGENT.md) §8 第 14–16 条 |
-| 文档同步 | 同步时机见文首「更新时机」；阶段的验收标准与历史记录见 [`../CHANGELOG.md`](../CHANGELOG.md) |
-
-## 15. 与其他文档的关系
-
-文档索引见 [`../README.md`](../README.md) §7；本文只负责验证方案。
+| 文档同步 | `docs/testing.md` 的作用 / 读者 / 更新时机登记在 [`../AGENT.md`](../AGENT.md) §6.5.1；阶段的验收标准与历史记录见 [`../CHANGELOG.md`](../CHANGELOG.md) |

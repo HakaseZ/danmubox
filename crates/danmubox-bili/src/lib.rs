@@ -7,7 +7,6 @@ pub mod admin;
 pub mod asset;
 pub mod auth;
 pub mod cmd;
-pub mod diagnose;
 pub mod emote;
 pub mod follow;
 pub mod history;

@@ -75,6 +75,49 @@
     return Math.round((el.scrollHeight - el.scrollTop - el.clientHeight) * 10) / 10;
   };
   /**
+   * 把某一行**翻回渲染窗口**再交回来（虚拟列表只渲染视口里的行：列表够长时，22 段那批
+   * 历史样本行早就滚出去了，`rowWith` 对它们一律返回 `undefined`）。
+   * 做法：从底部一屏一屏往上翻（每档半屏重叠），翻到就停下、返回那一行。
+   *
+   * 为什么要有它：断言要的**不一定是最新那条**——要一条历史行（例如「无头像的弹幕」那条
+   * 规定昵称的样本）时，「它还在窗口里」这个前提得由**用它的那一段**自己造出来
+   * （docs/testing.md §9.3 ②：每段自保证准入前提），不能假定列表长度不变。
+   *
+   * ⚠ 拿回来的节点**只在当下有效**：中间只要又发了消息 / 列表重新贴底，它就可能被卸载成
+   * **游离节点**，而 React 的事件挂在根容器上 —— 往游离节点派发 `contextmenu` **静默无反应**
+   * （菜单不出现，下一步 `buttonWith(byTestId("db-context-menu"), …)` 才炸）。
+   * 因此每次要动它之前都**重新取一次**，不要把行节点存起来跨步骤用。
+   */
+  var rowIntoView = async function (needle) {
+    var found = rowWith(needle);
+    if (found) return found;
+    var scroller = byTestId("db-chat-scroll");
+    var list = byTestId("db-msg-list");
+    if (!scroller || !list) return undefined;
+    var total = list.getBoundingClientRect().height;
+    var step = Math.max(1, Math.round(scroller.clientHeight * 0.5));
+    // `top` 单调递减（每档半屏），不会原地打转：翻到 0 还没找到就真的没有这一行。
+    for (var offset = 0; offset <= total + step; offset += step) {
+      scroller.scrollTop = Math.max(0, total - scroller.clientHeight - offset);
+      await sleep(150);
+      found = rowWith(needle);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  /**
+   * 把弹幕列表放回**底部**（并等「跟随最新」重新成立）。
+   * 凡是自己翻过列表（`rowIntoView`）的段，收尾都要调一次：后面那些段（时间戳 / 筛选 /
+   * 自动消失 / 礼物栏）都假定列表跟着最新走，滚在中间会让它们量不到新行。
+   */
+  var scrollChatToBottom = async function () {
+    var scroller = byTestId("db-chat-scroll");
+    if (!scroller) return false;
+    scroller.scrollTop = scroller.scrollHeight;
+    await sleep(400);
+    return bottomGap(scroller) < 8 && !byTestId("db-bottom-anchor");
+  };
+  /**
    * 显示块里的两枚礼物开关（issue 2609152029 第 1 条：原来那个「礼物栏」下拉已删）：
    * 按 label 文案点复选框本体 —— 与用户点它走的是同一条路（React 的 onChange）。
    * 每次都重新取面板节点：面板关掉再开时旧节点会变成游离节点（踩过，见上面发弹幕那段的说明）。

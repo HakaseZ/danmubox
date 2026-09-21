@@ -43,7 +43,7 @@
 //   layout 的弹幕行部分（排版取证 / 长串 / 表情盒 / ＠ / 身份行 / 头像 / 颜色）→ 22-danmaku-rows.mjs
 //   工具行 / 文档不滚动 / 面板布局 / 表情面板   → 23-panels-layout.mjs
 //   发送失败浮片 / 乐观渲染 / 粉丝牌            → 24-composer-send.mjs
-//   弹幕聚合 / 阅读位置 / 回到最新 / 我的表情   → 25-aggregate-jump.mjs
+//   刷屏弹幕聚合 / 阅读位置 / 回到最新 / 我的表情 → 25-aggregate-jump.mjs
 //   点一下发 / 右键菜单 / mention / limit / ime / 超时 / time → 26-shortcuts-limits.mjs
 //   filter / step4 / step5 / step6 / 字号 / 对比度 / 时间戳位置 → 27-filter-panel.mjs
 //   gift / SC 卡片 / 礼物区与弹幕区同款 / 选区 / 分界线 / 两枚开关四组合 → 28-gift-dock.mjs
@@ -58,8 +58,9 @@
 //
 // 三条维护约定（拆之前就在，逐条保留）：
 //   1) 断言只依赖对外可观察的行为（DOM 文本 / 几何 / 副作用记录），**不依赖 CSS-module 类名**；
-//      定位一律走 `data-testid`（db-chat-scroll / db-msg-row / db-msg-time / db-context-menu /
-//      db-account / db-panel / db-gift-dock / db-follow-item），那是稳定的对外契约。
+//      定位一律走 `data-testid`（db-chat-scroll / db-msg-row / db-msg-time / db-msg-spam /
+//      db-msg-avatar-stack / db-context-menu / db-account / db-panel / db-gift-dock /
+//      db-follow-item），那是稳定的对外契约。
 //   2) 快照字段名是契约：`step1_*` … `step6_*` 的语义不得改（Main 按这套闭环），
 //      新增断言另起字段名（layout* / menu* / time* / gift* / follow* / account*）。
 //   3) **断「某个元素在不在」必须定位到那个元素自身**，不要拿整行 / 整块的 innerText 找关键词：

@@ -40,6 +40,7 @@ const PREFS_BASE: Prefs = {
   "ui.gift_exclude_cheap_stats": false,
   "ui.interact_auto_hide": true,
   "ui.show_timestamp": false,
+  "ui.danmaku_aggregate": true,
   "composer.phrases": [],
   "filter.uids": [],
   "filter.kinds": [],

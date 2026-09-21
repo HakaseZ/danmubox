@@ -17,28 +17,6 @@ pub fn config_path() -> PathBuf {
     data_dir().join("config.toml")
 }
 
-/// 用户能一眼找到的导出目录：**主目录下的 `Downloads`**（`docs/contract.md` §4.4）。
-///
-/// 为什么不是平台「真正的」下载目录（macOS 的本地化名称、XDG 的 `user-dirs.dirs`）：
-/// 那要读平台配置、还得处理本地化目录名，而这里的用途只是「用户随手能找到、能发给别人」。
-/// `Downloads` 是三个桌面平台都认得的名字，也是用户真正的下载目录在**绝大多数**机器上的
-/// 实际路径。
-///
-/// 目录不存在（干净系统、或用户删过）时回退到主目录：宁可落在主目录，
-/// 也不要为了「有个下载目录」去凭空创建一个。
-///
-/// Android 不用它：那边的口径是 MediaStore 写公共 `Download`（`docs/contract.md` §4.4），
-/// 由外壳层的原生插件做。
-pub fn downloads_dir() -> PathBuf {
-    let home = home_dir();
-    let downloads = home.join("Downloads");
-    if downloads.is_dir() {
-        downloads
-    } else {
-        home
-    }
-}
-
 /// 偏好文件路径。
 pub fn prefs_path() -> PathBuf {
     data_dir().join("prefs.json")

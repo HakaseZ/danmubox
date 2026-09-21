@@ -376,32 +376,6 @@ export interface AppInfo {
   logged_in: boolean;
 }
 
-/**
- * 一键诊断：一次采集窗口（契约 §7 `diagnose_start`）。
- *
- * 两端都是 UTC 毫秒；界面按 `ends_ms` 倒计时，到点自动收工（`docs/ui.md` §3.6）。
- */
-export interface DiagnoseStart {
-  started_ms: number;
-  ends_ms: number;
-}
-
-/**
- * 一键诊断的导出结果（契约 §7 `diagnose_export`）。
- *
- * `path` 是**给用户看的位置**：桌面端是 `~/Downloads/danmubox-diagnose-….txt`，
- * Android 是 `/sdcard/Download/danmubox-diagnose-….txt`。一次诊断只产生这一个文件。
- */
-export interface DiagnoseExport {
-  path: string;
-  name: string;
-  bytes: number;
-  attempts: number;
-  logs: number;
-  started_ms: number | null;
-  ends_ms: number | null;
-}
-
 export interface Prefs {
   "ui.font_scale": number;
   "ui.theme": "system" | "dark" | "light";
@@ -448,6 +422,15 @@ export interface Prefs {
   "ui.interact_auto_hide": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */
   "ui.show_timestamp": boolean;
+  /**
+   * 把**刷屏弹幕**折成一行（契约 §8，默认 `true` = 保持既有行为，可以关）。
+   *
+   * 判据与形态全在 `aggregate.ts`（issue 202609211940 第 3 条）：**≥ 3 条**同键、同 5 秒窗口、
+   * 参与观众去重后 **≥ 2 位不同 uid** 才折；折出来的那一行头像列画前 3 位观众的头像
+   * （错位 30% 堆叠），身份行改画「刷屏 ×N」，**一个用户名都不出现**。关掉即逐条显示
+   * （纯派生，不改缓冲，见 `docs/ui.md` §8.4）。
+   */
+  "ui.danmaku_aggregate": boolean;
   /** 自定义短语（需求 §2.2）；短语面板里唯一的内容来源，点选插到光标处。 */
   "composer.phrases": string[];
   "filter.uids": number[];

@@ -1,7 +1,8 @@
 // 场景块：输入区快捷与上限：点一下发、右键菜单、@ 来源、字数上限、IME、超时
 //   emotes 点选某个表情直接发送（点一下就发、草稿不动、面板不关）
 //   menu 右键菜单（复制 / ＠TA / 回复 / 屏蔽 / 主页 / 举报）并能关掉
-//   mention ＠ 目标与文本同源；limit 弹幕字数上限来自 room_session.danmaku_length；ime 组字中的回车不许发
+//   mention ＠ 目标与文本同源（目标行是历史行：先用 rowIntoView 翻回窗口，整段包 try/catch）；
+//   limit 弹幕字数上限来自 room_session.danmaku_length；ime 组字中的回车不许发
 //   超时兜底（上游一直不回推时不永远停在「发送中」）；time 时间戳默认不渲染（开关打开后另量）
 //
 // 页内脚本片段：由 smoke/room-page.mjs **原样拼进** `window.__smoke_run` 的函数体，与相邻块共用同一条
@@ -44,45 +45,59 @@
     snap();
 
     // ---- mention ＠ 与文本同源（issue #13a）：文本里没有 @名字 就不许带目标
-    var mentionRow = rowWith("无头像的弹幕");
-    openRowMenu(mentionRow);
-    await sleep(250);
-    buttonWith(byTestId("db-context-menu"), "＠TA").click();
-    await sleep(300);
-    out.mentionInsertedIntoCaret = document.querySelector("textarea").value.indexOf("@无头像 ") >= 0;
-    out.mentionHintShown = !!byTestId("db-mention-hint");
-    buttonWith(null, "发送").click();
-    await sleep(400);
-    var sendWithMention = lastSendCall();
-    out.mentionSendCarriesTarget = !!sendWithMention && !!sendWithMention.args.reply &&
-      sendWithMention.args.reply.uname === "无头像" && sendWithMention.args.reply.mid > 0;
-    // 再 @ 一次，然后把文本里的 @名字 换掉再发：目标必须跟着消失
-    openRowMenu(mentionRow);
-    await sleep(250);
-    buttonWith(byTestId("db-context-menu"), "＠TA").click();
-    await sleep(300);
-    typeIntoArea(document.querySelector("textarea"), "你好呀");
-    await sleep(200);
-    out.mentionHintGoneAfterEdit = !byTestId("db-mention-hint");
-    buttonWith(null, "发送").click();
-    await sleep(400);
-    var sendWithoutMention = lastSendCall();
-    out.mentionTargetDroppedWithText = !!sendWithoutMention &&
-      sendWithoutMention.args.content === "你好呀" && !sendWithoutMention.args.reply;
+    //      ⚠ 目标行是**历史行**（22 段那批样本里那条规定昵称的样本），列表够长时它已经滚出
+    //      虚拟窗口 —— 用 `rowIntoView` 把它翻回来，并且**每一次用之前都重新取一次**：
+    //      中间那几次发送会往列表尾部加行、列表重新贴底，上一刻的节点会被卸载成游离节点，
+    //      往游离节点派发 `contextmenu` 是静默无反应的（菜单不出现，下一句才炸）。
+    //      这一段自己包一层（同下面 limit / ime 那两段的手法）：出岔子要让断言红
+    //      （mentionBlockRan），而不是把整场卡到 300s「未跑完」。
+    var mentionBlockRan = false;
+    try {
+      openRowMenu(await rowIntoView("无头像的弹幕"));
+      await sleep(250);
+      buttonWith(byTestId("db-context-menu"), "＠TA").click();
+      await sleep(300);
+      out.mentionInsertedIntoCaret = document.querySelector("textarea").value.indexOf("@无头像 ") >= 0;
+      out.mentionHintShown = !!byTestId("db-mention-hint");
+      buttonWith(null, "发送").click();
+      await sleep(400);
+      var sendWithMention = lastSendCall();
+      out.mentionSendCarriesTarget = !!sendWithMention && !!sendWithMention.args.reply &&
+        sendWithMention.args.reply.uname === "无头像" && sendWithMention.args.reply.mid > 0;
+      // 再 @ 一次，然后把文本里的 @名字 换掉再发：目标必须跟着消失
+      openRowMenu(await rowIntoView("无头像的弹幕"));
+      await sleep(250);
+      buttonWith(byTestId("db-context-menu"), "＠TA").click();
+      await sleep(300);
+      typeIntoArea(document.querySelector("textarea"), "你好呀");
+      await sleep(200);
+      out.mentionHintGoneAfterEdit = !byTestId("db-mention-hint");
+      buttonWith(null, "发送").click();
+      await sleep(400);
+      var sendWithoutMention = lastSendCall();
+      out.mentionTargetDroppedWithText = !!sendWithoutMention &&
+        sendWithoutMention.args.content === "你好呀" && !sendWithoutMention.args.reply;
 
-    // 回复是显式的引用条（可见、可取消），不靠文本，因此照旧带目标
-    openRowMenu(mentionRow);
-    await sleep(250);
-    buttonWith(byTestId("db-context-menu"), "回复").click();
-    await sleep(300);
-    out.replyBarShown = !!byTestId("db-reply-bar");
-    typeIntoArea(document.querySelector("textarea"), "收到");
-    await sleep(150);
-    buttonWith(null, "发送").click();
-    await sleep(400);
-    var sendWithReply = lastSendCall();
-    out.replySendCarriesTarget = !!sendWithReply && !!sendWithReply.args.reply &&
-      sendWithReply.args.reply.dmid.length > 0 && sendWithReply.args.content === "收到";
+      // 回复是显式的引用条（可见、可取消），不靠文本，因此照旧带目标
+      openRowMenu(await rowIntoView("无头像的弹幕"));
+      await sleep(250);
+      buttonWith(byTestId("db-context-menu"), "回复").click();
+      await sleep(300);
+      out.replyBarShown = !!byTestId("db-reply-bar");
+      typeIntoArea(document.querySelector("textarea"), "收到");
+      await sleep(150);
+      buttonWith(null, "发送").click();
+      await sleep(400);
+      var sendWithReply = lastSendCall();
+      out.replySendCarriesTarget = !!sendWithReply && !!sendWithReply.args.reply &&
+        sendWithReply.args.reply.dmid.length > 0 && sendWithReply.args.content === "收到";
+      mentionBlockRan = true;
+    } catch (e) {
+      out.mentionBlockError = String((e && e.stack) || e);
+    }
+    out.mentionBlockRan = mentionBlockRan;
+    // 本段为了找那几条历史样本翻上去过，收尾放回底部：后面的段都假定列表跟着最新走。
+    out.mentionBackToBottom = await scrollChatToBottom();
     snap();
 
     // 整块包一层（同粉丝牌与 tabs 那两段的手法）：互动步骤在一次真实运行里出岔子时

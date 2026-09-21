@@ -4,7 +4,9 @@
 #
 #   check             仓库既有的检查：Rust 的 fmt / clippy / test + 前端的 oxlint + tsc -b + vite build。
 #                     触发：push 到 main、任何 pull_request、手动 workflow_dispatch。
-#   artifacts         出 macOS .dmg（macos-14）。\n#   artifacts-android 出**已签名的** Android release APK（ubuntu-latest；2026-09-18 从 macOS 挪过来）。
+#   artifacts         出 macOS .dmg（macos-14）；.app 带 ad-hoc 整包封条（`signingIdentity: "-"`），
+#                     出包后 job 内自校验 `codesign --verify --deep --strict`（issue 202609211940 第 5 条）。
+#   artifacts-android 出**已签名的** Android release APK（ubuntu-latest；2026-09-18 从 macOS 挪过来）。
 #                     触发：仅 workflow_dispatch 与 v* tag —— 每次 push 都出包太贵。
 #   artifacts-windows 出 Windows 产物：NSIS 安装器 + MSI + 免安装 .exe。
 #                     触发：与 artifacts 相同（workflow_dispatch 与 v* tag）。
@@ -125,8 +127,36 @@ jobs:
         run: npm ci
 
       - name: 出 macOS .dmg
-        # bundle.active=false，靠 --bundles 覆盖；没有应用图标也能出（产物见 target/release/bundle/dmg/）
+        # bundle.active=false，靠 --bundles 覆盖（产物见 target/release/bundle/dmg/）。
+        # 图标与签名都走共享配置 `tauri.conf.json`：
+        #   * `bundle.icon = ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"]` —— 三枚是实测口径
+        #     （2026-09-21）：只列 png 时 tauri 拿最大的那张（512）现生成 icns，`Contents/Resources/`
+        #     里只剩 256/512 两档、Dock 的 1024 档会糊；把 `icons/icon.icns` 一起列上，整份 16→1024
+        #     原样拷进去（dmg 的卷图标也用这同一份）。
+        #   * `bundle.macOS.signingIdentity = "-"`（ad-hoc）—— **没有整包封条时，带隔离属性下载下来的
+        #     .app 会被 Gatekeeper 直接判成「已损坏」**（issue 202609211940 第 5 条）；ad-hoc 之后它
+        #     落到「无法验证开发者」那一档，`spctl` 仍会 rejected —— 预期结果，由下一步打印留档。
         run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
+
+      - name: 自校验 macOS 产物（dmg 里的 .app 必须过 codesign --verify）
+        # 把「产物能不能跑」变成 CI 里可核对的输出：整包封条缺失 / 校验失败一律红。
+        # 验的是**上传的那份 dmg 里的 .app**：`--bundles dmg` 出包后会清掉 bundle/macos/ 下的 .app
+        # 中间产物（只剩 dmg），所以这里挂载 dmg 再验 —— 也正是用户下载后拿到的那一份。
+        # `spctl` 只打印不当失败：ad-hoc 没有 Apple 公证，它 rejected 是预期结果。
+        run: |
+          set -euo pipefail
+          dmg="$(ls -d target/release/bundle/dmg/*.dmg | head -1)"
+          mnt="$RUNNER_TEMP/danmubox-dmg"
+          mkdir -p "$mnt"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          app="$(ls -d "$mnt"/*.app | head -1)"
+          echo "产物：$dmg → $app"
+          # 关键行：Sealed Resources 非 none（整包封条）、Identifier = dev.kksk.danmubox
+          codesign -dv --verbose=4 "$app" 2>&1 || true
+          codesign --verify --deep --strict "$app"
+          echo "codesign --verify --deep --strict: rc=0"
+          spctl -a -vv -t exec "$app" || true
+          hdiutil detach "$mnt"
 
       - name: 上传 macOS .dmg
         uses: actions/upload-artifact@v4
@@ -343,24 +373,15 @@ jobs:
         # macOS / Android 的写法是同一种形态（`./ui/node_modules/.bin/tauri …`）。
         # `bundle.active=false` 由 `--bundles` 覆盖（与 macOS 那边同理）。
         #
-        # `--config` **只**覆盖 Windows 这一侧的 `bundle.icon`，不动共享的 `tauri.conf.json`：
-        # `bundle.icon = []` 在 macOS 上能出 dmg，在 Windows 上过不去 —— 两处都硬要一枚 `.ico`：
-        #   ① 编译期 `tauri-build` 的 Windows 资源（winres）步骤：`bundle.icon` 里没有 `.ico`
-        #      就回落到 `icons/icon.ico`，该文件不存在则直接报错中断编译
-        #      （首次真跑 run 35211873761 撞到的就是这一条）；
-        #   ② 打包期 MSI（WiX）那条路径要求 `bundle.icon` 里能找到 `.ico` —— tauri-cli 把
-        #      bundler 的 `windows.iconPath` 显式置成空 PathBuf（`interface/rust.rs`），
-        #      于是只能回落到 `bundle.icon` 列表，列表为空就报 `Couldn't find a .ico icon`
-        #      （这一条按上游源码核对，没真的撞上过 —— 上面那枚 .ico 同时修掉了 ①，也就轮不到 ②）。
-        # 相应地 `icons/icon.ico` 也入库（`tauri icon` 从 `icons/icon.png` 生成，6 个尺寸：
-        # 16/24/32/48/64/256）。NSIS 那条路径不读 `bundle.icon`：它只看可选的 `nsis.installerIcon`
-        # （本仓库没设 ⇒ 用 NSIS 自己的默认图标；据上游 nsis 模板核对，未真机看过）。
-        #
-        # 图标口径为什么这样定、三端各读到什么、实测记录：docs/operations.md §5.3
-        # 「图标与 `bundle.icon` 的口径」。要把它合并进共享配置，先想清楚 macOS / Android
-        # 那两端的打包输入也跟着变，而且**改完必须手动跑一次本 job 才算验过**。
+        # 图标**不再按端覆盖**（2026-09-21 起）：`tauri.conf.json` 的 `bundle.icon` 是三端共用的
+        # `["icons/icon.png", "icons/icon.ico", "icons/icon.icns"]`，Windows 这一侧要的两处读的都是它 ——
+        #   ① 编译期 `tauri-build` 的 winres 步骤要一枚 `.ico`，列表里没有就中断编译；
+        #   ② 打包期 MSI（WiX）那条路径要求 `bundle.icon` 里能找到 `.ico`，列表为空直接报错
+        #      （tauri-cli 把 bundler 的 `windows.iconPath` 置成空 PathBuf，只能回落到 `bundle.icon`）。
+        # NSIS 那条路径不读 `bundle.icon`：它只看可选的 `nsis.installerIcon`（本仓库没设 ⇒ 用 NSIS 默认图标）。
+        # 图标与 `bundle.icon` 的口径、三端各读到什么：docs/operations.md §5.3。
         shell: bash
-        run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'
+        run: cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi
 
       - name: 上传 Windows 产物
         uses: actions/upload-artifact@v4

@@ -107,10 +107,16 @@ export function formatCount(value: number): string {
   return String(value);
 }
 
-/** 聚合行上参与的一条观众（`docs/ui.md` §8.4 的弹幕聚合）。 */
+/** 聚合行上参与的一位观众（`docs/ui.md` §8.4 的弹幕聚合）。 */
 export interface SenderRef {
   uid: number;
   uname: string;
+  /**
+   * 这位观众的头像 URL（`Message.face`，上游没给就是空串）—— 聚合行的头像列画的就是它。
+   * `uname` 只用于加载失败时的首字符占位与 `title`（**名单文字已不再展示**：
+   * 身份位改印「刷屏 ×N」，见 `MessageRow`）。
+   */
+  face: string;
 }
 
 export interface DisplayRow {
@@ -123,8 +129,10 @@ export interface DisplayRow {
    */
   count: number;
   /**
-   * **弹幕聚合行**参与过的观众（去重、按首次出现顺序，至少两位 —— 只有一位不算聚合，
-   * 因此这个字段缺席就表示「这一行不是聚合行」）。只有 `src/aggregate.ts` 产出它。
+   * **弹幕聚合行**参与过的观众（按首次出现顺序去重，**至少两位** —— 只有一位不算聚合，
+   * 因此这个字段缺席就表示「这一行不是聚合行」）。只有 `src/aggregate.ts` 产出它，
+   * 且**最多** `AGGREGATE_AVATARS_SHOWN` 位：头像列画的就是这几张（`MessageRow`），
+   * 名单文字不再展示（身份位改印「刷屏 ×N」）。
    */
   senders?: SenderRef[];
   /**

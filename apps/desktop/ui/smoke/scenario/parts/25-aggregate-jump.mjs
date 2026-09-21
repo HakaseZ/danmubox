@@ -1,16 +1,25 @@
-// 场景块：弹幕聚合、阅读位置、回到最新、我的表情
-//   弹幕聚合（不同观众短时同文本折一行：×N 与「都是谁」，非滑动窗口、至少两位观众）
+// 场景块：刷屏弹幕聚合、阅读位置、回到最新、我的表情
+//   刷屏弹幕聚合（**3 条以上 + 两位不同观众**才折：身份位印「刷屏 ×N」、头像列错位 30% 堆叠前 3 位、
+//   非滑动窗口、关掉开关逐条显示）
 //   面板展开改可视高度时正在看的位置不被弹走；「回到最新」是圆形图标钮（下箭头、与返回键同源几何）
 //   emotes 主站「我的表情」分组可见、能选中、发出去带的是唯一键
 //
 // 页内脚本片段：由 smoke/room-page.mjs **原样拼进** `window.__smoke_run` 的函数体，与相邻块共用同一条
 // 作用域（out / snap / byTestId / sleep / … 都是 10-harness.mjs 里的工具）。准入条件见 docs/testing.md §9.3。
-    // ---- 弹幕聚合（issue 2609171849 第 7 条，docs/ui.md §8.4 第二条、契约 §4 的三条常量）：
-    //      **不同观众**在短时间窗口里发的**同一条**弹幕折成一行 —— 正文行内「×N」（折了几条）
-    //      紧跟一格「都是谁」（db-msg-senders）。三条读数：
-    //      ① 同文本 + 两位不同观众 → **一行**、「×2」、名单里两位都在；
-    //      ② **不同文本** → 两行（聚合只认同一个键）；
-    //      ③ 同文本但**在窗口外**（5 秒）→ 两行（锚点是这一行的第一条，非滑动）。
+    // ---- 刷屏弹幕聚合（issue 202609211940 第 3 条，docs/ui.md §8.4 第二条、契约 §4 的四条常量）：
+    //      **3 条以上**同键、同 5 秒窗口、参与观众去重后 **≥ 2 位不同 uid** 才折成一行：
+    //      头像列画前 3 位观众的头像（沿 X 轴依次错开 30% 个头像宽、后一张压在前一张上、
+    //      **最左那张在最上层**），身份位改印「刷屏 ×N」且**一个用户名都不出现**
+    //      （db-msg-name / db-msg-badges 都不画），行内那一格 db-msg-count 也不再画
+    //      （数量已经在身份位）。五条读数：
+    //      ① 同文本 + 3 位不同观众（窗口内）→ **一行**、「刷屏 ×3」、堆叠 3 张头像（错位 30%、
+    //         z-index 递减）、身份位没有用户名 / 徽标、行内没有 ×N；
+    //      ② **不同文本** → 两行（聚合只认同一个键），且照旧画昵称（正面对照）；
+    //      ③ 同文本但第一条落在窗口外 → 三行（锚点是这一行的第一条，**非滑动**）；
+    //      ④ 三位观众里有一位**没头像** → 头像列只画两张、错位也只错开一次（空 url 不占位）；
+    //      ⑤ **关掉开关**（ui.danmaku_aggregate，点筛选面板里那一枚）→ 同样三条**逐条显示**
+    //         （三行、没有「刷屏 ×N」也没有堆叠层、昵称照旧），点回来当场又折成一行；
+    //         收尾把面板关回去（紧邻的 26 段接着用同一个面板节点，于是这条也当场钉住）。
     //      准入前提自己保证（testing.md §9.3 ②）：本段要求停在**房间页**、聊天流在场、且列表
     //      **跟随最新**（虚拟列表只渲染视口内的行，不跟随则新推的行根本不在 DOM 里）——
     //      不在底部就点一次「回到最新」，缺 db-msg-list 则当场报错红、不静默通过。
@@ -31,40 +40,139 @@
         var el = row ? row.querySelector('[data-testid="' + cell + '"]') : null;
         return el ? el.innerText.trim() : null;
       };
-      var aggPush = function (text, uid, uname, ts) {
+      // 开关走**筛选面板里那一枚复选框**（与用户点它同一条路）：面板是 db-panel，
+      // 打开 / 收起与 35-cheap-gift 那一段同一套写法（点工具行的「筛选」）。
+      var aggPanelOpen = function () { return !!byTestId("db-panel"); };
+      var aggSetPanel = async function (open) {
+        if (aggPanelOpen() !== open) {
+          clickTool("筛选");
+          await sleep(400);
+        }
+        return aggPanelOpen() === open;
+      };
+      var aggSetSwitch = async function (value) {
+        if (!await aggSetPanel(true)) return false;
+        var picked = [].slice.call(byTestId("db-panel").querySelectorAll("label")).filter(function (l) {
+          return l.innerText.trim() === "刷屏弹幕聚合";
+        })[0];
+        var box = picked ? picked.querySelector('input[type="checkbox"]') : null;
+        if (!box) return false;
+        if (box.checked !== value) {
+          box.click();
+          await sleep(400);
+        }
+        return window.__prefs["ui.danmaku_aggregate"] === value;
+      };
+      // 一条弹幕：`face` 传空串就是「上游没给头像」那一档（头像列不许画假图）。
+      var aggPush = function (text, uid, uname, ts, face) {
         window.__emit("danmubox://message", window.__mk("danmaku", text, false, {
-          uid: uid, uname: uname, ts: ts
+          uid: uid, uname: uname, ts: ts, face: face
         }));
       };
-      // ① 两位不同观众、同一文本、相隔 100ms（窗口内）
+      // ① 三位不同观众、同一文本、相隔 100ms（都在窗口内）
       var aggT0 = Date.now();
-      aggPush("聚合样本甲", 71001, "聚合一号", aggT0);
-      aggPush("聚合样本甲", 71002, "聚合二号", aggT0 + 100);
-      await sleep(400);
-      var aggPair = aggRowsOf("聚合样本甲");
-      out.aggregateSameTextRows = aggPair.length;
-      out.aggregateSameTextCount = aggCellOf(aggPair[0], "db-msg-count");
-      out.aggregateSameTextSenders = aggCellOf(aggPair[0], "db-msg-senders");
-      out.aggregateSameText = aggPair.length === 1 &&
-        out.aggregateSameTextCount === "×2" &&
-        (out.aggregateSameTextSenders || "").indexOf("聚合一号") >= 0 &&
-        (out.aggregateSameTextSenders || "").indexOf("聚合二号") >= 0;
+      aggPush("聚合样本甲", 71001, "聚合一号", aggT0, FACE_512);
+      aggPush("聚合样本甲", 71002, "聚合二号", aggT0 + 100, FACE_512);
+      aggPush("聚合样本甲", 71003, "聚合三号", aggT0 + 200, FACE_512);
+      await sleep(450);
+      var aggTrio = aggRowsOf("聚合样本甲");
+      var aggTrioRow = aggTrio[0];
+      var aggStack = aggTrioRow ? aggTrioRow.querySelector('[data-testid="db-msg-avatar-stack"]') : null;
+      var aggStackItems = aggStack ? [].slice.call(aggStack.children) : [];
+      var aggStackFaces = aggStack ? [].slice.call(aggStack.querySelectorAll('[data-testid="db-msg-avatar"]')) : [];
+      var aggStackBox = rect(aggStack);
+      var aggOffsets = aggStackItems.map(function (el) {
+        return Math.round((rect(el).left - aggStackBox.left) * 10) / 10;
+      });
+      // z-index 只认「最左那张在最上层」这条序：数值本身不重要（递减即可）。
+      var aggZOrder = aggStackItems.map(function (el) { return Number(getComputedStyle(el).zIndex) || 0; });
+      var aggFaceW = aggStackFaces.length > 0 ? rect(aggStackFaces[0]).width : 0;
+      out.aggregateSameTextRows = aggTrio.length;
+      out.aggregateSpamText = aggCellOf(aggTrioRow, "db-msg-spam");
+      out.aggregateSpamStackCount = aggStackFaces.length;
+      out.aggregateSpamOffsets = aggOffsets.join(",");
+      out.aggregateSpamZOrder = aggZOrder.join(",");
+      out.aggregateSameText = aggTrio.length === 1 &&
+        out.aggregateSpamText === "刷屏 ×3" &&
+        // 身份位**一个用户名都不出现**：代表行（第一条）的昵称也不许在行里露头
+        aggTrioRow.innerText.indexOf("聚合一号") < 0 &&
+        aggTrioRow.querySelector('[data-testid="db-msg-name"]') === null &&
+        aggTrioRow.querySelector('[data-testid="db-msg-badges"]') === null &&
+        // 数量只在身份位出现一次（行内那一格不画）
+        aggCellOf(aggTrioRow, "db-msg-count") === null;
+      // 头像列：3 张、每个错开 30% 个头像宽、容器宽 = 头像宽 × 1.6、高 = 头像宽、最左那张在最上层
+      out.aggregateSameTextAvatars = aggStack !== null && aggStackFaces.length === 3 &&
+        aggStackBox.height > 0 && Math.abs(aggStackBox.height - aggFaceW) < 0.6 &&
+        Math.abs(aggStackBox.width - aggFaceW * 1.6) < 1 &&
+        Math.abs(aggOffsets[0]) < 0.6 &&
+        Math.abs(aggOffsets[1] - aggFaceW * 0.3) < 1 &&
+        Math.abs(aggOffsets[2] - aggFaceW * 0.6) < 1 &&
+        aggZOrder[0] > aggZOrder[1] && aggZOrder[1] > aggZOrder[2];
       snap();
-      // ② 不同文本：两条各占一行，且都不是聚合行（没有 ×N / 名单两格）
-      aggPush("聚合样本乙", 71003, "聚合三号", Date.now());
-      aggPush("聚合样本丙", 71004, "聚合四号", Date.now() + 50);
-      await sleep(400);
+      // ② 不同文本：两条各占一行，都不是聚合行（没有「刷屏 ×N」、没有堆叠层，昵称照旧画）
+      aggPush("聚合样本乙", 71004, "聚合四号", Date.now(), FACE_512);
+      aggPush("聚合样本丙", 71005, "聚合五号", Date.now() + 50, FACE_512);
+      await sleep(450);
       var aggB = aggRowsOf("聚合样本乙");
       var aggC = aggRowsOf("聚合样本丙");
       out.aggregateDifferentTextTwoRows =
         aggB.length === 1 && aggC.length === 1 &&
         aggCellOf(aggB[0], "db-msg-count") === null &&
-        aggCellOf(aggC[0], "db-msg-senders") === null;
-      // ③ 同文本、但第一条落在 60 秒前（远在 5 秒窗口之外）：不许折
-      aggPush("聚合样本丁", 71005, "聚合五号", Date.now() - 60000);
-      aggPush("聚合样本丁", 71006, "聚合六号", Date.now());
-      await sleep(400);
-      out.aggregateWindowSeparatesRows = aggRowsOf("聚合样本丁").length === 2;
+        aggCellOf(aggC[0], "db-msg-spam") === null &&
+        aggCellOf(aggC[0], "db-msg-name") !== null &&
+        aggC[0].querySelector('[data-testid="db-msg-avatar-stack"]') === null;
+      // ③ 同文本、但第一条落在 60 秒前（远在 5 秒窗口之外）：不许折 —— 三条都在，
+      //    锚点是这一行的第一条（非滑动），因此后两条也不因为「彼此相邻」而自成一行聚合。
+      aggPush("聚合样本丁", 71006, "聚合六号", Date.now() - 60000, FACE_512);
+      aggPush("聚合样本丁", 71007, "聚合七号", Date.now(), FACE_512);
+      aggPush("聚合样本丁", 71008, "聚合八号", Date.now() + 50, FACE_512);
+      await sleep(450);
+      var aggWindowRows = aggRowsOf("聚合样本丁");
+      out.aggregateWindowSeparatesRows = aggWindowRows.length === 3 &&
+        aggWindowRows.every(function (r) {
+          return r.querySelector('[data-testid="db-msg-spam"]') === null;
+        });
+      // ④ 三位观众里有一位没头像：头像列只画两张（不画假图），错位也只错开一次
+      aggPush("聚合样本戊", 71009, "聚合九号", Date.now(), FACE_512);
+      aggPush("聚合样本戊", 71010, "聚合十号", Date.now() + 50, "");
+      aggPush("聚合样本戊", 71011, "聚合十一号", Date.now() + 100, FACE_512);
+      await sleep(450);
+      var aggBareRows = aggRowsOf("聚合样本戊");
+      var aggBareStack = aggBareRows[0]
+        ? aggBareRows[0].querySelector('[data-testid="db-msg-avatar-stack"]') : null;
+      var aggBareFaces = aggBareStack
+        ? [].slice.call(aggBareStack.querySelectorAll('[data-testid="db-msg-avatar"]')) : [];
+      var aggBareW = aggBareFaces.length > 0 ? rect(aggBareFaces[0]).width : 0;
+      out.aggregateEmptyFaceNoSlot = aggBareRows.length === 1 && aggBareFaces.length === 2 &&
+        aggBareStack !== null && Math.abs(rect(aggBareStack).width - aggBareW * 1.3) < 1;
+      snap();
+      // ⑤ 关掉开关（ui.danmaku_aggregate）：同样三条**逐条显示** —— 一行都不是聚合行，
+      //    昵称照旧回来；点回来又折成一行（纯派生，不丢内容）。
+      var aggSwitchOff = await aggSetSwitch(false);
+      await aggSetPanel(false);
+      aggPush("聚合样本己", 71012, "聚合十二号", Date.now(), FACE_512);
+      aggPush("聚合样本己", 71013, "聚合十三号", Date.now() + 50, FACE_512);
+      aggPush("聚合样本己", 71014, "聚合十四号", Date.now() + 100, FACE_512);
+      await sleep(450);
+      var aggPlainRows = aggRowsOf("聚合样本己");
+      out.aggregateSwitchOffRows = aggPlainRows.length;
+      out.aggregateSwitchOffKeepsRows = aggSwitchOff && aggPlainRows.length === 3 &&
+        aggPlainRows.every(function (r) {
+          return r.querySelector('[data-testid="db-msg-spam"]') === null &&
+            r.querySelector('[data-testid="db-msg-avatar-stack"]') === null;
+        }) &&
+        aggCellOf(aggPlainRows[0], "db-msg-name") !== null;
+      var aggSwitchOn = await aggSetSwitch(true);
+      var aggPanelClosed = await aggSetPanel(false);
+      await sleep(450);
+      var aggBackRows = aggRowsOf("聚合样本己");
+      out.aggregateSwitchBackFolds = aggSwitchOn && aggBackRows.length === 1 &&
+        aggCellOf(aggBackRows[0], "db-msg-spam") === "刷屏 ×3";
+      // 收尾必须**确定**：本段结束时筛选面板要是关着的。紧邻的 26 那一段会在同一枚工具行按钮上
+      // 开一次筛选面板，并把那个节点存进**块间共享的** `filterPanel`（var 声明同一条函数作用域）
+      // 一路用到 27 —— 面板要是漏着，26 那一次点击只是把它**关掉**，后续 clickLabelIn 静默失效
+      // （26 的注释记着改前实测过的这条坑）。这条断言把「漏着」从静默变成当场红。
+      out.aggregatePanelClosedAfterToggle = aggPanelClosed;
       snap();
       aggregateBlockRan = true;
     } catch (e) {

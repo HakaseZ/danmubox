@@ -18,7 +18,7 @@ interface Props {
 /**
  * 筛选与显示面板（issue #8 第一条：不再常驻占一行，收进工具栏弹出的面板）。
  *
- * 两块：消息类型白名单 / 辅助功能（字号滑杆 + 六枚显示开关），键名全部来自契约 §8 的
+ * 两块：消息类型白名单 / 辅助功能（字号滑杆 + 七枚显示开关），键名全部来自契约 §8 的
  * 权威清单。两块的表单**同一形态**：两列勾选清单（issue 2609160959 第 3、4 条 ——
  * 消息类型原先是一排按钮样的芯片，用户要的是勾选清单；辅助开关跟随同一形态）。
  *
@@ -59,11 +59,13 @@ export function FilterBar({ prefs, onChange }: Props) {
 
       <section className={styles.filterSection} data-testid="db-filter-aux">
         <h3>辅助功能</h3>
-        {/* 字号滑杆占满一整行（它需要宽度），六枚显示开关与「消息类型」同款两列清单：
+        {/* 字号滑杆占满一整行（它需要宽度），七枚开关与「消息类型」同款两列清单：
             窄屏 360 与宽屏都是同一份 DOM（docs/ui.md §8.5、§9.1）。
-            末两枚是低价礼物（单个价值 ≤ 0.1 元）的两枚开关（issue 2609162056 第 3、4 条）：
+            中间两枚是低价礼物（单个价值 ≤ 0.1 元）的开关（issue 2609162056 第 3、4 条）：
             「折叠低价礼物」只改礼物栏的分组形状、「剔除低价礼物统计」只改折叠头的统计口径，
-            两枚**默认都关**（契约 §8）—— 默认形态因此与改前一致。 */}
+            两枚**默认都关**（契约 §8）—— 默认形态因此与改前一致。
+            最后一枚是**刷屏弹幕聚合**（issue 202609211940 第 3 条，`ui.danmaku_aggregate`）：
+            **默认开**（改前的形态就是折着的），关掉即逐条显示（`aggregate.ts`）。 */}
         <div className={styles.filterFields}>
           <label className={styles.filterRange}>
             字号
@@ -137,6 +139,16 @@ export function FilterBar({ prefs, onChange }: Props) {
               }
             />
             剔除低价礼物统计
+          </label>
+          <label title="刷屏弹幕聚合">
+            <input
+              type="checkbox"
+              checked={prefs["ui.danmaku_aggregate"]}
+              onChange={(event) =>
+                onChange({ "ui.danmaku_aggregate": event.target.checked })
+              }
+            />
+            刷屏弹幕聚合
           </label>
         </div>
       </section>

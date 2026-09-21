@@ -1068,6 +1068,32 @@
   justify-content: center;
 }
 
+/* 聚合行的头像列（issue 202609211940 第 3 条）：叠起来最多 3 张，比单张宽 —— 列宽因此
+   随内容走（覆盖上面那条 `width`）。列高仍是 `--avatar`：叠层不比单张高，行高照旧由正文块的
+   两行决定。**列变宽是有意的**：这一行的身份位改印「刷屏 ×N」（不再有昵称），正文起点因此
+   右移半个头像宽，换来的是「谁在刷」一眼看得出。 */
+.avatarColStack {
+  width: auto;
+}
+
+/* 刷屏那几位发言者的头像：沿 X 轴依次向右错开 **30% 头像宽**（`AVATAR_STACK_OFFSET`，
+   MessageRow），后一张压在前一张上；容器宽 = 头像宽 + (张数 - 1) × 30%（`left` / `z-index`
+   由组件按**实际画出来的张数**现给：空 url 的观众不占位，几张就按几张错开）。
+   绝对定位的每一片：`z-index` 递减 ⇒ **最左那张在最上层**，压住右边那几片的左半边。 */
+.avatarStack {
+  position: relative;
+  height: var(--avatar);
+}
+
+/* 每一片：`display: flex` 是必须的 —— `Avatar` 的占位块（加载失败时那个首字符圆）是
+   `.avatarFallback`，内联元素上的 width / height 会被忽略；作为弹性项被块级化才有尺寸
+   （`.avatarCol` 一直靠这一点，叠层里不能丢）。 */
+.avatarStackItem {
+  position: absolute;
+  top: 0;
+  display: flex;
+}
+
 /* 发言者头像（Message.face）；加载失败时用昵称首字符占位（Avatar 组件） */
 .avatar {
   flex: none;
@@ -1172,6 +1198,18 @@
   max-width: 14em;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 聚合行的身份位（issue 202609211940 第 3 条）：这里原本是「昵称 + 身份牌」，聚合行改印
+   「刷屏 ×N」—— **一个用户名都不出现**（谁在刷已经由头像列那几片叠着的头像说了）。
+   取昵称同档字号与同一个弱化色（它是同一格位置的替身），不取 `.merged` 那条：
+   那是「跟在正文后面的行内一格」，有左外边距；这一格是身份行的**第一格**，贴左边界。
+   等宽数字：`N` 涨上去时这一格不左右抖。 */
+.spam {
+  font-size: var(--fs-3);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -2407,65 +2445,6 @@
   border-top: 1px solid var(--border);
   padding: var(--sp-2) var(--sp-3);
   background: var(--bg-input);
-}
-
-/* --------------------------------------------------------------------------
-   一键诊断（Diagnose 票，docs/ui.md §3.6）：采集中 / 刚导出两块都落在这里。
-   与 .logs 同款位置（房间页底部、沉浸态一并收起），因此沿用同一套排版口径；
-   进程里可能还有别的 agent 在改这个文件，本段只属于本票。
-   -------------------------------------------------------------------------- */
-.diagnose {
-  border-top: 1px solid var(--border);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--bg-input);
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  font-size: var(--fs-1);
-  color: var(--fg-dim);
-}
-
-.diagnoseLine {
-  color: var(--fg);
-}
-
-/* 路径可能要换行（Android 上是 /sdcard/Download/…），用等宽体便于肉眼核对。 */
-.diagnosePath {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  word-break: break-all;
-  user-select: text;
-}
-
-.diagnoseNote {
-  color: var(--fg-dim);
-  line-height: 1.4;
-}
-
-.diagnoseActions {
-  display: flex;
-  gap: var(--sp-2);
-  margin-top: var(--sp-1);
-}
-
-/* 小按钮沿用现有口径：`--bg-elevated` 底、发丝线边、`--r-3` 圆角
-   （与 .followItem / .toast 同一套令牌，见 docs/ui.md §9.2）。 */
-.diagnoseButton {
-  font: inherit;
-  color: var(--fg);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--r-3);
-  padding: var(--sp-1) var(--sp-3);
-  cursor: pointer;
-}
-
-.diagnoseButton:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
-.diagnoseButton:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* ==========================================================================

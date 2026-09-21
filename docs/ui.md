@@ -166,7 +166,7 @@
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-mention` / `db-msg-body` / `db-msg-sc-card` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-chat-area` / `db-msg-count` / `db-gift-dock` / `db-gift-area` / `db-gift-scroll` / `db-gift-list` / `db-gift-anchor` / `db-gift-row` / `db-gift-avatar` / `db-gift-avatar-col` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-sc-card` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item` / `db-diagnose` / `db-diagnose-path` / `db-diagnose-finish`），冒烟脚本按它定位，不依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col` |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-avatar-stack` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-spam` / `db-msg-mention` / `db-msg-body` / `db-msg-sc-card` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-chat-area` / `db-msg-count` / `db-gift-dock` / `db-gift-area` / `db-gift-scroll` / `db-gift-list` / `db-gift-anchor` / `db-gift-row` / `db-gift-avatar` / `db-gift-avatar-col` / `db-gift-avatar-stack` / `db-gift-identity` / `db-gift-name` / `db-gift-spam` / `db-gift-badges` / `db-gift-body` / `db-gift-sc-card` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col`。口径：**`db-msg-count` 现在只属于礼物连击与低价礼物桶**（弹幕聚合行不再画行内 `×N`，数量已印在身份位的「刷屏 ×N」里，§8.4 第二条） |
 
 ### 2.3.1 沉浸模式（需求 §2.11）
 
@@ -228,7 +228,8 @@
 | `Avatar.tsx` | 头像：空 URL 不渲染、首字回退、加载失败回退（§4.2） |
 | `back.ts` | 系统返回手势的 JS 端桥：`window.__danmuboxHandleBack` 与两级登记表（§2.6） |
 | `filtering.ts` | 纯函数层（不含 React、不碰 store）：徽标派生、粉丝牌兜底色、过滤判据、计数格式、关注排序、房间命名、分页、**显示行管线**（过滤 + 礼物连击折叠，§8.4）、时间格式化 |
-| `aggregate.ts` | 纯函数层：**弹幕聚合**（跨观众短时同文本折成一行，§8.4 第二条）与它的三个规范性常量（契约 §4）；只在 `MessageList` 的弹幕区那一份上跑 |
+| `aggregate.ts` | 纯函数层：**弹幕聚合** —— 跨观众短时同文本折成一行（折叠门槛 ≥ 3 条 **且** 去重后 ≥ 2 位不同 uid；头像列堆叠 `senders` 前 3 位、身份位印「刷屏 ×N」、不再画行内 `×N`，§8.4 第二条）与它的四条公开常量 + 一条判据常量（契约 §4）；只在 `MessageList` 的弹幕区那一份上跑 |
+| `aggregate.test.ts` | 纯函数层的机制级验证（在 `apps/desktop/ui` 下跑 `node --test src/aggregate.test.ts`，9 条用例）：折叠门槛（两条逐条显示、第三条到齐才并成一行）、观众门槛（同一个人的三条重复逐条）、窗口是锚点起的**非滑动**窗口、头像列只画前 3 位、条数上限封口、关掉 `ui.danmaku_aggregate` 原样返回入参、折叠不改入参、只有弹幕参与、本地乐观行与空正文不参与（§8.4 第二条） |
 | `session-messages.ts` | 纯函数层：**房内会话消息列表的规则** —— 一条实时消息入列的判据（同一条只算一次 + `local_id` 只进不退）、`history_query` 快照怎么落地、会话换代（「断开连接」后再「刷新」）时列表怎么换（§2.4）。`store.ts` 只做接线，规则住这里是为了能被 `node --test` 钉住（`session-messages.test.ts`） |
 
 ### 2.6 系统返回手势（Android 侧滑 / 三键返回）
@@ -276,12 +277,12 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 |---|---|
 | 返回 | **圆形左箭头按钮**（几何由 `--ctl-round` 一处给出；可访问名仍是「返回房间列表」）。回到房间列表页（等同关闭当前房间页）。**顶栏的圆形控件只剩它**与 `⋯`。Android 的系统返回手势第 2 级与它是**同一条路**（§2.6） |
 | 两枚图标的规范 | **共用同一套矢量规范**。规范四条：① 同一个 `viewBox="0 0 24 24"` 与同一个 `.ctlIcon` 盒（60% × `--ctl-round` = 24px，缩放系数正好 1）；② 同一条 `stroke-width: 1.75`（写死在 SVG 里，不随字号 / 字体变）+ `stroke-linecap/linejoin="round"`；③ 两枚的墨迹都**居中于 (12,12)**；④ 主轴尺寸都是 **16 单位**（箭头的**高** = ⋯ 的**宽**），而 `⋯` 的圆点直径 = **2 × 描边宽**（= 3.5 —— 一个圆点就是一个零长度描边段的圆头，Material 同款比例）。控件尺寸仍是 `--ctl-round` = 40 × 40 正圆。冒烟按 `iconDotsTwiceStroke` / `iconSameBox` / `iconCapsShared` / `iconInkCentered` / `iconSameDominantExtent` / `iconControlsSameSize` 断言，量到的两个墨迹厚度进 `iconBackInkThicknessPx` / `iconMoreInkThicknessPx`。**这一套规范的另外两枚**在房管面板（§4.9）：X 关闭与「清单 + 勾」批量 —— 同一个 `viewBox` / `.ctlIcon` 盒、同一条 `stroke-width: 1.75` 与 round 线帽接合、墨迹同样居中于 (12,12)，主轴同样是 16 单位 |
-| 状态点 | **绿 = 开播 / 红 = 下播 / 灰 = 未连接**。判据只有一条 —— `liveKindOf`（`apps/desktop/ui/src/liveKind.ts:15`；`RoomView.tsx:188` 与房间标签条都调它）：连接态（`danmubox://status`）不是 `connected`，**或**列表载荷的 `connected` 为假 → **灰**（没连上就不知道在不在播）；连上了且 `live_status == 1` → **绿**；其余（`0` 下播、`2` 轮播）→ **红**（轮播不是开播）。任一说没连上就先点灰，不许把「已经断了」一直显示成红 / 绿。色值走 `--live-on` / `--live-off` / `--live-idle`。**房间标签页上那颗点走的是同一个 `liveKindOf`、同一套令牌、同一条 `.liveDot` 规则**，因此同一状态下两处必然是同一个色。**看得见的那颗点直径 `--live-dot` = 8px**：它画在**外壳**里（`db-live-dot-box`，仍是 `--sp-3` = 12px），因此**热区 / 悬停面不跟着缩**。文案只进 `title` / `aria-label`（「开播 / 下播 / 未连接」），**不上屏** |
+| 状态点 | **绿 = 开播 / 红 = 下播 / 灰 = 未连接**。判据只有一条 —— `liveKindOf`（`apps/desktop/ui/src/liveKind.ts:15`；`RoomView.tsx:173` 与房间标签条都调它）：连接态（`danmubox://status`）不是 `connected`，**或**列表载荷的 `connected` 为假 → **灰**（没连上就不知道在不在播）；连上了且 `live_status == 1` → **绿**；其余（`0` 下播、`2` 轮播）→ **红**（轮播不是开播）。任一说没连上就先点灰，不许把「已经断了」一直显示成红 / 绿。色值走 `--live-on` / `--live-off` / `--live-idle`。**房间标签页上那颗点走的是同一个 `liveKindOf`、同一套令牌、同一条 `.liveDot` 规则**，因此同一状态下两处必然是同一个色。**看得见的那颗点直径 `--live-dot` = 8px**：它画在**外壳**里（`db-live-dot-box`，仍是 `--sp-3` = 12px），因此**热区 / 悬停面不跟着缩**。文案只进 `title` / `aria-label`（「开播 / 下播 / 未连接」），**不上屏** |
 | 状态点的 `live_status` 从哪来 | 两条来源，落在同一个 `rooms[].live_status` 上：**① 长连接的实时事件** —— `LIVE` / `PREPARING` 到达即改（`danmubox://room`，`contract.md` §6），**不需要重连、不需要手动刷新**，`0.35s` 内房间头与标签页两处一起变色（冒烟按 `liveDotFollowsStatus` 断言）；**② 列表页那一拍** —— 停在列表页时每 30 秒用上游的只读值纠一次（§2.2），用于「没打开、也不在连接里的房间」。两条互不冲突：实时那条是快路径，周期那条是权威值 |
 | 标题 / 房间号 | 房间元信息（`follow_list` / `rooms_list` / `getRoomPlayInfo` 解析结果）；**紧跟状态点右侧、同一排**，不再独占一排。放不下时**循环滚动**（marquee，见下），不再用省略号截断；完整标题始终在 `title` 属性里 |
 | 观众数 | 当前在线（`ONLINE_RANK_COUNT` 的 `online_count`）与累计看过（`WATCHED_CHANGE` 的 `num`），两个都显示；上游还没给过的一侧不显示，不用 `—` 或 `0` 顶替。人气值不再展示 |
 | 电池 | **不在顶栏**：它是输入区工具行里、发送按钮左侧的一枚控件，且**不是圆形**（见 §6.4） |
-| `⋯` 菜单 | **圆形按钮**，动作收在右键菜单里：房管面板 / 刷新连接 / 断开连接 / 显示·隐藏日志 / 一键诊断（见 §3.2、§3.4、§3.5） |
+| `⋯` 菜单 | **圆形按钮**，动作收在右键菜单里：房管面板 / 刷新连接 / 断开连接 / 显示·隐藏日志（见 §3.2、§3.4） |
 
 **标题的循环滚动**：
 
@@ -347,25 +348,6 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 与登录态区分 | `danmubox://session` 只推房内身份（`RoomSession`，带 `is_admin`）；登录态（`SessionState`，带 `logged_in`）由 `session_status` 命令现取，**不走事件总线**（契约 §7、`ipc.md` §4） |
 | 生命周期 | 会话级、不落盘；关标签 / 移除房间 / **断开连接**即丢弃（断开即这次会话结束，身份不再成立）；**切房保留** —— 房间并没有断，切回来还是同一次会话，房管入口因此不会白闪一下；会话重建（断开后再连 / 刷新重建）时由引擎重取经 `danmubox://session` 覆盖（`ipc.md` §8.1） |
 
-### 3.5 「一键诊断」（`⋯` 菜单最后一项）
-
-用途：把「连上了却收不到弹幕」这类一时说不清的问题**变成一份能发出去的文件**
-（命令 `diagnose_start` / `diagnose_export`，契约 §4.4；读法见 `operations.md` §2.9）。
-
-| 项 | 规则 |
-|---|---|
-| 位置 | 房间头 `⋯` 菜单的**最后一项**，文案「一键诊断」；采集中改成「诊断采集中…」并**置灰**（第二次点击只会重置倒计时，让人误以为在重连） |
-| 触发 | `invoke('diagnose_start', { engine: navigator.userAgent })`。`engine` 是渲染引擎标识：内核版本只有页面自己知道，报告头要用它（桌面端 = WKWebView / WebView2，Android = 系统 WebView） |
-| 窗口 | **固定 180 秒**（契约 §4.4）。后端返回 `{ started_ms, ends_ms }`，界面按 `ends_ms` 每秒倒计时；到点**自动**调 `diagnose_export` —— 用户不必守着，也不会有「采完忘了导出」这一档 |
-| 提前结束 | 面板上的「提前结束并导出」：立即调 `diagnose_export`（与到点自动收工同一条路）；「放弃」则不导出、直接清掉本次采集的本地状态（后端窗口到点自行失效，因此不会留下「永远在采」的状态） |
-| 状态区 | 页面底部一块（与日志块同款位置，沉浸态一并收起，`data-testid="db-diagnose"`）：采集中显示倒计时与「**不会自动发送任何数据**」（本仓无遥测，这句是给用户看的承诺）；导出后显示 `path` +「复制路径」 |
-| 隐私措辞 | 采集中那一行必须写明「只在本机采集连接信息，**不会自动发送任何数据**；导出后发给谁由你决定」——用户要的是「排障可交」，不是「悄悄上报」 |
-| 一次一个文件 | 一次诊断恰好产生一个文件（`contract.md` §4.4）；界面不缓存、不重写、不生成第二个。重复点菜单项不会产生第二个文件（采集中该项置灰） |
-| 文件位置 | 桌面端 `~/Downloads/danmubox-diagnose-<UTC 时间戳>.txt`；Android 公共下载目录 `/sdcard/Download/` 下的同名文件。文案只展示后端返回的 `path`（界面**不自己拼路径**，各平台规则只有一处实现） |
-| 与日志块的分工 | 「显示日志」是**现场看**（进程内最近 200 行，`ipc.md` §8）；「一键诊断」是**交出去**（脱敏后落盘、含字段与连接事实）。两者共用同一份 `tracing` 输出，不各记一套 |
-| 生命周期 | 采集窗口与导出结果都是房间页的临时状态；**切标签不重置**（采集的是这个进程的连接，与在看哪个房间无关），返回房间列表则随组件卸载消失（此时不会产生文件） |
-| 稳定钩子 | `db-diagnose` / `db-diagnose-status` / `db-diagnose-path` / `db-diagnose-finish` / `db-diagnose-abort` / `db-diagnose-copy` / `db-diagnose-close` |
-
 ---
 
 ## 4. 消息渲染
@@ -398,18 +380,18 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 昵称 | 身份行的**第一格**（身份牌跟在它后面），`--fg-dim`（低正文一档），**不吃**弹幕自身颜色：普通弹幕的颜色是 `16777215`（白），套到人名上在浅色主题里等于隐形。超长时 14em 截断，名字 + 牌一起超出行宽时由身份行截断 |
 | @ 高亮（正文内） | 正文里的 `@昵称` **就地强调**：身份牌后那枚「回复 @某人」的牌子与正文里自带的 @ 重复，**牌子已删**；@ 由展示层从 `content` 里识别（`@` 之后到空白或句读为止都算名字），命中的一段套 `.mention`（`data-testid="db-msg-mention"`），**只改字体颜色** —— 色值是专为正文取的 `--mention`（深色 `#fb7299` 品牌粉 / 浅色 `#c2185b`；对画布与面板两面都 ≥ 4.5:1，见 §9.2），**不是**身份牌的字符色 `--badge-fg`（那是彩底上的白字，搬到正文里在深色下与正文近乎同色、浅色下白压米色 1.2:1）；**没有底色、没有内边距、没有圆角**。它与回复关系**无关**：没有 `reply_*` 字段的弹幕，正文里有 @ 照样高亮；反过来 `reply_to_uid != 0` 而正文里没有 @ 时，行内不再出现任何「回复」字样（上游 `reply_uname_color` 因此不再被界面消费，留在契约 §5 里）。高亮只加壳不改字，冒烟按 `replyChipGone`（`db-msg-reply` / `db-msg-reply-name` 一律不存在）、`mentionHighlighted`、`mentionColorVisible`（色值 = `--mention`、对 `--bg` 与 `--bg-elevated` 都 ≥ 4.5:1、与正文色不同且有彩 —— 深浅两套主题各判一遍）、`mentionNoBackground`（背景图 none / 底色透明、内边距与圆角为 0）、`mentionWorksWithoutReply`、`mentionBodyTextIntact` 断言 |
 | 正文 | 折行；**不吃弹幕自身颜色**（`Message.color` 界面一处都不消费，正文与昵称 / 时间戳 / 徽标同用主题前景色，见 §4.3）；超过 4 行截断并给「展开」 |
-| 合并计数 | 礼物行始终渲染 `×N`（连击折叠后的 `count`，未折叠时为 `×1`）；其余 `kind` 只有**弹幕聚合行**出现 `×N` —— `count > 1` 只可能来自礼物连击或弹幕聚合（§8.4 的两条规则）。`×N` 是正文**行内**末尾一格：跟在最后一行文字后面，不另占一行、不另开一栏；聚合行在它**后面**紧跟一格「都是谁」（`db-msg-senders`，同一档次级文字，§8.4） |
+| 合并计数 | 礼物行**始终**渲染 `×N`（连击折叠后的 `count`，未折叠时为 `×1`，§8.4 第一条）；低价礼物桶也用它（§5.3）。`×N` 是正文**行内**末尾一格：跟在最后一行文字后面，不另占一行、不另开一栏。**弹幕聚合行不再画行内 `×N`** —— 数量已印在身份位的「刷屏 ×N」里（`db-msg-spam`，§8.4 第二条） |
 
 | kind | 行色（`app.module.css`） | 其它视觉 | 备注 |
 |---|---|---|---|
 | `danmaku` | 无专属 kind 类 → 继承主题前景 `--fg`；昵称 `--fg-dim`、时间戳 `--fg-muted` | 正文折行 + 悬挂缩进（见上表） | **不消费** `Message.color`（§4.3）；正文色与其它 kind 一致 |
-| `gift` | `--ok`（`.kindGift`，`app.module.css:1320`） | 正文是上游给的「`<动作词> <礼物名>`」；行尾 `×N`；金额一格只在独立礼物栏那一份出现（`MessageRow` 的 `showGiftAmount`） | 行里**不画金额**（上游把金额放在 `amount` 而不是正文里，行内再塞一格会与 `×N` 挤在一起）；金额在**独立礼物栏**里按「`<金额> 元`」呈现（金瓜子 ÷ 1000，见 §5.3 与契约 §5「金额单位」） |
-| `superchat` | `--warn`（`.kindSuperchat`，`app.module.css:1323`）；卡片背景与边框取自 SC 档位 token `--sc-1 … --sc-5`（`.scTierN` 把命中的那一枚写进 `--sc-tier`，`app.module.css:1349-1363`） | 金额行独占一行、低一档加粗。**卡片只盖内容部**（需求 §2.11）：框从身份行的**下一行**开始（`margin-top: --sp-1` 那道缝），包住正文行 + 金额行，**头像列与身份行都在框外**（`scCardRowUntouched` 断言） | 高度随内容行数增长。**档位边界是本地取值**：`amount`（元）< 100 → `--sc-1`、< 500 → `--sc-2`、< 1000 → `--sc-3`、< 2000 → `--sc-4`、≥ 2000 → `--sc-5`（分界取官方 SC 可购档位 30 / 50 / 100 / 500 / 1000 / 2000 元的中段），`amount = 0`（上游没给价）落最低档。**未与网页端卡片逐档比对**，那一条仍挂在 `protocol.md` 附录 A 的待校准表里（A.2「SC 卡片配色档位边界」）；这一段的色值因此是【B+】本地取值，不是官方取色 |
-| `interact` | `--fg-dim`（`.kindInteract`，`app.module.css:1376`） | 显示一会儿后自动消失（§4.8） | 弱化显示；默认显示一会儿后自动消失，见 §4.8 |
-| `guard` | `--warn`（`.kindGuard`，`app.module.css:1379`） | 大航海徽标按 `guard_level` 取 `--guard-1` / `--guard-2` / `--guard-3`（§4.2） | 文案见 `protocol.md` 附录 A；金额同样只在独立礼物栏里呈现 |
-| `system` | `--fg-dim` + 斜体（`.kindSystem`，`app.module.css:1372`） | 不渲染头像列（`MessageRow`：`kind !== "system"` 才画 `db-msg-avatar-col`） | 由 `core` 归一化后的系统事件；**默认不渲染**（`filter.kinds` 白名单默认不含它，见 §8.1 / §4.8） |
+| `gift` | `--ok`（`.kindGift`，`app.module.css:1358`） | 正文是上游给的「`<动作词> <礼物名>`」；行尾 `×N`；金额一格只在独立礼物栏那一份出现（`MessageRow` 的 `showGiftAmount`） | 行里**不画金额**（上游把金额放在 `amount` 而不是正文里，行内再塞一格会与 `×N` 挤在一起）；金额在**独立礼物栏**里按「`<金额> 元`」呈现（金瓜子 ÷ 1000，见 §5.3 与契约 §5「金额单位」） |
+| `superchat` | `--warn`（`.kindSuperchat`，`app.module.css:1361`）；卡片背景与边框取自 SC 档位 token `--sc-1 … --sc-5`（`.scTierN` 把命中的那一枚写进 `--sc-tier`，`app.module.css:1387-1401`） | 金额行独占一行、低一档加粗。**卡片只盖内容部**（需求 §2.11）：框从身份行的**下一行**开始（`margin-top: --sp-1` 那道缝），包住正文行 + 金额行，**头像列与身份行都在框外**（`scCardRowUntouched` 断言） | 高度随内容行数增长。**档位边界是本地取值**：`amount`（元）< 100 → `--sc-1`、< 500 → `--sc-2`、< 1000 → `--sc-3`、< 2000 → `--sc-4`、≥ 2000 → `--sc-5`（分界取官方 SC 可购档位 30 / 50 / 100 / 500 / 1000 / 2000 元的中段），`amount = 0`（上游没给价）落最低档。**未与网页端卡片逐档比对**，那一条仍挂在 `protocol.md` 附录 A 的待校准表里（A.2「SC 卡片配色档位边界」）；这一段的色值因此是【B+】本地取值，不是官方取色 |
+| `interact` | `--fg-dim`（`.kindInteract`，`app.module.css:1414`） | 显示一会儿后自动消失（§4.8） | 弱化显示；默认显示一会儿后自动消失，见 §4.8 |
+| `guard` | `--warn`（`.kindGuard`，`app.module.css:1417`） | 大航海徽标按 `guard_level` 取 `--guard-1` / `--guard-2` / `--guard-3`（§4.2） | 文案见 `protocol.md` 附录 A；金额同样只在独立礼物栏里呈现 |
+| `system` | `--fg-dim` + 斜体（`.kindSystem`，`app.module.css:1410`） | 不渲染头像列（`MessageRow`：`kind !== "system"` 才画 `db-msg-avatar-col`） | 由 `core` 归一化后的系统事件；**默认不渲染**（`filter.kinds` 白名单默认不含它，见 §8.1 / §4.8） |
 
-行内不画 kind 的单字图标、也不画行首竖条：`MessageRow` 只给行根挂 `styles.kind*` 类，`app.module.css` 的 `.kind*` 规则只改 `color`（`system` 另加 `font-style: italic`），行内没有图标节点。行内字号档由元素规则给出、不随 kind 变：正文吃弹幕区基准（`MessageList.tsx:211` 把 `ui.font_scale` 写成 `em` 落在滚动容器上）、昵称 `--fs-3`（`app.module.css:1167`）、时间戳 `--fs-2`（`app.module.css:1043`）。
+行内不画 kind 的单字图标、也不画行首竖条：`MessageRow` 只给行根挂 `styles.kind*` 类，`app.module.css` 的 `.kind*` 规则只改 `color`（`system` 另加 `font-style: italic`），行内没有图标节点。行内字号档由元素规则给出、不随 kind 变：正文吃弹幕区基准（`MessageList.tsx:216` 把 `ui.font_scale` 写成 `em` 落在滚动容器上）、昵称 `--fs-3`（`app.module.css:1193`）、时间戳 `--fs-2`（`app.module.css:1043`）。
 
 色值为本项目本地设计 token；与 ac站网页端配色的差异未实测，见 `protocol.md` 附录 A。
 
@@ -1021,7 +1003,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | `getScrollElement` | 聊天流容器 ref | 元素级虚拟化 |
 | `estimateSize` | 按 `kind` 基准行高 × `ui.font_scale` 估算 | 实际高度由 `measureElement` 写回 |
 | `getItemKey` | `local_id`；连击折叠行取行内首条消息的 `local_id` | 契约 §5：`local_id` 仅用于 UI key 与本地引用 |
-| `overscan` | 12（固定值，无窄屏分支；`MessageList.tsx:151`） | 真机不达标时按 `protocol.md` 附录 A 的实测校准下调 |
+| `overscan` | 12（固定值，无窄屏分支；`MessageList.tsx:156`） | 真机不达标时按 `protocol.md` 附录 A 的实测校准下调 |
 | `measureElement` | 开启 | 动态行高实测写回 |
 | `scrollToFn` | 自定义 | 跟随模式瞬时定位（§7.3） |
 | `lanes` | 1 | 单列 |
@@ -1051,7 +1033,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 规则：
 
-1. 距底阈值 8px 是唯一判定依据，不用滚动方向启发式（手势惯性下会抖动；实现锚点 `apps/desktop/ui/src/components/MessageList.tsx:217` 的 `el.scrollHeight - el.scrollTop - el.clientHeight < 8`）。
+1. 距底阈值 8px 是唯一判定依据，不用滚动方向启发式（手势惯性下会抖动；实现锚点 `apps/desktop/ui/src/components/MessageList.tsx:222` 的 `el.scrollHeight - el.scrollTop - el.clientHeight < 8`）。
 2. 初始状态由 `ui.auto_scroll` 决定；暂停 / 恢复时把新状态写回 `ui.auto_scroll`，作为下次进入房间的初始值。
 3. 独立礼物栏（`ui.gift_panel` 为真时）各自维护跟随状态，互不影响。
 4. 「回到最新」使用平滑滚动。
@@ -1108,7 +1090,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 ### 8.2 字号
 
-`ui.font_scale` 是一个**连续数值滑杆**：没有命名预设，也不吸附到整档。键的类型 / 范围 / 默认值见契约 §8（`number` / `0.8–2.0` / 默认 `1.0`），实现在 `FilterBar.tsx:70-79`（`<input type="range" min={0.8} max={2} step={0.02}>`）。
+`ui.font_scale` 是一个**连续数值滑杆**：没有命名预设，也不吸附到整档。键的类型 / 范围 / 默认值见契约 §8（`number` / `0.8–2.0` / 默认 `1.0`），实现在 `FilterBar.tsx:72-81`（`<input type="range" min={0.8} max={2} step={0.02}>`）。
 
 所有字号 = 标准档基准（body 的 `--fs-root`，14px）× `ui.font_scale`，但**只有弹幕区吃这个滑杆**（需求 §2.8）。实现上**不给每处写 px**：弹幕区（`MessageList` 的 `.scroller`）把 `ui.font_scale` 写成 `em` 落在容器上，**三个弹出面板与房管面板不乘它**——它们吃 body 的 `--fs-root`，其余字号一律走 `--fs-1 … --fs-8` 的 em 令牌（§9.2）。因此滑杆一路作用到时间戳、昵称、徽标与行内表情尺寸，而面板的字号与定高（`--panel-h`）保持常数。变更后清空高度缓存并按 §7.3 重建锚点。
 
@@ -1117,7 +1099,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 对象 | 视觉 | 说明 |
 |---|---|---|
 | `danmaku` / `gift` / `superchat` / `guard` | 行色见 §4.1 的 kind 表 | 正文不透明 |
-| `interact` | 行色 `--fg-dim`（§4.1）；`ui.interact_auto_hide` 打开时按 8 秒淡出（`.autoHide` → `@keyframes interactFade`，`app.module.css:1127-1141`） | 另受 §4.8 的自动消失控制 |
+| `interact` | 行色 `--fg-dim`（§4.1）；`ui.interact_auto_hide` 打开时按 8 秒淡出（`.autoHide` → `@keyframes interactFade`，`app.module.css:1153-1167`） | 另受 §4.8 的自动消失控制 |
 | `system` | 行色 `--fg-dim` + 斜体（`.kindSystem`）；默认不渲染（§4.8） | 与其它行同一套排版（不居中） |
 
 > **不提供**透明度调节（原 `ui.opacity` 已移除）：上表是每种 `kind` 的固定视觉档位，不是可调项；重做透明度调节见 [`roadmap.md`](roadmap.md) §2.3。
@@ -1151,7 +1133,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 项 | 礼物连击折叠 | 弹幕聚合 |
 |---|---|---|
 | 折的是 | **同一个动作**的重复（同一次连击） | **不同的人**说了**同一句话** |
-| 判据 | 相邻 + 同 `combo_id` | 相邻 + 同**聚合键** + 短窗口 + **至少两位不同观众** |
+| 判据 | 相邻 + 同 `combo_id` | 相邻 + 同**聚合键** + 5 秒窗口 + **≥ 3 条且至少两位不同观众** |
 | 落点 | `filtering.toDisplayRows` | `aggregate.ts`（弹幕区那一份行上，礼物栏不经过） |
 
 **第一条：礼物连击折叠。** 同一个 `combo_id`（上游 `batch_combo_id`，契约 §5）且**相邻**的礼物折叠成一行：`count` 记折叠了几条、`amount` 累加为整串总额，正文行尾渲染 `礼物 ×N`。这是**礼物连击**的固有形态（刷屏本来就是同一个动作的重复），不是可关的设置。
@@ -1165,21 +1147,23 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 行数变化 | 折叠使行数减少，行高按 §7.1 重新测量、锚定按 §7.3 恢复 |
 | 计数上限 | `N` 显示上限 999，超过仍显示 999（计数本身不封顶） |
 
-**第二条：弹幕聚合（跨观众同文本）。** **不同的观众**在**短时间窗口**里发**同一条**弹幕时折成一行：行尾照旧是 `×N`（`count` = 折了几条），紧跟一格写「都是谁」。三条参数（窗口 / 条数上限 / 名单长度）与归一化规则是规范性常量，见契约 §4 与 `aggregate.ts`。
+**第二条：弹幕聚合（跨观众同文本）。** **不同的观众**在短时间窗口里发**同一条**弹幕够**多**时折成一行：**头像列**堆叠前几位的头像、**身份位**印「刷屏 ×N」，**一个用户名都不出现**。**四条公开常量**（窗口 / 条数上限 / 折叠门槛 / 头像张数）加**一条判据常量**（观众门槛）与归一化规则都是规范性常量，见契约 §4 与 `aggregate.ts`。
 
 | 项 | 规则 |
 |---|---|
-| 聚合键 | `danmaku` 的**归一化正文**：去首尾空白 → 连续空白并成一个空格 → 大小写不敏感（契约 §4）；**表情弹幕**按 `emote.emoticon_unique`，图不同即不同条。其余 `kind` **不聚合** |
-| 窗口 | `AGGREGATE_WINDOW_MS` = **5 秒**：与**锚点**（这一行的第一条）比，**非滑动** —— 窗口外的另起一行，因此一行的寿命有确定上界 |
-| 条数上限 | `AGGREGATE_MAX_COUNT` = **999**：到顶即封口，由下一条开一行新的（不必再给 `×N` 另设显示上限） |
-| 跨观众 | 至少要**两位不同观众**参与才折：还没凑齐两位时（同一个人的重复）不聚合 |
-| 相邻 | 只与当前最后一行比，不回溯修改视口上方的历史行（与连击折叠同一条口径）；中间夹了别的文本即断链 |
-| 展示 | 沿用正文行内两格：`×N`（`data-testid="db-msg-count"`，与礼物行同一格）+ 紧跟的名单格 `db-msg-senders` —— 按首次出现顺序列前 `AGGREGATE_SENDERS_SHOWN` = 3 位，多于 3 位补「等 N 人」（N = **参与观众总数**，条数由 `×N` 说）；上游没给昵称的那条按「匿名观众」计。**不另立视觉**：与 `×N` 同一档次级文字（`app.module.css` 的 `.merged`），行结构一动不动 |
-| 代表行 | 这一行的头像 / 昵称 / 徽标 / 时间戳仍是**第一条**那条消息的（React key = 第一条的 `local_id`）—— 后续观众加入**不重建节点、行不跳位** |
+| 折叠门槛 | `AGGREGATE_MIN_COUNT = 3`（`aggregate.ts:43`）：同键的一串够 **3 条**才折成一行；**不足 3 条则这一串逐条原样输出**（两条重复最常见的是同一个人连发，省下一行不值得把「谁说的」搭进去） |
+| 观众门槛 | 参与观众按 uid 去重后至少 **2 位不同 uid**（**私有**常量 `AGGREGATE_MIN_SENDERS = 2`，`aggregate.ts:60`，不出现在公开 API 里）：「同一句」在同一个人嘴里重复不叫刷屏 —— 那是一个人连发，与跨观众聚合无关 |
+| 聚合键 | `aggregateKey`（`aggregate.ts:75`）：只有 `danmaku` 取**归一化正文** —— 去首尾空白 → 连续空白并成一个空格 → 大小写不敏感（契约 §4）；**表情弹幕**按 `emote.emoticon_unique`，图不同即不同条；**空正文不聚合**；**本地乐观行**（`local_id < 0`）不参与。其余 `kind` **不聚合** |
+| 窗口 | `AGGREGATE_WINDOW_MS = 5000`（`aggregate.ts:23`）= **5 秒**：与**锚点**（这一串的第一条）比，**非滑动** —— 锚点定了就不随后续加入顺延，窗口外的另起一行，因此一行的寿命有确定上界 |
+| 条数上限 | `AGGREGATE_MAX_COUNT = 999`（`aggregate.ts:31`）：到顶即封口，由下一条开一行新的（不必再给 `×N` 另设显示上限） |
+| 相邻 | 只与当前最后一行比（这一串必须相邻），不回溯修改视口上方的历史行（与连击折叠同一条口径）；中间夹了别的键即断链 |
+| 展示 | 头像列（`db-msg-avatar-col`）里画 `senders` 的**前 `AGGREGATE_AVATARS_SHOWN = 3` 张**（`aggregate.ts:54`）：容器 `db-msg-avatar-stack`，每张沿 X 轴**错开 30% 头像宽**（`AVATAR_STACK_OFFSET = 0.3`，`MessageRow.tsx:73`）、后一张压在前一张上、**最左那张在最上层**（`z-index` 递减）；**空 `face` 不占位**（错位按实画张数现算），头像列本身照留宽。身份位印「**刷屏 ×N**」（`db-msg-spam`，N = `count`），**一个用户名都不出现**：`db-msg-name` / `db-msg-badges` 整个不画。**行内不再画 `×N`**（`db-msg-count` 不再属于聚合行）。名单格与「等 N 人」**没有**：不列名字，也不报参与总人数 |
+| 代表行 | `message` = 这一串的**第一条**（React key = 第一条的 `local_id`，头像 / 时间戳 / 正文都不动），`count` = 这一串的长度、`senders` = 去重后**前 3 位** —— 后续观众加入**不重建节点、行不跳位** |
 | 待确认行 | **不参与**（同第一条与 §4.4）：本地乐观行自己站一行，也不许开聚合 |
-| 行数变化 | 同第一条：行高按 §7.1 重新测量、锚定按 §7.3 恢复 |
+| 行数变化 | **折成一行**时行数减少，行高按 §7.1 重新测量、锚定按 §7.3 恢复；**不折的那一串行数不变**，每行逐条原样（一个行对象都不动） |
 | 礼物栏 | **不经过**它：礼物栏那份行本来就只取礼物三族（§5.3），聚合只作用弹幕流 |
-| 冒烟按 | `aggregateBlockRan` 与 `aggregate*` 一组：同文本两位观众 → **一行**、`×2`、名单里有这两位；**不同文本不聚合**（两行）；窗口外的同文本也不聚合（两行） |
+| 开关 | `ui.danmaku_aggregate`（契约 §8，默认**开**）：关掉即逐条显示（原样返回入参，不复制、不重排）—— 与礼物那两枚开关同一条口径 |
+| 冒烟按 | `aggregateBlockRan` 与 `aggregate*` 一组（`25-aggregate-jump.mjs` **五条读数**）：① 同文本 + 3 位不同观众（窗口内）→ **一行**、身份位「刷屏 ×3」、堆叠 3 张头像（错位 30%、`z-index` 递减）、无用户名 / 无徽标 / 无行内 `×N`；② **不同文本** → 两行（只认同一个聚合键），且照旧画昵称；③ 同文本但第一条落在窗口外 → 三行（锚点 = 这一串第一条，**非滑动**）；④ 三位观众里有一位**没头像** → 头像列只画两张、只错开一次；⑤ **关掉开关** → 同样三条**逐条显示**（三行、无「刷屏 ×N」、无堆叠层），点回来当场又折成一行 |
 
 ### 8.5 筛选与显示面板（工具行「筛选」）
 
@@ -1188,21 +1172,21 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 分区 | 内容 | 相关键 |
 |---|---|---|
 | 消息类型 | 六种 `kind` 白名单（`filter.kinds`，全选=不过滤） | `filter.kinds` |
-| 辅助功能 | 字号滑杆（占满一整行）、**时间戳**、互动消息自动消失、**弹幕包含礼物**、**独立礼物栏**、**折叠低价礼物**、**剔除低价礼物统计** | `ui.font_scale` / `ui.show_timestamp` / `ui.interact_auto_hide` / `ui.gift_in_danmaku` / `ui.gift_panel` / `ui.gift_collapse_cheap` / `ui.gift_exclude_cheap_stats` |
+| 辅助功能 | 字号滑杆（占满一整行）、**时间戳**、互动消息自动消失、**弹幕包含礼物**、**独立礼物栏**、**折叠低价礼物**、**剔除低价礼物统计**、**刷屏弹幕聚合**（默认开） | `ui.font_scale` / `ui.show_timestamp` / `ui.interact_auto_hide` / `ui.gift_in_danmaku` / `ui.gift_panel` / `ui.gift_collapse_cheap` / `ui.gift_exclude_cheap_stats` / `ui.danmaku_aggregate` |
 
 **两块的表单是同一形态：两列勾选清单**：
 
 | 项 | 规则 |
 |---|---|
-| 列数与铺法 | `grid-template-columns: repeat(2, minmax(0, 1fr))`，两块各自独立成网格。**按行铺**：左列 = 第 1/3/5 项、右列 = 第 2/4/6 项 —— DOM 序即阅读序，键盘 Tab 与目视顺序一致（消息类型因此是「弹幕 / SC / 大航海」一列、「礼物 / 互动 / 系统」一列；辅助功能末一行是「折叠低价礼物」与「剔除低价礼物统计」） |
+| 列数与铺法 | `grid-template-columns: repeat(2, minmax(0, 1fr))`，两块各自独立成网格。**按行铺**：左列 = 第 1/3/5/7 项、右列 = 第 2/4/6 项（DOM 序即阅读序 = `0101010`，键盘 Tab 与目视顺序一致）—— 消息类型因此是「弹幕 / SC / 大航海」一列、「礼物 / 互动 / 系统」一列；辅助功能两列各 **4 / 3 项**，末一行**只有左列的「刷屏弹幕聚合」一格**、右列空着（奇数项按行铺就是这个形状，`27-filter-panel.mjs` 量到的几何） |
 | 每一行 | 原生 `<input type="checkbox">` + 可见文字，**没有**芯片那层底色 / 描边 / 胶囊（不作按钮样）；`justify-items: start`，可点区域就是「复选框 + 文字」那一段，不留半行宽的隐形热区 |
 | 两档宽度 | 同一份 DOM：宽屏两块并排、每块两列；窄屏（≤ 520px，含最小宽度 360）两块上下排，每块仍是两列 —— 360 下每列 ≈ 160px，最长的一条「互动消息自动消失」/「剔除低价礼物统计」（8 个汉字 ≈ 96px + 复选框）放得下，**不许横向滚动** |
-| 字号滑杆 | **仍是滑杆**（`ui.font_scale`，§8.2），在「辅助功能」里占满一整行（横跨两列）；六枚开关排成它下面的两列（三行） |
+| 字号滑杆 | **仍是滑杆**（`ui.font_scale`，§8.2），在「辅助功能」里占满一整行（横跨两列）；七枚开关排成它下面的两列（**四行**） |
 | 两块标题 | 标题 = 这两块的 `<h3>`（**文案与结构一字不动**：一块一个标题 + 一份清单）。**格式醒目**：字号 `--fs-6`（≈ 1 倍正文）、字重 700、字色 `--fg`、底部一条 `--border` 发丝分隔线。这四项只作用视觉层级，不动横向盒模型（360 下两列仍是每列 ≈ 160px、面板横向溢出 0，`.filterPanel` 仍不许横向滚动） |
 | 稳定钩子 | 两块各带 `data-testid`：`db-filter-kinds` / `db-filter-aux`（冒烟按它定位，不再靠 `section` 下标） |
 | 键与语义 | 辅助块里的每一枚开关各自读写契约 §8 的一个布尔键（`filter.kinds` 仍是白名单多选：全选=不过滤、至少留一项）；末两枚低价礼物开关的口径见 §5.3「低价礼物桶」段 |
 | 面板高度 | 仍走 §9.1 的定高口径（`--panel-h`，与表情 / 短语面板同高）：窄屏下两块上下排、内容高于面板时由**面板内部滚动**承担（列表空间一口不吃）；内容高于面板时仍只由面板内部滚动吸收，面板高度不变 |
-| 冒烟按 | `filterPanelTwoBlocks`（两块 = 消息类型 / 辅助功能）、`filterPanelKindLabels` / `filterPanelAuxLabels`（文案）、`filterPanelKindsTwoColumns` / `filterPanelAuxTwoColumns`（列 / 行几何：2 列、各列等项、按行铺）、`filterPanelTwoColumnLists`、`filterPanelPlainCheckboxList` / `filterPanelSameFormBothLists`（朴素复选框、两块同形态）、`filterPanelNoButtons`、`filterPanelNoHorizontalOverflow`、`filterPanelAuxComplete`（滑杆 + 六枚复选框、无 select）、`filterPanelRangeSpansRow`（滑杆那一行仍横跨两列）、`filterPanelAuxToggles`（六枚逐枚点开再点回，偏好与复选框同步翻）、`filterPanelAutoHideCheckedByDefault` / `filterPanelTimestampUncheckedByDefault`（干净环境下两枚复选框画的**就是**契约 §8 的默认值）、`filterPanelTitlesProminent` / `filterPanelTitleCopyUnchanged`（两块标题的层级：字号 / 字重 / 字色 / 分隔线比清单项醒目，文案仍是「消息类型」「辅助功能」）断言 |
+| 冒烟按 | `filterPanelTwoBlocks`（两块 = 消息类型 / 辅助功能）、`filterPanelKindLabels` / `filterPanelAuxLabels`（文案）、`filterPanelKindsTwoColumns` / `filterPanelAuxTwoColumns`（列 / 行几何：2 列、按行铺 —— 消息类型两列各 3 项、`010101`；辅助功能 **4 / 3 项、四行、`0101010`**，逐列项数由 `27-filter-panel.mjs` 量到）、`filterPanelTwoColumnLists`、`filterPanelPlainCheckboxList` / `filterPanelSameFormBothLists`（朴素复选框、两块同形态）、`filterPanelNoButtons`、`filterPanelNoHorizontalOverflow`、`filterPanelAuxComplete`（滑杆 + 七枚复选框、无 select）、`filterPanelRangeSpansRow`（滑杆那一行仍横跨两列）、`filterPanelAuxToggles`（七枚逐枚点开再点回，偏好与复选框同步翻）、`filterPanelAutoHideCheckedByDefault` / `filterPanelTimestampUncheckedByDefault`（干净环境下两枚复选框画的**就是**契约 §8 的默认值）、`filterPanelTitlesProminent` / `filterPanelTitleCopyUnchanged`（两块标题的层级：字号 / 字重 / 字色 / 分隔线比清单项醒目，文案仍是「消息类型」「辅助功能」）断言 |
 
 | 时间戳开关 | 规则 |
 |---|---|
@@ -1237,7 +1221,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 房间头 | **一排**：◀返回（圆形）· ●状态点 · 直播间标题（`--fs-5` 加粗，放不下就循环滚动） ······ 在线 / 看过 · `⋯`（圆形）。标题不另起一排，电池不在顶栏 | 同一套一排结构；两枚圆形控件直径都是 `--ctl-round`（= `--tap-min` 40px）。标题是 `flex: 1 1 0` + `min-width: 0`，因此窄屏也**不会**被甩到第二排；任何宽度下**不许横向滚动** |
 | 共享分区（弹幕区 ⇕ 礼物栏） | **唯一的生长区与滚动区**（需求 §2.7）：弹幕区默认在上、礼物栏在下，中间一条常驻的分割条（热区 8px）；两栏都各自内部滚动，比例由 `ui.gift_pane_ratio` 驱动、上下由 `ui.gift_pane_on_top` 决定（§5.4） | 同左：两栏仍是上下分区、分割条一样常驻可拖（窄屏没有单独一套排布），最小高度也照样成立（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头） |
 | 礼物 / SC 栏 | 共享分区里的下半栏（默认）：折叠态一行（折叠头）、展开后栏内滚动，**全宽、不换行** | 同样一行折叠头与同样的分区，不换行，不挤掉弹幕区 |
-| 弹出面板（表情 / 短语 / 筛选） | 文档流里的一块，向上展开，只挤压列表（不遮最新一条）；**三个面板都是定高**（顶上没有标题、没有「关闭」）：高度 = 三行大表情格 + 面板上下内边距 + **面板的 1px 上边框**（`--panel-h`，见 §6.1 / §6.3；宽屏实测 **169.1 / 168.1 / 168.1px**（表情 / 筛选 / 短语），冒烟 `panelHeightsMatch` 钉这条，`app.module.css:1600`），**不随内容伸缩**；限高 `--panel-max-h` = 260px。另有 `--live-dot` = 8px（状态点**看得见的那颗点**的直径，元素盒仍是 `--sp-3` 12px、热区不缩）与 `--title-gap` = 2.5em（循环滚动的标题两份拷贝之间的间隙） | **同一口径**：也在文档流里，只挤压列表、不遮最新一条；区别只在定高里的上下内边距（窄屏 `--sp-3`）与限高——窄屏用视口份额 `--panel-max-h-narrow` = **45vh**（844px 下 ≈ 380px），内容超出由**面板内部滚动**承担，不去吃列表空间。三个面板同样没有标题与「关闭」（收起靠再点一次工具按钮或点面板外面） |
+| 弹出面板（表情 / 短语 / 筛选） | 文档流里的一块，向上展开，只挤压列表（不遮最新一条）；**三个面板都是定高**（顶上没有标题、没有「关闭」）：高度 = 三行大表情格 + 面板上下内边距 + **面板的 1px 上边框**（`--panel-h`，见 §6.1 / §6.3；宽屏实测 **169.1 / 168.1 / 168.1px**（表情 / 筛选 / 短语），冒烟 `panelHeightsMatch` 钉这条，`app.module.css:1638`），**不随内容伸缩**；限高 `--panel-max-h` = 260px。另有 `--live-dot` = 8px（状态点**看得见的那颗点**的直径，元素盒仍是 `--sp-3` 12px、热区不缩）与 `--title-gap` = 2.5em（循环滚动的标题两份拷贝之间的间隙） | **同一口径**：也在文档流里，只挤压列表、不遮最新一条；区别只在定高里的上下内边距（窄屏 `--sp-3`）与限高——窄屏用视口份额 `--panel-max-h-narrow` = **45vh**（844px 下 ≈ 380px），内容超出由**面板内部滚动**承担，不去吃列表空间。三个面板同样没有标题与「关闭」（收起靠再点一次工具按钮或点面板外面） |
 | 房管面板 | 同弹出面板（文档流、只挤压列表、限高 260px）；**排布是「头部一行 + 两排都贴顶」**（§4.9）：头部一行 = 三个 tab（禁言 / 黑名单 / 屏蔽词，**不带计数**）+ 贴右的**一枚 X 图标关闭**（40 × 40 正圆，与房间头同一个控件族）；第 1 排 = 输入框（`flex: 1`，这一排**唯一可缩的一项**）+ 该 tab 的主操作 + 批量图标钮；批量模式下第 1 排**正下方**多一排 = 全选 / 已选 N 项 / 批量动作。列表与错误条在两排之下 | 同一套排布（文档流、限高 45vh、内部滚动、关闭仍是那枚 X 图标钮）；**两排都不换行、不竖排**：输入框可缩、按钮不缩，360px 下量到的宽度不溢出（口径与房间头那条相同：任何宽度下不许横向滚动）；tab 轨道放不下时自己横向滚（不挤压关闭按钮） |
 | 账号管理对话框 | 居中卡片（`max-width: 680px`），顶对齐，点背景或 `Esc` 关闭（头部没有「关闭」按钮） | 贴底 sheet：占满宽度、顶部圆角、内容可滚动；同样只有背景与 `Esc` 两条关闭路。它是**模态流程**（不是在读弹幕时顺手展开的面板），所以这里用覆盖式而不是挤压 |
 | 输入区 | 输入框占满宽度；工具行一行放得下（面板入口在左，发送簇 = 电池 + 发送在右） | 输入框占满宽度；工具行**放不下就换行**，不挤成小方块；换行以「发送簇」为单位，电池不会被拆到发送按钮之外的排 |
@@ -1288,8 +1272,8 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | `--ctl-round` | `app.module.css:180` | var(--tap-min) | §3.1、§9.1、§9.2 |
 | `--danger` | `app.module.css:40` | #ff6b6b | §9.2 |
 | `--emote` | `app.module.css:988` | calc(var(--row-line) * 1.1) | §9.2 |
-| `--emote-row-h-big` | `app.module.css:1590` | 大表情格的一行高（图片盒 + 两倍 `--sp-1`） | §9.1 |
-| `--emote-grid-h` | `app.module.css:1591` | 三行 `--emote-row-h-big` + 两倍 `--sp-1` | §9.1 |
+| `--emote-row-h-big` | `app.module.css:1628` | 大表情格的一行高（图片盒 + 两倍 `--sp-1`） | §9.1 |
+| `--emote-grid-h` | `app.module.css:1629` | 三行 `--emote-row-h-big` + 两倍 `--sp-1` | §9.1 |
 | `--fg` | `app.module.css:34` | #e9edef | §9.2 |
 | `--fg-dim` | `app.module.css:35` | #8696a0 | §9.2 |
 | `--fg-muted` | `app.module.css:56` | #8696a0 | §9.2 |
@@ -1317,10 +1301,10 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | `--on-danger` | `app.module.css:87` | #1b0000 | §9.2 |
 | `--on-ok` | `app.module.css:86` | #002b12 | §9.2 |
 | `--overlay` | `app.module.css:102` | rgba(0, 0, 0, 0.55) | §9.2 |
-| `--panel-h` | `app.module.css:1601` | calc(var(--emote-grid-h) + var(--panel-pad-y) * 2 + 1px) | §9.1 |
+| `--panel-h` | `app.module.css:1639` | calc(var(--emote-grid-h) + var(--panel-pad-y) * 2 + 1px) | §9.1 |
 | `--panel-max-h` | `app.module.css:181` | 260px | §9.1、§9.2 |
 | `--panel-max-h-narrow` | `app.module.css:182` | 45vh | §9.1、§9.2 |
-| `--panel-pad-y` | `app.module.css:1595`（窄屏覆盖 `:2578`） | var(--sp-2) / var(--sp-3) | §9.1 |
+| `--panel-pad-y` | `app.module.css:1633`（窄屏覆盖 `:2557`） | var(--sp-2) / var(--sp-3) | §9.1 |
 | `--r-1` | `app.module.css:112` | 4px | §9.2 |
 | `--r-3` | `app.module.css:114` | 12px | §9.2 |
 | `--r-4` | `app.module.css:115` | 16px | §9.2 |

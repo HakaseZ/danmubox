@@ -438,17 +438,7 @@ impl BiliHttp {
     /// `buvid3` 与账号 Cookie **合成一条** `Cookie` 头（[`merge_cookie`]）：
     /// 曾经这里是「先由 `get_with_cookie` 设账号 Cookie、再 `.header(COOKIE, "buvid3=…")`
     /// 追加一条」，请求带着两条 `Cookie` 头出门（`docs/protocol.md` A46）。
-    ///
-    /// `diag` 是**只写**的诊断出口（一键诊断，`docs/operations.md` §2.9）：这一步的
-    /// 成败（含上游 `code`）是「到底卡在哪一环」的第一环，但它原本只活在这条调用链
-    /// 的错误文案里——`code` 在 `ws.rs` 那边已经还原不出来（只剩一个字符串），
-    /// 因此在这里、在还看得见 `code` 的地方记一笔。协议行为一字未改。
-    pub async fn danmu_info(
-        &self,
-        room_id: i64,
-        buvid3: &str,
-        diag: &danmubox_core::diagnose::Attempt,
-    ) -> Result<DanmuInfo> {
+    pub async fn danmu_info(&self, room_id: i64, buvid3: &str) -> Result<DanmuInfo> {
         let (img_key, sub_key) = self.wbi_keys().await?;
         let mixin = wbi::mixin_key(&img_key, &sub_key);
 
@@ -467,26 +457,16 @@ impl BiliHttp {
         {
             Ok(response) => match response.json::<Value>().await {
                 Ok(value) => value,
-                Err(err) => {
-                    let error = upstream("getDanmuInfo decode", err);
-                    diag.ticket_failed(danmubox_core::now_ms(), &error.to_string());
-                    return Err(error);
-                }
+                Err(err) => return Err(upstream("getDanmuInfo decode", err)),
             },
-            Err(err) => {
-                let error = upstream("getDanmuInfo", err);
-                diag.ticket_failed(danmubox_core::now_ms(), &error.to_string());
-                return Err(error);
-            }
+            Err(err) => return Err(upstream("getDanmuInfo", err)),
         };
 
         let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
         if code != 0 {
             // -352 是签名/风控失败，与凭据失效区分（`docs/auth.md` §4.6）。
-            diag.ticket_failed(danmubox_core::now_ms(), &format!("code={code}"));
             return Err(Error::Upstream(format!("getDanmuInfo code={code}")));
         }
-        diag.ticket_ok(danmubox_core::now_ms(), code);
 
         let data = value.get("data").unwrap_or(&Value::Null);
         let token = data
@@ -506,9 +486,9 @@ impl BiliHttp {
             .unwrap_or_default();
 
         if token.is_empty() || hosts.is_empty() {
-            let error = Error::Upstream("getDanmuInfo 缺少 token 或 host_list".into());
-            diag.ticket_failed(danmubox_core::now_ms(), &error.to_string());
-            return Err(error);
+            return Err(Error::Upstream(
+                "getDanmuInfo 缺少 token 或 host_list".into(),
+            ));
         }
         Ok(DanmuInfo { token, hosts })
     }
@@ -1380,12 +1360,6 @@ mod tests {
     /// `.header(COOKIE, "buvid3=…")` 追加了第二条（`RequestBuilder::header` 是 append 语义），
     /// 桩上数到的是两条 `Cookie` 行——把 `.header(COOKIE, …)` 加回 `danmu_info`，
     /// 本断言立刻变红。ac站按身份三要素（`uid` / `buvid` / 凭据）同源认身份。
-    /// 测试用的一条诊断记录（`danmu_info` 只往它里面写，不影响请求行为）。
-    fn test_diag() -> std::sync::Arc<danmubox_core::diagnose::Attempt> {
-        // 用独立采集器分配，避免用例之间互相看见（环里那一条无所谓，断言不看它）。
-        danmubox_core::diagnose::Diagnoser::new().begin_attempt(0)
-    }
-
     #[tokio::test]
     async fn danmu_info_sends_single_merged_cookie_header() {
         let _guard = CACHE_TEST_LOCK.lock().await;
@@ -1402,10 +1376,7 @@ mod tests {
             .with_nav_url(stub.base.clone())
             .with_danmu_url(format!("{}/danmu", stub.base));
 
-        let info = http
-            .danmu_info(5440, "BV3-EXPLICIT", &test_diag())
-            .await
-            .expect("票据");
+        let info = http.danmu_info(5440, "BV3-EXPLICIT").await.expect("票据");
 
         assert_eq!(info.token, "tok");
         assert_eq!(info.hosts, vec!["a.example".to_string()]);
@@ -1440,9 +1411,7 @@ mod tests {
             .with_nav_url(stub.base.clone())
             .with_danmu_url(format!("{}/danmu", stub.base));
 
-        http.danmu_info(5440, "BV3-EXPLICIT", &test_diag())
-            .await
-            .expect("票据");
+        http.danmu_info(5440, "BV3-EXPLICIT").await.expect("票据");
 
         let raw = stub.headers.lock().unwrap();
         let cookies = cookie_lines(raw.last().expect("getDanmuInfo 的请求头"));

@@ -28,7 +28,7 @@
 - 系统通知（开播 / 下播 / 标题变更 / 公告）默认**关闭**，勾上「系统」才显示（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `filter.kinds`
 - 弹幕里的文字表情（`[dog]` 这类）要画出来：正文整条就是一个 token 的已修，token 夹在句中的仍按原文显示（部分落地，见 CHANGELOG）— 落点 `contract.md` §5 `Message.emote`、`protocol.md` A42
 - 弹幕里要看得见 @ 关系：正文里的 `@昵称` 就地高亮（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §5 `reply_to_uid`
-- 不同的观众短时间内刷**同一个弹幕**时做聚合（**至少两位不同 uid** 才成立）（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §4、`aggregate.ts`
+- 不同的观众短时间内刷**同一个弹幕**时做聚合：**至少 3 条**且**至少两位不同 uid** 才折成一行；折后头像列画前三位发言者的头像（沿 X 轴各错开 30% 堆叠），身份位（原来的用户名与身份牌位置）改印**刷屏数量**、不再显示每个用户的用户名；新增 `ui.danmaku_aggregate` 开关，关掉即逐条原样显示（用户反馈已落地，见 CHANGELOG）— 落点 `docs/contract.md` §4 / §8、`apps/desktop/ui/src/aggregate.ts`
 
 ### 2.2 发弹幕
 
@@ -158,7 +158,7 @@
 - SC 的高亮框**仅显示在内容部分**，也就是用户名、身份牌下面的区域（用户反馈已落地，见 CHANGELOG）— 落点 `apps/desktop/ui/src/components/MessageRow.tsx`（`db-msg-sc-card`）
 - 分割独立礼物栏的那个横折叠区域弄点横线或者虚线之类的，2 个区间要有边界（用户反馈已落地，见 CHANGELOG）— 落点 `apps/desktop/ui/src/app.module.css`（`--fold-line`）
 
-### 2.12 连接、保活与诊断
+### 2.12 连接与保活
 
 - 部分账号连接进**自己的**直播间无法看到任何消息内容（这些账号在浏览器里能正常加载弹幕）。从三个方向排查：逆向官方网页版弹幕（如果这个方案能解决，**以此为准**）、参考作者 fork 的 `bilibili-API-collect` 与 `bilibili-api`、再在互联网上搜有没有相关案例（部分落地，见 CHANGELOG）— 落点 `protocol.md` A46
 - 安卓端有没有后台保活机制？（有用户反馈说「好像不會後台自動運行和讀取彈幕」）（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §2（Android 例外）
@@ -175,6 +175,7 @@
 | 手填 Cookie | 现在的登录方式（游客 / 扫码）很合理，不做导入入口（已删除，见 CHANGELOG）— `contract.md` §4.1 |
 | 短语里的内置颜文字 | 短语只留用户自建的条目（已删除，见 CHANGELOG）— `contract.md` §8 `composer.phrases` |
 | 文本框上方的「将发送 xxx」预览 | 没有这个需求（已删除，见 CHANGELOG）— `apps/desktop/ui/src/components/Composer.tsx` |
+| 一键诊断导出 | 采出来的数据意义不大，既有链路的事实靠日志已经够用（已删除，见 CHANGELOG）— `docs/contract.md` §4 / §7 与 `docs/operations.md` 里该功能的落点已删除 |
 
 ## 3. 架构约束
 

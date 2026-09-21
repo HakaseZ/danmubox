@@ -2,7 +2,7 @@
 
 ## 1. 运行模式
 
-- 唯一运行模式：页面运行在 Tauri WebView 中，命令走 `invoke("命令名", 参数)`，事件走 `listen("danmubox://事件名", handler)`（`apps/desktop/ui/src/ipc.ts:59`、`apps/desktop/ui/src/ipc.ts:192`）。
+- 唯一运行模式：页面运行在 Tauri WebView 中，命令走 `invoke("命令名", 参数)`，事件走 `listen("danmubox://事件名", handler)`（`apps/desktop/ui/src/ipc.ts:57`、`apps/desktop/ui/src/ipc.ts:179`）。
 - `vite dev` 下 WebView 内 `@tauri-apps/api` 同样可用；前端的数据路径只有 `invoke` / `listen` 这一条（唯一例外见 §4.1 的控制台桥）。
 - 命令名与事件名的集合是**封闭**的，与 `contract.md` §7 逐条一致（命令清单 §3、事件清单 §4）。新增面必须同时改 `contract.md` §7、`docs/ipc.md` 与实现；不允许前端私自定义字符串。
 - 凭据文件由程序写回（`contract.md` §4.1、`auth.md` §8.4）；没有「手填 Cookie」命令。
@@ -13,16 +13,16 @@
 
 | 项 | 约定 | 锚点 |
 |---|---|---|
-| 命令注册 | 全部集中在 `tauri::generate_handler![…]`；命令函数也在同一文件（没有 `commands.rs`） | `apps/desktop/src-tauri/src/lib.rs:1302-1341` |
+| 命令注册 | 全部集中在 `tauri::generate_handler![…]`；命令函数也在同一文件（没有 `commands.rs`） | `apps/desktop/src-tauri/src/lib.rs:1149-1187` |
 | 命令名 | `snake_case`，与 `contract.md` §7 字面一致 | 同上 |
-| 参数名 | Rust 侧 `snake_case`；Tauri 2 把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId` / `query` / `patch` / `upstreamId` 等 camelCase 键 | `apps/desktop/ui/src/ipc.ts:59-175` |
-| 同步 / 异步 | 39 条命令：29 条 `async fn`，10 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `diagnose_start` / `frontend_log`（定义行见 §3 的「实现锚点」表）。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` | `lib.rs:206-1058` |
+| 参数名 | Rust 侧 `snake_case`；Tauri 2 把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId` / `query` / `patch` / `upstreamId` 等 camelCase 键 | `apps/desktop/ui/src/ipc.ts:57-162` |
+| 同步 / 异步 | 37 条命令：28 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`（定义行见 §3 的「实现锚点」表）。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` | `lib.rs:198-945` |
 | 成功返回 | §3 签名表「返回」列的 JSON 值；`void` = 无返回体 | — |
-| 失败返回 | `invoke` reject，值为 `ApiError { code: string, message: string }`。前端按 `code` 分支；`message` 是给人看的文案（Rust `Display` 或上游原文），**不得**解析它做逻辑，也没有 `detail` 这类嵌套字段 | `lib.rs:31-44` |
+| 失败返回 | `invoke` reject，值为 `ApiError { code: string, message: string }`。前端按 `code` 分支；`message` 是给人看的文案（Rust `Display` 或上游原文），**不得**解析它做逻辑，也没有 `detail` 这类嵌套字段 | `lib.rs:29-42` |
 | 错误码 | 八个，见下表；错误对象的集合以此为准，`code` 取自 `core::Error::code()` | `crates/danmubox-core/src/error.rs:8-39` |
 | 时间 | 统一 UTC 毫秒、`i64`；JS 侧为 `number` | — |
 | 载荷字段 | `snake_case`（`apps/desktop/ui/src/types.ts` 与后端同形）；store 里存的就是同一份 `Message`，**不做** camelCase 转换（见 §3.1、§5） | `apps/desktop/ui/src/types.ts:11` |
-| 偏好键 | `contract.md` §8 的字面键名（如 `ui.font_scale`）；两边都不改名，store 内也用字面键 | `apps/desktop/ui/src/types.ts:405` |
+| 偏好键 | `contract.md` §8 的字面键名（如 `ui.font_scale`）；两边都不改名，store 内也用字面键 | `apps/desktop/ui/src/types.ts:379` |
 | 凭据 | 任何命令的返回都不含 `sessdata` / `bili_jct` / `dede_user_id`；`session_status` 只返回状态位 | `crates/danmubox-core/src/ports.rs:22` |
 
 错误码（分类见 `contract.md` §7；前端按 `code` 分支）：
@@ -40,33 +40,33 @@
 
 ## 3. 命令签名表
 
-39 条，与 `generate_handler!` 逐条对应；除「说明」列注明同步的命令外均为 `async fn`。命令函数除 `open_url`（只接 `app: tauri::AppHandle`）与 `frontend_log`（无注入参数）外都接收 `State<'_, AppState>`，`chat_send` / `diagnose_export` 另接 `app: tauri::AppHandle`（下表省略这些注入参数）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
+37 条，与 `generate_handler!` 逐条对应；除「说明」列注明同步的命令外均为 `async fn`。命令函数除 `open_url`（只接 `app: tauri::AppHandle`）与 `frontend_log`（无注入参数）外都接收 `State<'_, AppState>`，`chat_send` 另接 `app: tauri::AppHandle`（下表省略这些注入参数）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
 
 | 命令 | 参数 | 返回 | 错误 | 说明 |
 |---|---|---|---|---|
 | `app_info` | 无 | `AppInfo` | — | 版本、数据目录、`config.toml` 路径、是否登录；不含任何凭据。同步命令 |
 | `session_status` | 无 | `SessionState` | `INTERNAL` | 未登录时 `logged_in=false`、`uid=0`、`nickname=""`；`active_profile` 是当前生效的 profile 名 |
 | `accounts_list` | 无 | `Account[]` | `INTERNAL` | 列出全部账号（`contract.md` §5 `Account`）；游客态不是账号，没有凭据就没有条目 |
-| `account_qr_start` | `target: Option<String>` | `QrStart` | `BAD_REQUEST` `INTERNAL` | 不带 `target` = **新增账号**（确认后按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并写明覆盖哪个账号）。后端校验 `target` 并把它与 `key` 一起记住，确认时据此决定覆盖对象（`crates/danmubox-bili/src/auth.rs:298-331`）；`target` 不出现在 `QrStart` 返回里，界面另行补记用于展示。二维码由后端离线渲染成 SVG（`lib.rs:824-827`） |
-| `account_qr_poll` | `key: String` | `QrPoll` | `NOT_FOUND` `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`（`QrState`）；确认那一次凭据已落盘、账号已存在，`account` 非空；未确认时 `account` 为 `null`。确认（或当前账号已变）时各房间以新凭据重连（`lib.rs:840-848`） |
+| `account_qr_start` | `target: Option<String>` | `QrStart` | `BAD_REQUEST` `INTERNAL` | 不带 `target` = **新增账号**（确认后按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并写明覆盖哪个账号）。后端校验 `target` 并把它与 `key` 一起记住，确认时据此决定覆盖对象（`crates/danmubox-bili/src/auth.rs:298-331`）；`target` 不出现在 `QrStart` 返回里，界面另行补记用于展示。二维码由后端离线渲染成 SVG（`lib.rs:816-819`） |
+| `account_qr_poll` | `key: String` | `QrPoll` | `NOT_FOUND` `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`（`QrState`）；确认那一次凭据已落盘、账号已存在，`account` 非空；未确认时 `account` 为 `null`。确认（或当前账号已变）时各房间以新凭据重连（`lib.rs:832-840`） |
 | `account_switch` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换当前账号并以新凭据重建各房间连接 |
 | `account_logout` | `name: Option<String>` | `SessionState` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省 = 当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
 | `account_remove` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
 | `rooms_list` | 无 | `RoomView[]` | — | 已登记房间 + 当前连接状态 + 当前会话缓冲条数。同步命令 |
-| `rooms_refresh_status` | 无 | `RoomView[]` | `UPSTREAM_ERROR` `INTERNAL` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，`contract.md` §4）：逐个房间只读上游一次 `getRoomPlayInfo`（游客同样成立），把最新的 `live_status` 落进登记表，返回同一份 `RoomView[]` 形状（前端按与 `rooms_list` 相同的口径落地）。**只动 `live_status`**，不碰标题 / 昵称 / 连接态。逐个房间**并发**取，单个失败只记日志并跳过它；**一个都没成功**（且有房间要问）→ `UPSTREAM_ERROR`（前端据此退避，断网时不会每 30 秒打一次）。没有已登记房间时不发任何请求，直接返回空数组（`lib.rs:246-293`） |
+| `rooms_refresh_status` | 无 | `RoomView[]` | `UPSTREAM_ERROR` `INTERNAL` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，`contract.md` §4）：逐个房间只读上游一次 `getRoomPlayInfo`（游客同样成立），把最新的 `live_status` 落进登记表，返回同一份 `RoomView[]` 形状（前端按与 `rooms_list` 相同的口径落地）。**只动 `live_status`**，不碰标题 / 昵称 / 连接态。逐个房间**并发**取，单个失败只记日志并跳过它；**一个都没成功**（且有房间要问）→ `UPSTREAM_ERROR`（前端据此退避，断网时不会每 30 秒打一次）。没有已登记房间时不发任何请求，直接返回空数组（`lib.rs:238-285`） |
 | `rooms_add` | `input: String` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号；解析不出即 `BAD_REQUEST`。只登记，不建连 |
 | `rooms_remove` | `room_id: i64` | `void` | `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
 | `rooms_connect` | `room_id: i64` | `void` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 建立会话：创建 supervisor、创建会话缓冲、开始收包。幂等：已连接时直接 `Ok`。**连接态不在返回值里**——看 `danmubox://status` 或重拉 `rooms_list` |
 | `rooms_disconnect` | `room_id: i64` | `void` | — | 断开并**结束会话、清空缓冲**。幂等：未连接时也 `Ok` |
 | `rooms_reconnect` | `room_id: i64` | `void` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 房间内「刷新」：会话还在（连接中/退避中/已连接）→ 只终止当前连接并立即重连，**不清空缓冲、不结束会话**；会话已结束（断连过、或房间被移除后又加回来）→ **重建一次会话**（全新会话、缓冲从空开始，等价重新进房），因此断连之后这颗键不是死键。同步命令 |
 | `history_query` | `room_id: i64, query: HistoryQueryDto` | `Message[]`（snake_case） | `BAD_REQUEST` | 只查**当前房内会话缓冲**（`contract.md` §4.3）；无活跃会话（缓冲已销毁）时返回空数组，不报错。过滤后按 **`local_id` 升序**返回、取最后 `limit` 条（`crates/danmubox-core/src/session.rs:287-299`）。不跨会话、不回放、不导出。同步命令 |
-| `chat_send` | `room_id: i64, content: String, color: Option<i64>, emote: Option<EmoteToken>, reply: Option<ReplyTarget>` | `ChatSendResult` | `BAD_REQUEST` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | 发弹幕。`emote` 非空 = **表情弹幕**（`emoticon_unique` + 尺寸等整份信息，此时 `content` 只用于日志与节流判重）；`reply` = @ 或回复某条（`mid` + `uname`，回复某条时带 `dmid` = 被回复弹幕的 `upstream_id`）。`color` 缺省 16777215（`crates/danmubox-bili/src/send.rs:226`），**原样透传不做范围校验**；上游 `mode=1`（普通弹幕）由实现内部固定，**不作为参数暴露**。**唯一要避免的是 `color=0`**（上游参数层直接拒绝）。本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发。返回的同一份对象再作为 `danmubox://send` 发一次（`lib.rs:460-489`） |
+| `chat_send` | `room_id: i64, content: String, color: Option<i64>, emote: Option<EmoteToken>, reply: Option<ReplyTarget>` | `ChatSendResult` | `BAD_REQUEST` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | 发弹幕。`emote` 非空 = **表情弹幕**（`emoticon_unique` + 尺寸等整份信息，此时 `content` 只用于日志与节流判重）；`reply` = @ 或回复某条（`mid` + `uname`，回复某条时带 `dmid` = 被回复弹幕的 `upstream_id`）。`color` 缺省 16777215（`crates/danmubox-bili/src/send.rs:226`），**原样透传不做范围校验**；上游 `mode=1`（普通弹幕）由实现内部固定，**不作为参数暴露**。**唯一要避免的是 `color=0`**（上游参数层直接拒绝）。本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发。返回的同一份对象再作为 `danmubox://send` 发一次（`lib.rs:452-481`） |
 | `chat_report` | `message: Message, reason: ReportReason` | `void` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕。`message` 取列表里那一条（实现读它的 `upstream_id` / `uid` / `content`；**`upstream_id` 必需**，为空 → `BAD_REQUEST`）；`reason` 来自 `report_reasons`（同时上报文案与 `id`）。前端签名见 `apps/desktop/ui/src/ipc.ts` 的 `chatReport(message, reason)` |
 | `report_reasons` | 无 | `ReportReason[]` | `UPSTREAM_ERROR` `INTERNAL` | 举报理由清单：请求上游 `dMReport/ForReason` 并解析 `data.data[]`，每项 `ReportReason { id, reason }`（`contract.md` §5）。**条数由上游决定**，不是本地硬编码清单；不要求登录 |
 | `emotes_list` | `room_id: i64` | `Emote[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 按**真实会话身份**（取自会话缓存）加载表情包库：无牌/有牌/房管/大航海看到的面板不同；无活跃会话时退回零身份。未登录即 `NOT_LOGGED_IN`（`crates/danmubox-bili/src/emote.rs:365-370`）。`Emote.locked` 由上游 `perm` 派生，`true` = 当前身份用不了（界面置灰，不隐藏） |
-| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`contract.md` §5 `RoomSession`）。无活跃会话 → 全零身份而**不报错**（`lib.rs:573-585`）；界面据此决定房管入口**是否出现**（`is_admin` 不为 `true` 时该入口不渲染；拿不到身份即按无权限处理，不靠试错，`ui.md` §4.9）与**输入区的字数上限**（`danmaku_length` 实测 = 40，缺省回落 20；`0` = 还没取到）。同步命令 |
+| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`contract.md` §5 `RoomSession`）。无活跃会话 → 全零身份而**不报错**（`lib.rs:565-577`）；界面据此决定房管入口**是否出现**（`is_admin` 不为 `true` 时该入口不渲染；拿不到身份即按无权限处理，不靠试错，`ui.md` §4.9）与**输入区的字数上限**（`danmaku_length` 实测 = 40，缺省回落 20；`0` = 还没取到）。同步命令 |
 | `emotes_owned` | 无 | `Emote[]` | `UPSTREAM_ERROR` `INTERNAL` | 主站「我的表情」：用户**拥有**的表情包（`upower_` 家族）。`package_kind="owned"`、`room_id=0`、唯一键 = `"upower_" + 表情 text`（`crates/danmubox-bili/src/emote.rs:67-69`）；未登录时上游退化为免费表情包，因此**不报** `NOT_LOGGED_IN`（`emote.rs:398-401`） |
-| `admin_mute` | `room_id: i64, uid: i64, hour: i64, msg: Option<String>` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数（`lib.rs:619-635`）。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
+| `admin_mute` | `room_id: i64, uid: i64, hour: i64, msg: Option<String>` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数（`lib.rs:611-627`）。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
 | `admin_unmute` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 解除禁言 |
 | `admin_silent_list` | `room_id: i64` | `SilentUser[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 当前禁言名单（只读），条目形状见 `contract.md` §5 |
 | `admin_blacklist_list` | `room_id: i64` | `BlacklistedUser[]` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 黑名单（只读）。内部把 `roomId` 解析成主播 uid 后按 `anchor_id` 寻址——上游这个接口不吃房间号 |
@@ -77,12 +77,10 @@
 | `admin_keywords_del` | `room_id: i64, word: String` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 删除屏蔽词 |
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表（`contract.md` §5）。后端返回前已排序：`live_status == 1` 置顶、其余按 `room_id` 升序（`crates/danmubox-bili/src/follow.rs:377-379`、`crates/danmubox-core/src/model.rs:383-389`）；界面按 `ui.md` §2.2 的展示排序链再次排列 |
 | `wallet_balance` | 无 | `number`（Rust `i64`） | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额（整数）：上游 `data.gold`（金瓜子）按 `gold / 100` 换算成电池（`crates/danmubox-bili/src/wallet.rs:40-49`）；`gold` 缺失或不可解析 → `UPSTREAM_ERROR`。没有包裹类型（口径与端点见 `protocol.md` 附录 A29） |
-| `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令。平台实现：macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 各一条系统命令；**Android 走官方 `tauri-plugin-opener`（平台 Intent）**——插件只在 Android 目标声明（`[target.'cfg(target_os = "android")'.dependencies]`，桌面构建依赖图与产物一字不变），由 **Rust 侧**调用、**不进 capability**（`capabilities/default.json` 不需要 `opener:*` 权限）；iOS 等其余平台仍是显式 `Unsupported`（不静默失败）（`lib.rs:496-547`） |
-| `prefs_get` | 无 | `PrefsSnapshot` | `INTERNAL` | `contract.md` §8 全部 23 键的**生效值**（默认值已合并）；未写入过的键返回 `contract.md` §8 默认值。同步命令（`lib.rs:552-555`） |
-| `prefs_set` | `patch: Partial<PrefsSnapshot>`（Rust 侧收 `serde_json::Value`，由 core 校验） | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令（`lib.rs:557-563`） |
-| `diagnose_start` | `engine: String` | `DiagnoseStart` | — | 一键诊断：开始采集连接诊断（`contract.md` §4.4）。`engine` 是渲染引擎标识（前端传 `navigator.userAgent`：内核版本只有页面知道，报告头要用它）。窗口固定 180 秒（`crates/danmubox-core/src/diagnose.rs:29`），界面按 `ends_ms` 倒计时、到点自动收工。采集中**不发送任何数据**（本仓无遥测）。同步命令：只写窗口起止时刻，不碰 IO（`lib.rs:992-1004`） |
-| `diagnose_export` | 无 | `DiagnoseExport` | `INTERNAL` | 一键诊断：渲染并写出**恰好一个**报告文件（`contract.md` §4.4 的位置与命名）、结束采集并清空采集内容。`INTERNAL` 只在写文件失败时出现（目录不可写 / MediaStore 拒绝），`message` 带本地路径与原话。前端由 `diagnose_start` 的界面在窗口到点或用户点「提前结束」时调用 |
-| `frontend_log` | `level: String, message: String` | `void` | — | **前端 → 后端的内部命令**，不是给业务代码用的：控制台桥把 `console.error` / `console.warn` 与未捕获错误转发过来，写进 `tracing` 日志（`target = "danmubox::ui"`，`level` ∈ `error` / `warn`，其它值降级为 debug）。同步命令，永不失败（`lib.rs:1051-1058`）。详见 §4.1 |
+| `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令。平台实现：macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 各一条系统命令；**Android 走官方 `tauri-plugin-opener`（平台 Intent）**——插件只在 Android 目标声明（`[target.'cfg(target_os = "android")'.dependencies]`，桌面构建依赖图与产物一字不变），由 **Rust 侧**调用、**不进 capability**（`capabilities/default.json` 不需要 `opener:*` 权限）；iOS 等其余平台仍是显式 `Unsupported`（不静默失败）（`lib.rs:488-539`） |
+| `prefs_get` | 无 | `PrefsSnapshot` | `INTERNAL` | `contract.md` §8 全部 24 键的**生效值**（默认值已合并）；未写入过的键返回 `contract.md` §8 默认值。同步命令（`lib.rs:544-547`） |
+| `prefs_set` | `patch: Partial<PrefsSnapshot>`（Rust 侧收 `serde_json::Value`，由 core 校验） | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令（`lib.rs:549-555`） |
+| `frontend_log` | `level: String, message: String` | `void` | — | **前端 → 后端的内部命令**，不是给业务代码用的：控制台桥把 `console.error` / `console.warn` 与未捕获错误转发过来，写进 `tracing` 日志（`target = "danmubox::ui"`，`level` ∈ `error` / `warn`，其它值降级为 debug）。同步命令，永不失败（`lib.rs:938-945`）。详见 §4.1 |
 
 `prefs_set` 接受部分补丁（只提交要改的键），返回合并后的全量生效值。
 
@@ -90,28 +88,27 @@
 
 | 命令 | 定义 | 命令 | 定义 |
 |---|---|---|---|
-| `app_info` | `lib.rs:207` 同步 | `emotes_list` | `lib.rs:588` |
-| `session_status` | `lib.rs:219` | `room_session` | `lib.rs:573` 同步 |
-| `accounts_list` | `lib.rs:734` | `emotes_owned` | `lib.rs:614` |
-| `account_qr_start` | `lib.rs:810` | `admin_mute` | `lib.rs:623` |
-| `account_qr_poll` | `lib.rs:840` | `admin_unmute` | `lib.rs:639` |
-| `account_switch` | `lib.rs:744` | `admin_silent_list` | `lib.rs:646` |
-| `account_logout` | `lib.rs:775` | `admin_blacklist_list` | `lib.rs:653` |
-| `account_remove` | `lib.rs:757` | `admin_blacklist_add` | `lib.rs:663` |
-| `rooms_list` | `lib.rs:224` 同步 | `admin_blacklist_del` | `lib.rs:673` |
-| `rooms_refresh_status` | `lib.rs:246` | `admin_keywords_list` | `lib.rs:683` |
-| `rooms_add` | `lib.rs:301` | `admin_keywords_add` | `lib.rs:690` |
-| `rooms_remove` | `lib.rs:318` | `admin_keywords_del` | `lib.rs:704` |
-| `rooms_connect` | `lib.rs:332` | `follow_list` | `lib.rs:865` |
-| `rooms_disconnect` | `lib.rs:388` | `wallet_balance` | `lib.rs:871` |
-| `rooms_reconnect` | `lib.rs:403` 同步 | `open_url` | `lib.rs:501` 同步 |
-| `history_query` | `lib.rs:446` 同步 | `prefs_get` | `lib.rs:553` 同步 |
-| `chat_send` | `lib.rs:460` | `prefs_set` | `lib.rs:558` 同步 |
-| `chat_report` | `lib.rs:717` | `diagnose_start` | `lib.rs:992` 同步 |
-| `report_reasons` | `lib.rs:859` | `diagnose_export` | `lib.rs:1013` |
-| — | — | `frontend_log` | `lib.rs:1052` 同步 |
+| `app_info` | `lib.rs:199` 同步 | `emotes_list` | `lib.rs:580` |
+| `session_status` | `lib.rs:211` | `room_session` | `lib.rs:565` 同步 |
+| `accounts_list` | `lib.rs:726` | `emotes_owned` | `lib.rs:606` |
+| `account_qr_start` | `lib.rs:802` | `admin_mute` | `lib.rs:615` |
+| `account_qr_poll` | `lib.rs:832` | `admin_unmute` | `lib.rs:631` |
+| `account_switch` | `lib.rs:736` | `admin_silent_list` | `lib.rs:638` |
+| `account_logout` | `lib.rs:767` | `admin_blacklist_list` | `lib.rs:645` |
+| `account_remove` | `lib.rs:749` | `admin_blacklist_add` | `lib.rs:655` |
+| `rooms_list` | `lib.rs:216` 同步 | `admin_blacklist_del` | `lib.rs:665` |
+| `rooms_refresh_status` | `lib.rs:238` | `admin_keywords_list` | `lib.rs:675` |
+| `rooms_add` | `lib.rs:293` | `admin_keywords_add` | `lib.rs:682` |
+| `rooms_remove` | `lib.rs:310` | `admin_keywords_del` | `lib.rs:696` |
+| `rooms_connect` | `lib.rs:324` | `follow_list` | `lib.rs:857` |
+| `rooms_disconnect` | `lib.rs:380` | `wallet_balance` | `lib.rs:863` |
+| `rooms_reconnect` | `lib.rs:395` 同步 | `open_url` | `lib.rs:493` 同步 |
+| `history_query` | `lib.rs:438` 同步 | `prefs_get` | `lib.rs:545` 同步 |
+| `chat_send` | `lib.rs:452` | `prefs_set` | `lib.rs:550` 同步 |
+| `chat_report` | `lib.rs:709` | `frontend_log` | `lib.rs:939` 同步 |
+| `report_reasons` | `lib.rs:851` | — | — |
 
-注册顺序另见 `generate_handler!`（`lib.rs:1302-1341`）。
+注册顺序另见 `generate_handler!`（`lib.rs:1149-1187`）。
 
 ### 3.1 载荷类型
 
@@ -129,12 +126,12 @@
 | `FollowedRoom` | `contract.md` §5（`model.rs:345`） | `follow_list` 返回 |
 | `SilentUser` / `BlacklistedUser` | `contract.md` §5（`model.rs:368` / `model.rs:376`） | `admin_silent_list` / `admin_blacklist_list` 返回 |
 | `ReportReason` | `contract.md` §5（`model.rs:235`） | `report_reasons` 返回、`chat_report` 参数 |
-| `PrefsSnapshot` | `contract.md` §8（`crates/danmubox-core/src/prefs.rs:103-282`） | `prefs_get` / `prefs_set`；23 键、键名即契约字面（TS 侧类型名 `Prefs`，`apps/desktop/ui/src/types.ts:405`） |
+| `PrefsSnapshot` | `contract.md` §8（`crates/danmubox-core/src/prefs.rs:103-294`） | `prefs_get` / `prefs_set`；24 键、键名即契约字面（TS 侧类型名 `Prefs`，`apps/desktop/ui/src/types.ts:379`） |
 
 ```ts
-// history_query 的 query 参数（`lib.rs:136-179`）
+// history_query 的 query 参数（`lib.rs:128-171`）
 type HistoryQueryDto = {
-  limit?: number;        // 缺省 500（`lib.rs:160-162`）；0 = 不截断；过滤后取最后 limit 条
+  limit?: number;        // 缺省 500（`lib.rs:152-154`）；0 = 不截断；过滤后取最后 limit 条
   after?: number;
   before?: number;
   kinds?: MessageKind[];  // 未知取值 → BAD_REQUEST
@@ -161,22 +158,22 @@ type ReplyTarget = {
   dmid: string;      // 被回复弹幕的 Message.upstream_id；仅 @ 时为空串
 };
 
-// chat_send 的返回（`lib.rs:116-127`），同时是 danmubox://send 的载荷
+// chat_send 的返回（`lib.rs:108-119`），同时是 danmubox://send 的载荷
 type ChatSendResult = {
   room_id: number;
   content: string;
   outcome: SendOutcome;     // contract.md §5
-  detail?: string | null;   // 上游 msg 原话 + code 拼成的一行（`lib.rs:129-141`）；outcome="ok" 时不出现
+  detail?: string | null;   // 上游 msg 原话 + code 拼成的一行（`lib.rs:121-133`）；outcome="ok" 时不出现
 };
 
-// rooms_list / rooms_refresh_status 的返回（`lib.rs:101-116`）
+// rooms_list / rooms_refresh_status 的返回（`lib.rs:93-108`）
 // = contract.md §5 的 Room 加上连接态与缓冲条数
 type RoomView = Room & {
   connected: boolean;
   buffered: number;         // 当前会话缓冲条数，无会话为 0
 };
 
-// app_info 的返回（`lib.rs:93-99`）
+// app_info 的返回（`lib.rs:85-91`）
 type AppInfo = {
   version: string;      // CARGO_PKG_VERSION
   data_dir: string;
@@ -184,7 +181,7 @@ type AppInfo = {
   logged_in: boolean;
 };
 
-// account_qr_start 的返回（`lib.rs:796-803`）；二维码离线渲染，最小边长 240（`lib.rs:824-827`）
+// account_qr_start 的返回（`lib.rs:788-795`）；二维码离线渲染，最小边长 240（`lib.rs:816-819`）
 type QrStart = { key: string; url: string; svg: string };
 
 // session_status / account_switch / account_logout / account_remove 的返回（`ports.rs:22-30`）
@@ -203,22 +200,6 @@ type QrPoll = {
   state: QrState;                // 状态码语义表由 `auth.md` 拥有
   account: Account | null;       // state="confirmed" 时非空
 };
-
-// 一键诊断（`contract.md` §4.4）。时间都是 UTC 毫秒。
-type DiagnoseStart = {
-  started_ms: number;   // 采集窗口起点
-  ends_ms: number;      // 窗口截止时刻（界面按它倒计时）
-};
-
-type DiagnoseExport = {
-  path: string;         // 给用户看的位置：桌面端绝对路径；Android 为 /sdcard/Download/…
-  name: string;         // 文件名（danmubox-diagnose-YYYYMMDD-HHMMSS.txt）
-  bytes: number;        // 报告字节数
-  attempts: number;     // 报告里带了几条连接尝试
-  logs: number;         // 报告里带了几行窗口内日志
-  started_ms: number | null;  // 本次采集窗口的起止（没先 start 就直接导出时为 null，`lib.rs:1044-1045`）
-  ends_ms: number | null;
-};
 ```
 
 ### 3.2 待实测校准
@@ -227,17 +208,17 @@ type DiagnoseExport = {
 
 ## 4. 事件表
 
-后端 → 前端共 **7 个**事件名。其中 5 个由事件转发器统一转发（`spawn_event_forwarder`，`lib.rs:884-928`，总线事件的**唯一 emit 点**）；`danmubox://send` 由 `chat_send` 自己 emit（`lib.rs:488`），`danmubox://log` 由日志桥 emit（`lib.rs:1297`）。前端由 `subscribeEvents` 统一 `listen`（`apps/desktop/ui/src/ipc.ts:192-251`），只订阅传入的 handler 对应的事件；返回的取消订阅函数必须保存（见 §8）。
+后端 → 前端共 **7 个**事件名。其中 5 个由事件转发器统一转发（`spawn_event_forwarder`，`lib.rs:874-934`，总线事件的**唯一 emit 点**）；`danmubox://send` 由 `chat_send` 自己 emit（`lib.rs:480`），`danmubox://log` 由日志桥 emit（`lib.rs:1144`）。前端由 `subscribeEvents` 统一 `listen`（`apps/desktop/ui/src/ipc.ts:179-238`），只订阅传入的 handler 对应的事件；返回的取消订阅函数必须保存（见 §8）。
 
 | 事件名 | 载荷（snake_case） | 触发时机 | 频率控制 | 发射点 |
 |---|---|---|---|---|
-| `danmubox://message` | `Message` | 每归一化一条消息；同时写入该房间会话缓冲 | 不节流；前端按帧合批渲染 | `lib.rs:888` |
-| `danmubox://room` | `Room` | 长连接里 `LIVE` / `PREPARING` 到达（`protocol.md` §10.7）：先把登记表里该房间的 `live_status` 改掉，再把改后的**整条** `Room` 推给界面（`LIVE` → `1`、`PREPARING` → `0`，见 `contract.md` §6）。界面据此合并 `rooms` 与 `followed` 里同号的那一条——房间头状态点 / 标签页圆点 / 列表卡片 / 关注行同时变，不需要重连或手动刷新。载荷不含连接态——连接态走 `danmubox://status`。总线侧推的是 `Event::LiveStatus` 这条小载荷，**桌面外壳**补齐整条 `Room` 后再推给界面；`EventBus::publish_room`（`bus.rs:281`）无调用方，`Event::Room` 目前无生产者 | 事件驱动（一条连接生命周期内至多几次） | `lib.rs:897`、`lib.rs:913` |
-| `danmubox://session` | `RoomSession` | 会话建立后本人房内身份取到时推一次；取不到则只记日志、不推 | 事件驱动 | `lib.rs:923` |
-| `danmubox://status` | `StatusEvent` | 连接状态变化；会话关闭（`Event::RoomClosed`）也以 `disconnected` 形态从这里推出，`detail = "会话已关闭"` | 事件驱动 | `lib.rs:891`、`lib.rs:926-933` |
-| `danmubox://send` | `ChatSendResult` | 每次 `chat_send` 得到结果（**与命令返回值同构**，同一份对象再发一次） | 事件驱动 | `lib.rs:488` |
-| `danmubox://room_stats` | `RoomStats`（`contract.md` §5） | 房间观众数变化（在线人数 / 累计看过，两侧可缺省） | 事件驱动，不进会话缓冲 | `lib.rs:894` |
-| `danmubox://log` | `string` | `tracing` 日志行经桥接层推出，格式为 `"<LEVEL> <message>"` | 事件驱动；前端日志切片上限 200 行（§8） | `lib.rs:1297` |
+| `danmubox://message` | `Message` | 每归一化一条消息；同时写入该房间会话缓冲 | 不节流；前端按帧合批渲染 | `lib.rs:880` |
+| `danmubox://room` | `Room` | 长连接里 `LIVE` / `PREPARING` 到达（`protocol.md` §10.7）：先把登记表里该房间的 `live_status` 改掉，再把改后的**整条** `Room` 推给界面（`LIVE` → `1`、`PREPARING` → `0`，见 `contract.md` §6）。界面据此合并 `rooms` 与 `followed` 里同号的那一条——房间头状态点 / 标签页圆点 / 列表卡片 / 关注行同时变，不需要重连或手动刷新。载荷不含连接态——连接态走 `danmubox://status`。总线侧推的是 `Event::LiveStatus` 这条小载荷，**桌面外壳**补齐整条 `Room` 后再推给界面；`EventBus::publish_room`（`bus.rs:281`）无调用方，`Event::Room` 目前无生产者 | 事件驱动（一条连接生命周期内至多几次） | `lib.rs:889`、`lib.rs:905` |
+| `danmubox://session` | `RoomSession` | 会话建立后本人房内身份取到时推一次；取不到则只记日志、不推 | 事件驱动 | `lib.rs:915` |
+| `danmubox://status` | `StatusEvent` | 连接状态变化；会话关闭（`Event::RoomClosed`）也以 `disconnected` 形态从这里推出，`detail = "会话已关闭"` | 事件驱动 | `lib.rs:883`、`lib.rs:918-925` |
+| `danmubox://send` | `ChatSendResult` | 每次 `chat_send` 得到结果（**与命令返回值同构**，同一份对象再发一次） | 事件驱动 | `lib.rs:480` |
+| `danmubox://room_stats` | `RoomStats`（`contract.md` §5） | 房间观众数变化（在线人数 / 累计看过，两侧可缺省） | 事件驱动，不进会话缓冲 | `lib.rs:886` |
+| `danmubox://log` | `string` | `tracing` 日志行经桥接层推出，格式为 `"<LEVEL> <message>"` | 事件驱动；前端日志切片上限 200 行（§8） | `lib.rs:1144` |
 
 ```ts
 // `crates/danmubox-core/src/bus.rs:10-26`
@@ -252,7 +233,7 @@ type StatusEvent = {
 
 **`ConnState` 仍是这四个取值**：`protocol.md` §13.1 的终态 `Failed` **不新增取值**——§13.3 步骤 6 明写「房间状态置为 error」。连续 3 次认证失败后自动重连**停止**，这个终态同样报 `"error"`，`detail` 里带「已停止自动重连；手动刷新可重置」。前端要区分「退避重连中」与「已停止自动重连」时读 `detail`；若要单独呈现一档，得先在 `protocol.md` §13、§4 的事件表与 `ui.md` §3.3 一起加取值。
 
-**`danmubox://session` 的判别规则**：这个事件名上**只推一种载荷**——房内身份 `RoomSession`（`Event::Session`，载荷类型即 `RoomSession`：`bus.rs:71`；会话建立时向总线发一次）。登录态不经这个事件，由 `session_status` 现取（`contract.md` §7）。前端仍按**判别字段**分派而不是假定载荷种类：有 `logged_in`（boolean）→ 登录态 `SessionState`；有 `is_admin`（boolean）→ 房内身份 `RoomSession`（`ipc.ts:216-232`）——这是防御式写法，引擎将来真补推登录态也不用改。分派写错（例如把身份当登录态）会把 `session.logged_in` 覆盖成 `undefined`，界面随即误判成游客态。
+**`danmubox://session` 的判别规则**：这个事件名上**只推一种载荷**——房内身份 `RoomSession`（`Event::Session`，载荷类型即 `RoomSession`：`bus.rs:71`；会话建立时向总线发一次）。登录态不经这个事件，由 `session_status` 现取（`contract.md` §7）。前端仍按**判别字段**分派而不是假定载荷种类：有 `logged_in`（boolean）→ 登录态 `SessionState`；有 `is_admin`（boolean）→ 房内身份 `RoomSession`（`ipc.ts:203-219`）——这是防御式写法，引擎将来真补推登录态也不用改。分派写错（例如把身份当登录态）会把 `session.logged_in` 覆盖成 `undefined`，界面随即误判成游客态。
 
 ### 4.1 控制台桥（前端 → 后端的内部命令）
 
@@ -260,8 +241,8 @@ type StatusEvent = {
 
 | 项 | 内容 |
 |---|---|
-| 注入 | `CONSOLE_BRIDGE` 常量（`lib.rs:1061-1106`）在页面加载完成（`PageLoadEvent::Finished`）后由 Rust `eval` 注入 WebView（`lib.rs:1257-1262`）；每次加载都注入一次，脚本自带去重标记（`window.__danmuboxLogBridge`）防重复挂钩 |
-| 调用方式 | 脚本直接调原生 `window.__TAURI_INTERNALS__.invoke('frontend_log', { level, message })`（`lib.rs:1068-1071`）——这是 §6「前端不出现 `invoke` 字面量」的唯一例外，它不承载业务数据 |
+| 注入 | `CONSOLE_BRIDGE` 常量（`lib.rs:948-993`）在页面加载完成（`PageLoadEvent::Finished`）后由 Rust `eval` 注入 WebView（`lib.rs:1104-1109`）；每次加载都注入一次，脚本自带去重标记（`window.__danmuboxLogBridge`）防重复挂钩 |
+| 调用方式 | 脚本直接调原生 `window.__TAURI_INTERNALS__.invoke('frontend_log', { level, message })`（`lib.rs:955-958`）——这是 §6「前端不出现 `invoke` 字面量」的唯一例外，它不承载业务数据 |
 | 捕获范围 | `console.error` / `console.warn`（转调原函数，不吞日志）、`window` 的 `error` 事件、`unhandledrejection` |
 | `level` | 只取 `error` / `warn`；Rust 侧分别映射为 `tracing::error!` / `tracing::warn!`，其它值降级为 debug |
 | `target` | `"danmubox::ui"`——Rust 侧一份日志即可覆盖前后端 |
@@ -359,7 +340,7 @@ type SendState = "unconfirmed" | "rejected";   // Message.send_state（另有 Me
 
 ## 6. 客户端封装
 
-唯一 IO 边界是 `apps/desktop/ui/src/ipc.ts`：业务组件只 import 一个与 §3 同名、同参、同返回的客户端接口（`api`，`ipc.ts:68-174`），不出现 `invoke` / `listen` 字面量；事件订阅统一为 `subscribeEvents(handlers): Promise<UnlistenFn>`（`ipc.ts:192`），返回取消订阅函数。命令失败时由 `call()`（`ipc.ts:59-66`）把命令名与错误码打到控制台（经 §4.1 的桥进入 Rust 日志）；其余命令（写操作与 `history_query`）走裸 `invoke`，失败不进日志。`describeError`（`ipc.ts:43`）把 `ApiError` 转成展示文案。
+唯一 IO 边界是 `apps/desktop/ui/src/ipc.ts`：业务组件只 import 一个与 §3 同名、同参、同返回的客户端接口（`api`，`ipc.ts:66-161`），不出现 `invoke` / `listen` 字面量；事件订阅统一为 `subscribeEvents(handlers): Promise<UnlistenFn>`（`ipc.ts:179`），返回取消订阅函数。命令失败时由 `call()`（`ipc.ts:57-64`）把命令名与错误码打到控制台（经 §4.1 的桥进入 Rust 日志）；其余命令（写操作与 `history_query`）走裸 `invoke`，失败不进日志。`describeError`（`ipc.ts:41`）把 `ApiError` 转成展示文案。
 
 ```ts
 type EventHandlers = {
@@ -401,9 +382,9 @@ sequenceDiagram
 | 规则 | 内容 |
 |---|---|
 | 挂载位置 | `messages` 尾部插入一条**完整 `Message`**：`local_id` 取负数（`-1`、`-2`、…，`pendingSeq` 自增，`store.ts:208`、`store.ts:333-341`）；身份字段取自 `session`（昵称 / uid）、当前生效账号（`face`）与 `roomIdentities[roomId]`（大航海 / 房管），**粉丝牌只在 `my_medal_worn` 为真时才算数**（持有 ≠ 佩戴，`protocol.md` A43）、**牌面真彩色取自本人上一条上游行**（`room_session` 不带它），`upstream_id=""`。**刻意不设 `send_state`** |
-| 对账 | 上游回播到达时按 `matchPending`（`store.ts:265-276`）判定：回播那条必须是 `kind = "danmaku"` 且本地行同 `kind`；`uid` 相同 + 正文逐字相同（两侧都带 `emote` 时再比 `emoticon_unique`）+ `ts` 之差 ≤ `SEND_MATCH_WINDOW_MS`（**60000ms**，`types.ts:631`）。参与范围 = 本地行（负数）且未判 `rejected`、且没被对上过（`echoedLocals` 侧表，`store.ts:222`，行上一个字段都不写）；命中多条取列表里最靠前的一条。命中后**原位把字段换成上游那条、`local_id` 照抄本地那个负数**（`store.ts:791-796`）——净条数不变，React key 不变 ⇒ DOM 节点不重建 |
+| 对账 | 上游回播到达时按 `matchPending`（`store.ts:265-276`）判定：回播那条必须是 `kind = "danmaku"` 且本地行同 `kind`；`uid` 相同 + 正文逐字相同（两侧都带 `emote` 时再比 `emoticon_unique`）+ `ts` 之差 ≤ `SEND_MATCH_WINDOW_MS`（**60000ms**，`types.ts:614`）。参与范围 = 本地行（负数）且未判 `rejected`、且没被对上过（`echoedLocals` 侧表，`store.ts:222`，行上一个字段都不写）；命中多条取列表里最靠前的一条。命中后**原位把字段换成上游那条、`local_id` 照抄本地那个负数**（`store.ts:791-796`）——净条数不变，React key 不变 ⇒ DOM 节点不重建 |
 | 幂等 | 本地行与真实行的 `local_id` 永不碰撞（负数 vs 恒正），`onMessage` 的单调判定也不受影响；回播命中**不换号**，所以那条永远留在负数一侧（这也是 `echoedLocals` 必须存在的原因） |
-| 超时兜底 | 插入时排一个 `SEND_CONFIRM_TIMEOUT_MS`（**8000ms**，`types.ts:622`）的定时器：到点仍无 `send_state` → 置 `"unconfirmed"`（不删行，也不再假装它「发送中」，定时器 `store.ts:395-398`、置位 `store.ts:411-421`）。只改仍无状态的那条 |
+| 超时兜底 | 插入时排一个 `SEND_CONFIRM_TIMEOUT_MS`（**8000ms**，`types.ts:605`）的定时器：到点仍无 `send_state` → 置 `"unconfirmed"`（不删行，也不再假装它「发送中」，定时器 `store.ts:395-398`、置位 `store.ts:411-421`）。只改仍无状态的那条 |
 | `ok` | 命令返回 `outcome="ok"` 不动本地行；换字段完全交给上游回播（`danmubox://message`）。若回播先到，命中对账即已换好 |
 | 被拒（`blocked_platform` / `blocked_room` / `rate_limited` / `medal_required` / `muted` / `failed`） | 一律 `outcome != "ok"` → 本地行置 `"rejected"`，`send_reason` = `sendOutcomeText(outcome, detail)`（**与浮片同一句**）：正文划线，行尾显示该句。行**不删**，草稿**保留**（`store.ts:1071`） |
 | 传输层异常 / IPC 错误（含本地节流 `RATE_LIMITED`） | `chat_send` reject → 错误条展示 `describeError`，本地行置 `"unconfirmed"`（**结果未知**：这条可能已经上屏，因此不划线、不判被拒，`store.ts:1078`）。重试由用户再次发送完成（新的一次乐观行） |

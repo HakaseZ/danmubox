@@ -182,6 +182,18 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             None,
             None,
         ),
+        // 弹幕聚合：同一条弹幕被不同观众在窗口内重复发送时折成一行（规则与常量见契约 §4）。
+        // **默认 `true`**：聚合**本来就是现有行为**，这枚键只是把它变成可关的开关 ——
+        // 关掉 = 逐条照原样显示。与 `ui.gift_collapse_cheap` 那两枚的取舍正好相反
+        // （它们默认 `false`，因为会改变现有效果）；这里改默认值就会改变所有人眼下的画面。
+        spec(
+            "ui.danmaku_aggregate",
+            Ty::Bool,
+            json!(true),
+            None,
+            None,
+            None,
+        ),
         // 弹幕时间戳列（需求 §2.1 / 契约 §8）。**曾漏登记在白名单里**：界面、契约、
         // 文档三处都写了它，但 SPECS 没有 → `set_patch` 命中未知键分支返回
         // `BAD_REQUEST`，开关存不下去也读不回来（用户 2026-09-12 核 issue #6 时发现）。
@@ -666,6 +678,11 @@ mod tests {
             "低价礼物剔除统计默认关：默认形态必须与改前一致（契约 §8）"
         );
         assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
+        assert_eq!(
+            prefs.get("ui.danmaku_aggregate").unwrap(),
+            json!(true),
+            "聚合默认开 = 保留现有行为（契约 §8）"
+        );
         // 会话缓冲的六枚键：默认值以 `BufferCaps::default()` 为准（`buffer_caps_are_the_six_keys`
         // 把两者钉在一起），这里只确认它们真的在 SPECS 里、读得出来。
         assert_eq!(

@@ -884,11 +884,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 捕获 `body` 期间本线程打出的日志。
+    /// 捕获 `body` 期间**本线程**打出的日志。
     ///
     /// 手写最小订阅者：本 crate 不依赖 `tracing-subscriber`，这里只需要「把事件字段按 debug
-    /// 记下来」这一件事。缓冲区是**线程本地**的，`with_default` 也只在本线程生效，
-    /// 因此并行跑的其它用例不受影响。
+    /// 记下来」这一件事。缓冲区是**线程本地**的，因此并行跑的其它用例互不影响。
     fn captured_logs(body: impl FnOnce()) -> String {
         use std::cell::RefCell;
         use std::fmt::Write as _;
@@ -924,8 +923,21 @@ mod tests {
             fn exit(&self, _: &tracing::span::Id) {}
         }
 
+        // 订阅者常驻**进程级**，而不是按线程 `with_default`：tracing 的 callsite 兴趣缓存
+        // 与 max level 是进程级的，而 trace-core 在「活着的订阅者 ≤ 1」时走
+        // `Dispatchers::JustOne` 快路径 —— 它用的是**调用线程当前**的订阅者，而
+        // `with_default` 把订阅者装上去之前那一刻是「无订阅者」。并行跑时就有用例会把这条
+        // `warn!` 的 callsite 缓存成「永不启用」，本用例再装线程本地订阅者也收不到它
+        // （实测：`cargo test -p danmubox-core --lib` 约有一半的轮次因此失败，
+        // `--test-threads=1` 才稳定绿）。常驻的全局订阅者让进程里永远有一个活着的订阅者，
+        // 兴趣与 max level 都稳定，断言读到的才是「这条日志有没有发出来」。
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let _ = tracing::subscriber::set_global_default(Capture);
+        });
+
         CAPTURED.with(|out| out.borrow_mut().clear());
-        tracing::subscriber::with_default(Capture, body);
+        body();
         CAPTURED.with(|out| out.borrow().clone())
     }
 

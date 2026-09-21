@@ -24,10 +24,9 @@
 |---|---|---|---|
 | 连线礼物映射 | `UNIVERSAL_EVENT_GIFT(_V2)` → 礼物条目 | 活动期（PK / 连麦）房间的真实载荷；采样方法与归类判据见 `protocol.md` 附录 A（A22）与附录 B | REQUIREMENTS §2.1 |
 | `SEND_GIFT`（V1）字段 | V1 礼物的真实字段 | 一条 V1 样本（老客户端或特殊场景才发）；`protocol.md` A8 | REQUIREMENTS §2.1 |
-| 未开播条目的排序依据 | 未开播条目取不到开播时间，该档落回 `online` → 房间号 | 上游两个端点都不给未开播条目的开播时间（`liveTime` 为 0 / 缺失）；`protocol.md` A28；排序链 `apps/desktop/ui/src/filtering.ts:147`（`live_start_at` → `online` → `room_id`） | REQUIREMENTS §2.6（P11 未闭环） |
+| 未开播条目的排序依据 | 未开播条目取不到开播时间，该档落回 `online` → 房间号 | 上游两个端点都不给未开播条目的开播时间（`liveTime` 为 0 / 缺失）；`protocol.md` A28；排序链 `apps/desktop/ui/src/filtering.ts:155`（`live_start_at` → `online` → `room_id`） | REQUIREMENTS §2.6（P11 未闭环） |
 | 部分账号连自己的直播间收不到消息 | 三条护栏已落地：认证 `op=7` 后 10s 无 `op=8` 记一次认证失败、90s 无入站帧判僵死、连续 3 次失败停 `Failed` 等人工重连 | 「受影响的账号 + 可复现房间」（只读即可）；根因核对方法 `protocol.md` A46，护栏见 §13.2 | REQUIREMENTS §2.12（P109 未闭环） |
 | 后台长挂与安卓丢弹幕 | 7×24 长挂能力、后台唤回后丢弹幕的区间与成因 | 真机长挂对照；`protocol.md` A47、§13.2 | REQUIREMENTS §2.12 |
-| Android 诊断报告写公共下载目录 | 模拟器一档已闭环；真机、多外部存储卷、API 24–28 未验 | 一台真机 / 低版本设备；`protocol.md` A48 | REQUIREMENTS §2.12 |
 | 举报接口的官方 web 对照 | A27 已实测「跑通」（日志观察、`code=0`）；缺的是**与官方 web 的逐字一致**与**错误码集合** | **只读对照**：用浏览器打开官方直播间，在 DevTools 里看官方前端举报时的**请求形状**（端点 / 表单字段 / 头），与 `crates/danmubox-bili/src/report.rs` 逐字对照。**不做写操作**（故意触发错误码会招风控，且与「写操作不验证」口径冲突）| REQUIREMENTS §2.4 |
 
 ### 2.2 待拍板
@@ -61,7 +60,7 @@ backlog 各项不阻塞已退出阶段的退出条件；启动时各自作为独
 | 风险 | 触发信号 | 缓解动作 |
 |---|---|---|
 | 协议字段未实测 / 上游协议变更（字段下标、protobuf、被吞判定、举报 / 表情 / 关注 / 钱包端点） | `protocol.md` 附录 A 的条目无结论；事件流出现未识别 `cmd`、解码失败计数上升 | 结论一律取自实测样本，未实测不硬编码（`protocol.md` 附录 A 是唯一承载处）；ac站细节全部隔离在 `danmubox-bili`（[`AGENT.md`](../AGENT.md) §2、§8 第 3 条）；未识别 `cmd` 计入 `unknown_cmd` 并继续（`crates/danmubox-bili/src/cmd.rs:185`、`crates/danmubox-core/src/bus.rs:121`） |
-| 连接层：风控 / 限流、认证失败、上游主动断连 | 连接建立后立刻断开、连接频繁被拒、认证回应非 0 `code` | 按 5 / 10 / 20 / 40 / 60s 退避重连，健康会话回落起点（`crates/danmubox-bili/src/ws.rs:37`、`:933`、`:1027`）；非 0 `code` 只记原值、不编造含义（[`contract.md`](contract.md) §5 `SendOutcome`）；凭据失效时引导重新登录 |
+| 连接层：风控 / 限流、认证失败、上游主动断连 | 连接建立后立刻断开、连接频繁被拒、认证回应非 0 `code` | 按 5 / 10 / 20 / 40 / 60s 退避重连，健康会话回落起点（`crates/danmubox-bili/src/ws.rs:35`、`:845`、`:929`）；非 0 `code` 只记原值、不编造含义（[`contract.md`](contract.md) §5 `SendOutcome`）；凭据失效时引导重新登录 |
 | 凭据泄露（明文 `config.toml`） | 日志、前端明文、仓库或崩溃上报中出现真实值 | 权限 0600、只在本机数据目录（`crates/danmubox-core/src/config.rs:381`、`:417`）；凭据不进日志 / 前端明文 / 仓库 / 崩溃上报（[`AGENT.md`](../AGENT.md) §8 第 1 条） |
 | 解压炸弹 | 单包解压后体积异常 | 单包解压上限 16 MiB，超限丢弃并计数（`crates/danmubox-bili/src/proto.rs:14`、`:196`） |
 | Tauri Android WebView 渲染差异 | 安卓上布局溢出、滚动异常、虚拟列表失效 | 核心逻辑全部放 Rust（[`AGENT.md`](../AGENT.md) §2）；UI 做渐进增强；三端手工冒烟清单覆盖布局与滚动（[`testing.md`](testing.md) §10） |

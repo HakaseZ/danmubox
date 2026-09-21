@@ -11,8 +11,9 @@ import styles from "../app.module.css";
 interface Props {
   /**
    * 显示行（`filtering.toDisplayRows` 的输出）。弹幕区这一份（`scope === "chat"`）在本组件里
-   * 再过一道**弹幕聚合**（`src/aggregate.ts`，`docs/ui.md` §8.4）：跨观众短时同文本折成一行。
-   * 礼物栏那一份照原样渲染 —— 聚合是弹幕流的事，不过去。
+   * 再过一道**弹幕聚合**（`src/aggregate.ts`，`docs/ui.md` §8.4）：**3 条以上**的跨观众短时同文本
+   * 折成一行，`ui.danmaku_aggregate` 关掉即逐条显示。礼物栏那一份照原样渲染 —— 聚合是弹幕流
+   * 的事，不过去。
    */
   rows: DisplayRow[];
   anchorUid?: number;
@@ -101,13 +102,17 @@ export function MessageList({
   empty,
 }: Props) {
   const ids = SCOPES[scope];
-  // 弹幕聚合（issue 2609171849 第 7 条，`src/aggregate.ts`）：**只在弹幕区这一份**做。
-  // 礼物栏那一份（`scope === "gift"`）取的就是礼物三族，聚合对它是空操作 —— 但仍然显式分叉：
-  // 少一次遍历，也免得以后有人顺手把礼物行也合进来（`docs/ui.md` §8.4）。
+  // 弹幕聚合（issue 2609171849 第 7 条 + issue 202609211940 第 3 条，`src/aggregate.ts`）：
+  // **只在弹幕区这一份**做。礼物栏那一份（`scope === "gift"`）取的就是礼物三族，
+  // 聚合对它是空操作 —— 但仍然显式分叉：少一次遍历，也免得以后有人顺手把礼物行也合进来
+  // （`docs/ui.md` §8.4）。
+  // 开关是 `ui.danmaku_aggregate`（契约 §8，默认开）：关掉即**逐条显示**（`aggregateRows`
+  // 原样返回入参那一份）。它住在 `prefs` 里，所以依赖必须带上 `prefs` —— 少带它，
+  // 点掉这枚开关的那一次 `useMemo` 不会重算，界面会仍然折着。
   // 纯函数 + `useMemo`：与 App 的 `toDisplayRows` 同一条口径，渲染期不做重活。
   const listRows = useMemo(
-    () => (scope === "chat" ? aggregateRows(rows) : rows),
-    [rows, scope],
+    () => (scope === "chat" ? aggregateRows(rows, prefs) : rows),
+    [rows, scope, prefs],
   );
   const scrollerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);

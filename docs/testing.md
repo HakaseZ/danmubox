@@ -34,10 +34,10 @@ graph TD
 
 | 位置 | 文件 |
 |---|---|
-| `crates/danmubox-core/src/`（10 个 `.rs` 中的 7 个） | `bus.rs`、`config.rs`、`diagnose.rs`、`model.rs`、`paths.rs`、`prefs.rs`、`session.rs` |
-| `crates/danmubox-bili/src/`（18 个 `.rs` 中的 17 个） | `admin.rs`、`asset.rs`、`auth.rs`、`cmd.rs`、`diagnose.rs`、`emote.rs`、`follow.rs`、`history.rs`、`http.rs`、`pb.rs`、`proto.rs`、`redact.rs`、`report.rs`、`send.rs`、`wallet.rs`、`wbi.rs`、`ws.rs` |
-| `apps/desktop/src-tauri/src/`（3 个 `.rs` 中的 2 个） | `lib.rs`、`diagnose.rs` |
-| `apps/desktop/ui/src/` | `filtering.test.ts`、`session-messages.test.ts` |
+| `crates/danmubox-core/src/`（9 个 `.rs` 中的 6 个） | `bus.rs`、`config.rs`、`model.rs`、`paths.rs`、`prefs.rs`、`session.rs` |
+| `crates/danmubox-bili/src/`（17 个 `.rs` 中的 16 个） | `admin.rs`、`asset.rs`、`auth.rs`、`cmd.rs`、`emote.rs`、`follow.rs`、`history.rs`、`http.rs`、`pb.rs`、`proto.rs`、`redact.rs`、`report.rs`、`send.rs`、`wallet.rs`、`wbi.rs`、`ws.rs` |
+| `apps/desktop/src-tauri/src/`（2 个 `.rs` 中的 1 个） | `lib.rs` |
+| `apps/desktop/ui/src/` | `aggregate.test.ts`、`filtering.test.ts`、`session-messages.test.ts` |
 | `apps/desktop/ui/smoke/` | `run-headless.mjs`、`room-page.mjs`、`wkwebview-host.swift`、`scenario/fixtures.mjs`、`scenario/parts/*.mjs`（20 份：`00-mock` / `10-harness` / `20…36` / `90-epilogue`）、`fixtures/*.json`（10 份） |
 
 无测试的文件：`crates/danmubox-core/src/{lib,ports,error}.rs`、`crates/danmubox-bili/src/lib.rs`、`crates/danmubox-cli/src/main.rs`、`apps/desktop/src-tauri/src/main.rs`。端到端验证落在 `apps/desktop/ui/smoke/`（目录结构与夹具出处见 §9.1，引擎门槛见 `AGENT.md` §9）。
@@ -46,7 +46,7 @@ graph TD
 
 现有落位：`crates/danmubox-bili/src/proto.rs`（12 条）、`cmd.rs`（38 条）、`ws.rs`（21 条）等文件的 `mod tests`。§3.2 的编号是清单契约，与现有用例不是一一对应；§3.3 的映射断言主要在 `cmd.rs`。
 
-现有夹具位置：Rust 用例直接用 `include_str!` 读**无头冒烟那份** `apps/desktop/ui/smoke/fixtures/`，没有 crate 内的 `tests/fixtures/` —— `crates/danmubox-bili/src/http.rs:892-895`（`room-play-info.json` / `room-h5-info.json`）、`follow.rs:547-557`（`follow-getweblist-raw.json` / `follow-followings-raw.json` / `follow-status-raw.json`）。`cmd.rs:1096-1100` 只在注释里提到 `danmaku-rows.json` 的同款载荷，该用例的样本是代码内构造的。夹具是两侧共用的唯一来源，改夹具会同时影响 `cargo test` 与冒烟。
+现有夹具位置：Rust 用例直接用 `include_str!` 读**无头冒烟那份** `apps/desktop/ui/smoke/fixtures/`，没有 crate 内的 `tests/fixtures/` —— `crates/danmubox-bili/src/http.rs:872-875`（`room-play-info.json` / `room-h5-info.json`）、`follow.rs:547-557`（`follow-getweblist-raw.json` / `follow-followings-raw.json` / `follow-status-raw.json`）。`cmd.rs:1096-1100` 只在注释里提到 `danmaku-rows.json` 的同款载荷，该用例的样本是代码内构造的。夹具是两侧共用的唯一来源，改夹具会同时影响 `cargo test` 与冒烟。
 
 ### 3.1 包结构断言基础
 
@@ -196,7 +196,7 @@ graph TD
 
 | 字段 | 说明 |
 |---|---|
-| 文件头 | `mode` 取值为 `guest` 或 `logged-in`（录制时的登录模式）、`recorded_at=YYYY-MM-DD`、`encoding=brotli`（请求协商的载荷版本为 3；认证包在 body 里声明 `protover=3`，见 `crates/danmubox-bili/src/ws.rs:409-413`） |
+| 文件头 | `mode` 取值为 `guest` 或 `logged-in`（录制时的登录模式）、`recorded_at=YYYY-MM-DD`、`encoding=brotli`（请求协商的载荷版本为 3；认证包在 body 里声明 `protover=3`，见 `crates/danmubox-bili/src/ws.rs:365-369`） |
 | 每行 | `offset_ms` + 制表符 + `base64(原始包字节)`，`offset_ms` 为相对录制起点的毫秒偏移 |
 | 命名 | 形如 `fixtures/replay/room-20260911-01.txt`，不出现真实房间号以外的个人信息 |
 
@@ -222,15 +222,17 @@ graph TD
 
 前端测试用 `vitest` 加 jsdom 环境，mock `@tauri-apps/api` 的 `invoke` 与 `listen`；事件名断言覆盖契约 §7 的 `danmubox://message` / `danmubox://room` / `danmubox://session` / `danmubox://status` / `danmubox://send` / `danmubox://room_stats` / `danmubox://log`。
 
-**现状**：仓库里**还没有** vitest（`apps/desktop/ui/package.json` 的 devDependencies 里没有它），F-01…F-11 里依赖 jsdom / RTL 的那几档仍是规划。已落地的前端单测是显示层纯逻辑的两份，用 **Node 自带的 `node --test` + 类型擦除**直接跑，不需要任何新依赖：
+**现状**：仓库里**还没有** vitest（`apps/desktop/ui/package.json` 的 devDependencies 里没有它），F-01…F-11 里依赖 jsdom / RTL 的那几档仍是规划。已落地的前端单测是显示层纯逻辑的三份，用 **Node 自带的 `node --test` + 类型擦除**直接跑，不需要任何新依赖：
 
 | 文件 | 被测模块 | 覆盖 |
 |---|---|---|
+| `apps/desktop/ui/src/aggregate.test.ts` | `aggregate.ts` | 弹幕聚合的纯逻辑（9 条）：折叠门槛（同键 + 窗口内至少 3 条、去重后至少 2 位不同观众）、窗口 5000 ms 且**非滑动**（锚点是这一行第一条）、条数上限 999 到顶封口、归一化正文与表情弹幕按 `emoticon_unique` 同键、空正文与本地乐观行不参与、关掉 `ui.danmaku_aggregate` 即原样返回入参 |
 | `apps/desktop/ui/src/filtering.test.ts` | `filtering.ts` | 过滤 / 折叠 / 自动消失那一族（低价礼物两枚开关对两个区域都生效、四种机制都可逆且不丢内容） |
 | `apps/desktop/ui/src/session-messages.test.ts` | `session-messages.ts` | 会话换代后的消息列表规则（同一条只入列一次、`history_query` 快照落地、会话重建后新消息不再被 `local_id` 判丢） |
 
 ```bash
 cd apps/desktop/ui
+node --test src/aggregate.test.ts
 node --test src/filtering.test.ts
 node --test src/session-messages.test.ts
 node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑某几条
@@ -251,6 +253,7 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | F-08.1 | 上下分区的比例与顺序 | 拖动分割条、长按换位、改 `ui.gift_pane_ratio` / `ui.gift_pane_on_top` | 拖动实时改两栏高度（拖动中不写 store，松手写一次）、长按 0.5s 换位、两枚键持久化并在重启后读回；最小高度双向生效（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头）；`ui.gift_panel` 关掉时退化为弹幕区全高、分割条消失（`ui.md` §5.4；无头冒烟同款断言见 `smoke/scenario/parts/34-split-panes.mjs` 的 `splitter*` / `swap*`） |
 | F-08.2 | 低价礼物（≤ 0.1 元）的折叠与统计剔除 | 勾上「辅助功能」里的「折叠低价礼物」/「剔除低价礼物统计」，**弹幕区与礼物栏两处**都放 0.09 / 0.10 / 0.11 元与没给价（`amount = 0`）四条礼物 | **两个区域**（弹幕区 + 礼物栏）各量一次：折叠让**两处**的低价礼物合成一条（`×N` 与金额是整桶合计，弹幕区那一处不画金额格），折叠头的统计逐字不变；剔除只改**折叠头**的「礼物 / SC（N）」与三组明细（统计面只有这一处），**两处的行都不动**；边界：0.09 / 0.10 算低价、0.11 与 0 不算；SC 与大航海不受两枚开关影响；两枚默认都关且持久化（`ui.md` §5.3、`contract.md` §8；无头冒烟同款断言见 `smoke/scenario/parts/35-cheap-gift.mjs` 的 `cheapGift*` 与 `switchScope*`，单测见 `src/filtering.test.ts`） |
 | F-08.3 | **剔除 / 折叠 / 隐藏 / 自动消失都不丢内容、开关关掉即复原**（issue 2609171849 第 5 条） | ① 折叠开着时关掉它：**两个区域**各自逐条回来；② 剔除开着时关掉它：统计串逐字回来；③ 关掉 `ui.interact_auto_hide`：早先「消失」的互动行原样回来，再打开又不见；④ 关掉 `ui.gift_panel` / `ui.gift_in_danmaku`：被藏起来的那一批整批回来 | 这四种机制**都只是显示层的派生**——原始消息始终留在会话缓冲里（只受契约 §4.3 的上限约束），不得因它们提前消失。关掉后顺序、数量、金额与统计串逐项与开之前相同（`ui.md` §5.3「不丢内容 / 可逆」与 §4.8；单测 `src/filtering.test.ts` 第 2/3/5 条，冒烟 `switchScope*`） |
+| F-08.4 | **刷屏弹幕聚合**（不同观众在同一窗口里发同一条弹幕折成一行） | 五档：同文本 + 3 位不同观众、不同文本、同文本但第一条落在窗口外、三位观众里有一位没头像、关掉 `ui.danmaku_aggregate` 再点回来 | ① 同文本 + 3 位观众：折成**一行**，身份位印「刷屏 ×3」（`db-msg-spam`）、头像列（`db-msg-avatar-col`）里画 `db-msg-avatar-stack` 的 3 张堆叠头像（沿 X 每张错开 30% 头像宽、后一张压在前一张上、**最左那张 z-index 最高**），身份位**不画**用户名（`db-msg-name`）与徽标（`db-msg-badges`）、行内**不画** `×N`（`db-msg-count` 只属于礼物连击与低价礼物桶）；② 不同文本：两行（只认同一个聚合键）；③ 第一条落在窗口外：三行（锚点是本行第一条，**非滑动**）；④ 一位观众没头像：头像列只画两张、只错开一次（空 `face` 的那位不画，错位按实画张数算，头像列本身照留宽）；⑤ 关掉开关：同样三条**逐条**显示（无「刷屏 ×N」、无堆叠层），点回来当场又折成一行。单测见 `src/aggregate.test.ts`（9 条）；无头冒烟同款断言见 `smoke/scenario/parts/25-aggregate-jump.mjs` 的 `aggregateBlockRan` / `aggregate*` 一组（`ui.md` §8.4 第二条、`contract.md` §8） |
 | F-09 | 刷新按钮 | 在房间内点击「刷新」 | 发出 `rooms_reconnect`；已渲染的当前会话消息不被清空 |
 | F-10 | 空态 / 错误态 / 未登录态 | 渲染三种状态 | 各自展示对应提示；未登录时发弹幕入口被禁用并提示登录 |
 | F-11 | IPC 订阅生命周期 | 挂载、卸载组件并反复切房间 | 解绑后不再收到事件，监听器数量回到基线（无泄漏） |
@@ -300,9 +303,9 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `22-danmaku-rows.mjs` | `layout` 的弹幕行部分：排版取证 / 长 ASCII 串 / 表情渲染盒 / ＠ 高亮 / 身份行 / 悬挂缩进 / 头像 / 尺度 / 颜色 |
 | `23-panels-layout.mjs` | 工具行 / 文档不滚动 / 面板只挤列表 / 表情面板（tab 轨道、行数、溢出、权限、切 tab 不关面板）/ 面板收起后跟随仍活 |
 | `24-composer-send.mjs` | 发送失败浮片 / 乐观渲染与回执校验 / 粉丝牌只在亮着时画 |
-| `25-aggregate-jump.mjs` | 弹幕聚合 / 面板展开不弹走阅读位置 / 「回到最新」图标 / 我的表情 |
+| `25-aggregate-jump.mjs` | `aggregate` 弹幕聚合（`aggregateBlockRan` 与 `aggregate*` 一组：同文本三位观众 → 一行「刷屏 ×3」+ 3 张堆叠头像 / 不同文本 → 两行 / 窗口外 → 三行 / 缺头像 → 只画两张 / 关掉 `ui.danmaku_aggregate` → 逐条且点回来又折）/ 面板展开不弹走阅读位置 / 「回到最新」图标 / 我的表情 |
 | `26-shortcuts-limits.mjs` | 点一下发 / 右键菜单 / `mention` / `limit` / `ime` / 超时兜底 / `time` 时间戳默认关 |
-| `27-filter-panel.mjs` | `filter` 两块两列清单 / 六枚辅助开关 / 标题层级 / 字号滑杆 / 对比度 / 时间戳位置 / `step4` `step5` `step6` |
+| `27-filter-panel.mjs` | `filter` 两块两列清单 / 七枚辅助开关（两列四行、每列 4 / 3 项，DOM 序 `0101010`；末一行只有「刷屏弹幕聚合」一格、落在左列）/ 标题层级 / 字号滑杆 / 对比度 / 时间戳位置 / `step4` `step5` `step6` |
 | `28-gift-dock.mjs` | `gift` 礼物类去向 / 礼物栏一条一行与金额 / SC 卡片 / 礼物区与弹幕区同款 / 选中态全宽 / 分界线 / 两枚开关四组合 |
 | `29-phrases-tabs.mjs` | 短语面板 / 断开与刷新连接 / `tabs` 多标签隔离 |
 | `30-immersive.mjs` | 沉浸模式 |
@@ -322,8 +325,8 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 夹具细则（写死在夹具与解析器里，改之前先读）：
 
 1. `smoke/fixtures/danmaku-rows.json` 是**完整原始 `DANMU_MSG` 载荷**（正文弹幕 / 表情包弹幕 / 无空格长 ASCII 串），脱敏只做三件事：昵称 / 牌名 / 主播名 → **等长掩码**（CJK 与全角 → `＊`、ASCII → `x`）、`uid` / 哈希 → `<redacted>`、CDN 只脱敏哈希段；`emoticon_unique` 的房间号段 → `room_<redacted>_<id>`（**房间号不入库**）。
-2. 冒烟侧 `messageFromDanmakuPayload()`（`smoke/scenario/fixtures.mjs:236`）照搬 `crates/danmubox-bili/src/cmd.rs::danmaku` 的取值路径派生成 `Message`（**不得另写一套解析**），只把图换成本地内联替身（固有尺寸与真图一致）；`local_id` 借 `__mk` 分配（`smoke/scenario/parts/00-mock.mjs:187`；store 只接受比末尾更大的 `local_id`，契约 §5）。
-3. 关注列表夹具由真实响应派生：`follow-getweblist-raw.json`（直播侧只给在播）/ `follow-followings-raw.json`（主站关注关系）/ `follow-status-raw.json`（批量房间接口，含未开播）→ `follow-list.json`（70 条，`fixtures.mjs:203-205`），mock 里另加 **3 条自造条目**（在播 / 有标题 / 无标题各一，`parts/00-mock.mjs:122-126`）；脱敏口径与断言见 `protocol.md` A28。
+2. 冒烟侧 `messageFromDanmakuPayload()`（`smoke/scenario/fixtures.mjs:236`）照搬 `crates/danmubox-bili/src/cmd.rs::danmaku` 的取值路径派生成 `Message`（**不得另写一套解析**），只把图换成本地内联替身（固有尺寸与真图一致）；`local_id` 借 `__mk` 分配（`smoke/scenario/parts/00-mock.mjs:191`；store 只接受比末尾更大的 `local_id`，契约 §5）。
+3. 关注列表夹具由真实响应派生：`follow-getweblist-raw.json`（直播侧只给在播）/ `follow-followings-raw.json`（主站关注关系）/ `follow-status-raw.json`（批量房间接口，含未开播）→ `follow-list.json`（70 条，`fixtures.mjs:203-205`），mock 里另加 **3 条自造条目**（在播 / 有标题 / 无标题各一，`parts/00-mock.mjs:126-130`）；脱敏口径与断言见 `protocol.md` A28。
 
 构造类夹具的约束（写死在文件里，改夹具前先读）：
 
@@ -418,11 +421,12 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 | C-9 | 切换过滤器（用户 / 类型 / 粉丝牌等级） | 列表即时收敛为匹配项；清空过滤后恢复 |
 | C-10 | 切换筛选面板「辅助功能」块的两枚礼物开关 | 两枚都开（默认）：礼物 / SC / 大航海既在弹幕流里、也在独立礼物栏里；只开弹幕那枚则礼物栏消失；只开礼物栏那枚则弹幕流里不再出现这三类；两枚都关则两处都不出现 |
 | C-11 | 上滑暂停、点击「回到最新」 | 暂停期间不自动滚动；点击后回到最新并恢复跟随 |
-| C-12 | 断开房间连接（房间头 `⋯` →「断开连接」） | 停止接收新弹幕；**本次会话结束、缓冲随之销毁** —— `history_query` 返回空；随后点「刷新连接」= 重建一次会话（缓冲从空开始，界面换成新会话的快照，`ui.md` §2.4）。契约 §4.3、`apps/desktop/src-tauri/src/lib.rs:389-400` |
+| C-12 | 断开房间连接（房间头 `⋯` →「断开连接」） | 停止接收新弹幕；**本次会话结束、缓冲随之销毁** —— `history_query` 返回空；随后点「刷新连接」= 重建一次会话（缓冲从空开始，界面换成新会话的快照，`ui.md` §2.4）。契约 §4.3、`apps/desktop/src-tauri/src/lib.rs:380-392` |
 | C-13 | 退出应用后重新进入同一房间 | 进程退出无残留；重进为全新会话，不显示上一会话的弹幕 |
 | C-14 | 共享分区：拖分割条、长按换位、关掉礼物栏 | 拖动两栏之间的分割条：高度**实时**跟着走，松手后比例留在 `prefs.json`（`ui.gift_pane_ratio`），重开应用仍是这个比例；拖到极限时弹幕区不短于 3 行、礼物栏不短于它的折叠头（不压到 0、不溢出）；长按任一栏 0.5s 后拖到另一栏松手：两栏上下互换且 `ui.gift_pane_on_top` 落盘（拖回本栏或按 ESC 取消）；在筛选面板关掉「独立礼物栏」：礼物栏与分割条一起消失、弹幕区占满整块（`ui.md` §5.4）。鼠标与触摸各做一遍 |
 | C-15 | 低价礼物两枚开关与互动自动消失：两个区域都生效、关掉即复原 | 在一个礼物不多的房间里先看基线：弹幕区与礼物栏各自把每条礼物画成一行。① 勾上「折叠低价礼物」：**两个区域**里低价礼物（≤ 0.1 元）各合并成一条（`×N` 与金额是整桶合计，弹幕区的合并行不画金额），0.11 元那条与 SC / 大航海两处都照旧一行；② 取消勾选：两处**逐条回来**，顺序、条数、每行金额与折叠头的统计都与基线一字不差；③ 勾上「剔除低价礼物统计」：统计（「礼物 / SC（N）」与分组明细）里不再有低价礼物，而**两个区域的行一条都不少**；取消后统计逐字回到基线；④ 互动消息满 8 秒从弹幕区消失后，取消勾选「互动消息自动消失」：**先前消失的那些行原样回来**（再勾上又不见）—— 消失只是不画，不是丢内容（`ui.md` §5.3、§4.8） |
 | C-16 | 「我的直播间」区域（账号对话框底部）：**未开通不显示**、**双击前推流信息不入 DOM** | ① 用**没开通直播间**的账号（或游客态）打开账号对话框：`db-anchor-panel` **不在 DOM 里**（不是渲染成空块、也不报错；口径 `ui.md` §2.2.2）；② 用**已开通直播间**的账号打开：出现标题输入框（`db-anchor-title`）、状态文本（`db-anchor-status`）与开播 / 下播按钮（`db-anchor-live`），标题初值 = 该直播间当前标题，状态文案是 `直播中` / `轮播` / `未开播` 三选一；③ **不双击**状态文本时，`db-anchor-config`、推流地址与推流码**一个字都不在 DOM 里**（用元素检查或 `document.querySelector('[data-testid="db-anchor-config"]')` 确认，不是「看不见」）；④ 双击状态文本才展开 `db-anchor-config`，其中**当前分区**要与 web 端开播页看到的分区一致（**界面不提供分区选择**）；再双击收起，收起后推流信息又从 DOM 消失。**开播 / 下播是写操作**：只允许在**当次指定的、你自己当前账号的直播间**上点（`AGENT.md` §8 第 14–16 条 —— 失败即停、不重试）；开播成功后配置项里出现推流地址 / 推流码，下播后这两行连同推流码一起从 DOM 消失。上游非 0 code **原样显示在错误行**、不赋语义；**人脸认证那两个码（`60043` / `60024`）是唯一例外**：错误行下面出现引导块 `db-anchor-gate`（`FaceAuth` 给一枚「去完成人脸认证」入口、`QrConfirm` 就地画二维码），并提示「完成认证后再点一次开播」——**不弹窗、不轮询、不自动重试**（`ui.md` §2.2.2、`protocol.md` §18.5） |
+| C-17 | 刷屏弹幕聚合开关（筛选面板「辅助功能」块的「刷屏弹幕聚合」，`ui.danmaku_aggregate`，默认勾上）：先取消勾选、再勾回来 | 勾上时：同文本的几条在窗口内折成**一行** —— 身份位印「刷屏 ×N」、头像列画出最多 3 张堆叠头像（每张沿 X 错开、左压右），行内**不**画 `×N`，不同文本仍是两行；取消勾选：同一批弹幕**逐条**显示（无「刷屏 ×N」、无堆叠层）；再勾回来：当场又折成一行。折叠只是显示层的派生，会话缓冲里仍是逐条（`ui.md` §8.4 第二条；无头冒烟同款断言见 `smoke/scenario/parts/25-aggregate-jump.mjs` 的 `aggregateBlockRan` / `aggregate*`） |
 
 ### 10.2 macOS 专属
 
@@ -455,7 +459,6 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 | A-8 | **系统返回手势**：房间页里从屏幕左边缘侧滑（`adb shell input swipe 0 <y> 600 <y>`，`y` 取屏中），再换右边缘（`1080 <y>` → `480 <y>`）；然后先开一个面板（如「筛选」）再侧滑；最后回到**根页面**（房间列表页、无面板）按返回 | 侧滑 → 回房间列表（**不**退出应用）；面板开着时侧滑 → 面板关掉、**不**跳页；根页面按返回 → 应用退出（`pidof dev.kksk.danmubox` 为空）。**左右边缘都要试**：返回手势归系统管，两侧是否都能返回由系统设置决定，界面只负责消费它。三级顺序见 [`ui.md`](ui.md) §2.6 |
 | A-9 | **后台保活（有连接那一档）**：装好包后先给通知权限（`adb shell pm grant dev.kksk.danmubox android.permission.POST_NOTIFICATIONS`，等价于首启点「允许」）；进房间（如公开测试房间 `1`）等连接成功；按 HOME 退到后台，**等 ≥3 分钟**；期间查四项 —— ① 进程还在：`adb shell pidof dev.kksk.danmubox`；② 到 443 的长连还在：`/proc/<pid>/fd` 的 socket inode → `/proc/net/tcp{,6}` 里状态 `01`（ESTABLISHED）、远端端口 `01BB`；③ 通知在：`adb shell dumpsys notification --noredact` 里能看到渠道 `danmubox-keepalive` 与那条通知；④ `adb logcat` 无 `FATAL`、无反复重连刷屏。最后点通知回前台 | 四项都在；点通知回到应用后（= 走到 `onStart`）再查一遍：`dumpsys activity services` 里 `KeepAliveService` 消失、`dumpsys notification` 里那条通知消失、进程与连接**不受影响**（服务本身不碰网络）。行为与平台限制见 [`operations.md`](operations.md) §2.8 |
 | A-10 | **后台保活（不该起的那两档）**：① 不打开任何房间（停在房间列表页）→ 按 HOME；② 开着房间，但在**根页面按返回**退出应用（A-8 的最后一档） | 两档都**不该**出现 `KeepAliveService`，通知抽屉里也不该有那条常驻通知（① 没连接；② `isFinishing`，用户是主动退出）。检查方式同 A-9 的 ③ |
-| A-11 | **一键诊断（导出到公共下载目录）**：进一个房间，点房间头 `⋯` →「一键诊断」，等倒计时（或点「提前结束并导出」）；然后 `adb shell ls /sdcard/Download`（`-l` 可看体积）与 `adb pull /sdcard/Download/danmubox-diagnose-*.txt` | ① 目录里**恰好一个** `danmubox-diagnose-<UTC 时间戳>.txt`（没有临时文件、没有第二个）；② 面板上显示的就是该路径（点「复制路径」能粘贴出来）；③ `adb pull` 出来的文件可读、含「结论速览 / 连接尝试 / 协议计数 / 采集窗口内的日志」，且凭据、uid、昵称、**房间号**都是 `***`（口径 `contract.md` §4.4、`operations.md` §2.9） |
 
 ### 10.5 Android：无真机时的验证边界
 
@@ -497,7 +500,7 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 | 遗留 | 状态 |
 |---|---|
 | 退出应用时的 `FORTIFY: pthread_mutex_lock called on a destroyed mutex` | **未修**：成因未查（疑似 Rust 侧 teardown 阶段仍被触碰的已销毁锁）。证据：3 份退出日志各命中一次（`back-logcat.txt:899-905`、`logcat-v2.txt:1500-1506`、`v2-repro-backexit.log:341-347`），进程随后 `exited cleanly (0)`。**不得写成「零 crash」** |
-| Android 侧业务日志入口 | **已闭环**：房间头 `⋯` →「一键诊断」把采集窗口内的业务日志写进公共下载目录（验收见 §10.4 A-11；口径 `operations.md` §2.9、`contract.md` §4.4） |
+| Android 侧业务日志入口 | **已定**：应用内的业务日志导出入口（房间头 `⋯` 里那一项）已随该功能整体删除（见 [`../CHANGELOG.md`](../CHANGELOG.md)），安卓侧只剩 `adb logcat` —— 现场日志按 §10.4 A-9 的 ④ 那一档的口径抓（`adb logcat -d` 落盘、`-s <TAG>` 收窄），不再有应用内的倒计时采集与导出 |
 
 ### 10.6 无头冒烟的已知偏差（**保留断言、不放松**）
 

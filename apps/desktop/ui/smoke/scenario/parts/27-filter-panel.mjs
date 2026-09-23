@@ -1,6 +1,6 @@
 // 场景块：筛选与显示偏好面板 + step4/5/6
-//   filter 筛选面板的两块表单是两列勾选清单（消息类型 6 项 + 辅助功能 6 枚开关）：列 / 行几何、不许横向滚动、不再是芯片样
-//   六枚辅助开关逐枚点开再点回（偏好与复选框同步翻）、干净环境下画的即契约默认值、两块标题的视觉层级
+//   filter 筛选面板的两块表单是两列勾选清单（消息类型 6 项 + 辅助功能 7 枚开关）：列 / 行几何、不许横向滚动、不再是芯片样
+//   七枚辅助开关逐枚点开再点回（偏好与复选框同步翻）、干净环境下画的即契约默认值、两块标题的视觉层级
 //   字号滑杆只作用弹幕区；房间页这一档的主题对比度；时间戳在最右且逐行等宽
 //   step4 系统类消息的白名单；step5 互动行 8 秒后自动消失；step6 关掉开关后常驻
 //
@@ -19,9 +19,9 @@
       !filterPanel.querySelector('[data-testid="db-pref-theme"]');
     // 两块各自按**稳定钩子**定位（不再靠 sections[0] / [1] 的下标）：db-filter-kinds /
     // db-filter-aux 是本次新增的 data-testid（docs/ui.md §8.5）。
-    //      「消息类型」= 6 项（契约 §8 的 kind 全集）；「辅助功能」= 字号滑杆 + **六枚**复选框。
-    //      文案由下面的 step4 / step6 / gift / cheapgift 四段用 clickLabelIn / setGiftSwitch 点到
-    //      （点得到就说明文案在），这里只列文案并数控件，不解析 select 的 innerText。
+    //      「消息类型」= 6 项（契约 §8 的 kind 全集）；「辅助功能」= 字号滑杆 + **7 枚**复选框。
+    //      文案由下面的 step4 / step6 / gift / cheapgift / aggregate 几段用 clickLabelIn /
+    //      setGiftSwitch 点到（点得到就说明文案在），这里只列文案并数控件，不解析 select 的 innerText。
     var kindsSection = byTestId("db-filter-kinds");
     var auxSection = byTestId("db-filter-aux");
     var labelsOf = function (root) {
@@ -36,9 +36,10 @@
     out.filterPanelKindLabels =
       out.filterPanelKindItems.join(",") === "弹幕,礼物,SC,互动,大航海,系统";
     // 「辅助功能」块的控件清单：**旧的「礼物栏」下拉已随 issue 2609152029 第 1 条删除**
-    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），末两枚是低价礼物开关
-    // （issue 2609162056 第 3 / 4 条），所以这里数的是六枚复选框，并另外
-    // 钉住「select 一个都不剩」；字号滑杆仍在（它只是排布换成了整行）。
+    // （字符串键 ui.gift_panel_mode 换成两枚布尔键），倒数第三 / 第二枚是低价礼物开关
+    // （issue 2609162056 第 3 / 4 条）、末一枚是刷屏弹幕聚合（issue 202609211940 第 3 条），
+    // 所以这里数的是 7 枚复选框，并另外钉住「select 一个都不剩」；字号滑杆仍在
+    // （它只是排布换成了整行）。
     var auxLabels = labelsOf(auxSection).filter(function (l) {
       return !!l.querySelector('input[type="checkbox"]');
     });
@@ -52,9 +53,10 @@
       out.filterPanelAuxLabels.indexOf("弹幕包含礼物") >= 0 &&
       out.filterPanelAuxLabels.indexOf("独立礼物栏") >= 0 &&
       out.filterPanelAuxLabels.indexOf("折叠低价礼物") >= 0 &&
-      out.filterPanelAuxLabels.indexOf("剔除低价礼物统计") >= 0;
+      out.filterPanelAuxLabels.indexOf("剔除低价礼物统计") >= 0 &&
+      out.filterPanelAuxLabels.indexOf("刷屏弹幕聚合") >= 0;
     out.filterPanelAuxComplete = !!out.filterPanelAuxControls.fontScale &&
-      out.filterPanelAuxControls.switches === 6 &&
+      out.filterPanelAuxControls.switches === 7 &&
       out.filterPanelAuxControls.selects === 0 &&
       out.filterPanelAuxSwitchesPresent;
     // 字号滑杆那一行**仍占满整行**（横跨两列，滑杆贴右）：两列清单里唯一的例外，也是
@@ -98,13 +100,14 @@
     };
     out.filterPanelKindGeom = columnGeometry(kindLabels);
     out.filterPanelAuxGeom = columnGeometry(auxLabels);
-    var twoColumnsEven = function (geom, perColumn, order) {
-      return !!geom && geom.columns === 2 && geom.rows === order.length / 2 &&
+    var twoColumnsEven = function (geom, perColumn, rows, order) {
+      return !!geom && geom.columns === 2 && geom.rows === rows &&
         geom.perColumn === perColumn && geom.order === order;
     };
-    out.filterPanelKindsTwoColumns = twoColumnsEven(out.filterPanelKindGeom, "3/3", "010101");
-    // 辅助功能的六枚开关：三行两列（DOM 序 010101 —— 末一行是「折叠低价礼物 / 剔除低价礼物统计」）
-    out.filterPanelAuxTwoColumns = twoColumnsEven(out.filterPanelAuxGeom, "3/3", "010101");
+    out.filterPanelKindsTwoColumns = twoColumnsEven(out.filterPanelKindGeom, "3/3", 3, "010101");
+    // 辅助功能的 7 枚开关：四行两列（DOM 序 0101010 —— 末一行只有「刷屏弹幕聚合」一格，
+    // 它排在左列，右列那一格空着：奇数项按行铺就是这个形状）
+    out.filterPanelAuxTwoColumns = twoColumnsEven(out.filterPanelAuxGeom, "4/3", 4, "0101010");
     out.filterPanelTwoColumnLists = out.filterPanelKindsTwoColumns && out.filterPanelAuxTwoColumns;
     // ---- 「不要使用现在的按钮形式」（第 3 条）：清单里每一项都是**朴素的复选框 + 文字** ——
     //      没有旧芯片那层底色与描边（旧样式给 label 上 --bg-input 底 + 1px 描边 + 胶囊圆角），
@@ -147,10 +150,12 @@
       window.__prefs["ui.interact_auto_hide"] === true;
     out.filterPanelTimestampUncheckedByDefault = !!timestampBox && !timestampBox.checked &&
       window.__prefs["ui.show_timestamp"] === false;
-    // ---- 六枚辅助开关**逐枚真的能切**（第 4 条 + issue 2609162056 第 3 / 4 条）：点一下偏好跟着翻、
-    //      复选框跟着画，再点一下回到原值 —— 因此后面各段（时间戳 / step4 / step5 / step6 / gift
-    //      四种组合 / cheapgift）跑在**与改前完全相同的默认形态**上，切完行为不变这件事由那些
-    //      既有断言继续钉住。末两枚低价礼物开关的「默认关」与行为量值在 cheapgift 那一段。
+    // ---- 七枚辅助开关**逐枚真的能切**（第 4 条 + issue 2609162056 第 3 / 4 条 +
+    //      issue 202609211940 第 3 条）：点一下偏好跟着翻、复选框跟着画，再点一下回到原值 ——
+    //      因此后面各段（时间戳 / step4 / step5 / step6 / gift 四种组合 / cheapgift / aggregate）
+    //      跑在**与改前完全相同的默认形态**上，切完行为不变这件事由那些既有断言继续钉住。
+    //      三枚非默认值的开关（两枚低价礼物默认关、刷屏弹幕聚合默认开）的「默认值是哪一档」
+    //      与行为量值分别在 cheapgift 与 aggregate 那两段。
     var auxSpecs = [
       { label: "时间戳", key: "ui.show_timestamp" },
       { label: "互动消息自动消失", key: "ui.interact_auto_hide" },
@@ -158,6 +163,7 @@
       { label: "独立礼物栏", key: "ui.gift_panel" },
       { label: "折叠低价礼物", key: "ui.gift_collapse_cheap" },
       { label: "剔除低价礼物统计", key: "ui.gift_exclude_cheap_stats" },
+      { label: "刷屏弹幕聚合", key: "ui.danmaku_aggregate" },
     ];
     var auxTogglesOk = true;
     var auxToggleReport = [];

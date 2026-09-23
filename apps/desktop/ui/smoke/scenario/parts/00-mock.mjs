@@ -49,6 +49,10 @@
     // 形态就是「不折叠、不剔除」）。替身里必须与 prefs_get 同形，界面才量得到「默认关」这件事。
     "ui.gift_collapse_cheap": false, "ui.gift_exclude_cheap_stats": false,
     "ui.show_timestamp": false,
+    // 刷屏弹幕聚合（issue 202609211940 第 3 条，契约 §8）：**默认 true**（改前的形态就是
+    // 折着的，只是门槛从「两位观众」改成了 3 条以上）。替身里必须与 prefs_get 同形，
+    // 界面才量得到「默认开」这件事 —— aggregate 那一段还要现场点掉它量「关掉不折」。
+    "ui.danmaku_aggregate": true,
     // 键清单照抄契约 §8：ui.system_notice 随「系统类只由 filter.kinds 把关」
     // 一起删掉（两个门盖的消息集合逐字相同），关键词命中那三键随 item 9 一起删掉了，
     // 房管屏蔽词走 admin_keywords_*（IPC 命令，不是偏好键），不在这一份里。

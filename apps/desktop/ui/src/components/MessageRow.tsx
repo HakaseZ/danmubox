@@ -1,7 +1,6 @@
 import { Avatar } from "./Avatar";
 import type { MenuPoint } from "./ContextMenu";
 import { useRef, useSyncExternalStore, type ReactNode } from "react";
-import { sendersText } from "../aggregate";
 import {
   amountText,
   badgesFor,
@@ -65,6 +64,13 @@ interface Props {
 
 /** 行内各格的 `data-testid` 前缀（两族分得开，见 `Props.scope`）。 */
 const testIdFor = (scope: "msg" | "gift") => (part: string) => `db-${scope}-${part}`;
+
+/**
+ * 聚合行头像列里，后一张头像相对前一张**向右错开**多少（头像宽的倍数）：0.3 ⇒ 每人只露 70%，
+ * 3 张一共占 1.6 个头像宽（issue 202609211940 第 3 条：「错位30%堆叠」）。
+ * 只有它一个数字，宽度与每一张的 `left` 都从它现算（见下面的 `avatarCol`）。
+ */
+const AVATAR_STACK_OFFSET = 0.3;
 
 /* ------------------------------------------------------------------ 选中态 */
 
@@ -134,6 +140,16 @@ export function MessageRow({
 }: Props) {
   const t = testIdFor(scope);
   const { message, count } = row;
+  // 这一行是不是**聚合行**：判据就是 `senders` 在不在。两处产这个字段 ——
+  // 弹幕刷屏（`aggregate.ts`）与**低价礼物桶**（`filtering.collapseCheapGiftRows`，
+  // 用户 2026-09-22 第 3 条：桶改成与刷屏同一套形态）。聚合行有三处与其它行不同：
+  // 头像列画 `senders` 那几张叠着的头像、身份位改印数量（弹幕写「刷屏 ×N」、
+  // 礼物桶写「低价礼物 ×N」）、正文里**不再**画 `×N`（数量已经移到身份位，同一个数不出现两次）。
+  const aggregated = row.senders !== undefined;
+  // 聚合行头像列画的是谁：`senders` 里**有头像**的那几位 —— 上游没给 face 的观众不占位
+  // （与单张头像同一条口径：不画假图），错位因此按**实际画出来的张数**算，而不是按 `senders`
+  // 的长度（3 位里有 1 位没头像时，两张头像仍只错开一次 30%）。非聚合行是空数组。
+  const stackedFaces = row.senders?.filter((sender) => sender.face.length > 0) ?? [];
   const badges = badgesFor(message, anchorUid);
   const medal = medalColors(message);
   // 正文统一用主题前景色：上游允许发送者自定义弹幕颜色（舰长/老爷常见金黄），
@@ -146,8 +162,9 @@ export function MessageRow({
     (badges.medalLevel > 0 && badges.medalName.length > 0);
   // 有没有身份行：系统行不画，昵称与徽标都空的也不画（空盒会白吃一道间距）。
   // 时间戳要落在这两族行的**同一个纵向位置**上，所以这里统一算一次给两处用。
+  // 聚合行**一定有**身份行：它的身份位是「刷屏 ×N」（没有用户名，也不是空盒）。
   const hasIdentity =
-    message.kind !== "system" && (hasBadges || message.uname.length > 0);
+    aggregated || (message.kind !== "system" && (hasBadges || message.uname.length > 0));
 
   const kindClass: Record<Message["kind"], string | undefined> = {
     danmaku: undefined,
@@ -235,19 +252,14 @@ export function MessageRow({
           </span>
         )}
         {/* 礼物行始终显示数量（连击折叠后的次数）；其余类型不再有 ×N ——
-            「相似消息合并」已整条删除（P49），count > 1 因此只可能来自礼物**连击**折叠、
-            **低价礼物桶**（`ui.gift_collapse_cheap`，桶里是整桶合计）或弹幕**聚合**。
-            它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。 */}
-        {(count > 1 || message.kind === "gift") && (
+            「相似消息合并」已整条删除（P49），count > 1 因此只可能来自礼物**连击**折叠
+            或**低价礼物桶**（`ui.gift_collapse_cheap`，桶里是整桶合计）。
+            它是正文里的**行内**一格：跟在最后一行文字后面，不另占一行。
+            **刷屏聚合行不画这一格**：它的数量已经印在身份位上（「刷屏 ×N」），
+            同一个数在同一个行里出现两次没有意义（issue 202609211940 第 3 条）。 */}
+        {!aggregated && (count > 1 || message.kind === "gift") && (
           <span className={styles.merged} data-testid={t("count")}>
             ×{count}
-          </span>
-        )}
-        {/* 弹幕聚合行的「都是谁」（§8.4 第二张表）：紧跟 `×N`，同样是正文里的行内一格
-            （复用 `.merged` 的次级文字规格，不另立视觉）。`senders` 缺席 = 这一行不是聚合行。 */}
-        {row.senders !== undefined && row.senders.length >= 2 && (
-          <span className={styles.merged} data-testid={t("senders")}>
-            {sendersText(row.senders)}
           </span>
         )}
         {message.send_state !== undefined && (
@@ -302,8 +314,40 @@ export function MessageRow({
         // 头像列永远占位：没有头像（face 为空串）时不画假图，但列宽照留，
         // 否则这一行的身份簇 / 正文会整体左移，逐行对不齐（issue #8）。
         // 它钉在**首行盒**上（高度 = 行盒高、内部居中），不随折行掉到行的中间。
-        <span className={styles.avatarCol} data-testid={t("avatar-col")}>
-          <Avatar url={message.face} name={message.uname} testId={t("avatar")} />
+        // **聚合行**（issue 202609211940 第 3 条）在这里画 `senders` 那几张头像：
+        // 沿 X 轴依次向右错开 `AVATAR_STACK_OFFSET`（头像宽的 30%）、后一张压在前一张上，
+        // 最左那张在最上层（`z-index` 递减）；列宽随之变宽（`.avatarColStack`），
+        // 宽 = 头像宽 + (张数 - 1) × 30%、高 = 头像宽，两张与每一张的 `left` 都从实际张数现算。
+        <span
+          className={`${styles.avatarCol} ${aggregated ? styles.avatarColStack : ""}`}
+          data-testid={t("avatar-col")}
+        >
+          {aggregated ? (
+            <span
+              className={styles.avatarStack}
+              data-testid={t("avatar-stack")}
+              style={{
+                width: `calc(var(--avatar) * ${(
+                  1 + AVATAR_STACK_OFFSET * (stackedFaces.length - 1)
+                ).toFixed(2)})`,
+              }}
+            >
+              {stackedFaces.map((sender, index) => (
+                <span
+                  key={sender.uid}
+                  className={styles.avatarStackItem}
+                  style={{
+                    left: `calc(var(--avatar) * ${(AVATAR_STACK_OFFSET * index).toFixed(2)})`,
+                    zIndex: stackedFaces.length - index,
+                  }}
+                >
+                  <Avatar url={sender.face} name={sender.uname} testId={t("avatar")} />
+                </span>
+              ))}
+            </span>
+          ) : (
+            <Avatar url={message.face} name={message.uname} testId={t("avatar")} />
+          )}
         </span>
       )}
       {/* 正文块 = **上下两行**（参考图口径，用户 2026-09-13）：第一行身份
@@ -318,46 +362,59 @@ export function MessageRow({
           // 「回复了谁」不再另起一格（用户 2026-09-13 第 1 条：与正文里自带的 @ 重复）——
           // 身份行的最后那一枚「回复 @某人」的牌子已删，@ 改在**正文里**就地强调（见 withMentions）。
           <span className={styles.identity} data-testid={t("identity")}>
-            {message.uname.length > 0 && (
-              // 昵称**不吃**弹幕自身颜色：那是正文的颜色，套到人名的后果是普通弹幕
-              // （上游给 16777215 白色）在浅色主题下与背景同色、整条人名看不见（用户实测）。
-              <span className={styles.name} data-testid={t("name")}>
-                {message.uname}:
+            {/* 聚合行的身份位（issue 202609211940 第 3 条）：这里原本是「昵称 + 身份牌」，
+                现在只有「刷屏 ×N」—— **一个用户名都不出现**（`db-msg-name` / `db-msg-badges`
+                整个不画：这一行是几个人一起说的，挂谁的名字都是错的）。多少人在刷由头像列
+                那几张叠着的头像回答，第几条由 `N` 回答。时间戳仍在这一行的右端（下面那一格，
+                位置与其它行逐字相同）。 */}
+            {aggregated ? (
+              <span className={styles.spam} data-testid={t("spam")}>
+                {message.kind === "gift" ? `低价礼物 ×${count}` : `刷屏 ×${count}`}
               </span>
-            )}
-            {hasBadges && (
-              <span className={styles.badges} data-testid={t("badges")}>
-                {badges.anchor && (
-                  <span className={`${styles.badge} ${styles.badgeAnchor}`}>主播</span>
-                )}
-                {badges.admin && (
-                  <span className={`${styles.badge} ${styles.badgeAdmin}`}>房管</span>
-                )}
-                {badges.guardLevel > 0 && (
-                  <span
-                    className={`${styles.badge} ${
-                      styles[`badgeGuard${badges.guardLevel}`] ?? styles.badgeGuard
-                    }`}
-                  >
-                    {GUARD_TITLE[badges.guardLevel] ?? `Guard${badges.guardLevel}`}
+            ) : (
+              <>
+                {message.uname.length > 0 && (
+                  // 昵称**不吃**弹幕自身颜色：那是正文的颜色，套到人名的后果是普通弹幕
+                  // （上游给 16777215 白色）在浅色主题下与背景同色、整条人名看不见（用户实测）。
+                  <span className={styles.name} data-testid={t("name")}>
+                    {message.uname}:
                   </span>
                 )}
-                {badges.medalLevel > 0 && badges.medalName.length > 0 && (
-                  <span
-                    className={`${styles.badge} ${styles.badgeMedal}`}
-                    style={{
-                      // 牌面配色优先用上游真彩色（契约 §5）；空串不是颜色，缺失时
-                      // medalColors 已回退到按牌名派生的色相（docs/ui.md §4.2）。
-                      backgroundImage: `linear-gradient(45deg, ${medal.start}, ${medal.end})`,
-                      ...(medal.border ? { borderColor: medal.border } : null),
-                      ...(medal.text ? { color: medal.text } : null),
-                    }}
-                  >
-                    <span className={styles.medalName}>{badges.medalName}</span>
-                    <span className={styles.medalLevel}>{badges.medalLevel}</span>
+                {hasBadges && (
+                  <span className={styles.badges} data-testid={t("badges")}>
+                    {badges.anchor && (
+                      <span className={`${styles.badge} ${styles.badgeAnchor}`}>主播</span>
+                    )}
+                    {badges.admin && (
+                      <span className={`${styles.badge} ${styles.badgeAdmin}`}>房管</span>
+                    )}
+                    {badges.guardLevel > 0 && (
+                      <span
+                        className={`${styles.badge} ${
+                          styles[`badgeGuard${badges.guardLevel}`] ?? styles.badgeGuard
+                        }`}
+                      >
+                        {GUARD_TITLE[badges.guardLevel] ?? `Guard${badges.guardLevel}`}
+                      </span>
+                    )}
+                    {badges.medalLevel > 0 && badges.medalName.length > 0 && (
+                      <span
+                        className={`${styles.badge} ${styles.badgeMedal}`}
+                        style={{
+                          // 牌面配色优先用上游真彩色（契约 §5）；空串不是颜色，缺失时
+                          // medalColors 已回退到按牌名派生的色相（docs/ui.md §4.2）。
+                          backgroundImage: `linear-gradient(45deg, ${medal.start}, ${medal.end})`,
+                          ...(medal.border ? { borderColor: medal.border } : null),
+                          ...(medal.text ? { color: medal.text } : null),
+                        }}
+                      >
+                        <span className={styles.medalName}>{badges.medalName}</span>
+                        <span className={styles.medalLevel}>{badges.medalLevel}</span>
+                      </span>
+                    )}
                   </span>
                 )}
-              </span>
+              </>
             )}
             {/* 时间戳：身份行的**最后一格**、靠右（`margin-left: auto`，见 `.time`）——
                 用户 2026-09-14：「时间戳显示时放在最右边」。它是定宽的一格，所以逐行的

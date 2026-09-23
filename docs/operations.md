@@ -90,7 +90,7 @@ DANMUBOX_LOG=debug cargo run -p danmubox-desktop 2>&1 | tee -a target/logs/app.l
 
 ### 1.3 数据目录与文件位置（三端）
 
-数据目录只放两类文件：凭据 `config.toml` 与偏好 `prefs.json`（含备份）。弹幕只在内存，不落盘（`contract.md` §4.3）。唯一写到数据目录之外的是用户主动触发的一键诊断报告（落在下载目录，见 §2.9）。
+数据目录只放两类文件：凭据 `config.toml` 与偏好 `prefs.json`（含备份）。弹幕只在内存，不落盘（`contract.md` §4.3）。应用不往数据目录之外写任何文件。
 
 | 平台 | 数据目录 | 典型内容 |
 |---|---|---|
@@ -208,13 +208,13 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 
 产物是 `<repo>/target/release/danmubox-desktop`（约 13 MB），**前端已内嵌**：日志里页面加载的 URL 是 `tauri://localhost` 而不是 `http://localhost:5173`，因此不需要再起 Vite，双击即可运行。
 
-`tauri.conf.json` 当前 `bundle.active=false` 且 `bundle.icon=[]`，所以这一步不产出 `.app` / `.dmg` / APK；要出安装包**不用**改这两项：macOS 的 `.dmg` 直接加 `--bundles dmg` 即可（`--bundles` 覆盖 `bundle.active`，`icon: []` 也不拦 macOS 出包）。三端步骤与产物见 §5.3，`icon` 口径见 §5.3「图标与 `bundle.icon` 的口径」。
+`tauri.conf.json` 当前 `bundle.active=false`（图标已由共享的 `bundle.icon` 提供：`icons/icon.png` / `icons/icon.ico` / `icons/icon.icns`），所以这一步不产出 `.app` / `.dmg` / APK；要出安装包**不用**改这一项：macOS 的 `.dmg` 直接加 `--bundles dmg` 即可（`--bundles` 覆盖 `bundle.active`）。三端步骤与产物见 §5.3，`icon` 口径见 §5.3「图标与 `bundle.icon` 的口径」。
 
 ## 2. 故障排查决策树
 
 ### 2.1 总览
 
-排障顺序固定为：**登录状态 → 连接状态 → 业务行为**。先确认界面上的登录态与房间连接状态，再进对应小节（认证与扫码见 2.2 / 2.7，连接见 2.3 / 2.5，发送见 2.4，Android 白屏见 2.6）；需要细节时开启 `DANMUBOX_LOG=debug` 复现一次，读日志与 `danmubox://log` 事件。Android 上「退到后台之后」的行为（前台服务保活、那枚常驻通知、电池优化白名单）见 2.8；后台能挂多久、丢弹幕与切网断连的判定见 2.10。
+排障顺序固定为：**登录状态 → 连接状态 → 业务行为**。先确认界面上的登录态与房间连接状态，再进对应小节（认证与扫码见 2.2 / 2.7，连接见 2.3 / 2.5，发送见 2.4，Android 白屏见 2.6）；需要细节时开启 `DANMUBOX_LOG=debug` 复现一次，读日志与 `danmubox://log` 事件。Android 上「退到后台之后」的行为（前台服务保活、那枚常驻通知、电池优化白名单）见 2.8；后台能挂多久、丢弹幕与切网断连的判定见 2.9。
 
 ### 2.2 认证失败
 
@@ -363,38 +363,9 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle
 | 3 | `adb shell dumpsys notification --noredact \| grep -i danmubox` | 渠道 `danmubox-keepalive` 在、通知不在 → 十有八九是 `POST_NOTIFICATIONS` 没给 |
 | 4 | 通知在、但长连接断了 | 不是保活的问题，是 Doze 掐了网络 → 加电池优化白名单 |
 | 5 | 连接反复重连 | 退避属预期（§2.3）；持续不成功查网络与上游可用性（`protocol.md` §13） |
-| 6 | 后台/切网之后「丢了一段弹幕」、恢复要多久 | 见 §2.10 |
+| 6 | 后台/切网之后「丢了一段弹幕」、恢复要多久 | 见 §2.9 |
 
-### 2.9 一键诊断：让用户导出一份诊断文件
-
-「连上了却收不到弹幕」这条问题的定位链很长（票据 → 认证 → 首帧 → 之后有没有持续的业务载荷 → 退避重连），只能靠用户交出来的材料判断。房间头 `⋯` 菜单里的**一键诊断**就是这条出口（采集口径 `contract.md` §4.4、界面 `ui.md` §3.6、IPC `contract.md` §7 `diagnose_start` / `diagnose_export`）。
-
-**怎么让用户做**（三步，可以直接照抄给用户）：
-
-1. 进那个出问题的房间（采集的是**这个进程的连接**，入口因此放在房间页）；
-2. 点房间头 `⋯` →「一键诊断」——**采集 3 分钟**（180 秒），界面有倒计时，也可以点「提前结束并导出」；
-3. 把导出的文件发过来：桌面端在 `~/Downloads/danmubox-diagnose-<UTC 时间戳>.txt`；Android 在公共下载目录 `/sdcard/Download/danmubox-diagnose-<UTC 时间戳>.txt`，文件名相同（`danmubox-diagnose-YYYYMMDD-HHMMSS.txt`，UTC）。面板上的「复制路径」能拿到完整路径 —— 一次诊断**只产生这一个文件**。
-
-采集中与采集后都不需要用户做别的事：**应用不会自动发送任何数据**（本仓无遥测），文件只落在本机；文件已按 §3 的口径脱敏，可直接外发。
-
-文件里有什么（`contract.md` §4.4 的清单）：每一次连接尝试的每一环（票据 `getDanmuInfo` 的 `code` 与耗时 / 候选节点下标 / WS 握手 / 认证包 `op=7` 发出的时刻 / 认证回应 `op=8` 是否到达与延迟 / 首个入站帧 / 首条业务载荷 / 结束原因 / 退避与连续认证失败次数）、协议计数（收包 / 各类丢弃 / 未识别命令）、未识别命令名单、采集窗口内的日志行（带字段）、以及平台与版本信息（OS、应用版本、渲染引擎）。
-
-**读法**（判定顺序与 §2.1 一致，都先看机器可判定的量，再看界面表现）：
-
-| 判定顺序 | 观察点 | 结论与动作 |
-|---|---|---|
-| 1 | 票据那一行的 `code` 非 0 | 上游连票据都不给：`-352` 是签名 / 风控（`auth.md` §9.1），其余 code 原样看文案，别猜含义（§2.2） |
-| 2 | 认证回应一行写着「**未到达**」 | 卡在认证：同一段里看「本轮有 N 个候选没接上」，属候选节点连通性问题 |
-| 3 | 认证成功（`code=0`）但「首条业务载荷」一直是空的、且「距最近一次入站帧」还在涨 | **正是本条要闭环的那一档**：连接是通的、上游没往下发。再看窗口内日志有没有 `上游 HTTP 心跳失败` / `同一节点连续失败…切换` / `认证回应 code 非 0` |
-| 4 | 窗口内有 `距上次入站帧已 …ms（阈值 90000ms），判定连接僵死` | 僵死护栏按预期工作（`protocol.md` §8.1）：属上游静默，不是本地卡住 |
-| 5 | 一条连接尝试都没有 | 诊断期间没连过房间（先确认房间页的连接态，再看 §2.3） |
-| 6 | 文件里出现 `***` | 那是脱敏（凭据 / uid / 昵称 / **房间号**，见 §3），不是数据缺失；要定位具体房间让用户自己说 |
-
-**抹的范围**：按「本机已知的房间号 / 短号 / 主播 uid」**逐值**抹，但只抹**看起来是标识**的位置 —— 键值对形态（`room_id=5440` / `?id=5440`，一位数字也抹）与**两位以上**的独立数字。时间（`13:55:01`）、版本（`0.1.0`）、计数（`共 1 次记录`）、从开始算起的偏移（`+1.56 s` / `+619 ms`）与一位数序号（`[1]` / `host_list[0]`）**一律原样保留**：它们正是这份报告存在的理由。规则与回归用例：`crates/danmubox-bili/src/redact.rs` 的 `redact_for_export` / `mask_numbers`，单测 `export_redaction_keeps_times_versions_and_counts`。
-
-Android 上这枚入口也是设备端唯一可打开的业务日志出口（报告里「采集窗口内的日志」那一节）：报告随文件落到公共下载目录，用户可自己打开、自己决定发不发（此前只能 `adb logcat` 看系统日志，见 `testing.md` §10.5）。
-
-### 2.10 后台能不能挂 7×24 / 安卓后台丢弹幕 / 切网断连
+### 2.9 后台能不能挂 7×24 / 安卓后台丢弹幕 / 切网断连
 
 **结论**：三端都**不能承诺 7×24**（Android 最弱：那枚前台服务只保「进程」、不保「网络」）；后台丢弹幕丢的不是某一条，而是**一次断连的整个窗口**，而客户端**没有任何补拉机制**能把它找回来；切网后恢复最坏约 2 分钟量级。
 
@@ -402,8 +373,8 @@ Android 上这枚入口也是设备端唯一可打开的业务日志出口（报
 |---|---|---|---|
 | 想「挂 7×24」 | 三端都不保证 | 桌面端「开着窗口一直放」是可行用法，但「一条都不断」不能承诺——上游本身会常态轮换断开（`protocol.md` A24）；Android 侧除 §2.8 的电池优化白名单与 6 小时额度外，真机收益未验证 | `protocol.md` A24；§2.8 |
 | 安卓退到后台再回前台，「最新的一部分弹幕看不到」 | 丢的是断连窗口**整段**，且永久丢 | 先按 §2.8 的排查表确认服务与通知是否在；丢的时刻见下一条 | 根因 L2（没有补拉）：`crates/danmubox-core/src/session.rs:263-272`、`:283-305` |
-| 想知道「什么时候丢的」 | 丢的时刻 = 断连时刻 | 日志里 `距上次入站帧已 …ms（阈值 90000ms），判定连接僵死` 或 `连接中断，准备重连`；一键诊断报告里的「距最近一次入站帧」同样能看出（§2.9） | `crates/danmubox-bili/src/ws.rs` 的 `inbound_stale`；`protocol.md` §8.1 |
-| 回前台后多久恢复 | 判死最坏 90 秒 + 一次退避 5–60 秒 + 票据/握手/认证，**没有「立刻重连」这一档** | 要更快只有手动「刷新」（`rooms_reconnect`，§2.5） | `ws.rs:74`（90s）、`:775` / `:948`（退避、封顶 60s）、`:44`（候选拨号 10s）、`crates/danmubox-bili/src/http.rs:197-203`（票据 15s） |
+| 想知道「什么时候丢的」 | 丢的时刻 = 断连时刻 | 只看日志：`距上次入站帧已 …ms（阈值 90000ms），判定连接僵死` 或 `连接中断，准备重连`（Android 用 `adb logcat -s danmubox`，桌面端见 §1.2 的落文件办法）；不看界面表现 | `crates/danmubox-bili/src/ws.rs` 的 `inbound_stale`；`protocol.md` §8.1 |
+| 回前台后多久恢复 | 判死最坏 90 秒 + 一次退避 5–60 秒 + 票据/握手/认证，**没有「立刻重连」这一档** | 要更快只有手动「刷新」（`rooms_reconnect`，§2.5） | `ws.rs:81`（90s）、`:845` / `:858`（退避、封顶 60s）、`:47`（候选拨号 10s）、`crates/danmubox-bili/src/http.rs:197-203`（票据 15s） |
 | 切网后断连、恢复慢 | 确认会断：客户端没有网络变化感知，也没有 TCP keepalive，心跳 `op=2` 写进内核缓冲照样算「发送成功」 | 判死只能靠「入站静默」：对端 RST / close 是秒级，半开最坏 90 秒；恢复时长 = 判死 ≤90s + 退避 5–60s（±20% 抖动）+ 票据 ≤15s + 拨号 ≤10s/候选 + 认证 ≤10s | `ws.rs` 的心跳任务只看写端返回；`ws.rs` 三条读侧收场 |
 | 反复重连几次后**彻底不再自动重连** | 连续 3 次「认证超时」（拨号成功但 10 秒内没有 `op=8`）即停自动重连 | 界面停在「连续 3 次认证失败，已停止自动重连；手动刷新可重置」→ 点「刷新」；取票据失败 / 拨号失败**不计入**这个计数 | `ws.rs` 的认证超时计数；单测 `auth_timeout_is_a_failure_and_backs_off` |
 | 房间看着「已连接」却再也不进来弹幕（点过「断开连接」再点「刷新」之后） | 会话被**重建**（不是重连）：新 `MessageSink` 的 `local_id` 从 1 重来，界面那条单调判定把每一条新弹幕都丢掉 | **返回列表再进房**即恢复（`openRoom` 会用 `history_query` 整批覆盖）；本条为代码判定，未在设备上复现该操作序列 | `crates/danmubox-core/src/bus.rs` 的编号起点；`crates/danmubox-core/src/session.rs` 的重连路径；`apps/desktop/src-tauri/src/lib.rs` 的会话重建；`apps/desktop/ui/src/store.ts` 的单调判定与 `history_query` 覆盖 |
@@ -432,7 +403,7 @@ Android 上这枚入口也是设备端唯一可打开的业务日志出口（报
 
 **未验项**（别当结论用）：真机（尤其国产 ROM）退到后台期间到底还在不在收弹幕、白名单能否整夜收、macOS 最小化 / 被遮挡时 App Nap 是否拖慢 tokio 计时器、真机切网是否真连出 3 次认证超时、webview 后台被节流时 Rust→JS 事件是否积压。前两项见 `testing.md` §10.5，待办清单见 `roadmap.md` §2。
 
-**怎么把它变成实测**：进那个房间点「一键诊断」，把应用退到后台 ≥3 分钟再回前台导出（§2.9）——报告里「距最近一次入站帧」一直不动就说明后台确实收不到；也可按 `testing.md` 的 A-5 / A-9 走（HOME 前 `adb shell ss -tnp | grep :01BB` 记下那条 WS，退后台后每 30 秒采一次，回前台时用另一台设备比对该窗口的弹幕）。
+**怎么把它变成实测**：按 `testing.md` 的 A-5 / A-9 走 —— HOME 之前先 `adb shell ss -tnp | grep :01BB` 记下那条 WS，退到后台后每 30 秒采一次同一命令（`ss` 输出为空即那条长连已经不在了），回到前台后用另一台设备比对该窗口的弹幕：对不上即后台确实没在收（A-9 的 ② 给的是同一判据的另一条路径）。
 
 ## 3. 日志与敏感信息脱敏规则
 
@@ -448,7 +419,7 @@ Android 上这枚入口也是设备端唯一可打开的业务日志出口（报
 | `DedeUserID` | 属可识别标识，日志中以掩码或长度描述代替 |
 | 用户标识（`vmid` / `uid` / `uids[]` / `mid` / `reply_mid` / `anchor_id` / `tuid`） | 与 `DedeUserID` 同口径：日志、错误文案里一律以 `***` 代替。`vmid` **就是**自身的 `DedeUserID`，`uids[]` 是关注的人——实测二者会随请求 URL 一起进 `debug` 日志（`x/relation/followings?vmid=…`、`Room/get_status_info_by_uids?uids[]=…`）。脱敏后仍看得出「哪个接口、哪个房间、第几页、这一批几个值」 |
 | 昵称 / 用户名（`uname` / `nickname`） | 与 uid 同口径：以 `***` 代替（上游把请求原样回显时才有值可抹） |
-| 房间号 / 短号 | 日志里**不**脱敏：公开信息，且是排障主键；但要意识到「房间 ↔ 主播」本身是公开可查的关联。**唯一例外是一键诊断导出的文件**（§2.9）：那份是要发给别人的，房间号也抹成 `***` |
+| 房间号 / 短号 | 日志里**不**脱敏：公开信息，且是排障主键；但要意识到「房间 ↔ 主播」本身是公开可查的关联。**无例外**：脱敏只按这张表执行，不因外发对象另加一档 |
 | `config.toml` | 整文件视同凭据，不截图、不外发、不进仓库 |
 | `Cookie` 请求头 | 打印请求时必须整体省略该头，不允许「截断显示前 6 位」这种折衷 |
 | 二维码 key | 短时有效但视同凭据：分享日志前先替换 |
@@ -456,8 +427,6 @@ Android 上这枚入口也是设备端唯一可打开的业务日志出口（报
 | 弹幕内容 | 属用户数据，默认不进 `debug` 日志；需要时临时开启更高级别并按脱敏后外发 |
 
 实现方式（改规则只改这一处）：键名表与替换逻辑在 `crates/danmubox-bili/src/redact.rs`，只改写「键名 + 分隔符 + 值」三种成分齐全的地方（上游原话 `CSRF 校验失败` 这类不带分隔符的文本保持原样）。出口只有两个，都在 `crates/danmubox-bili/src/http.rs`：`log_request`（所有 `GET` / `POST` 的 URL 日志）与 `upstream`（上游错误文案——`reqwest::Error` 的 `Display` 会把完整 URL 拼进去）。回显上游 `message` 的几处（`admin` / `send` / `report`）调的是同一个函数。占位符固定 `***`，不用短哈希。
-
-一键诊断**导出的文件**走同一处规则、但更严一档：`redact.rs` 的 `redact_for_export` 在整份报告文本上先跑一遍上面的日志口径，再抹**房间号**的键名形态（`room_id=` / `roomid=` / `room=`）与「本机已知的房间号 / 短号 / 主播 uid」的**裸数字**（`getDanmuInfo` 的查询串是 `?id=…`，`id=` 认不出是不是房间号，因此按值抹）。导出链路因此只有这一个出口，与日志共用同一张键名表。
 
 > `danmubox::raw`（`protocol.md` 附录 B.1）是唯一的例外：它按设计打印**原始业务载荷**，供协议字段校准用，里面自然带得到发言人的 uid 与昵称。核对字段时用它，分享日志前必须先按上面的规则表处理；只想看普通调试信息时别把这个 target 打开。
 
@@ -503,9 +472,8 @@ grep -nE '(vmid|uid|anchor_id|tuid)=[0-9]' <日志文件>   # 值为 *** 的行�
 |---|---|---|
 | 1 | 应用本体 | 长按图标卸载，或 `adb uninstall dev.kksk.danmubox` |
 | 2 | 应用私有数据 | 随卸载自动清除（含 `config.toml`、`prefs.json`）；只想清数据不卸载 → 「设置 → 应用 → danmubox → 存储 → 清除数据」 |
-| 3 | 公共下载目录里的诊断文件 | **只有你主动点过「一键诊断」才会有**：`/sdcard/Download/danmubox-diagnose-*.txt`（§2.9）。应用不往别处写，也不写应用私有目录 |
-| 4 | 开发机上的签名材料 | **不要删除**：`apps/desktop/src-tauri/gen/android/keystore.jks` 与同目录的 `keystore.properties`。两者被 `gen/android/.gitignore`（`*.jks` / `keystore.properties`）忽略，且**不在 `.android-env/` 内**，所以 `scripts/android-env.sh clean` 删不到它们；清工具链时**别手工把它们一起删掉**，丢了只能卸载重装（§5.7、§5.12） |
-| 5 | 设备上的安装包 | 手工删除此前 `adb push` / 传输的 APK |
+| 3 | 开发机上的签名材料 | **不要删除**：`apps/desktop/src-tauri/gen/android/keystore.jks` 与同目录的 `keystore.properties`。两者被 `gen/android/.gitignore`（`*.jks` / `keystore.properties`）忽略，且**不在 `.android-env/` 内**，所以 `scripts/android-env.sh clean` 删不到它们；清工具链时**别手工把它们一起删掉**，丢了只能卸载重装（§5.7、§5.12） |
+| 4 | 设备上的安装包 | 手工删除此前 `adb push` / 传输的 APK |
 
 ### 4.4 卸载检查清单
 
@@ -515,7 +483,6 @@ grep -nE '(vmid|uid|anchor_id|tuid)=[0-9]' <日志文件>   # 值为 *** 的行�
 | 2 | 无数据目录残留 | §1.3 列出的路径均已清理 |
 | 3 | 凭据文件已删 | `config.toml` 不再存在（含备份副本） |
 | 4 | 重装可用 | 重新安装后能正常启动；因凭据已随文件删除，需重新扫码（凭据文件由程序管理，§1.4） |
-| 5 | 诊断文件（只有你导出过才有） | 桌面端 `~/Downloads/danmubox-diagnose-*.txt`、Android `/sdcard/Download/danmubox-diagnose-*.txt`：是**用户自己的产物**，不随卸载删除，要清就手工删 |
 
 ## 5. 构建与分发
 
@@ -560,15 +527,14 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
 - `<arch>` 由构建机架构决定（Apple Silicon 为 `aarch64`，Intel 为 `x64`）。
 - 交叉架构：在 Apple Silicon 上追加 `--target x86_64-apple-darwin`，产物落在 `<target-dir>/x86_64-apple-darwin/release/bundle/` 下。
 - 要单独出 `.app` 用 `--bundles app`；本地运行不需要 DMG，可直接从 `.dmg` 拖出 `.app`，或用 §1.1 的开发期运行方式。
-- `.dmg` **不做 Apple 签名与公证**，口径见 §5.5。
+- `.dmg` 本身**不签名**，但里面的 `.app` 做 ad-hoc **整包**签名（口径与实测读数见 §5.5）。
 
 #### Windows
 
 开发机是 macOS，**本机出不了 Windows 包**（`x86_64-pc-windows-msvc` 要 Windows 上的 MSVC 工具链；交叉到 `-gnu` 是另一条路，本仓库不采用），因此 Windows 产物**只有 CI 一条出口**：`artifacts-windows` job（`windows-latest`，触发口径见 §5.13）。下面是那条 job 里逐字在跑的命令：
 
 ```bash
-cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
-  --config '{"bundle":{"icon":["icons/icon.ico"]}}'
+cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi
 ```
 
 | 产物 | 路径 |
@@ -578,7 +544,7 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
 | WiX MSI | `<target-dir>/release/bundle/msi/danmubox_<version>_x64_en-US.msi` |
 
 - **`--bundles` 不能省**：`tauri.conf.json` 里 `bundle.active = false`，而 tauri-cli 只在 `config.bundle.active || 命令行给了 --bundles` 时才进打包阶段，所以光写 `tauri build` 一个安装器都不出。
-- **`.ico` 是必需的**：① 编译期 `tauri-build` 生成 Windows 资源（winres）时找不到 `.ico` 就中断编译；② 打包期 MSI（WiX）要求 `bundle.icon` 列表里能找到 `.ico`（tauri-cli 把 bundler 的 `windows.iconPath` 置成空 PathBuf，只能回落到这个列表，空列表报 `Couldn't find a .ico icon`）。`apps/desktop/src-tauri/icons/icon.ico` 因此入库（`tauri icon` 从 `icons/icon.png` 生成，六个尺寸 16/24/32/48/64/256），并用 `--config` 只覆盖 Windows 这一次调用（口径见 §5.3「图标与 `bundle.icon` 的口径」）。
+- **`.ico` 是必需的，由共享的 `bundle.icon` 提供**：① 编译期 `tauri-build` 生成 Windows 资源（winres）时找不到 `.ico` 就中断编译；② 打包期 MSI（WiX）要求 `bundle.icon` 列表里能找到 `.ico`（tauri-cli 把 bundler 的 `windows.iconPath` 置成空 PathBuf，只能回落到这个列表，空列表报 `Couldn't find a .ico icon`）。`apps/desktop/src-tauri/icons/icon.ico`（16…256）已入库并被 `tauri.conf.json` 的 `bundle.icon` 列着，因此那条命令**不再需要** `--config` 覆盖（口径见 §5.3「图标与 `bundle.icon` 的口径」）。
 - NSIS 那条路径不读 `bundle.icon`：它的安装器图标只看可选的 `nsis.installerIcon`（本仓库没设 ⇒ 用 NSIS 自己的默认图标）。
 - 两个安装器文件名里的 `<version>` 段随版本号变化（§5.2 / §5.8），**以实际构建为准**。
 - `--target x86_64-pc-windows-msvc` 是显式指 64 位（在 x86_64 的 Windows 上本就是默认）。`.msi` **只能在 Windows 上构建**（WiX 仅支持 Windows）。
@@ -587,16 +553,19 @@ cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles nsis,msi \
 
 #### 图标与 `bundle.icon` 的口径
 
-**口径：共享的 `tauri.conf.json` 里 `bundle.icon` 保持 `[]` 不动；Windows 那一条命令用 `--config` 只覆盖这一次调用的 `bundle.icon`。**
+**口径：三端共享 `tauri.conf.json` 里的一份 `bundle.icon`，不再按端覆盖。** 当前值是 `["icons/icon.png", "icons/icon.ico", "icons/icon.icns"]`（三枚，`apps/desktop/src-tauri/tauri.conf.json:30`）。
 
-| 端 | 读不读 `bundle.icon` | 依据 |
+源图入库为 `apps/desktop/src-tauri/icons/icon-source.png`（1254×1254）；`icons/` 下其余图标文件（`32x32.png` / `64x64.png` / `128x128.png` / `128x128@2x.png` / `icon.png`(512) / `icon.ico`(16…256) / `icon.icns`(16…1024) 与 Windows Store 那 9 张）由 `tauri icon` 从它生成。仓库根那张 `icon.png` 仍是 untracked、未入库，也不参与构建。
+
+| 端 | 读什么 | 说明 |
 |---|---|---|
-| macOS | 出包**不要求**它非空；给了图标就用 | `icon: []` 时 `--bundles dmg` 与 `--bundles app` 都 rc=0，`.app` 里**没有** `Contents/Resources/`、`Info.plist` 也没有 `CFBundleIconFile`（⇒ 系统通用图标）；把 `icons/icon.png` 写进列表后 tauri **自己**从 png 生成 `danmubox.icns` 并写上 `CFBundleIconFile` |
-| Windows | **要**（编译期 winres 与打包期 WiX 两处硬要求） | 见 §5.3 的 Windows 段两条 |
-| Android | **不读** | `gen/android/app/src/main/AndroidManifest.xml` 的 `android:icon="@mipmap/ic_launcher"` 指向**已入库**的 `gen/android/app/src/main/res/mipmap-*`；`tauri android build` 只重生成 wry 那几个文件与 `tauri.properties` / `tauri.build.gradle.kts` |
+| macOS | `icons/icon.icns` | 出 `.app` / `.dmg` 时用它写 `Contents/Resources/` 与 `Info.plist` 的 `CFBundleIconFile`（`.dmg` 的卷图标同源）。只列 `icons/icon.png` 时 tauri 会拿最大的那张现生成 icns，`Contents/Resources/` 里只剩两档、Dock 的 1024 档会糊；三枚一起列上即整份 16→1024 原样拷入 |
+| Windows | `icons/icon.ico` | 打包期 MSI（WiX）要求 `bundle.icon` 里能找到 `.ico`（列表为空直接报错），见上一节那条。**NSIS 那条不读 `bundle.icon`**：只看可选的 `nsis.installerIcon`，本仓库没设 ⇒ 用 NSIS 默认图标 |
+| Android | `gen/android/app/src/main/res/mipmap-*/` | 本次按 `mipmap-mdpi` / `-hdpi` / `-xhdpi` / `-xxhdpi` / `-xxxhdpi` **逐档同尺寸替换** `ic_launcher` / `ic_launcher_round` / `ic_launcher_foreground`；自适应图标那套 `mipmap-anydpi-v26/` 与 `values/ic_launcher_background.xml` **已删除**（回到改动前的资源形态）。`AndroidManifest.xml` 的 `android:icon="@mipmap/ic_launcher"` 指的就是这些已入库的 png，`tauri android build` 只重生成 wry 那几个文件与 `tauri.properties` / `tauri.build.gradle.kts`，不碰它们 |
 
-- 已知代价：`.app` / `.dmg` 装出来是**系统通用图标**（macOS 那一档）。
-- 要换成带图标的口径是一次**联动**改动：`tauri.conf.json` 的 `bundle.icon` 写成 `["icons/icon.png", "icons/icon.ico"]`，并删掉 `artifacts-windows` 那条命令里的 `--config`（macOS 侧顺带得到 `.app` 图标——tauri 会从 png 生成 icns）。改完**必须**手动触发一次 `workflow_dispatch` 把 Windows job 真跑一遍才算验过。
+- Windows 那条 CI 命令里原来的 `--config '{"bundle":{"icon":["icons/icon.ico"]}}'` **已删除**（`ci.yml:384`）——图标不再按端覆盖。
+- 前端 favicon：`apps/desktop/ui/public/favicon.svg` 已删，改为同目录的 `favicon-32x32.png` + `apple-touch-icon.png`（`ui/index.html` 两条 `<link>`）。
+- **未验**：改成共享 `bundle.icon` 之后 **Windows job 尚未真跑**（改动前那一次真跑见 §5.13「本地验证到什么程度」；本次只在本机核过 `bundle.icon` 三枚与那条命令已无 `--config`）。
 
 #### Android
 
@@ -692,19 +661,33 @@ scripts/android-env.sh help         # 用法
 
 ### 5.5 macOS 本地运行与签名策略
 
-自用不发布，因此**不购买 Apple Developer 账号、不做公证（notarization）**。
+自用不发布，因此**不购买 Apple Developer 账号、不做公证（notarization）**。签名分两档，只有第一档是「整包签名」：
 
-| 场景 | 做法 | 结果 |
-|---|---|---|
-| 本机构建本机运行 | 不配置 `signingIdentity`，Tauri 做 ad-hoc 签名（等价 `codesign -s -`） | 可直接启动；Apple Silicon 上 ad-hoc 签名是二进制可执行的前提 |
-| 拷到另一台自己的 Mac | 用「右键 → 打开」或系统设置 → 隐私与安全性 → 仍要打开；也可 `xattr -dr com.apple.quarantine /path/danmubox.app` | Gatekeeper 首次拦截后可正常运行 |
+| 档 | 怎么来 | 产物读数（`codesign -dv --verbose=4`） | 能否直接启动 |
+|---|---|---|---|
+| ad-hoc **整包**签名（本仓库采用） | `tauri.conf.json` 的 `bundle.macOS.signingIdentity = "-"`（`apps/desktop/src-tauri/tauri.conf.json:32`）—— 声明式一条路，**不需要**额外的 `codesign` 步骤 | 构建日志两处 `Signing with identity "-"`（先 Mach-O、再 `.app`）；`Identifier=dev.kksk.danmubox`、`CodeDirectory flags=0x10002(adhoc,runtime)`、`Info.plist entries=14`、`Sealed Resources version=2 rules=13 files=1`；`codesign --verify --deep --strict` **rc=0**；`spctl -a -vv -t exec` → `rejected` **rc=3**（预期：ad-hoc，无 Developer ID、无公证） | 可以 |
+| 只有可执行文件的**链接器 ad-hoc 签名**（不配 `signingIdentity` 时的形态） | `tauri build` 不再额外签名，只有链接器在 Mach-O 上盖的那一枚；bundle 无封条 | `CodeDirectory flags=0x20002(adhoc,linker-signed)`、`Info.plist=not bound`、`Sealed Resources=none`、`Identifier=danmubox_desktop-<hash>`；`codesign --verify --deep --strict` **rc=1**（`code has no resources but signature indicates they must be present`）——**在没有 quarantine 的情况下就已如此** | **不能**：系统把这一档显示成「已损坏，无法打开」 |
+
+因此「不配 `signingIdentity` 时 Tauri 会做 ad-hoc 签名」这句话**不成立**：不配它拿到的只是链接器签名、bundle 没有封条；`bundle.macOS.signingIdentity = "-"` 才是 ad-hoc 整包签名，也是 `.app` 能启动的前提（Apple Silicon 上尤其明显）。
+
+`dmg` 本身不签名，但里面的 `.app` 做 ad-hoc 整包签名。往返实测：`tauri build --bundles dmg` 出 `target/release/bundle/dmg/danmubox_0.2.0_aarch64.dmg`（8.3 MB），`hdiutil verify` rc=0，挂载后里面的 `.app` 读数与上表第一档一致。
+
+**CI 产物这一档**（从浏览器下载后拖进 `/Applications` 的那条路）：
+
+| 办法 | 操作 |
+|---|---|
+| 走系统设置 | 系统设置 → 隐私与安全性 → 找到被拦的那一条 → 「仍要打开」 |
+| 命令行去隔离属性 | `xattr -dr com.apple.quarantine /Applications/danmubox.app` |
+
+从浏览器下载的产物会被 `com.apple.quarantine` 打上隔离属性（未公证的必然结果），首次打开被 Gatekeeper 拦下，上面两条任选其一。**不买 Apple Developer 账号 = 不做公证，跨机器首次打开必然要这一步**（本机自己构建、没经过浏览器的那份不受影响）。
 
 验证命令：
 
 ```bash
-codesign -dv --verbose=4 /path/danmubox.app   # 确认为 adhoc 签名
-spctl -a -vv /path/danmubox.app               # 查看 Gatekeeper 评估结果
-xattr -l /path/danmubox.app                   # 查看隔离属性
+codesign -dv --verbose=4 /path/danmubox.app            # Identifier / CodeDirectory flags / Sealed Resources
+codesign --verify --deep --strict /path/danmubox.app   # ad-hoc 整包签名应为 rc=0
+spctl -a -vv -t exec /path/danmubox.app                # ad-hoc 必然 rejected（rc=3），属预期
+xattr -l /path/danmubox.app                            # 查看隔离属性
 ```
 
 - **证书与密钥不进仓库**：签名材料一律留在本机钥匙串，禁止写入仓库或文档。
@@ -860,13 +843,16 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 | job | `runs-on` | 做什么（命令逐字来自 `ci.yml`） | 触发 |
 |---|---|---|---|
 | `check` | `macos-14` | `rustup component add rustfmt clippy` → `npm ci` → `npm run lint`（= `oxlint --deny-warnings`，**告警即失败**）→ `npm run build`（= `tsc -b && vite build`）→ `cargo fmt --all -- --check`（**提交门**，无 `continue-on-error`）→ `cargo clippy --workspace --all-targets -- -D warnings` → `cargo test --workspace` | push 到 `main`、任何 `pull_request`、手动 `workflow_dispatch`；**推 `v*` tag 也会触发**（该 job 无 `if`） |
-| `artifacts` | `macos-14` | `tauri build --bundles dmg` → 上传 `danmubox-macos-dmg`（`target/release/bundle/dmg/*.dmg`） | `workflow_dispatch` 或 `refs/tags/v*` |
+| `artifacts` | `macos-14` | `tauri build --bundles dmg` → **挂载 dmg、对里面的 `.app` 自校验**（`hdiutil attach` → 打印 `codesign -dv --verbose=4` → `codesign --verify --deep --strict` 失败即 job 失败 → `spctl -a -vv -t exec … \|\| true` 只记录 → `hdiutil detach`）→ 上传 `danmubox-macos-dmg`（`target/release/bundle/dmg/*.dmg`） | `workflow_dispatch` 或 `refs/tags/v*` |
 | `artifacts-android` | `ubuntu-latest` | 四个 ABI `rustup target add` → JDK 17（temurin）→ 自取 cmdline-tools（**linux** 包 `16111833`；**不用** `android-actions/setup-android@v3`，它会去装上游已下架的 `tools` 包）→ `sdkmanager` 装 `platform-tools` / `platforms/android-36` / `build-tools/35.0.0` / `ndk/27.0.12077973` → 导出 `NDK_HOME` / `ANDROID_NDK_HOME` 与四个 target 的 linker / ar / ranlib 配置（prebuilt 目录**按宿主探测**）→ `npm ci` → `keytool` 生成一次性 release 签名材料 → `tauri android build --apk --ci` → 上传 `danmubox-android-apk`（`apk/*/release/*.apk`） | 同 `artifacts` |
-| `artifacts-windows` | `windows-latest` | `npm ci` → `tauri build --bundles nsis,msi --config '{"bundle":{"icon":["icons/icon.ico"]}}'`（`shell: bash`）→ 上传 `danmubox-windows`（免安装 `.exe` + NSIS 安装器 + MSI） | 同 `artifacts`（仅手动与 `v*` tag） |
+| `artifacts-windows` | `windows-latest` | `npm ci` → `tauri build --bundles nsis,msi`（`shell: bash`，`ci.yml:384`；原先那条 `--config '{"bundle":{"icon":["icons/icon.ico"]}}'` 已删）→ 上传 `danmubox-windows`（免安装 `.exe` + NSIS 安装器 + MSI） | 同 `artifacts`（仅手动与 `v*` tag） |
 
 - `concurrency`：`group: ${{ github.workflow }}-${{ github.ref }}`、`cancel-in-progress: true` —— 同一个 ref 上的新一轮推送取消上一轮未完成的运行。
 - `permissions: contents: read`（工作流级）。
 - 三个产物 job 都显式钉 `CARGO_TARGET_DIR: ${{ github.workspace }}/target`；`check` 用默认 target 目录。
+- `artifacts` 的自校验为什么必须挂在 **dmg 上**验：`--bundles dmg` 出包后会清掉 `target/release/bundle/macos/` 下那个 `.app` 中间产物（只剩 dmg），而用户拿到的也正是 dmg 里那一份。脚本位置 `.github/workflows/ci.yml:141-159`，判据是 `codesign --verify --deep --strict` 必须 rc=0；`spctl` 的输出只打印留档（ad-hoc 必然 `rejected`，见 §5.5）。
+- **未验**：`artifacts` 的这段自校验脚本**并入 CI 之后尚未真跑**；本机逐字跑过同一段 `run:` 脚本、rc=0。
+- **未验**：`artifacts-windows` 去掉 `--config` 之后**这条 job 尚未真跑**（改动前那一次真跑见本节「本地验证到什么程度」）。
 
 缓存：
 
@@ -912,7 +898,7 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 就是 §5.3 里那两条命令（CI 用的也是它们）。**Windows 不在这一节**：本机是 macOS，出不了 Windows 包，它的产物只在 CI 的 `artifacts-windows` job 上生成。
 
 ```bash
-# ① macOS .dmg（bundle.active=false 靠 --bundles 覆盖；不需要应用图标）
+# ① macOS .dmg（bundle.active=false 靠 --bundles 覆盖；图标与签名都由共享的 tauri.conf.json 提供，见 §5.3 / §5.5）
 cd apps/desktop && ./ui/node_modules/.bin/tauri build --bundles dmg
 #    产物：<repo>/target/release/bundle/dmg/danmubox_<version>_aarch64.dmg（<version> 见 §5.2）
 
@@ -924,12 +910,12 @@ cd apps/desktop && CI=true ./ui/node_modules/.bin/tauri android build --apk --ci
 
 两条都要先装前端依赖（`tauri` CLI 与前端构建都在 `apps/desktop/ui/node_modules` 里）：`npm --prefix apps/desktop/ui install`（CI 里用 `npm ci`）。
 
-#### 签名口径差异（**CI 产物与本地产物签名不同**）
+#### 签名口径差异（Android：**CI 产物与本地产物签名不同**）
 
 - 本机的签名材料是 `gen/android/keystore.jks` + `keystore.properties`（自用私钥，已被 gitignore，**绝不入库、绝不进 CI**，见 §5.7）。
 - CI 上不用也不该用这份私钥：`artifacts-android` job 用 `keytool -genkeypair` **现场生成一次性 keystore**（写进 `keystore.properties` 的四个键；口令由 `github.run_id` / `run_attempt` 派生，只活在本次 run 里，run 结束即消失），因此 CI 的 APK 签名**有效但与本机不同**。
 - 后果：**设备上已装过本机包时，CI 包装不上**（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）—— 先 `adb uninstall dev.kksk.danmubox` 再装（卸载会清数据，`config.toml` 凭据要重新扫码，见 §4.3 与 §5.7）。
-- macOS 的 `.dmg` 不做 Apple 签名与公证，与 §5.5 的本机口径一致。
+- macOS 侧**没有这个差异**：CI 与本机读的是同一份 `bundle.macOS.signingIdentity = "-"`，两侧都是 ad-hoc **整包**签名（都不公证，跨机器首次打开都要过 §5.5「CI 产物这一档」那一步）。
 - CI 里的 `keytool` 与 `sdkmanager` 只出现在 run 步骤的 shell 里，工作流文件中不含任何口令明文。
 
 #### 冒烟不在 CI 里跑
@@ -947,9 +933,10 @@ cd apps/desktop/ui && node smoke/run-headless.mjs --engine webkit               
 |---|---|
 | `npm ci` / `npm run lint` / `npm run build` / 三条 Rust 命令 / `tauri build --bundles dmg` | **本机实测过** |
 | `tauri android build --apk --ci` | 本机干净 worktree 上真跑完过（rc=0，四个 ABI 全部编出）；那份 worktree 没有本地 keystore，所以是**未签名**产物 |
+| macOS 产物的 `codesign` 自校验 | **本机实测过**（ad-hoc 整包签名：`codesign --verify --deep --strict` rc=0、`spctl` rejected rc=3；读数见 §5.5）；**未验**：同一段脚本并入 CI 之后没有真跑过 |
 | Android 工具链在 runner 上安装 | **已真跑**（自取 cmdline-tools 的方案取自首次真跑暴露的失败，见 §5.13 的 `artifacts-android` 行） |
 | Android 产物在 `ubuntu-latest` 上出 | **已真跑**（run `35307480216`，四条 job 全绿，产物为已签名通用包） |
-| Windows 产物 | **已真跑出包**（run `35213437486`，三个产物上传）；**未验**：真机安装 / 启动 / 卸载、WebView2 是否需联网、SmartScreen —— 即 `testing.md` §10.3 的 W-1~W-4 |
-| CI 工作流本身 | **已真跑**：`check` 在 PR 与 push 上多次 success；三条产物 job 均手动触发成功；`v*` tag 触发**未真跑**（见 §5.13「发一版的操作步骤」的未验条） |
+| Windows 产物 | **已真跑出包**（run `35213437486`，三个产物上传；那一次还在用 `--config` 覆盖图标）；**未验**：改成共享 `bundle.icon`、去掉 `--config` 之后尚未真跑；真机安装 / 启动 / 卸载、WebView2 是否需联网、SmartScreen 也未验 —— 即 `testing.md` §10.3 的 W-1~W-4 |
+| CI 工作流本身 | **已真跑**：`check` 在 PR 与 push 上多次 success；三条产物 job 均手动触发成功（各自最新改动是否已复跑，见上面几行的未验标注）；`v*` tag 触发**未真跑**（见 §5.13「发一版的操作步骤」的未验条） |
 
 逐轮读数与耗时留档见 `../CHANGELOG.md` 归档区。

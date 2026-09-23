@@ -11,14 +11,11 @@ import type {
   AdminUser,
   ApiError,
   AppInfo,
-  DiagnoseExport,
-  DiagnoseStart,
   ChatSendResult,
   Emote,
   EmoteToken,
   FollowedRoom,
   Message,
-  OwnRoom,
   RoomStatsEvent,
   ReportReason,
   ReplyTarget,
@@ -29,7 +26,6 @@ import type {
   SendOutcome,
   SessionState,
   StatusEvent,
-  StreamEndpoints,
 } from "./types";
 
 function isApiError(error: unknown): error is ApiError {
@@ -91,25 +87,6 @@ export const api = {
   /** 删除账号条目。最后一个与错误情形由后端拦（`BAD_REQUEST` / `NOT_FOUND`）。 */
   accountRemove: (name: string) =>
     call<SessionState>("account_remove", { name }),
-
-  /**
-   * 我自己直播间（契约 §7 `anchor_room`）：`null` = 该账号**没有开通直播间**，
-   * 不是错误 —— 界面据此整块不渲染。只读，因此走 `call`（失败要进日志）。
-   */
-  anchorRoom: () => call<OwnRoom | null>("anchor_room"),
-  /**
-   * 改直播间标题（写操作：裸 `invoke`，失败即停不重试；空标题由后端报 `BAD_REQUEST`）。
-   * 命令本身只写不读 —— 调用方（`store.setAnchorTitle`）成功后就地重读 `anchor_room`，
-   * 标题以远端为准、不拿本地草稿当事实。
-   */
-  anchorTitleSet: (title: string) =>
-    invoke<void>("anchor_title_set", { title }),
-  /**
-   * 开播 / 下播（写操作：裸 `invoke`）。**开播**返回上游刚下发的推流端点，**下播**返回 `null`
-   * —— 上游非 0 code 原样带回（含 60024 / 60043 那类人脸认证），界面只显示 `code` 与 `msg`。
-   */
-  anchorLiveSet: (live: boolean) =>
-    invoke<StreamEndpoints | null>("anchor_live_set", { live }),
 
   roomsList: () => call<RoomView[]>("rooms_list"),
   /**
@@ -181,17 +158,6 @@ export const api = {
 
   prefsGet: () => call<Prefs>("prefs_get"),
   prefsSet: (patch: Partial<Prefs>) => call<Prefs>("prefs_set", { patch }),
-
-  /**
-   * 一键诊断：开始采集（契约 §7）。
-   *
-   * `engine` 是渲染引擎标识（`navigator.userAgent`）：内核版本只有页面自己知道，
-   * 报告头要用它（桌面端是 WKWebView / WebView2，Android 是系统 WebView）。
-   */
-  diagnoseStart: (engine: string) =>
-    invoke<DiagnoseStart>("diagnose_start", { engine }),
-  /** 一键诊断：导出报告并结束采集。一次调用恰好一个文件。 */
-  diagnoseExport: () => invoke<DiagnoseExport>("diagnose_export"),
 };
 
 export interface EventHandlers {

@@ -4,7 +4,7 @@
 
 ### 1.1 范围
 
-需求溯源：`REQUIREMENTS.md` §2.1（消息展示与类型）、§2.7（礼物与金额）、§2.12（连接、保活与诊断）、§2.14（我的直播间：主播侧开播 / 下播 / 改标题）。
+需求溯源：`REQUIREMENTS.md` §2.1（消息展示与类型）、§2.7（礼物与金额）、§2.12（连接与保活）。
 
 | 纳入 | 不纳入 |
 |---|---|
@@ -19,11 +19,11 @@
 | `short_id` | 用户可见的短号（可为 0，表示该房间无短号） |
 | 真实 `room_id` | 协议与领域模型统一使用的房间号（`i64`，见 `contract.md` §5） |
 | `getRoomPlayInfo` | 短号 / URL → 真实 `room_id` 的 REST 接口；一次返回 `room_id` / `uid`（主播 UID）/ `live_status`。**不返回**主播昵称与直播间标题（`crates/danmubox-bili/src/http.rs:355`） |
-| `getH5InfoByRoom` | 主播昵称与直播间标题的来源：`data.anchor_info.base_info.uname` / `data.room_info.title`（游客态可读，无需签名；`http.rs:868-877`；见附录 A41） |
-| `getDanmuInfo` | 取得弹幕 WS 连接参数（`token`、`host_list`）的 REST 接口，需 `buvid3` 与 WBI 签名（`http.rs:446`） |
-| `token` | 认证包 `key` 字段的值；由服务端签发（`crates/danmubox-bili/src/ws.rs:417`） |
-| `host_list` | 弹幕 WS 候选节点列表，含主机名与端口（`http.rs:497-507`） |
-| `buvid3` | 匿名设备标识 Cookie，`getDanmuInfo` 的前置条件（`ws.rs:288`） |
+| `getH5InfoByRoom` | 主播昵称与直播间标题的来源：`data.anchor_info.base_info.uname` / `data.room_info.title`（游客态可读，无需签名；`http.rs:848-857`；见附录 A41） |
+| `getDanmuInfo` | 取得弹幕 WS 连接参数（`token`、`host_list`）的 REST 接口，需 `buvid3` 与 WBI 签名（`http.rs:441`） |
+| `token` | 认证包 `key` 字段的值；由服务端签发（`crates/danmubox-bili/src/ws.rs:373`） |
+| `host_list` | 弹幕 WS 候选节点列表，含主机名与端口（`http.rs:477-487`） |
+| `buvid3` | 匿名设备标识 Cookie，`getDanmuInfo` 的前置条件（`ws.rs:257`） |
 | WBI 签名 | `getDanmuInfo` 请求所需的查询串签名，实现见 [`auth.md`](auth.md) |
 | `cmd` | `op=5` 业务载荷中的命令名（`crates/danmubox-bili/src/cmd.rs:99`） |
 | `kind` | 归一化后的六种消息类型之一（见 §10.0） |
@@ -33,20 +33,20 @@
 
 ## 2. 端到端连接时序
 
-完整顺序：房间解析 → `getDanmuInfo` → WSS 握手 → `op=7` 认证 → `op=8` 且 `code=0` 后启动 WS / HTTP 心跳 → `op=5` 分发；任一步失败按 §13 退避重连（`ws.rs:302-441`）。
+完整顺序：房间解析 → `getDanmuInfo` → WSS 握手 → `op=7` 认证 → `op=8` 且 `code=0` 后启动 WS / HTTP 心跳 → `op=5` 分发；任一步失败按 §13 退避重连（`ws.rs:271-395`）。
 
 ### 2.1 连接前置步骤
 
 | 步 | 输入 | 调用 | 产出 | 失败处理 |
 |---|---|---|---|---|
 | 1 | 用户输入的短号 / URL / 房间号 | 本地解析（提取数字路径段） | 候选 `short_id` 或 `room_id` | 无法解析 → `BAD_REQUEST` |
-| 2 | 候选号 | `GET getRoomPlayInfo` | 真实 `room_id`、主播 `uid`、`live_status`（`http.rs:355`） | 房间不存在 → `ROOM_NOT_FOUND`（`http.rs:950-953`） |
-| 3 | 真实 `room_id` | `GET getDanmuInfo`（需 `buvid3` + WBI） | `token`、`host_list`（`http.rs:446-512`） | 未登录可走游客参数；接口失败 → `UPSTREAM_ERROR` |
-| 4 | `host_list` | 按顺序选取节点 | `wss://{host}/sub`（`ws.rs:351`） | 全部节点失败 → `UPSTREAM_ERROR` |
+| 2 | 候选号 | `GET getRoomPlayInfo` | 真实 `room_id`、主播 `uid`、`live_status`（`http.rs:355`） | 房间不存在 → `ROOM_NOT_FOUND`（`http.rs:930-933`） |
+| 3 | 真实 `room_id` | `GET getDanmuInfo`（需 `buvid3` + WBI） | `token`、`host_list`（`http.rs:441-492`） | 未登录可走游客参数；接口失败 → `UPSTREAM_ERROR` |
+| 4 | `host_list` | 按顺序选取节点 | `wss://{host}/sub`（`ws.rs:313`） | 全部节点失败 → `UPSTREAM_ERROR` |
 
 主播 UID 由步骤 2 得到，用于派生主播徽标（`uid == Room.anchor_uid`），协议层不再单独请求。
 
-**主播昵称与直播间标题不在步骤 2 的响应里**，由步骤 2 之后的一次 `GET getH5InfoByRoom`（游客态可读）补上：`data.anchor_info.base_info.uname` / `data.room_info.title`（`http.rs:868-877`）。这一步**非致命**——失败（超时 / 非 0 code / 字段缺失）只把两个字段留空，房间照常登记（`http.rs:941-947`），展示回落规则见 [`ui.md`](ui.md) §2.2。字段清单与核对方法见附录 A41。
+**主播昵称与直播间标题不在步骤 2 的响应里**，由步骤 2 之后的一次 `GET getH5InfoByRoom`（游客态可读）补上：`data.anchor_info.base_info.uname` / `data.room_info.title`（`http.rs:848-857`）。这一步**非致命**——失败（超时 / 非 0 code / 字段缺失）只把两个字段留空，房间照常登记（`http.rs:921-927`），展示回落规则见 [`ui.md`](ui.md) §2.2。字段清单与核对方法见附录 A41。
 
 ---
 
@@ -89,7 +89,7 @@
 | `packetLen` | 唯一权威的长度来源；先读头再按长度切片，禁止依赖 WS 帧边界推断包边界 |
 | body | 可能为空（如认证回应之外的保活帧），空 body 直接跳过，不视为错误 |
 
-`op`（§5）决定 body 的**用途与分发路径**，`protover`（§6）决定 body 的**编码与解码器**，两者互不混用（`proto.rs:133-167`）：认证包与心跳包的**帧头** `protover` 固定为 `1`，认证包 **body 内**的 `protover` 字段固定为 `3`（同名不同物，`ws.rs:410-417`）。
+`op`（§5）决定 body 的**用途与分发路径**，`protover`（§6）决定 body 的**编码与解码器**，两者互不混用（`proto.rs:133-167`）：认证包与心跳包的**帧头** `protover` 固定为 `1`，认证包 **body 内**的 `protover` 字段固定为 `3`（同名不同物，`ws.rs:366-373`）。
 
 ---
 
@@ -97,12 +97,12 @@
 
 | `op` | 名称 | 方向 | body 形态 | 处理 |
 |---|---|---|---|---|
-| `2` | 心跳 | 客户端 → 服务端 | 字面量字符串 `[object Object]`（15 字节 ASCII，`ws.rs:173`） | 认证成功即发首包；此后按心跳周期固定续拍（见 §8.1） |
-| `3` | 心跳回应 / 人气值 | 服务端 → 客户端 | 4 字节大端无符号整数（人气值）；兼容面见下 | 解析为整数（`proto.rs:176`）+ `debug` 日志（`ws.rs:707-708`）；**不参与**心跳计时 |
+| `2` | 心跳 | 客户端 → 服务端 | 字面量字符串 `[object Object]`（15 字节 ASCII，`ws.rs:142`） | 认证成功即发首包；此后按心跳周期固定续拍（见 §8.1） |
+| `3` | 心跳回应 / 人气值 | 服务端 → 客户端 | 4 字节大端无符号整数（人气值）；兼容面见下 | 解析为整数（`proto.rs:176`）+ `debug` 日志（`ws.rs:629-630`）；**不参与**心跳计时 |
 | `5` | 业务消息 | 服务端 → 客户端 | 压缩子包拼接或 JSON（见 §6、§9） | 解包 → `cmd` 分发 → 归一化 → 广播 / 入会话缓冲 |
-| `7` | 认证 | 客户端 → 服务端 | JSON 对象（见 §7） | 连接建立后立即发送一次（`ws.rs:409-441`） |
+| `7` | 认证 | 客户端 → 服务端 | JSON 对象（见 §7） | 连接建立后立即发送一次（`ws.rs:365-395`） |
 | `8` | 认证回应 | 服务端 → 客户端 | JSON 对象，含 `code` 字段 | `code=0` 视为成功；非 0 一律按认证失败处理（见 §13.3）；已知取值集合与分类见附录 A15 |
-| `24` | SocketAck（消息回执） | 客户端 → 服务端 | JSON `{msg_id, cmd, p_msg_type}` | **我方未实现**（唯一一种我们缺的出站包）：出站只有 `op=7` 与 `op=2`，入站 `op=24` 落「其他包」分支仅记 `trace`（`ws.rs:747-749`）。触发条件未实测，核对方法见附录 A47 |
+| `24` | SocketAck（消息回执） | 客户端 → 服务端 | JSON `{msg_id, cmd, p_msg_type}` | **我方未实现**（唯一一种我们缺的出站包）：出站只有 `op=7` 与 `op=2`，入站 `op=24` 落「其他包」分支仅记 `trace`（`ws.rs:667-669`）。触发条件未实测，核对方法见附录 A47 |
 
 未知 `op` 不得猜测语义：记 `warn`（含 `op` 原值、`packetLen`、`protover`）后丢弃该包。
 
@@ -117,11 +117,11 @@
 | `0` | 明文 JSON（无压缩） | 直接按 UTF-8 JSON 解析（`proto.rs:24`、`proto.rs:146-152`） |
 | `1` | 认证与心跳包的帧头版本 | 用于 `op=7` / `op=2` 的**帧头**（`proto.rs:25`）；若出现在业务子包中，按整数 body 兼容处理，仅计数与日志 |
 | `2` | zlib（deflate 容器） | 解码兼容路径（`proto.rs:26`）；解压后可能仍是子包拼接（见 §9） |
-| `3` | brotli | **本期认证包请求的编码**，默认路径（`proto.rs:27`、`ws.rs:413`）；解压失败按 §9.3 处理 |
+| `3` | brotli | **本期认证包请求的编码**，默认路径（`proto.rs:27`、`ws.rs:369`）；解压失败按 §9.3 处理 |
 
 | 协商项 | 值 | 依据 |
 |---|---|---|
-| 认证包请求的 `protover` | `3` | `contract.md` §4 规范性常量；发送处 `ws.rs:413` |
+| 认证包请求的 `protover` | `3` | `contract.md` §4 规范性常量；发送处 `ws.rs:369` |
 | 解码需兼容的取值 | `0` / `1` / `2` / `3` | `contract.md` §4 规范性常量；分派处 `proto.rs:124-167` |
 | 解压失败 | 丢弃该子包 + 计数，**不**断开连接 | `proto.rs:203-206` |
 
@@ -133,13 +133,13 @@
 
 ### 7.1 body 精确格式
 
-帧头 `protover=1`；body 为 JSON 对象（明文）（`ws.rs:409-428`）：
+帧头 `protover=1`；body 为 JSON 对象（明文）（`ws.rs:365-384`）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `uid` | number | 登录态为当前用户 UID；游客为 `0`（`ws.rs:400-408`：登录态发 `uid=0` 会被上游在握手后立刻 reset） |
+| `uid` | number | 登录态为当前用户 UID；游客为 `0`（`ws.rs:356-364`：登录态发 `uid=0` 会被上游在握手后立刻 reset） |
 | `roomid` | number | **真实** `room_id`（不是短号） |
-| `protover` | number | 固定 `3`（`ws.rs:413`） |
+| `protover` | number | 固定 `3`（`ws.rs:369`） |
 | `buvid` | string | `buvid3` 的值；游客模式亦需携带 |
 | `platform` | string | 固定 `"web"` |
 | `type` | number | 固定 `2` |
@@ -173,11 +173,11 @@
 
 | 发送规则 | 约定 |
 |---|---|
-| 发送时机 | WSS 打开后立即发送，不得等到收到首帧再发（`ws.rs:422-441`） |
+| 发送时机 | WSS 打开后立即发送，不得等到收到首帧再发（`ws.rs:378-395`） |
 | 发送次数 | 每条连接一次；重连后重新发送 |
-| 认证超时 | 发出后 10 秒内未收到 `op=8` → 视为失败，走退避重连（`ws.rs:82` 阈值、`ws.rs:555` 起算、`ws.rs:602-613` 判定） |
-| 重连后 | **必须**重新调用 `getDanmuInfo` 取新 `token`，不复用旧 `token`（`ws.rs:326`） |
-| 日志 | 认证包**从不打印**：只记 `room_id` / `logged_in = (uid != 0)` / `host`，`uid` 与 `key` 都不进日志（`ws.rs:419-421`）；凭据类键名的值在通用脱敏里写成 `***`（`crates/danmubox-bili/src/redact.rs:20`、`redact.rs:27-52`） |
+| 认证超时 | 发出后 10 秒内未收到 `op=8` → 视为失败，走退避重连（`ws.rs:80` 阈值、`ws.rs:505` 起算、`ws.rs:551-561` 判定） |
+| 重连后 | **必须**重新调用 `getDanmuInfo` 取新 `token`，不复用旧 `token`（`ws.rs:289`） |
+| 日志 | 认证包**从不打印**：只记 `room_id` / `logged_in = (uid != 0)` / `host`，`uid` 与 `key` 都不进日志（`ws.rs:375-377`）；凭据类键名的值在通用脱敏里写成 `***`（`crates/danmubox-bili/src/redact.rs:20`、`redact.rs:27-52`） |
 
 ---
 
@@ -189,14 +189,14 @@ danmubox 必须同时维持**两个**心跳：WS 心跳（`op=2`，保活 WS）�
 
 | 项 | 值 |
 |---|---|
-| body 形态 | 字面量字符串 `[object Object]`（15 字节 ASCII，不是 JSON 对象，也不是空 JSON；`ws.rs:173`） |
-| 帧头 `protover` | `1`（body 不压缩；`ws.rs:798`） |
-| `op` | `2`（`ws.rs:797`） |
+| body 形态 | 字面量字符串 `[object Object]`（15 字节 ASCII，不是 JSON 对象，也不是空 JSON；`ws.rs:142`） |
+| 帧头 `protover` | `1`（body 不压缩；`ws.rs:717`） |
+| `op` | `2`（`ws.rs:716`） |
 | `seq` | `1`（`proto.rs:68` 固定写 1） |
-| 首包时机 | 认证成功（`op=8` 且 `code=0`）后**立即**发出（放行 `ws.rs:716-720`，首拍 `ws.rs:787-801`）；60 秒是硬上界、不是等待时长 |
-| 周期 | **固定 30 秒一拍**（`ws.rs:84`）；循环体只有「发一拍 → `sleep(period)`」（`ws.rs:794-810`），**不**因 `op=3` 或其他入站帧重置计时 |
+| 首包时机 | 认证成功（`op=8` 且 `code=0`）后**立即**发出（放行 `ws.rs:637-641`，首拍 `ws.rs:706-720`）；60 秒是硬上界、不是等待时长 |
+| 周期 | **固定 30 秒一拍**（`ws.rs:82`）；循环体只有「发一拍 → `sleep(period)`」（`ws.rs:713-729`），**不**因 `op=3` 或其他入站帧重置计时 |
 | 兼容 | 空 body 亦被上游接受，但**以 `[object Object]` 为规范实现** |
-| 重连后 | 旧定时器必须取消：每次连接新建心跳任务，重新以认证成功为起点计时（`ws.rs:443-453`） |
+| 重连后 | 旧定时器必须取消：每次连接新建心跳任务，重新以认证成功为起点计时（`ws.rs:396-406`） |
 
 ```text
 [object Object]
@@ -206,18 +206,18 @@ danmubox 必须同时维持**两个**心跳：WS 心跳（`op=2`，保活 WS）�
 |---|---|
 | 心跳不携带房间信息 | 房间由认证包确定，心跳仅保活 |
 | 不在重连窗口补发 | 断线期间错过的节拍作废，不与新连接的首次心跳合并 |
-| 僵死判定 | 连续 3 个心跳周期（90 秒）内未收到任何入站帧 → 判定连接僵死，主动断开并重连（阈值 `ws.rs:83`，判据 `ws.rs:560-561`，日志与收场 `ws.rs:581-598`） |
-| 心跳失败不重试 | 发送失败等价于连接故障，直接进入退避流程，不重复 `op=2`（`ws.rs:801-806`） |
+| 僵死判定 | 连续 3 个心跳周期（90 秒）内未收到任何入站帧 → 判定连接僵死，主动断开并重连（阈值 `ws.rs:81`，判据 `ws.rs:510-511`，日志与收场 `ws.rs:531-547`） |
+| 心跳失败不重试 | 发送失败等价于连接故障，直接进入退避流程，不重复 `op=2`（`ws.rs:720-725`） |
 
 ### 8.2 HTTP 心跳（`webHeartBeat`）
 
 | 项 | 值 |
 |---|---|
 | 方法 / 地址 | `GET https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat`（`crates/danmubox-bili/src/http.rs:32-33`） |
-| 参数 | `pf=web`（`http.rs:526`），`hb=<base64("60|<真实room_id>|1|0")>`（`http.rs:524`） |
-| 周期 | 每 60 秒一次（`ws.rs:40` 常量，节拍 `ws.rs:462`） |
-| 起点 | 认证成功后启动，与 WS 心跳各自独立计时（`ws.rs:454-467`） |
-| 失败 | **传输层**失败立即重试一次（`http.rs:531-539`）；仍失败则计入「HTTP 心跳失败」计数并告警（`ws.rs:467-470`、`crates/danmubox-core/src/bus.rs:126`），下一节拍继续尝试；**不因此主动断开 WS**，但连续失败意味着连接可能被上游判死，应在计数达阈值时提示 |
+| 参数 | `pf=web`（`http.rs:506`），`hb=<base64("60|<真实room_id>|1|0")>`（`http.rs:504`） |
+| 周期 | 每 60 秒一次（`ws.rs:38` 常量，节拍 `ws.rs:415`） |
+| 起点 | 认证成功后启动，与 WS 心跳各自独立计时（`ws.rs:407-420`） |
+| 失败 | **传输层**失败立即重试一次（`http.rs:511-519`）；仍失败则计入「HTTP 心跳失败」计数并告警（`ws.rs:420-423`、`crates/danmubox-core/src/bus.rs:126`），下一节拍继续尝试；**不因此主动断开 WS**，但连续失败意味着连接可能被上游判死，应在计数达阈值时提示 |
 
 `hb` 的构造（规范性）：
 
@@ -237,8 +237,8 @@ hb = base64("60|" + 真实room_id + "|1|0")
 | 约束 | 原因 |
 |---|---|
 | HTTP 客户端的**池内空闲上限必须小于心跳间隔**（当前 30s < 60s，`http.rs:205`） | 让每次心跳都新建连接，避开被判死 / 被回收的连接 |
-| 传输层失败**重试一次**（`http.rs:531-539`） | 覆盖 DNS / 网络抖动等一次性故障 |
-| 失败必须**计数并告警**（`ws.rs:467-470`） | 这是「连接是否可能被判死」的唯一可观察信号（`CounterSnapshot.heartbeat_failures`，`bus.rs:126`） |
+| 传输层失败**重试一次**（`http.rs:511-519`） | 覆盖 DNS / 网络抖动等一次性故障 |
+| 失败必须**计数并告警**（`ws.rs:420-423`） | 这是「连接是否可能被判死」的唯一可观察信号（`CounterSnapshot.heartbeat_failures`，`bus.rs:126`） |
 
 失败计数纳入 `CounterSnapshot`，在 CLI 汇总与 `app_info` 中可见。
 
@@ -252,9 +252,9 @@ hb = base64("60|" + 真实room_id + "|1|0")
 2. 按帧 `protover` 处理：`3` → brotli 解压；`2` → zlib 解压；`0` → 直接进入 JSON 解析；`1` → 按整数 body 兼容处理。解压结果为下一轮输入（可能仍是子包拼接）（`proto.rs:124-132`）。
 3. 按 16 字节头循环消费缓冲区，逐个切出子包（`proto.rs:100-167`）。
 4. 对每个子包按**其自身** `protover` 处理，规则同步骤 2（子包编码可能与父帧不同）。
-5. 解析出的 JSON **整体作为一条**候选命令交给归一化（`proto.rs:146-152` → `ws.rs:648` → `cmd.rs:97`）。载荷为数组时**不展开**：数组没有 `cmd` 字段，落 §10.8 的未识别命令路径。
+5. 解析出的 JSON **整体作为一条**候选命令交给归一化（`proto.rs:146-152` → `ws.rs:591` → `cmd.rs:97`）。载荷为数组时**不展开**：数组没有 `cmd` 字段，落 §10.8 的未识别命令路径。
 6. 按 `cmd` 查 §10.0 映射表得到 `kind`；未知 `cmd` → `debug` 日志 + 丢弃并计数（`cmd.rs:184-188`，不广播、不入缓冲）。
-7. 命中映射 → 归一化为 `Message`（见 §10）→ 广播到 `core::bus` 并写入当前会话缓冲（`ws.rs:664-695`）。
+7. 命中映射 → 归一化为 `Message`（见 §10）→ 广播到 `core::bus` 并写入当前会话缓冲（`ws.rs:592-623`）。
 
 ### 9.2 拆分伪代码
 
@@ -480,7 +480,7 @@ fn decode_stream(data, depth):
 | `uid` / `uname` | 触发用户槽位（JSON：`data.uid` / `data.uname` 回落 `data.uinfo.base.name`，`cmd.rs:558-562`） | `INTERACT_WORD_V2` 需经 protobuf 解码后再取 | 待实测校准（A10、A11） |
 | `medal_level` / `medal_name` / `guard_level` | 触发用户粉丝牌槽位 | 无则零值 | 待实测校准（A4） |
 | `face` | pb：`user_info.base.face`（tag 22 → `2: face`）；JSON：`data.uinfo.base.face` | 均与昵称同层；取不到为空串 | pb 路径已实测（A11、A14） |
-| `ts` | 载荷时间戳槽位 | 归一化为 UTC 毫秒 | 待实测校准（A7） |
+| `ts` | **本地收包时刻**（不取载荷时间戳；上游那两个槽位 `timestamp_millisecond` / `timestamp` 只进 `tracing::debug!` 留档，见 `cmd.rs` 的 `interact_v2`） | 与 `interact_json` 同口径，归一化为毫秒。`protocol.md` 附录 A7 标注的「待实测」在 2026-09-22 撤销：载荷时钟不可信（迟到包会让行瞬间消失、偏快时钟会让它永不消失），而 `ts` 只服务两个界面判据（§12.1 的自动消失 + 可选时间戳显示） |
 
 #### `INTERACT_WORD_V2` 的 protobuf 载荷
 
@@ -560,7 +560,7 @@ fn decode_stream(data, depth):
 
 噪声过滤与合并：
 
-- 同一笔的两条载荷**必须合并成一条播报**（§12.3）：实现见 `cmd.rs:739-760` 的 `GuardMerge`，窗口 **5s**，键 = `uid` + `guard_level` + 起始时间（`cmd.rs:718`）。到达间隔分布见附录 A13。
+- 同一笔的两条载荷**必须合并成一条播报**（§12.3）：实现见 `cmd.rs` 的 `GuardMerge`。键 = `room_id` + `uid` + `guard_level`（**已去掉起始时间 `start_time`**：两条的 `start_time` 缺失 / 非整数时各自回落本地时刻会让键对不上，正是「一笔出两行」的根因，见下）；窗口 **5s**，认同一笔靠**到达时刻**而非载荷时间。合并器活在**房间运行时**之上（**不随 `ws.rs` 的 `read_loop` 重建**），因为同一笔的两条载荷完全可能分处两次连接；`announced` 用独立的 **30s TTL**（比放行窗口长），放行 / 收尾放出的购买事件都写进它，避免迟到的播报再投第二行。金额仍只取播报的实付、标价不入 `amount`（见 `guard`）。到达间隔分布见附录 A13。
 - `num` 在全部样本里恒为 `1`；`op_type: 2` 的播报文案是「续费了提督」——续费与首购仍不区分（统一落 `guard`；该枚举尚未逐值校准）。
 - 命令名与字段的实测样本（含「本仓 10 分钟采集里零条」那一次）见附录 A12 / A13 / A33。
 
@@ -574,7 +574,7 @@ fn decode_stream(data, depth):
 | `PREPARING` | 下播 / 准备中 | 固定文案 | 同上；连续重复仅计一次状态变更 |
 | `ROOM_CHANGE` | 房间信息变更（标题 / 分区 / 封面） | 变更后的标题或分区名 | 仅当房间内存态字段确实变化时写入并广播 |
 | `CUT_OFF` | 直播间被切断 | 固定文案 | 写入缓冲；触发界面断流提示 |
-| `POPULARITY_CHANGE` | 人气值变化 | 人气数值 | **高频**：只更新房间内存计数，**不写入会话缓冲**（`cmd.rs:145-146`）。`op=3` 心跳回应携带同一口径的值，只记 `debug` 日志（`ws.rs:707-708`）；人气值的展示口径见 [`ui.md`](ui.md) §3.1 |
+| `POPULARITY_CHANGE` | 人气值变化 | 人气数值 | **高频**：只更新房间内存计数，**不写入会话缓冲**（`cmd.rs:145-146`）。`op=3` 心跳回应携带同一口径的值，只记 `debug` 日志（`ws.rs:629-630`）；人气值的展示口径见 [`ui.md`](ui.md) §3.1 |
 | `LIKE_INFO_V3_UPDATE` | 点赞计数更新 | 点赞计数描述 | 同 `LIKE_INFO_V3_CLICK`：只更新计数 |
 | `ROOM_REAL_TIME_MESSAGE_UPDATE` | 关注数 / 粉丝数等实时计数更新 | 计数描述 | **高频**：仅更新房间内存计数，**不写入会话缓冲** |
 | `WATCHED_CHANGE` | 累计看过人数变化 | `data.num` | 只更新计数，不入缓冲；`data.num` 作为**累计看过**冒泡给界面（`cmd.rs:157`，`Dispatch::RoomStats`） |
@@ -585,7 +585,7 @@ fn decode_stream(data, depth):
 | `STOP_LIVE_ROOM_LIST` | 停播房间列表（全站广播） | 固定文案 + 房间数 | 已列入「已知但直接丢弃」（§10.0） |
 | `HOT_ROOM_NOTIFY` | 客户端刷新提示 | — | 已列入「已知但直接丢弃」（§10.0），不计入 `unknown_cmd` |
 
-**`LIVE` / `PREPARING` 另有一条侧路**：这两条命令到达时，除按 §10.7 表的缓冲策略入缓冲外，还会把**本房间的开播状态**一并置上并冒泡给界面——`LIVE` → `live_status = 1`、`PREPARING` → `0`（`cmd.rs:25-26` 的标注、`cmd.rs:179-182` 赋值、`cmd.rs:210-213` 产出 `Dispatch::LiveStatus`；投递处 `ws.rs:689-695`）。`2`（轮播）**不**由这两条命令推出——轮播是主播另设的状态，无实测表明 `PREPARING` 会切到轮播；推错也只是短暂不一致，列表页那一拍（`contract.md` §4）会用上游的只读值纠回来（`http.rs:833-839`）。
+**`LIVE` / `PREPARING` 另有一条侧路**：这两条命令到达时，除按 §10.7 表的缓冲策略入缓冲外，还会把**本房间的开播状态**一并置上并冒泡给界面——`LIVE` → `live_status = 1`、`PREPARING` → `0`（`cmd.rs:25-26` 的标注、`cmd.rs:179-182` 赋值、`cmd.rs:210-213` 产出 `Dispatch::LiveStatus`；投递处 `ws.rs:617-623`）。`2`（轮播）**不**由这两条命令推出——轮播是主播另设的状态，无实测表明 `PREPARING` 会切到轮播；推错也只是短暂不一致，列表页那一拍（`contract.md` §4）会用上游的只读值纠回来（`http.rs:813-819`）。
 
 ### 10.8 未知 `cmd` 与载荷形态异常
 
@@ -682,7 +682,7 @@ resp.msg / resp.message == "k"     → blocked_room
 
 识别依据是 `msg` 传唯一键 + `dm_type = 1`；只把表情名当普通文本发出去，上游不会渲染成表情（对照见附录 A31）。
 
-**可发送性**：官方客户端发之前会查 `emoticonDanmakuPermCheck`——`perm === 1` 直接放行；否则按 `identity` 给出解锁条件（`identity === 4` 时是「加入主播的粉丝团」，其余按大航海档位）。即 `perm = 0` 的表情不是不能点，而是**未解锁**（判据与实测见附录 A26 补充之三；实现派生成 `Emote.locked`，`crates/danmubox-bili/src/emote.rs:197-201`、`model.rs:380-390`；置灰展示落点 [`ui.md`](ui.md) §6.3）。
+**可发送性**：官方客户端发之前会查 `emoticonDanmakuPermCheck`——`perm === 1` 直接放行；否则按 `identity` 给出解锁条件（`identity === 4` 时是「加入主播的粉丝团」，其余按大航海档位）。即 `perm = 0` 的表情不是不能点，而是**未解锁**（判据与实测见附录 A26 补充之三；实现派生成 `Emote.locked`，`crates/danmubox-bili/src/emote.rs:197-201`、`model.rs:330-340`；置灰展示落点 [`ui.md`](ui.md) §6.3）。
 
 ### 11.5 举报载荷（官方实现）
 
@@ -729,7 +729,7 @@ resp.msg / resp.message == "k"     → blocked_room
 | 触发条件 | 帧头 `seq > 1`（不是消息体里的任何字段） |
 | 身份相关性 | **无**——与「是不是主播」无关（同 §5 的 `op=24`）；方向是**观众 → 服务端** |
 
-**本实现现状**：**没有**这条请求，也**没有** `op=24`：出站只有 `op=7` 与 `op=2`（常量表 `proto.rs:18-27` 不含 24），入站 `op=24` 落「其他包」分支只记 `trace`（`ws.rs:747-749`）。
+**本实现现状**：**没有**这条请求，也**没有** `op=24`：出站只有 `op=7` 与 `op=2`（常量表 `proto.rs:18-27` 不含 24），入站 `op=24` 落「其他包」分支只记 `trace`（`ws.rs:667-669`）。
 
 **未实测**：帧头 `seq` 在现有日志里没有出口——`proto.rs` 解析出 `Header.seq`（`proto.rs:35`、`proto.rs:48`）但没有任何代码路径打印它，`danmubox::raw` 打印的是业务载荷 JSON、不含帧头字段。判定触发条件需先在读循环补一条带 `seq` 的 `debug` 日志（或临时桩），再按附录 A47 采一轮。
 
@@ -741,7 +741,7 @@ resp.msg / resp.message == "k"     → blocked_room
 
 ### 12.1 分发链路
 
-`op=5` 帧 → 递归拆子包 / 解压（§9）→ JSON 解析（`INTERACT_WORD_V2` 先 protobuf 解码）→ 按 `cmd` 查 §10.0 映射表 → 归一化为 `Message` → `core::bus` 广播（`crates/danmubox-core/src/bus.rs:206-208`）+ 当前会话环形缓冲 → Tauri IPC 事件 `danmubox://message`（投递处 `ws.rs:664-695`）。
+`op=5` 帧 → 递归拆子包 / 解压（§9）→ JSON 解析（`INTERACT_WORD_V2` 先 protobuf 解码）→ 按 `cmd` 查 §10.0 映射表 → 归一化为 `Message` → `core::bus` 广播（`crates/danmubox-core/src/bus.rs:206-208`）+ 当前会话环形缓冲 → Tauri IPC 事件 `danmubox://message`（投递处 `ws.rs:592-623`）。
 
 ### 12.2 会话内环形缓冲
 
@@ -753,7 +753,7 @@ resp.msg / resp.message == "k"     → blocked_room
 | 进程退出 | 全部丢失，不做恢复 |
 | 查询 | `history_query` 只查**当前会话**缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`） |
 | 计数类命令 | 永不写入缓冲（见 §10.7），仅更新房间内存态 |
-| 序号 | 每条 `Message.local_id` 为会话内自增（`bus.rs:248`、`session.rs:252-256`），仅供界面 key 与本地引用，进程重启重置；**重连期间不许回退**（回退会让界面按单调判据丢掉之后每一条弹幕，`ws.rs:1744-1749`） |
+| 序号 | 每条 `Message.local_id` 为会话内自增（`bus.rs:248`、`session.rs:252-256`），仅供界面 key 与本地引用，进程重启重置；**重连期间不许回退**（回退会让界面按单调判据丢掉之后每一条弹幕，`ws.rs:1611-1616`） |
 
 ### 12.3 会话内聚合
 
@@ -761,7 +761,8 @@ resp.msg / resp.message == "k"     → blocked_room
 |---|---|
 | 上游重复推送同一条弹幕 | 不做跨会话去重；相同内容由界面相似合并处理 |
 | 礼物连击 | `Message.combo_id`（上游 `batch_combo_id`）相同的礼物折叠成一行；由界面完成（`ui.md` §8.4），协议层逐条入缓冲 |
-| `GUARD_BUY` 与 `USER_TOAST_MSG` 同笔 | 按时间窗合并为一条播报：`cmd.rs` 的 `GuardMerge`（窗口 5s，键 = `uid` + `guard_level` + 起始时间，`cmd.rs:739-760`），金额取播报的**实付**、标价不入 `amount`（§10.6） |
+| `GUARD_BUY` 与 `USER_TOAST_MSG` 同笔 | 按时间窗合并为一条播报：`cmd.rs` 的 `GuardMerge`（窗口 5s；键 = `room_id` + `uid` + `guard_level`，**不含起始时间**，`cmd.rs` 的 `GuardKey`；合并器随房间运行时存活、跨 `read_loop`，`announced` 用 30s TTL，见 §10.6），金额取播报的**实付**、标价不入 `amount`（§10.6） |
+| `ENTRY_EFFECT` 与 `INTERACT_WORD` / `_V2` 同源 | 同一次进场的两条载荷在 `cmd::InteractMerge`（窗口 5s，键 = `room_id` + `uid`）压成一条；不同观众或窗口后再次进场各投一条（§10.4） |
 | 重连 | 不清空已收缓冲（同一次会话），重连后继续追加 |
 
 ---
@@ -797,26 +798,26 @@ stateDiagram-v2
 
 | 参数 | 值 | 说明 |
 |---|---|---|
-| 心跳参数 | 见 §8.1 / §8.2 | WS `op=2`：认证成功后立即首拍，此后每 30 s 固定一拍（`ws.rs:84`）；HTTP 心跳 60 s（`ws.rs:40`）；僵死判定 90 s 无入站帧（`ws.rs:83`） |
-| 退避序列 | 5s / 10s / 20s / 40s / 60s（封顶） | 起点与上限 `ws.rs:37-38`，翻倍与封顶 `ws.rs:1027-1032` |
-| 抖动 | ±20% | 实际等待 = 基准 ×(1 ± 0.2)，随机取值（`ws.rs:1055-1061`） |
-| 重连前动作 | **必须**重新调用 `getDanmuInfo`（`ws.rs:326`） | 不重用旧 `token` / 旧节点；房间信息若可能变化则一并重取 |
-| 连接成功后退避复位 | 是（**认证成功过** + 活过 `HEALTHY_SESSION` 30s，两条同时满足；`ws.rs:867`、`ws.rs:1046-1052`） | 进入 `Live` 且活过阈值才把退避清零（阈值 `ws.rs:47`；机制说明见 [`architecture.md`](architecture.md) §8）；**未认证成功**的尝试不重置退避——连不上（含把候选表逐个拨到超时）与认证失败都继续按 §13.2 序列递增 |
-| 认证失败上限 | 连续 3 次（`ws.rs:85`，判据 `ws.rs:886`） | 达上限进入 `Failed`，停止自动重连 |
-| 重连期间的心跳 | 取消定时器 | 断开即停，不在退避期发送；HTTP 心跳同样暂停（两者都挂在会话 `Cancel` 下，`ws.rs:443-453`） |
+| 心跳参数 | 见 §8.1 / §8.2 | WS `op=2`：认证成功后立即首拍，此后每 30 s 固定一拍（`ws.rs:82`）；HTTP 心跳 60 s（`ws.rs:38`）；僵死判定 90 s 无入站帧（`ws.rs:81`） |
+| 退避序列 | 5s / 10s / 20s / 40s / 60s（封顶） | 起点与上限 `ws.rs:35-36`，翻倍与封顶 `ws.rs:929-934` |
+| 抖动 | ±20% | 实际等待 = 基准 ×(1 ± 0.2)，随机取值（`ws.rs:957-963`） |
+| 重连前动作 | **必须**重新调用 `getDanmuInfo`（`ws.rs:289`） | 不重用旧 `token` / 旧节点；房间信息若可能变化则一并重取 |
+| 连接成功后退避复位 | 是（**认证成功过** + 活过 `HEALTHY_SESSION` 30s，两条同时满足；`ws.rs:779`、`ws.rs:948-954`） | 进入 `Live` 且活过阈值才把退避清零（阈值 `ws.rs:45`；机制说明见 [`architecture.md`](architecture.md) §8）；**未认证成功**的尝试不重置退避——连不上（含把候选表逐个拨到超时）与认证失败都继续按 §13.2 序列递增 |
+| 认证失败上限 | 连续 3 次（`ws.rs:83`，判据 `ws.rs:798`） | 达上限进入 `Failed`，停止自动重连 |
+| 重连期间的心跳 | 取消定时器 | 断开即停，不在退避期发送；HTTP 心跳同样暂停（两者都挂在会话 `Cancel` 下，`ws.rs:396-406`） |
 
 ### 13.3 认证失败分支
 
 | 步骤 | 动作 |
 |---|---|
-| 1 | 收到 `op=8`：解析 body，取 `code` 原值（`ws.rs:710-715`） |
+| 1 | 收到 `op=8`：解析 body，取 `code` 原值（`ws.rs:632-636`） |
 | 2 | `code=0` → 进入 `Live`，启动 WS / HTTP 心跳定时器；退避复位按 §13.2 |
 | 3 | `code≠0` → 记 `warn`：`code` 数值原值 + `op=8` 原始 body（脱敏）写入 `debug` 日志；**不得**为未知 code 编造含义 |
 | 4 | 若为登录态且上游语义指向凭据失效 → 标记会话可能失效，通过 `danmubox://session` 事件通知前端 |
-| 5 | 连续失败计数 +1；未达上限 → 进入 `Backoff`（按 §13.2 等待，重跑房间解析与 `getDanmuInfo`）（`ws.rs:884-911`） |
-| 6 | 连续失败达 3 次 → 进入 `Failed`：房间状态置为 `error`（`ConnState::Error`，经 `danmubox://status` 推出，`detail` 写明「已停止自动重连；手动刷新可重置」，`ws.rs:893-900`），**停止自动重连**，等待人工 `rooms_connect` / `rooms_reconnect`（§14：重置计数并跳过退避） |
+| 5 | 连续失败计数 +1；未达上限 → 进入 `Backoff`（按 §13.2 等待，重跑房间解析与 `getDanmuInfo`）（`ws.rs:796-823`） |
+| 6 | 连续失败达 3 次 → 进入 `Failed`：房间状态置为 `error`（`ConnState::Error`，经 `danmubox://status` 推出，`detail` 写明「已停止自动重连；手动刷新可重置」，`ws.rs:805-812`），**停止自动重连**，等待人工 `rooms_connect` / `rooms_reconnect`（§14：重置计数并跳过退避） |
 
-**`op=8` 非 0 `code` 的已知取值**：只有官方命名的 `-101 = WS_AUTH_TOKEN_ERROR`；本实现**不区分** `-101`——任何非 0 都走上面的步骤 3–6（`warn` + 连续失败计数 + 退避），不因它停止自动重连、也不显式重取 token（`ws.rs:884-911`）。取值集合与分类核对见附录 A15。
+**`op=8` 非 0 `code` 的已知取值**：只有官方命名的 `-101 = WS_AUTH_TOKEN_ERROR`；本实现**不区分** `-101`——任何非 0 都走上面的步骤 3–6（`warn` + 连续失败计数 + 退避），不因它停止自动重连、也不显式重取 token（`ws.rs:796-823`）。取值集合与分类核对见附录 A15。
 
 **凭据失效的判定在会话层**：上游对失效凭据的表现是**握手后立刻 reset**（`Connection reset without closing handshake`），不是 `op=8` 带非 0 code——因此单靠认证回应判不出失效，必须先向 `nav` 求证（`crates/danmubox-bili/src/auth.rs:181-196`：`nav` 说未登录 → 会话置为未登录；网络错误不改变登录态）。
 
@@ -844,7 +845,7 @@ stateDiagram-v2
 | 缓冲 | **不清空**已收缓冲；仍属同一次房内会话 |
 | 定时器 | 旧 WS / HTTP 心跳定时器全部取消，按新连接重建 |
 | 与自动重连的区别 | 自动重连遵守 5/10/20/40/60s 退避且连续认证失败 3 次后停止；手动重连跳过退避、且会重置自动重连的失败计数后重试 |
-| 实现口径 | 每次 `stream()` 调用都是一个**新的重连周期**：连续认证失败计数、节点游标与退避都从起点重新开始（`ws.rs:1001-1005`） |
+| 实现口径 | 每次 `stream()` 调用都是一个**新的重连周期**：连续认证失败计数、节点游标与退避都从起点重新开始（`ws.rs:911-915`） |
 | 当前状态为 `Live` 时 | 幂等：先断开旧连接再按 §14 各项重建，不并发建立第二条 WS |
 | 前置 | 需要有效凭据（游客亦可）；凭据失效时仍以 `Failed` 状态提示重登 |
 
@@ -879,10 +880,10 @@ stateDiagram-v2
 
 | 规则 | 说明 |
 |---|---|
-| 单房间单连接 | 同一 `room_id` 同时只允许一条 WS；重复 `rooms_connect` 幂等（`apps/desktop/src-tauri/src/lib.rs:364`） |
+| 单房间单连接 | 同一 `room_id` 同时只允许一条 WS；重复 `rooms_connect` 幂等（`apps/desktop/src-tauri/src/lib.rs:355`） |
 | 遵守退避 | 禁止在退避窗口内主动重试或「心跳探测」，手动重连（§14）除外 |
-| 节点切换 | 单次尝试内按 `host_list` 顺序、**从轮换游标起**把候选试完一轮（一个不通就换下一个）；同一节点连续失败 2 次后把游标推进到下一项（`ws.rs:86`、`ws.rs:917-925`）。游标跨重连保留、轮完一轮回到首项（越界对 `host_list` 长度取模，`ws.rs:345-349`），继续按 §13.2 退避；手动重连（§14）重置游标与失败计数 |
-| 节点拨号超时 | 单节点 10 s，超时换下一个（`ws.rs:49`、`ws.rs:365-388`） |
+| 节点切换 | 单次尝试内按 `host_list` 顺序、**从轮换游标起**把候选试完一轮（一个不通就换下一个）；同一节点连续失败 2 次后把游标推进到下一项（`ws.rs:84`、`ws.rs:829-837`）。游标跨重连保留、轮完一轮回到首项（越界对 `host_list` 长度取模，`ws.rs:307-311`），继续按 §13.2 退避；手动重连（§14）重置游标与失败计数 |
+| 节点拨号超时 | 单节点 10 s，超时换下一个（`ws.rs:47`、`ws.rs:326-345`） |
 | 并发上限 | 订阅房间数上限由偏好在界面侧约束；协议层不做硬限，但每房间独立 supervisor，避免相互阻塞 |
 | 禁止行为 | 自动化刷弹幕、批量小号、抓取非公开接口数据 |
 
@@ -894,10 +895,10 @@ stateDiagram-v2
 
 | 禁止 | 说明 |
 |---|---|
-| `SESSDATA` / `bili_jct` / `DedeUserID` 进入日志 | 包括 `debug` 级别、协议帧日志、崩溃上报；脱敏键集合见 `crates/danmubox-bili/src/redact.rs:27-52`，值一律写成 `***`（`redact.rs:20`），应用点如 `http.rs:719` |
+| `SESSDATA` / `bili_jct` / `DedeUserID` 进入日志 | 包括 `debug` 级别、协议帧日志、崩溃上报；脱敏键集合见 `crates/danmubox-bili/src/redact.rs:27-52`，值一律写成 `***`（`redact.rs:20`），应用点如 `http.rs:699` |
 | 上述凭据进入前端明文 | IPC 载荷与事件不得携带凭据值 |
 | 上述凭据进入仓库 | 任何文件、fixture、示例中不得出现真实值 |
-| 认证包 `key` 原文入库 / 入日志 | 认证包**从不打印**：只记 `room_id` / `logged_in` / `host`（`ws.rs:419-421`） |
+| 认证包 `key` 原文入库 / 入日志 | 认证包**从不打印**：只记 `room_id` / `logged_in` / `host`（`ws.rs:375-377`） |
 | 发言人与被回复者的 uid 入日志 | 归一化日志只记 `cmd` 与 `kind`（`cmd.rs:194-199`） |
 
 | 允许 | 说明 |
@@ -916,8 +917,8 @@ stateDiagram-v2
 |---|---|
 | 开关 | 环境变量 `DANMUBOX_LOG`，默认 `info`（`crates/danmubox-cli/src/main.rs:618-619`）；协议帧级细节需 `debug` |
 | `info` 级别内容 | 连接状态迁移、认证结果（仅 `code` 数值）、重连次数、异常计数汇总 |
-| `debug` 级别内容 | 每条业务载荷原文（`target: danmubox::raw`，`cmd.rs:104-105`）、归一化命令的 `cmd` + `kind`、解析失败原因；每次重连的收场与退避（`ws.rs:882`、`ws.rs:936-941`） |
-| 帧日志脱敏 | 认证包与心跳包的字段不进日志（`key` 从不打印，`ws.rs:419-421`）；业务载荷里的凭据类键名值写成 `***`（`redact.rs:27-52`）；凭据永不出现 |
+| `debug` 级别内容 | 每条业务载荷原文（`target: danmubox::raw`，`cmd.rs:104-105`）、归一化命令的 `cmd` + `kind`、解析失败原因；每次重连的收场与退避（`ws.rs:794`、`ws.rs:848-853`） |
+| 帧日志脱敏 | 认证包与心跳包的字段不进日志（`key` 从不打印，`ws.rs:375-377`）；业务载荷里的凭据类键名值写成 `***`（`redact.rs:27-52`）；凭据永不出现 |
 | 输出 | 经 `danmubox://log` 事件与标准输出呈现（见 [`ipc.md`](ipc.md)）。协议帧日志与上游 `GET` / `POST` 请求互不复用该通道 |
 
 ### 17.2 计数
@@ -934,7 +935,7 @@ stateDiagram-v2
 | `mirrored_dropped` | `DANMU_MSG_MIRROR` 丢弃数（`cmd.rs:118`） |
 | `unknown_cmd` | 未映射命令数（`cmd.rs:185`；§10.0 的「已知但直接丢弃」不计入） |
 | `counter_updates` | 计数类命令更新次数（`cmd.rs:146`） |
-| `heartbeat_failures` | HTTP 心跳失败次数（`ws.rs:468`；§8.2） |
+| `heartbeat_failures` | HTTP 心跳失败次数（`ws.rs:421`；§8.2） |
 
 计数在 CLI 汇总与 `app_info` 中可见。
 
@@ -1057,7 +1058,7 @@ stateDiagram-v2
 | A4 | 粉丝牌 / 勋章结构（`medal_level` / `medal_name` / `guard_level`） | 粉丝牌对象的位置、等级与名称字段名；`guard_level` 与勋章守护等级是否为同一值 | 同上，需覆盖有牌 / 无牌 / 舰长 / 提督 / 总督样本 | 收集至少 5 类样本建立映射表 | `medal_level`、`medal_name`、`guard_level`（影响全部命令） |
 | A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态（布尔 / 等级 / 位标志） | 同上，需一名房管账号发言样本 | 以已知房管与非房管各 3 条对照，确定判定式 | 房管徽标、`is_admin` |
 | A6 | `Message.upstream_id`（举报所需标识） | 举报弹幕所需的上游标识位于哪个槽位（弹幕 id / 消息 id / 组合串） | 同上，抓取一条可被举报的弹幕原文 | 用该标识对目标弹幕发起一次举报并核对是否命中，确认取哪个槽位 | `chat_report`、`upstream_id` |
-| A7 | 时间戳字段 | 各命令载荷中时间戳的字段名与单位（秒 / 毫秒）；缺失时是否可安全回退到本地时间 | 同上 | 与本地收帧时间比对，误差应在秒级以内；写入归一化规则 | `ts` 全命令 |
+| A7 | 时间戳字段 | 各命令载荷中时间戳的字段名与单位（秒 / 毫秒）；缺失时是否可安全回退到本地时间 | 同上 | **2026-09-22 结论（部分撤销「待实测」）**：`interact` 的 `ts` **不再取载荷时间戳**，一律用本地收包时刻（`cmd.rs` 的 `interact_json` / `interact_v2` 同口径，上游那两个槽位只进 debug 留档）——载荷时钟不可信，且 `ts` 只服务自动消失与可选时间戳显示两个判据；其余命令（弹幕 / 礼物 / SC / 大航海）的 `ts` 仍按载荷归一化（秒 ×1000 或毫秒），已稳定用于排序与展示 | `ts`（interact 为本地时刻；其余为载荷归一化） |
 | A8 | `SEND_GIFT`（含金额与连击字段） | 礼物名称、数量、单价（金瓜子）字段名；礼物标识与连击数（去重聚合用）字段名；用户 UID / 昵称字段名 | 同上，需真实礼物样本 | **按权威文档核对（2026-09-12），仍未实测**：`data.name`（礼物名）、`data.price`（金瓜子，文档记「该值/1000 的单位为元」）、`data.coin_type`（一般为 `gold`，即电池体系）。实现已按此填 `content` 与 `amount`。**但实测流量里没有 `SEND_GIFT`，只有 `SEND_GIFT_V2`**（后者字段抄自官方 proto，见 §10.2）。**头像（`Message.face`）无来源**：社区字段表里没有头像字段，载荷里也没有可确证的昵称同层头像槽位——刻意留空，等有样本再回填。**单位再核对（2026-09-16）**：社区字段表原文就是「该值 / 1000 的单位为元」，与 SC 的 `rate = 1000`（A9）互证；`coin_type = gold` 是币种名、**不等于**数值按电池计（§10.2「金额单位」）。仍属**文档口径**，未见真实礼物样本 | `cmd.rs` |
 | A9 | `SUPER_CHAT_MESSAGE` / `_JP`（含金额与去重字段） | SC 标识、金额、正文、时长字段名；`_JP` 与主命令的载荷差异 | 同上，需真实 SC 样本 | **已实测（2026-09-12）**：字段见 §10.3——`message` / `price`（**元**）/ `id` / `ts`（秒）/ `uinfo.base.name` / `user_info.{uname,guard_level,manager}` / `medal_info.{medal_level,medal_name,guard_level}`，另有 `rate = 1000`（1 元 = 1000 金瓜子）。10 分钟采集到 1 条 SC。**`_JP` 仍未见样本**。头像按同一 `uinfo.base` 层的 `face` 取用（**该键本轮未逐项记录**，实现按同路径取值，取不到即空串） | `cmd.rs`、§10.3 |
 | A10 | `INTERACT_WORD`（V1） | 互动类型枚举的字面值与取值集合（进入 / 关注 / 分享等） | 同上 | 按可触发的类型逐项采集，建立完整映射后再写描述文案 | `content` 文案 |
@@ -1115,11 +1116,10 @@ stateDiagram-v2
 | A45 | **上游的「非 JSON 应答」**（风控验证页 / CDN 错误页 / 404 与 405 的纯文本）与客户端对它的解码路径 | `api.live.bilibili.com` 在什么条件下不回 JSON；客户端把这类应答当成什么 | 用真实登录态的 Cookie 与同一套 UA / Referer，对**房管只读**端点（`GET …/xbanned/banned/GetBlackList`）先按 7 次/秒连打 120 次、再 6 并发连打，逐条记录 HTTP 状态、`content-type` 与响应体开头；把同一形状的应答喂给本地桩上的 `BiliHttp`，对照改前的 `response.json::<Value>()` 与改后的分支（同一份桩也覆盖 502 与空体） | **部分实测（2026-09-13，公开测试房间 5440；用户报 issue 2609132259 #6「房管面板打开就报解码失败」）**：① **412 + `text/html` 实测**——上面那轮并发之后，同一端点在 HTTP/1.1 客户端上稳定回 `HTTP 412` + `content-type: text/html`，响应体 3400 字节，是 ac站的验证页（`<title>出错啦! - bilibili.com</title>`、`.txt-item.err-code`、验证码容器、`security.bilibili.com/static/js/412.js`）。② **404 / 405 是纯文本**：错误路径回 `404 page not found`、方法用错回 `Method Not Allowed`（Go 默认响应，**不是 JSON**）。③ **触发条件未确定**：先按 7 次/秒连打 120 次（全 200 + JSON），接着 6 并发连打时**第一条响应就是 412**；同一时刻 `reqwest`（rustls + HTTP/2，同账号同 Cookie）打同一端点仍是 200 → 风控看着按**客户端指纹 + 突发**判定，且给 412 的请求补上 `buvid3` / `buvid4` 仍是 412（这次拦截不认设备指纹这一项，别拿「少带 buvid」解释它）。因此**用户那一条报错出自哪个请求无法确定**（面板打开即并发三条只读列表，`silent_list` 还会按 `total_page` 逐页连打）。④ **改前的行为已用桩复核**：把 412 页面交给 `Response::json::<Value>()` → `is_decode() == true`、Display 恰为 `error decoding response body`，与用户原文逐字相同。⇒ 纪律：任何应答**先看状态码与 `content-type`**，不得直接当 JSON 解；失败文案必须带端点路径（**不含查询串与请求体**）、HTTP 状态、`content-type`、响应体前 128 字节（丢控制字符、抹疑似凭据、空体写「（空）」）；`GET` 仅在**非 4xx** 的非 JSON 上重试一次（幂等、无副作用），`POST` 一律不重试（可能已经生效） | `http.rs`（`get_with_cookies` / `post_form` 的解码分支）、`admin.rs` 三个只读列表、`ws.rs` 的 `getInfoByUser` |
 | A46 | **`getDanmuInfo` 的 `Cookie` 头数量与「身份同源」**（重复 `Cookie` 头是否影响弹幕下发） | 同一次请求带**两条** `Cookie` 头（账号 Cookie 一条 + `buvid3=…` 一条）时，上游按哪一条解释、会不会因此判成「身份不同源」而降低信任；合并成一条后「认证包 `uid` / Cookie 的 `buvid` / 换 token 的凭据」是否才算同源 | ① 本地先核对**线上形态**（不抓包）：桩服务器记录原始请求头，数 `Cookie` 行；② 再用真实登录态对同一房间两轮对照——「两条 `Cookie` 头」（改前形态，需临时改回）与「一条合并头」（改后形态）各连打若干次，记录 `getDanmuInfo` 的 `code`、随后 WS `op=7` 认证包的 `op=8` 结果，以及认证成功后**同一时间段**收到的 `DANMU_MSG` 条数 | **待实测校准**：本地形态已闭环（2026-09-16，只读单测 + 桩）——改前 `getDanmuInfo` **确实**发两条 `Cookie` 行（`SESSDATA=…; bili_jct=…; DedeUserID=…; buvid3=…` 与 `buvid3=…`，后者由 `RequestBuilder::header` 的 append 语义叠上去），改后**只有一条**且 `buvid3` 与账号字段同条。**合并规则**（`merge_cookie`）：账号字段在前、`buvid3` 追加在末尾（Cookie 顺序对服务端无语义，账号在前只为肉眼可辨）；账号 Cookie 自带 `buvid3` 时**以入参为准**（入参即进认证包 `buvid` 的那个值，同一条头里留两枚同名键只会让服务端无从取舍）。**仍未实测**：上游对重复 `Cookie` 头的容忍度、以及它是否就是「WS 连上了却收不到弹幕」的成因——本轮只证明客户端发的形态改了，没有任何服务端证据 | `http.rs`（`merge_cookie` / `without_cookie_pair` / `get_request` / `get_with_buvid3` / `danmu_info`）、`ws.rs`（`buvid3` 与认证包同源）。**同一症状（连上却收不到弹幕）的另两个候选成因见 A47** |
 | A47 | **服务端是否要求我方回 ack**（WS `op=24` SocketAck / HTTP `POST /xlive/open-interface/v1/dm/message_ack`） | ① 我们真实收到的 `op=5` 里有没有带 ack 标记的消息（`msg_id` / `p_is_ack`）——有则说明该机制在我们这条链路上真实存在；② 帧头 `seq` 是否 `> 1`（HTTP 那条的触发条件）；③ 若不回 ack，是否影响后续下发（同一房间同一时段的对照窗口） | ① **官方产物证据（已核，2026-09-16 只读）**：两条机制都写在 `room-player.<hash>.prod.min.js` 里——`processSingleMessageReply` 在 `msg_id && p_is_ack` 时发 `op=24`，`onReceivedMessage(e, t)` 在 `t > 1` 时 `POST /xlive/open-interface/v1/dm/message_ack`（`t` = 帧头 `seq`）；**两条都与身份无关**（该 WS 客户端对 uid 零分支，产物里 `isAnchor` 只出现在页面 UI 权限判断处，`isAnchor`/`isOwner`/`is_uper` 在 WS 客户端模块里 0 命中）。② **我方游客态一轮采集（本轮未命中）**：`DANMUBOX_LOG=debug cargo run -p danmubox-cli -- watch 5440 --seconds 300 2> capture.log`，然后 `grep -c '\"msg_id\"' capture.log`、`grep -c '\"p_is_ack\"' capture.log`、`grep -n 'seq' capture.log`（前两条看原始载荷，第三条看帧头） | **未实测 / 未命中（2026-09-16 游客态 3 分钟采集，公开测试房间 5440；470 包 / 185 条消息 / `mirrored_dropped` 19）**：原始载荷里 `msg_id` 与 `p_is_ack` **各 0 命中**（`danmubox::raw` 打印了全部 185 条业务载荷原文）⇒ **「服务端要求我们回 `op=24` ack」这条在本轮观测里没有出现**；帧头 `seq` **本轮未采样**（`proto.rs` 解析出 `Header.seq` 但没有任何代码路径打印它，`danmubox::raw` 打的是载荷 JSON）⇒ **HTTP `message_ack` 的触发条件本轮无法判定**（要判定得先在 `ws.rs` 读循环补一条带 `seq` 的 `debug` 日志或临时桩）。仍未闭环：这两个标记是否只在特定房间 / 特定身份下出现、以及不回 ack 是否就是「连上却收不到消息」的成因（需要受影响账号上的真实对照） | `ws.rs`（出站补 `op=24`）、`http.rs`（补 `message_ack`）、§5、§11.7 |
-| A48 | **Android 把诊断报告写进公共下载目录（MediaStore）在真机上的行为** | 报告是否恰好一个、是否出现在真机文件管理器 / 相册外的「下载」里、API 29+ 是否真的**不需要任何权限**（本应用只声明 `INTERNET` 与保活那三枚 + `POST_NOTIFICATIONS`）；API 24–28（无 `MediaStore.Downloads`、且没有 `WRITE_EXTERNAL_STORAGE`）是否**明确报错**而不是静默写进别处 | ① 模拟器（本地 AVD android-35）上走一遍：房间内点「一键诊断」→ 等窗口结束 → `adb shell ls -l /sdcard/Download` 与 `adb pull`；② 真机上重复同一动作（含面板上的「复制路径」）；③ 若有 API 24–28 设备，确认返回的是那条「不支持」错误文案 | **待实测校准**：模拟器一档已闭环（结论与证据见 `docs/operations.md` §2.9）；**真机、多外部存储卷、API 24–28 三档均未验** | `apps/desktop/src-tauri/gen/android/app/src/main/java/dev/kksk/danmubox/DiagnosePlugin.kt`、`apps/desktop/src-tauri/src/diagnose.rs` |
 | A49 | 扫码成功时 `data.code` 的具体数值 | 上游在扫码确认后返回的 `data.code` 数值是否恒为 `0` | 用手机 ac站 App 扫描一次，记录轮询响应里 `data.code` 与外层 `code` | **仍未实测**：实现要求 `data.code == 0` 与完整三要素同时成立才落盘（`crates/danmubox-bili/src/auth.rs:212-222` 落盘路径、`auth.rs:39-72` 三要素判据） | 扫码登录落盘条件 |
 | A50 | 扫码「已扫码待确认」状态码 `86090` | `86090` 是否就是「已扫码、待确认」这一态 | 同上流程，在扫码后、点确认前各观察一次轮询响应 | **仍未实测**：实现已把 `86090` 映射为 `Scanned`（`crates/danmubox-bili/src/auth.rs:26-33`） | 扫码状态机 |
 | A51 | 扫码状态码 `86101` / `86038` | 两者的语义是否为「未扫码」与「二维码已失效」 | 同上流程 | **已实测确认**：`86101` 未扫码、`86038` 已失效；上游调整时复核 | 扫码状态机 |
-| A52 | `nav` 的身份字段 `data.mid` / `data.uname` / `data.face` | 三者的取值形态与未登录时的表现 | 登录态与未登录态各请求一次 `nav` | **已实测确认**：登录态三者都有值（`face` 为 `i0.hdslb.com/bfs/face/….jpg`）；未登录 `code = -101`。实现取这三处（`crates/danmubox-bili/src/http.rs:562`） | 会话身份、账号列表 |
+| A52 | `nav` 的身份字段 `data.mid` / `data.uname` / `data.face` | 三者的取值形态与未登录时的表现 | 登录态与未登录态各请求一次 `nav` | **已实测确认**：登录态三者都有值（`face` 为 `i0.hdslb.com/bfs/face/….jpg`）；未登录 `code = -101`。实现取这三处（`crates/danmubox-bili/src/http.rs:542`） | 会话身份、账号列表 |
 | A53 | `qrcode_key` 的服务端有效期 | 二维码从生成到失效的时长（本地不做看门狗） | 生成二维码后不扫码，持续轮询直到出现 `86038`，记录耗时 | **仍未实测** | 二维码轮询时长 |
 | A54 | 完整 `Set-Cookie` 字段集合 | 核心 7 个字段之外是否还有其它字段 | 真实扫码成功后记录响应 `Set-Cookie` 的**全部字段名**（只记字段名，不记值） | **仍未实测**：已知核心 7 个；实现只认这 7 个名、其余忽略（`auth.rs:39-72`） | 登录态字段集合 |
 | A55 | `img_key` / `sub_key` 的轮换周期 | 是否按自然日轮换、轮换时刻在何时 | 连续两天在固定时刻记录 `nav` 的 `img_url` / `sub_url`，比对是否变化 | **仍未实测**：实现按自然日缓存 + 30 分钟 TTL | WBI 签名密钥缓存 |
@@ -1133,13 +1133,11 @@ stateDiagram-v2
 | A63 | 举报：是否存在频次限制 | 连续举报的阈值与提示 | 连续举报多次（只用自己刚发的那条），记录首次被拒的阈值与提示 | **仍未实测** | 举报入口 |
 | A64 | 举报：是否必需 WBI 签名 | 不带 `w_rid` 的请求是否被拒 | 不带 `w_rid` 发一次举报，记录响应 | **仍未实测**：实现照 `send.rs` 对表单签名（含 `wts` / `w_rid`，`report.rs:147-152`）；参考实现未签名 | 举报请求形态 |
 | A65 | 电池余额：其它上游码语义 | 非 0 `code` 的取值集合 | 复现非 0 code 时记录数值与原始 message | **未实测**：实现只判 `code == 0`，其余报 `UPSTREAM_ERROR` 并保留原始 code（`crates/danmubox-bili/src/wallet.rs:34-40`） | 钱包余额读取 |
-| A66 | **主播侧写链路**（开播三段式 / 下播 / 改标题，需求 §2.14）与「找自己直播间」的取数口径 | 七个端点的路径、方法与参数（`room/v2/Room/room_id_by_uid` / `room/v1/Room/get_info` / `room/v1/Room/update` / `x/report/click/now` / `xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion` / `room/v1/Room/startLive` / `room/v1/Room/stopLive`）；app 签名算法（参数加 `appkey` → 排序 → `urlencode` → `md5(query + appsec)`）与那两个公开 key 是否被接受、签名参数放 query 还是 form；`platform=pc_link`；`csrf` == `csrf_token` == `bili_jct`；`area_v2` 是否就是 `get_info` 的 `data.area_id`；`startLive` 成功时 `data.rtmp` / `data.protocols[]` 的实际形状；非 0 code（社区实现观察到人脸认证 `60024` / `60043`）的取值集合与 `data.qr` 形态 | 登录后对自己的直播间跑一次开播 / 下播 / 改标题（**Main 本轮会做**） | **部分实测（2026-09-19，公开测试房间 `1`，游客只读、不用任何凭据）**：① `room/v2/Room/room_id_by_uid` → `code=0`，`data` **只有 `room_id` 一个键**；② `room/v1/Room/get_info` → `code=0`、**37 个字段**，`data.area_id` 是 **int 且有值**（实测 `21`），`data.area_v2_id` **实测为 `null`**，`data.area_name` / `data.parent_area_name` 是字符串（实测「视频唱见」/「娱乐」），`data.live_status` 是 int（实测 `2` = 轮播），`area_v2_name` / `parent_area_v2_id` / `parent_area_v2_name` 实测均 `null`。负面对照：游客裸请求分区分页列表 `xlive/web-interface/v1/second/getList` 吃 `code=-352` 风控（与 `roadmap.md` 既有记载一致）。**未实测**：`update`、`click/now`、`getHomePageLiveVersion`、`startLive`、`stopLive` **一次都没打过**；「该账号**没有开通直播间**」的响应形态（`room_id_by_uid` 给 0 / 缺 `room_id`）同样未实测——端点 / 字段 / 签名口径全部来自两份社区实现（`ChaceQC/bilibili_live_stream_code`、`Zeppelinpp/bilibili-streamer`）；且本机两个 profile 的凭据当前都已失效（`nav` 返回 `-101`），本轮很可能实测不了，故**按未实测记账、不得写成已验证** | `crates/danmubox-bili/src/anchor.rs`、`contract.md` §3 / §5、[`ipc.md`](ipc.md) §3 |
 
 | A66 实测进展（2026-09-19） | 主播侧写链路在真实登录态下的实测 | 七个端点是否可通；app 签名是否被接受；`area_v2` 是否就是 `get_info` 的 `data.area_id` | 真实登录态下对自己的直播间跑一遍探针（取状态 → 改标题回原值 → 开播 → 复查 → 下播），**失败即停** | **实测（2026-09-19，真实登录态；目标 = 该账号**自己的**直播间，由 `AnchorRoom::own()` 现取）**：① `room/v2/Room/room_id_by_uid` → `code=0`、`data.room_id` 有值 ✓；② `room/v1/Room/get_info` → `live_status` / `area_id` / `parent_area_name` + `area_name` 齐备 ✓（同一次实测里 `area_v2_id` 为 `null` ✓，故分区只认 `area_id`，与 §18.1 一致）；③ `x/report/click/now` 与 `xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion`（**带 app 签名**）均 `code=0` 并给出 `data.now` / `data.build` / `data.curr_version` ✓ → **app 签名被上游接受** ✓；④ `room/v1/Room/update`（改标题：**不签名**、`csrf` == `csrf_token` == `bili_jct`）实测**成功**：读出原值再写回，标题逐字未变 ✓；⑤ `room/v1/Room/startLive`（三段式的第三段、app 签名、`platform=pc_link`、`area_v2` 取 `get_info` 的 `data.area_id`）**请求被上游接受**（返回的是业务码，不是参数 / 签名错误），结果为 **`60043`**，`msg` =「本次开播需要身份验证，请在关播时点击开播唤起人脸认证」。本仓按纪律**原样带回 `code` 与 `msg`、不赋语义**，且**失败即停、未重试、未换参数** —— 这条实测同时印证了「非 0 code 只透传」的行为 | 开播 / 改标题链路 |
 | A66 未实测（2026-09-19） | 上述链路仍缺的实测面 | — | 完成一次人脸认证后重跑同一探针 | **仍未实测**：① `startLive` 的**成功分支**（`data.rtmp` / `data.protocols[]` 的实际形状）—— 被上游人脸认证挡住，该账号未完成本次开播的身份验证；② `room/v1/Room/stopLive` —— 未曾进入直播态，没走到；③ 人脸认证的另一个码 `60024` 与 `data.qr` 的实际形态；④ 「该账号**没有**开通直播间」时 `room_id_by_uid` 的响应形态（本账号已开通，走的是 `code=0` + `room_id` 有值那一支）；⑤ `60043` 引导用的**认证页地址**（§18.5，取自社区实现 `Zeppelinpp/bilibili-streamer`）——它**不在**本仓实测到的那份响应里，只是需求指定的引导口径，待完成一次真实人脸认证时顺带核对能否唤起。**边界确认**：本次实测未让直播间真的开播（上游拒绝在前），事后只读复查 `live_status` 仍为 `0` | 开播 / 下播链路 |
 > A49–A65 由 `docs/auth.md` 原有的待实测表移交（该表已删，`AGENT.md` §6.5.2 第 6 条要求「待实测校准」只在本附录维护）；条目状态照原表记录、未做升级，核对面分别是扫码 / `nav` / WBI / `getDanmuInfo` / 表情包库 / 举报 / 钱包。
 > 其中两项已有实测结论、不另立条目：举报理由清单端点登录态返回 7 条 `{id, reason}`（`crates/danmubox-bili/src/report.rs:32-59`）；举报表单里 `csrf` 与 `csrf_token` 同值、放 query 一律禁止（`report.rs:80-81`）。A16 / A17 / A26 / A28 / A29 / A34 六条与本批移交内容重合，已合并进各自原行。
-> **A66 的编号口径**：主播侧写链路（需求 §2.14）追加在现表末尾，取**下一个空号** A66 —— `crates/danmubox-core/src/ports.rs` 的注释最初把它预留为「附录 A48」，但 **A48 已由 Android 诊断导出（MediaStore）占用**（[`roadmap.md`](roadmap.md) §2.1 引用它），故不重编号整表，**一律以本表的编号为准**。
 
 
 ---

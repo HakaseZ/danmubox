@@ -12,15 +12,15 @@
 //! 外加**节点轮换**（§15.3）：同一节点连续失败 2 次就换 `host_list` 下一项。
 
 use std::future::Future;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use danmubox_core::diagnose::{self, Attempt as DiagAttempt};
 use danmubox_core::ports::LiveSource;
 use danmubox_core::{
-    Cancel, ConnState, Counters, Error, Message, MessageSink, Result, Room, RoomSession,
+    Cancel, ConnState, Counters, Error, Message, MessageKind, MessageSink, Result, Room,
+    RoomSession,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
@@ -116,45 +116,16 @@ struct Attempt {
     /// 本次实际接入的候选节点下标（`host_list` 内的下标）；一个都没接上时是**起始候选**
     /// 的下标（它同样算一次失败，§15.3），`host_list` 都没取到时是 `None`。
     host: Option<usize>,
-    /// 本次尝试在诊断采集器里的那条记录（一键诊断，`docs/operations.md` §2.9）。
-    ///
-    /// 放在这里而不是另开一条信道：重连循环要在收场之后补上「退避多久、连续失败几次」，
-    /// 而那两件事是循环算出来的 —— 顺着收场结果带出来，比再传一个句柄更不容易丢。
-    diag: Arc<DiagAttempt>,
 }
 
 impl Attempt {
-    fn new(diag: &Arc<DiagAttempt>, end: End, verified: bool, host: Option<usize>) -> Self {
+    fn new(end: End, verified: bool, host: Option<usize>) -> Self {
         Self {
             end,
             verified,
             host,
-            diag: Arc::clone(diag),
         }
     }
-}
-
-/// [`End`] 说成一句人话，进诊断报告（`docs/operations.md` §2.9）。
-///
-/// 原样搬运连接层自己的判定，不额外解释：报告里要能看见「是认证失败、僵死、还是
-/// 对端关的」，而不是一个笼统的「连接失败」。
-fn end_reason(end: &End) -> String {
-    match end {
-        End::Live => "认证成功后收场（对端关闭或本次会话结束）".into(),
-        End::AuthFailed(reason) => reason.clone(),
-        End::Failed(reason) => reason.clone(),
-        End::Cancelled => "本次连接被取消（离开房间 / 手动刷新）".into(),
-    }
-}
-
-/// 业务载荷的 `cmd` 主干名（`DANMU_MSG:4:0:2:2:2:0` → `DANMU_MSG`）。
-///
-/// 与 `cmd::dispatch` 取主干的那一步同口径（那边是 `cmd.split(':').next()`）：
-/// 一键诊断的「未识别命令名单」要与 `Counters.unknown_cmd` 的分类对得上，
-/// 名字就不能带后缀。三行重复好过把 bili 的命令表复制第二份。
-fn cmd_name(value: &Value) -> String {
-    let raw = value.get("cmd").and_then(Value::as_str).unwrap_or_default();
-    raw.split(':').next().unwrap_or(raw).to_string()
 }
 
 /// 大航海合并器的定时分支（`docs/protocol.md` §10.6）：等到 `deadline` 就放行那条
@@ -253,6 +224,18 @@ pub struct BiliLive {
     /// 有凭据文件时，`buvid3` 优先用配置里的（登录后由上游下发），
     /// 省掉一次 `finger/spi` 请求，也让连接与账号绑定。
     store: Option<Arc<danmubox_core::ConfigStore>>,
+    /// 大航海按笔合并器（`cmd::GuardMerge`）：活在**房间运行时**这一层，不是每次连接 ——
+    /// 同一笔购买的两条载荷完全可能分处两次连接（`GUARD_BUY` 在这条、播报在下一条），
+    /// 每次连接新建一个就认不出是同一笔，于是「一笔买出两行」（用户 2026-09-22 第 4 条）。
+    ///
+    /// 用同步锁而不是把 `&mut` 传进 `read_loop`：`read_loop` 之上是重连循环的 `FnMut`
+    /// 闭包，把 `&mut` 借进闭包返回的 future 会要求 `Fut` 带上调用点的生命周期；
+    /// 而会话的 future 必须 `Send`，也不能把 `MutexGuard` 挂在 await 上。
+    /// 临界区里只做一次 HashMap 操作，不跨 await。
+    guard_merge: StdMutex<cmd::GuardMerge>,
+    /// 互动（进场）同源去重器（`cmd::InteractMerge`）：与上面同一个理由活在这一层 ——
+    /// 同一次进场的两条载荷同样可能分处两条连接。
+    interact_merge: StdMutex<cmd::InteractMerge>,
 }
 
 impl BiliLive {
@@ -267,6 +250,8 @@ impl BiliLive {
             counters: Arc::new(Counters::default()),
             buvid3: Mutex::new(None),
             store: None,
+            guard_merge: StdMutex::new(cmd::GuardMerge::new()),
+            interact_merge: StdMutex::new(cmd::InteractMerge::new()),
         })
     }
 
@@ -277,6 +262,8 @@ impl BiliLive {
             counters: Arc::new(Counters::default()),
             buvid3: Mutex::new(None),
             store: Some(store),
+            guard_merge: StdMutex::new(cmd::GuardMerge::new()),
+            interact_merge: StdMutex::new(cmd::InteractMerge::new()),
         })
     }
 
@@ -310,24 +297,17 @@ impl BiliLive {
         cancel: &Cancel,
         limits: &Limits,
         node_start: usize,
-        diag: &Arc<DiagAttempt>,
     ) -> Attempt {
         let buvid3 = match self.buvid3().await {
             Ok(buvid3) => buvid3,
             Err(err) => {
-                return Attempt::new(
-                    diag,
-                    End::Failed(format!("取 buvid3 失败: {err}")),
-                    false,
-                    None,
-                )
+                return Attempt::new(End::Failed(format!("取 buvid3 失败: {err}")), false, None)
             }
         };
-        let info = match self.http.danmu_info(room_id, &buvid3, diag).await {
+        let info = match self.http.danmu_info(room_id, &buvid3).await {
             Ok(info) => info,
             Err(err) => {
                 return Attempt::new(
-                    diag,
                     End::Failed(format!("getDanmuInfo 失败: {err}")),
                     false,
                     None,
@@ -335,7 +315,7 @@ impl BiliLive {
             }
         };
         if info.hosts.is_empty() {
-            return Attempt::new(diag, End::Failed("host_list 为空".into()), false, None);
+            return Attempt::new(End::Failed("host_list 为空".into()), false, None);
         }
 
         // `host_list` 就是候选节点表：**从 `node_start` 起**逐个尝试（游标可能已经绕过
@@ -351,7 +331,6 @@ impl BiliLive {
             let mut request = match format!("wss://{host}/sub").into_client_request() {
                 Ok(request) => request,
                 Err(err) => {
-                    diag.dial_failed();
                     last_error = format!("构造 WS 请求失败: {err}");
                     continue;
                 }
@@ -367,18 +346,14 @@ impl BiliLive {
             {
                 Ok(Ok((stream, _response))) => {
                     tracing::debug!(room_id, index, host = %host, "WS 握手完成");
-                    diag.node(index, Some(host));
-                    diag.dialed(danmubox_core::now_ms());
                     connected = Some((index, host.clone(), stream));
                     break;
                 }
                 Ok(Err(err)) => {
-                    diag.dial_failed();
                     tracing::warn!(room_id, index, host = %host, %err, "节点连接失败，尝试下一个");
                     last_error = format!("{host} 连接失败: {err}");
                 }
                 Err(_) => {
-                    diag.dial_failed();
                     tracing::warn!(
                         room_id,
                         index,
@@ -392,8 +367,7 @@ impl BiliLive {
         }
         let Some((host_index, chosen_host, stream)) = connected else {
             // 整个候选表都没接上：这次尝试在**起始候选**上收场（它同样算一次失败，§15.3）。
-            diag.node(first, None);
-            return Attempt::new(diag, End::Failed(last_error), false, Some(first));
+            return Attempt::new(End::Failed(last_error), false, Some(first));
         };
         let (mut write, mut read) = stream.split();
 
@@ -431,15 +405,12 @@ impl BiliLive {
             .await
         {
             return Attempt::new(
-                diag,
                 End::Failed(format!("发送认证包失败: {err}")),
                 false,
                 Some(host_index),
             );
         }
         // 认证包确实写出去了才算「已发出」（§7.3 的 10 秒从这一刻起算）。
-        diag.auth_sent(danmubox_core::now_ms());
-
         // 本次会话的心跳作用域，任何退出路径都会停掉两个心跳任务。
         let session = Cancel::new();
         // 认证成功信号：读循环收到 `op=8` 且 `code=0` 时唤醒 WS 心跳任务**立刻**发首包。
@@ -473,7 +444,7 @@ impl BiliLive {
         };
 
         let outcome = self
-            .read_loop(room_id, sink, cancel, &verify, limits, &mut read, diag)
+            .read_loop(room_id, sink, cancel, &verify, limits, &mut read)
             .await;
 
         session.cancel();
@@ -485,14 +456,49 @@ impl BiliLive {
         }
     }
 
-    /// 读循环的外层：与 [`Self::read_loop_inner`] 只差**大航海按笔合并器**的生命周期。
+    /// 大航海：同一笔的两条载荷在这里合成**一条**（`cmd::GuardMerge`，§10.6 / §12.3）。
+    /// 返回 `None` = 这一条要压着等播报，或是同一笔已投过之后的第二条。
+    fn absorb_guard(&self, message: Message, source: cmd::GuardSource) -> Option<Message> {
+        self.guard_merge
+            .lock()
+            .expect("guard merge poisoned")
+            .absorb(tokio::time::Instant::now(), message, source)
+    }
+
+    /// 大航海窗口到期：放出「没等到播报」的购买事件（金额留 0）。
+    fn flush_guard(&self) -> Option<Message> {
+        self.guard_merge
+            .lock()
+            .expect("guard merge poisoned")
+            .flush(tokio::time::Instant::now())
+    }
+
+    /// 大航海还压着的购买事件最早什么时候到期（`None` = 没有待放项，不起定时器）。
+    fn guard_deadline(&self) -> Option<tokio::time::Instant> {
+        self.guard_merge
+            .lock()
+            .expect("guard merge poisoned")
+            .deadline()
+    }
+
+    /// 互动（进场）：同一次进场的两条载荷只投第一条（`cmd::InteractMerge`，§10.4）。
+    fn absorb_interact(&self, message: Message) -> Option<Message> {
+        self.interact_merge
+            .lock()
+            .expect("interact merge poisoned")
+            .absorb(tokio::time::Instant::now(), message)
+    }
+
+    /// 读循环的外层：与 [`Self::read_loop_inner`] 只差**大航海按笔合并器**的收尾。
     ///
     /// 合并器要在退出前把还压着的购买事件放出去（[`cmd::GuardMerge::take_pending`]），
     /// 而内层有 5 条 `return` 出口（取消 / 认证超时 / 僵死 / 对端关闭 / 读失败），
     /// 统一收在这一层才不会漏 —— 否则那条开通播报会随断连一起消失。
     ///
+    /// 合并器本身由 [`BiliLive`] 持有（**不随连接重建**，理由见那两个字段的注释），
+    /// 因此这一层只做收尾、不负责建。
+    ///
     /// 签名与拆分前逐字一致：`ws::tests` 有 6 个用例直接调它。
-    #[allow(clippy::too_many_arguments)]
     async fn read_loop<S>(
         &self,
         room_id: i64,
@@ -501,26 +507,20 @@ impl BiliLive {
         verify: &Notify,
         limits: &Limits,
         read: &mut S,
-        diag: &Arc<DiagAttempt>,
     ) -> Attempt
     where
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
             + Unpin,
     {
-        let mut guard_merge = cmd::GuardMerge::new();
         let attempt = self
-            .read_loop_inner(
-                room_id,
-                sink,
-                cancel,
-                verify,
-                limits,
-                read,
-                diag,
-                &mut guard_merge,
-            )
+            .read_loop_inner(room_id, sink, cancel, verify, limits, read)
             .await;
-        for message in guard_merge.take_pending() {
+        for message in self
+            .guard_merge
+            .lock()
+            .expect("guard merge poisoned")
+            .take_pending(tokio::time::Instant::now())
+        {
             sink.publish_message(message);
         }
         attempt
@@ -532,8 +532,8 @@ impl BiliLive {
     /// 返回的 [`Attempt`] 里 `host` 是空的：`host_list` 只有 [`BiliLive::run_once`] 见过，
     /// 由它补上。
     ///
-    /// 参数多是因为它同时握着「会话内六件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
-    /// 入站流）、诊断采集句柄 `diag` 与大航海的按笔合并器 —— 收成结构只会让调用点更长，
+    /// 参数多是因为它同时握着「会话内五件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
+    /// 入站流）—— 收成结构只会让调用点更长，
     /// 与 `send::build_params` 同一取舍（那里的 `#[allow]` 注释同样说明了这点）。
     #[allow(clippy::too_many_arguments)]
     async fn read_loop_inner<S>(
@@ -544,8 +544,6 @@ impl BiliLive {
         verify: &Notify,
         limits: &Limits,
         read: &mut S,
-        diag: &Arc<DiagAttempt>,
-        guard_merge: &mut cmd::GuardMerge,
     ) -> Attempt
     where
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
@@ -564,16 +562,16 @@ impl BiliLive {
             };
             // 大航海按笔合并的到期时刻（`docs/protocol.md` §10.6）：只有真压着「等播报的
             // 购买事件」时才有值，没有时不 arm 分支 —— 移动端不该为此常驻唤醒。
-            let guard_deadline = guard_merge.deadline();
+            let guard_deadline = self.guard_deadline();
             tokio::select! {
                 _ = guard_flush_when_due(guard_deadline) => {
-                    if let Some(message) = guard_merge.flush(tokio::time::Instant::now()) {
+                    if let Some(message) = self.flush_guard() {
                         sink.publish_message(message);
                     }
                 }
                 _ = cancel.cancelled() => {
                     let end = if verified { End::Live } else { End::Cancelled };
-                    return Attempt::new(diag, end, verified, None);
+                    return Attempt::new(end, verified, None);
                 }
                 _ = tokio::time::sleep_until(deadline) => {
                     if verified {
@@ -588,7 +586,6 @@ impl BiliLive {
                             limits.inbound_stale.as_millis()
                         );
                         return Attempt::new(
-                            diag,
                             End::Failed(format!(
                                 "僵死：距上次入站帧 {}ms（阈值 {}ms）",
                                 idle.as_millis(),
@@ -604,7 +601,6 @@ impl BiliLive {
                         "发出认证包后未在超时内收到 op=8，按认证失败处理"
                     );
                     return Attempt::new(
-                        diag,
                         End::AuthFailed(format!(
                             "认证超时：{}ms 内未收到 op=8",
                             limits.auth_timeout.as_millis()
@@ -617,7 +613,6 @@ impl BiliLive {
                     let message = match incoming {
                         None => {
                             return Attempt::new(
-                                diag,
                                 End::Failed("连接已被对端关闭".into()),
                                 verified,
                                 None,
@@ -625,7 +620,6 @@ impl BiliLive {
                         }
                         Some(Err(err)) => {
                             return Attempt::new(
-                                diag,
                                 End::Failed(format!("读取失败: {err}")),
                                 verified,
                                 None,
@@ -636,9 +630,6 @@ impl BiliLive {
                     // 任何入站帧都把「最后一次入站」往前推：判据是「未收到**任何**入站帧」，
                     // `op=3` / `op=5` / `op=8` 之外的控制帧同样算它活着。
                     last_inbound = tokio::time::Instant::now();
-                    // 同一个时刻进诊断采集器：护栏判死用的是这里，报告里要能对上（§2.9）。
-                    let inbound_at = danmubox_core::now_ms();
-                    diag.inbound(inbound_at);
                     match message {
                         WsMessage::Binary(bytes) => {
                             let mut decoded = Vec::new();
@@ -646,35 +637,30 @@ impl BiliLive {
                             for item in decoded {
                                 match item {
                                     Decoded::Business(value) => {
-                                        // 首条业务载荷到达的时刻 = 「有没有在喂弹幕」的判据
-                                        // （一键诊断，`docs/operations.md` §2.9）。
-                                        diag.business(inbound_at);
-                                        // 未识别命令的**名单**在这里补：`cmd::dispatch` 只累加
-                                        // 计数（`Counters.unknown_cmd`），它的已知命令表是私有的；
-                                        // 这里不重复一份表，改成看这次调用有没有把计数推上去。
-                                        // 平时（没在采集）连那两次原子读都不做。
-                                        let unknown_probe = diagnose::shared()
-                                            .recording_at(inbound_at)
-                                            .then(|| {
-                                                (
-                                                    cmd_name(&value),
-                                                    self.counters.unknown_cmd.load(Ordering::Relaxed),
-                                                )
-                                            });
                                         // 观众数走单独支路：它不进会话缓冲，只更新界面数字。
                                         match cmd::dispatch(room_id, &value, &self.counters) {
                                             Some(cmd::Dispatch::Message(message)) => {
-                                                sink.publish_message(message)
+                                                // 互动（进场）先过同源去重：同一次进场上游推两条
+                                                // 载荷（`ENTRY_EFFECT` 与 `INTERACT_WORD(_V2)`），
+                                                // 两条都投就是「XX 进入直播间」连着两行（§10.4）。
+                                                let message =
+                                                    if message.kind == MessageKind::Interact {
+                                                        match self.absorb_interact(message) {
+                                                            Some(message) => message,
+                                                            None => continue,
+                                                        }
+                                                    } else {
+                                                        message
+                                                    };
+                                                sink.publish_message(message);
                                             }
                                             // 大航海：同一笔购买的 `GUARD_BUY` 与
                                             // `USER_TOAST_MSG` 在这里合成**一条**播报
                                             // （§10.6 / §12.3），金额取实付那一份。
                                             Some(cmd::Dispatch::Guard { message, source }) => {
-                                                if let Some(message) = guard_merge.absorb(
-                                                    tokio::time::Instant::now(),
-                                                    message,
-                                                    source,
-                                                ) {
+                                                if let Some(message) =
+                                                    self.absorb_guard(message, source)
+                                                {
                                                     sink.publish_message(message);
                                                 }
                                             }
@@ -695,12 +681,6 @@ impl BiliLive {
                                             }
                                             None => {}
                                         }
-                                        if let Some((name, before)) = unknown_probe {
-                                            if self.counters.unknown_cmd.load(Ordering::Relaxed) > before
-                                            {
-                                                diagnose::shared().note_unknown_cmd(inbound_at, &name);
-                                            }
-                                        }
                                     }
                                     Decoded::Popularity(value) => {
                                         // `op=3` 心跳回应携带的是人气值（与 `POPULARITY_CHANGE`
@@ -712,7 +692,6 @@ impl BiliLive {
                                             .get("code")
                                             .and_then(Value::as_i64)
                                             .unwrap_or(-1);
-                                        diag.auth_reply(inbound_at, Some(code));
                                         if code == 0 {
                                             verified = true;
                                             // 认证成功 = 可以发心跳了：放行心跳任务的**首包**
@@ -737,7 +716,6 @@ impl BiliLive {
                                                 "op=8 原始 body"
                                             );
                                             return Attempt::new(
-                                                diag,
                                                 End::AuthFailed(format!("认证失败 code={code}")),
                                                 verified,
                                                 None,
@@ -755,7 +733,6 @@ impl BiliLive {
                         }
                         WsMessage::Close(frame) => {
                             return Attempt::new(
-                                diag,
                                 End::Failed(format!("对端发送关闭帧: {frame:?}")),
                                 verified,
                                 None,
@@ -846,13 +823,6 @@ where
 
         let started = Instant::now();
         let outcome = attempt(node_start).await;
-        // 收场先记账再判取消：一键诊断要看到**每一次**尝试的结局，
-        // 包括「还没认证就被取消」那一档（`docs/operations.md` §2.9）。
-        outcome.diag.ended(
-            danmubox_core::now_ms(),
-            &end_reason(&outcome.end),
-            outcome.verified,
-        );
         if cancel.is_cancelled() {
             return Ok(());
         }
@@ -939,8 +909,6 @@ where
             node_start,
             "退避等待"
         );
-        // 退避与连续失败次数是重连历史的两根坐标，跟着这一次尝试一起进报告。
-        outcome.diag.backoff(wait.as_millis() as u64, auth_failures);
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = tokio::time::sleep(wait) => {}
@@ -1003,20 +971,12 @@ impl LiveSource for BiliLive {
         // 每次 `stream()` 调用都是一个**新的重连周期**（§14：手动重连取消当前连接、
         // 重新调到这里），因此连续认证失败计数与节点游标都从这里重新开始。
         //
-        // 一键诊断：本周期用的那份协议计数交给采集器（报告里要的是「这一段连接」
-        // 收了多少包、丢了多少，而不是进程开机以来的总数）。
-        diagnose::shared().note_counters(Arc::clone(&self.counters));
-        // 先把这两个借用取出来：下面的 `async move` 要按值捕获（每次尝试一条新记录），
+        // 先把这两个借用取出来：下面的 `async move` 要按值捕获 `node_start`，
         // 直接捕获 `sink` / `cancel` 会被理解成「把会话本身搬进闭包」，`FnMut` 搬不动。
         let (sink, cancel) = (&sink, &cancel);
-        reconnect_loop(room_id, sink, cancel, &limits, |node_start| {
-            // 每次尝试各开一条诊断记录：一个重连周期里可能有好几次尝试，
-            // 报告要按次给出「票据 / 认证 / 首帧 / 结束原因 / 退避」。
-            let diag = diagnose::shared().begin_attempt(danmubox_core::now_ms());
-            async move {
-                self.run_once(room_id, sink, cancel, &limits, node_start, &diag)
-                    .await
-            }
+        reconnect_loop(room_id, sink, cancel, &limits, |node_start| async move {
+            self.run_once(room_id, sink, cancel, &limits, node_start)
+                .await
         })
         .await
     }
@@ -1290,12 +1250,6 @@ mod tests {
         }
     }
 
-    /// 测试用的一条诊断记录：只为了满足 `Attempt` / `read_loop` 的签名，
-    /// 断言都落在收场结果上（诊断采集器自己另有用例）。
-    fn test_diag() -> Arc<DiagAttempt> {
-        danmubox_core::diagnose::Diagnoser::new().begin_attempt(0)
-    }
-
     fn frame(op: u32, body: &[u8]) -> WsMessage {
         WsMessage::Binary(proto::build_packet(op, proto::PROTOVER_HEARTBEAT, body).into())
     }
@@ -1387,7 +1341,6 @@ mod tests {
                 times.lock().expect("lock poisoned").push(Instant::now());
                 async move {
                     Attempt::new(
-                        &test_diag(),
                         End::AuthFailed("认证超时：40ms 内未收到 op=8".into()),
                         false,
                         Some(node_start),
@@ -1403,29 +1356,27 @@ mod tests {
     /// 超时」，`true` 是「认证成功过、活过阈值又掉线」。两条判据（认证成功过 + 活过阈值）
     /// 由这对用例分别钉住。
     ///
-    /// 回报的是每次尝试那条诊断记录（与生产代码同一个形态）：断言读**循环自己算出的
-    /// 退避**（`AttemptRecord::backoff_ms`，带 ±20% 抖动），不读墙钟差值 —— 后者受调度
-    /// 噪声影响，会写出时灵时不灵的用例。
+    /// 回报的是**每次尝试的起始时刻**：退避只体现在「两次尝试之间等了多久」上，因此断言
+    /// 读墙钟差值（与 [`spawn_auth_failing_loop`] 同一口径）。每次尝试自己固定睡
+    /// `attempt_span`，减掉它就是循环算出的那次退避（带 ±20% 抖动）。
     fn spawn_past_threshold_failing_loop(
         sink: &MessageSink,
         cancel: &Cancel,
         limits: &Limits,
         attempt_span: Duration,
         verified: bool,
-        diags: Arc<StdMutex<Vec<Arc<DiagAttempt>>>>,
+        times: Arc<StdMutex<Vec<Instant>>>,
     ) -> tokio::task::JoinHandle<Result<()>> {
         let sink = sink.clone();
         let cancel = cancel.clone();
         let limits = *limits;
         tokio::spawn(async move {
             reconnect_loop(1, &sink, &cancel, &limits, |node_start| {
-                let diag = test_diag();
-                diags.lock().expect("lock poisoned").push(Arc::clone(&diag));
+                times.lock().expect("lock poisoned").push(Instant::now());
                 async move {
                     // 一次尝试的时长：拨号超时 / 认证成功后的长连都只会更慢，不会更快。
                     tokio::time::sleep(attempt_span).await;
                     Attempt::new(
-                        &diag,
                         End::Failed("候选节点连接超时 / 掉线（语义由 verified 区分）".into()),
                         verified,
                         Some(node_start),
@@ -1436,42 +1387,49 @@ mod tests {
         })
     }
 
-    /// 跑满 3 次尝试之后收场，返回每轮的记录（顺序 = 尝试顺序）。
+    /// 跑满 3 次尝试之后收场，返回相邻两次尝试之间的间隔（顺序 = 尝试顺序）。
+    ///
+    /// 要 3 次才够：这一段循环算出的退避作用在「这一次尝试之后」，
+    /// 因此第 2 段间隔才是第二次尝试之后那次退避的读数 —— 而它正是两条判据分出胜负的地方。
     async fn run_past_threshold_loop(
         limits: &Limits,
         attempt_span: Duration,
         verified: bool,
-    ) -> Vec<Arc<DiagAttempt>> {
+    ) -> Vec<Duration> {
         let (sink, _bus) = test_sink();
         let cancel = Cancel::new();
-        let diags = Arc::new(StdMutex::new(Vec::new()));
+        let times = Arc::new(StdMutex::new(Vec::new()));
         let runner = spawn_past_threshold_failing_loop(
             &sink,
             &cancel,
             limits,
             attempt_span,
             verified,
-            Arc::clone(&diags),
+            Arc::clone(&times),
         );
-        // 等到**三轮都算完退避**才收场：循环在取消之后会提前返回，不再记这一轮的退避，
-        // 那时收场就只剩两轮读数。
         until(
-            || {
-                diags
-                    .lock()
-                    .expect("lock poisoned")
-                    .iter()
-                    .filter(|diag| diag.record().backoff_ms.is_some())
-                    .count()
-                    >= 3
-            },
+            || times.lock().expect("lock poisoned").len() >= 3,
             Duration::from_millis(2000),
         )
         .await;
         cancel.cancel();
         runner.await.unwrap().unwrap();
-        let rounds = diags.lock().expect("lock poisoned").clone();
-        rounds
+        let starts = times.lock().expect("lock poisoned").clone();
+        starts.windows(2).map(|pair| pair[1] - pair[0]).collect()
+    }
+
+    /// 这一对用例的量程：起点档 / 翻倍档各 200ms / 400ms，抖动 ±20%。
+    ///
+    /// 档位取得比 [`test_limits`] 大，是为了让「持平」与「翻倍」在墙钟上真正分得开：
+    /// 起点档的上沿（240ms）与翻倍档的下沿（320ms）之间留了 80ms 余量，
+    /// 够吃下调度噪声，又不必真按秒级等（一次尝试仅 15ms）。
+    fn threshold_limits() -> Limits {
+        Limits {
+            healthy_session: Duration::from_millis(12),
+            backoff_initial: Duration::from_millis(200),
+            backoff_max: Duration::from_millis(800),
+            ..test_limits()
+        }
     }
 
     /// 阶段目标 S1-AC9（阶段史见 `CHANGELOG.md` 归档区）：非 0 认证 code 一律按失败处理，且只记录原始值。
@@ -1486,15 +1444,7 @@ mod tests {
         let mut stream = Box::pin(futures_util::stream::iter(items));
 
         let outcome = live
-            .read_loop(
-                1,
-                &sink,
-                &cancel,
-                &verify,
-                &limits,
-                &mut stream,
-                &test_diag(),
-            )
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => {
@@ -1528,15 +1478,7 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(
-                1,
-                &sink,
-                &cancel,
-                &verify,
-                &limits,
-                &mut stream,
-                &test_diag(),
-            )
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "认证成功后应保持运行直到被取消");
@@ -1569,15 +1511,7 @@ mod tests {
         >());
         let started = Instant::now();
         let outcome = live
-            .read_loop(
-                1,
-                &sink,
-                &cancel,
-                &verify,
-                &limits,
-                &mut silent,
-                &test_diag(),
-            )
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut silent)
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => assert!(reason.contains("op=8"), "只描述事实：{reason}"),
@@ -1634,29 +1568,24 @@ mod tests {
     #[tokio::test]
     async fn unverified_attempt_past_the_healthy_threshold_does_not_reset_the_backoff() {
         // 阈值 12ms、每次尝试 15ms：每次尝试都「活过阈值」，但从未认证成功。
-        let limits = Limits {
-            healthy_session: Duration::from_millis(12),
-            ..test_limits()
-        };
-        let rounds = run_past_threshold_loop(&limits, Duration::from_millis(15), false).await;
+        let limits = threshold_limits();
+        let span = Duration::from_millis(15);
+        let gaps = run_past_threshold_loop(&limits, span, false).await;
 
-        let waits: Vec<u64> = rounds
-            .iter()
-            .filter_map(|diag| diag.record().backoff_ms)
-            .collect();
-        assert_eq!(waits.len(), 3, "每轮结束都要留下算出的退避：{waits:?}");
-        // 抖动的下界（±20%）：起点档 25ms 落在 [20, 30]，翻倍后的 50ms 档落在 [40, 60]。
-        let initial_band = limits.backoff_initial.mul_f64(0.79).as_millis() as u64;
-        let escalated_band = limits.backoff_max.mul_f64(0.79).as_millis() as u64;
-        // 第一轮按起点，第二轮必须翻倍 —— 除非被误判成健康会话。
+        assert_eq!(gaps.len(), 2, "3 次尝试之间应有 2 段间隔：{gaps:?}");
+        // 间隔 = 一次尝试自己的 `span` + 循环算出的退避（±20% 抖动）：
+        // 起点档 200ms → 间隔在 [span+160, span+240]；翻倍档 400ms → [span+320, span+480]。
+        let escalated_lower = span + limits.backoff_initial.mul_f64(2.0 * 0.79);
+        // 第一段还看不出判据（两次用例的第一轮都是起点档），但翻倍档的下沿是条硬线：
+        // 越过它就说明第一轮不是起点档。
         assert!(
-            waits[0] >= initial_band && waits[0] < escalated_band,
-            "第一轮的退避是起点档（25ms ±20%）：{waits:?}"
+            gaps[0] < escalated_lower,
+            "第一次退避是起点档（间隔应 < {escalated_lower:?}）：{gaps:?}"
         );
         assert!(
-            waits[1] >= escalated_band,
-            "未认证成功的尝试不得把退避重置回起点：第二轮之后应等 50ms 档（≥ {escalated_band}），实测 {:?}",
-            waits[1]
+            gaps[1] >= escalated_lower,
+            "未认证成功的尝试不得把退避重置回起点：第二次之后应等翻倍档（间隔 ≥ {escalated_lower:?}），实测 {:?}",
+            gaps[1]
         );
     }
 
@@ -1666,26 +1595,22 @@ mod tests {
     /// 正是 `a111720` 修掉的旧缺陷）。
     #[tokio::test]
     async fn verified_attempt_past_the_healthy_threshold_still_resets_the_backoff() {
-        let limits = Limits {
-            healthy_session: Duration::from_millis(12),
-            ..test_limits()
-        };
-        let rounds = run_past_threshold_loop(&limits, Duration::from_millis(15), true).await;
+        let limits = threshold_limits();
+        let span = Duration::from_millis(15);
+        let gaps = run_past_threshold_loop(&limits, span, true).await;
 
-        let waits: Vec<u64> = rounds
-            .iter()
-            .filter_map(|diag| diag.record().backoff_ms)
-            .collect();
-        assert_eq!(waits.len(), 3, "每轮结束都要留下算出的退避：{waits:?}");
-        let initial_band = limits.backoff_initial.mul_f64(0.79).as_millis() as u64;
-        let escalated_band = limits.backoff_max.mul_f64(0.79).as_millis() as u64;
+        assert_eq!(gaps.len(), 2, "3 次尝试之间应有 2 段间隔：{gaps:?}");
+        // 健康会话每轮都把退避拉回起点档：两段间隔都在 [span+160, span+240]。
+        // 翻倍档的下沿（span+320）是条硬线：越过它就意味着退避没被拉回起点。
+        let initial_lower = span + limits.backoff_initial.mul_f64(0.79);
+        let escalated_lower = span + limits.backoff_initial.mul_f64(2.0 * 0.79);
         assert!(
-            waits[1] < escalated_band,
-            "认证成功过又掉线 = 健康会话，退避必须回到 5 秒起点（25ms 档，< {escalated_band}）：{waits:?}"
+            gaps[1] < escalated_lower,
+            "认证成功过又掉线 = 健康会话，退避必须回到起点（间隔应 < {escalated_lower:?}）：{gaps:?}"
         );
         assert!(
-            waits[1] >= initial_band,
-            "回落的目标是起点档（25ms ±20%）：{waits:?}"
+            gaps[1] >= initial_lower,
+            "回落的目标是起点档（间隔应 ≥ {initial_lower:?}）：{gaps:?}"
         );
     }
 
@@ -1776,7 +1701,6 @@ mod tests {
                         message.content = format!("第 {round} 轮");
                         sink.publish_message(message);
                         Attempt::new(
-                            &test_diag(),
                             End::Failed("连接已被对端关闭".into()),
                             false,
                             Some(node_start),
@@ -1823,15 +1747,7 @@ mod tests {
             Box::pin(futures_util::stream::iter(items).chain(futures_util::stream::pending()));
         let started = Instant::now();
         let outcome = live
-            .read_loop(
-                1,
-                &sink,
-                &cancel,
-                &verify,
-                &limits,
-                &mut stream,
-                &test_diag(),
-            )
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
             .await;
         let End::Failed(reason) = &outcome.end else {
             panic!("一直没有入站帧必须判死，实际 {:?}", outcome.end);
@@ -1860,7 +1776,6 @@ mod tests {
                     times.lock().expect("lock poisoned").push(Instant::now());
                     async move {
                         Attempt::new(
-                            &test_diag(),
                             End::Failed("僵死：距上次入站帧 120ms（阈值 120ms）".into()),
                             true,
                             Some(node_start),
@@ -1915,15 +1830,7 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(
-                1,
-                &sink,
-                &cancel,
-                &verify,
-                &limits,
-                &mut stream,
-                &test_diag(),
-            )
+            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "有入站帧就不得判僵死");
@@ -2001,14 +1908,7 @@ mod tests {
                     starts.lock().expect("lock poisoned").push(index);
                     // 传输层失败：认证失败会让连续认证失败计数先到上限而停在 Failed，
                     // 那不是本用例要看的轴。
-                    async move {
-                        Attempt::new(
-                            &test_diag(),
-                            End::Failed("模拟掉线".into()),
-                            false,
-                            Some(index),
-                        )
-                    }
+                    async move { Attempt::new(End::Failed("模拟掉线".into()), false, Some(index)) }
                 })
                 .await
             })

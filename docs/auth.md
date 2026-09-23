@@ -13,7 +13,7 @@
 | `danmubox-core` 端口 `AuthProvider` | 定义登录态、账号列表、扫码流程、账号切换 / 登出 / 删除与 `buvid3` 的 trait 与领域模型（§8.6 的脱敏对象） | 出现任何 ac站 URL、字段下标、签名算法；依赖 `tauri` 或 UI | `crates/danmubox-core/src/ports.rs:22-121` |
 | `danmubox-bili`（`AuthProvider` 实现） | 实现扫码、WBI 签名、`getDanmuInfo`、`buvid3`、凭据字段语义；**所有 ac站 URL、字段名、签名只在此出现** | 依赖 `tauri`；把凭据写入日志 | `crates/danmubox-bili/src/auth.rs`、`http.rs`、`wbi.rs`、`send.rs`、`report.rs` |
 | `danmubox-core` 本地文件层 | `config.toml` / `prefs.json` 的读写、原子替换、权限（`contract.md` §4.1、§4.2） | 解释 ac站字段的协议语义 | `crates/danmubox-core/src/config.rs` |
-| `danmubox-cli` / `apps/desktop/src-tauri` | 经 `AuthProvider` 驱动登录，向前暴露**脱敏后**的状态 | 自行读 `config.toml` 拼 Cookie；自行实现签名 | `apps/desktop/src-tauri/src/lib.rs:220-227`、`apps/desktop/src-tauri/src/lib.rs:795-859` |
+| `danmubox-cli` / `apps/desktop/src-tauri` | 经 `AuthProvider` 驱动登录，向前暴露**脱敏后**的状态 | 自行读 `config.toml` 拼 Cookie；自行实现签名 | `apps/desktop/src-tauri/src/lib.rs:211-219`、`apps/desktop/src-tauri/src/lib.rs:786-851` |
 | 前端（React/TS） | 渲染二维码、展示登录态、触发命令 | 接触任何 Cookie 值、参与签名计算 | `apps/desktop/ui/src/components/AccountManager.tsx` |
 
 ### 1.2 一次登录请求的调用链
@@ -40,7 +40,7 @@ getDanmuInfo（Cookie + wts + w_rid）──► { token, host_list }（§5）
 WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover=3）
 ```
 
-各步锚点：生成 `crates/danmubox-bili/src/auth.rs:298-331`；轮询与落盘 `auth.rs:333-374`；签名 `http.rs:633-654` + `wbi.rs:15-46`；`getDanmuInfo` `http.rs:446-520`；取 `buvid3` `ws.rs:288-300`；认证包 `ws.rs:405-420`。认证包的二进制帧格式见 `protocol.md` §8。
+各步锚点：生成 `crates/danmubox-bili/src/auth.rs:298-331`；轮询与落盘 `auth.rs:333-374`；签名 `http.rs:613-634` + `wbi.rs:15-46`；`getDanmuInfo` `http.rs:441-500`；取 `buvid3` `ws.rs:257-269`；认证包 `ws.rs:361-376`。认证包的二进制帧格式见 `protocol.md` §8。
 
 ---
 
@@ -85,7 +85,7 @@ WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover
 | 请求头 | 常规 `User-Agent`；无需登录、无需签名 |
 | 响应字段 | `data.b_3` → `buvid3`；`data.b_4` → `buvid4`（`http.rs:335-352`） |
 | 实测结果 | `code = 0`，`message = "ok"`，`data.b_3` / `data.b_4` 均为字符串 |
-| 调用时机 | 惰性获取：有凭据文件时优先用文件里的 `buvid3`，取不到才问上游；结果缓存在进程内，失败则整轮连接失败并按重连退避重试（`crates/danmubox-bili/src/ws.rs:287-300`） |
+| 调用时机 | 惰性获取：有凭据文件时优先用文件里的 `buvid3`，取不到才问上游；结果缓存在进程内，失败则整轮连接失败并按重连退避重试（`crates/danmubox-bili/src/ws.rs:256-269`） |
 
 ### 3.2 在请求链中的位置
 
@@ -94,16 +94,16 @@ WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover
 | 位置 | 形式 | 说明 | 代码位置 |
 |---|---|---|---|
 | 上游 REST 请求头 | `Cookie: <账号 Cookie>; buvid3=<值>` | 账号 Cookie 在前、`buvid3` 追加在**末尾**，**合成一条** `Cookie` 头（`RequestBuilder::header` 是 append 语义，调两次会发出两条头）；入参的 `buvid3` 覆盖账号 Cookie 里的同名键；游客态只剩 `buvid3=…` 一条 | `http.rs:43-75`、`http.rs:270-285` |
-| WS 认证包 body | `"buvid": "<buvid3 值>"` | `contract.md` §6 认证包的 `buvid` 字段，游客与登录态都必须填 | `crates/danmubox-bili/src/ws.rs:411-417` |
+| WS 认证包 body | `"buvid": "<buvid3 值>"` | `contract.md` §6 认证包的 `buvid` 字段，游客与登录态都必须填 | `crates/danmubox-bili/src/ws.rs:367-373` |
 | 本地持久化 | `config.toml` 当前账号的 `buvid3` / `buvid4` 字段 | 见 §3.3；不使用偏好文件 | `config.rs:21-36` |
 
-`buvid4` **不上行**：它只作为 `config.toml` 字段保存与继承，不进任何请求头（`http.rs:60-75` 只并入 `buvid3`；`config.rs:71-88` 的 Cookie 头不含 `buvid4`；`ws.rs:297` 取回后即丢弃）。
+`buvid4` **不上行**：它只作为 `config.toml` 字段保存与继承，不进任何请求头（`http.rs:60-75` 只并入 `buvid3`；`config.rs:71-88` 的 Cookie 头不含 `buvid4`；`ws.rs:266` 取回后即丢弃）。
 
 注意：`buvid3` **不是** WBI 签名的输入，也不进入 `w_rid` 计算（签名输入见 §4.1）。它只在请求头与认证包里出现。
 
 ### 3.3 持久化与生命周期
 
-- 文件里的 `buvid3` 由扫码成功时的 `Set-Cookie` 写入（`crates/danmubox-bili/src/auth.rs:67-70`）；`finger/spi` 取回的 `buvid3` 只在进程内缓存，**不写回文件**（`ws.rs:287-300`）。
+- 文件里的 `buvid3` 由扫码成功时的 `Set-Cookie` 写入（`crates/danmubox-bili/src/auth.rs:67-70`）；`finger/spi` 取回的 `buvid3` 只在进程内缓存，**不写回文件**（`ws.rs:256-269`）。
 - `buvid4` 只在一个写入点产生：新增账号时若新凭据未自带，则从当前账号继承一份（`auth.rs:219-233`）。它不绑定账号，因此登出与换号都不清除。
 - 登出**不清除** `buvid3` / `buvid4`：清除反而使设备指纹抖动（`config.rs:96-103`）。
 - 敏感级别：低（无账号绑定），但与 `SESSDATA` 同时出现时二者可被关联到同一设备，因此仍不得进入日志（`crates/danmubox-bili/src/redact.rs:48-50`）。
@@ -124,15 +124,15 @@ WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover
 | 参与签名的 query | 本次请求除 `w_rid` 外的全部业务参数 | 例如 `getDanmuInfo` 的 `id` / `type` / `web_location` |
 | 混入密钥 `mixin_key` | 由 `img_key` + `sub_key` 经置换表导出，见 §4.5 | 不随请求变化，随 key 轮换 |
 
-`nav` 接口无需登录也无需签名；即使未登录（响应 `code = -101`、「账号未登录」），`data.wbi_img` 依然返回（`http.rs:656-684` 的注释即此口径）。
+`nav` 接口无需登录也无需签名；即使未登录（响应 `code = -101`、「账号未登录」），`data.wbi_img` 依然返回（`http.rs:636-664` 的注释即此口径）。
 
 ### 4.2 取 key
 
 | 项 | 值 |
 |---|---|
 | 接口 | `GET https://api.bilibili.com/x/web-interface/nav`（`http.rs:21`） |
-| 路径 | `data.wbi_img.img_url`、`data.wbi_img.sub_url`（`http.rs:668-675`） |
-| basename 规则 | 取最后一个 `/` 之后、去掉最后一个 `.` 及其后缀的片段（`http.rs:686-693`） |
+| 路径 | `data.wbi_img.img_url`、`data.wbi_img.sub_url`（`http.rs:648-655`） |
+| basename 规则 | 取最后一个 `/` 之后、去掉最后一个 `.` 及其后缀的片段（`http.rs:666-673`） |
 | 实测样例 | `img_url` → `https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png`，`img_key = 7cd084941338484aae1ad9425b84077c`（key 随自然日轮换，此值仅作形态样例：32 位十六进制） |
 | 长度 | `img_key` 与 `sub_key` 各 32 字符，拼接后 64 字符（`wbi.rs:15-22`） |
 
@@ -140,13 +140,13 @@ WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover
 
 `img_key` / `sub_key` 由服务端**按自然日轮换**。若进程跨日运行仍复用旧 key，签名会整体失效，所有受 WBI 保护的接口开始返回 `-352`——表现为「弹幕看着正常但每隔一阵拉不到 `getDanmuInfo`」。因此：
 
-1. 缓存结构为 `{ img_key, sub_key, fetched_at, fetched_day }`——即旧文档写的 `{ img_key, sub_key, fetched_at, fetched_at_day }`：`fetched_day` 是代码字段名，语义为 UTC+8 的自然日（`http.rs:136-165`；`http.rs:143`、`http.rs:696` 的注释按旧称 `fetched_at_day` 引用）。
+1. 缓存结构为 `{ img_key, sub_key, fetched_at, fetched_day }`——即旧文档写的 `{ img_key, sub_key, fetched_at, fetched_at_day }`：`fetched_day` 是代码字段名，语义为 UTC+8 的自然日（`http.rs:136-165`；`http.rs:143`、`http.rs:676` 的注释按旧称 `fetched_at_day` 引用）。
 2. 命中条件：`fetched_day == 今天`（等价判据 `fetched_at_day == 今天`）**且** `now - fetched_at < 30 分钟`（`WBI_KEY_TTL` = 30 分钟，`http.rs:137`、`http.rs:150-157`）；否则重新调 `nav`。TTL 取 30 分钟：密钥按自然日轮换，半小时远短于轮换周期，命中因此不可能跨越轮换点，而「连发几条弹幕」这种场景之间必然命中。两道判据都要——`Instant` 在系统休眠期间不前进，只靠 TTL 会把「睡一觉跨天」的旧 key 当成新鲜。
-3. **单飞**：并发调用共用一把锁（锁跨一次网络请求），多个发送同时到达时只打一次 `nav`（`http.rs:633-647`）。
-4. **失败降级**：`nav` 取不到时错误原样上抛、缓存槽位保持不动，下一次调用照旧重新请求（`http.rs:648-654`）。缓存只用来省一次访问，绝不让发送因为缓存而失败。
-5. 缓存**仅存于内存**、进程级共享，不落盘（key 无长期价值，落盘只是多一处可泄漏面）。放进程级而不是 `BiliHttp` 实例字段：桌面端每次发送都新建 `BiliHttp`（`apps/desktop/src-tauri/src/lib.rs:470`），实例字段等于没缓存。密钥与账号无关（游客态 `nav` 也下发同一份，§4.2），所以一个槽位即可。
-6. 取 key 的调用点全部经 `BiliHttp::wbi_keys()`：`send.rs`（发弹幕，`crates/danmubox-bili/src/send.rs:166`）、`report.rs`（举报，`report.rs:146`）、`http.rs` 的 `danmu_info`（`http.rs:452`）。身份求证（`nav_identity`，§8.6）**不**走这份缓存——它每次都要问上游，不许拿上一次的结论冒充这一次。
-7. 兜底：受保护请求返回 `-352` 时按上游错误上抛，**不**强制刷新 key、**不**自动重试（`http.rs:484-489`；发送与举报同样只透传 code，`send.rs:51-70`、`report.rs:88-108`）。缓存照旧按 §4.3 的命中条件过期，下一次调用才可能刷新。`-352` 的排查见 §4.6。
+3. **单飞**：并发调用共用一把锁（锁跨一次网络请求），多个发送同时到达时只打一次 `nav`（`http.rs:613-627`）。
+4. **失败降级**：`nav` 取不到时错误原样上抛、缓存槽位保持不动，下一次调用照旧重新请求（`http.rs:628-634`）。缓存只用来省一次访问，绝不让发送因为缓存而失败。
+5. 缓存**仅存于内存**、进程级共享，不落盘（key 无长期价值，落盘只是多一处可泄漏面）。放进程级而不是 `BiliHttp` 实例字段：桌面端每次发送都新建 `BiliHttp`（`apps/desktop/src-tauri/src/lib.rs:461`），实例字段等于没缓存。密钥与账号无关（游客态 `nav` 也下发同一份，§4.2），所以一个槽位即可。
+6. 取 key 的调用点全部经 `BiliHttp::wbi_keys()`：`send.rs`（发弹幕，`crates/danmubox-bili/src/send.rs:166`）、`report.rs`（举报，`report.rs:146`）、`http.rs` 的 `danmu_info`（`http.rs:442`）。身份求证（`nav_identity`，§8.6）**不**走这份缓存——它每次都要问上游，不许拿上一次的结论冒充这一次。
+7. 兜底：受保护请求返回 `-352` 时按上游错误上抛，**不**强制刷新 key、**不**自动重试（`http.rs:466-469`；发送与举报同样只透传 code，`send.rs:51-70`、`report.rs:88-108`）。缓存照旧按 §4.3 的命中条件过期，下一次调用才可能刷新。`-352` 的排查见 §4.6。
 
 `mixin_key` 不单独缓存：由 key 现算（§4.5），成本是 64 个字符的置换，不值得再存一份。
 
@@ -188,8 +188,6 @@ WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover
 | `code = -352` 且**所有**受保护接口同时失败 | 几乎一定是 key 轮换或算法变更 | 复核置换表与 key 轮换时刻 |
 | 游客正常、登录后失败 | 与签名无关，方向应转向凭据/Cookie，见 §10 | 检查 `SESSDATA` 是否失效 |
 
-诊断导出会记下 `getDanmuInfo` 这一步的上游 `code`（`http.rs:484-493` 的 `diag.ticket_failed` / `ticket_ok`）。
-
 ### 4.7 算法自检（可复现的核对方法）
 
 判断「置换表是否仍然有效」只需两步，无需分析流量：
@@ -216,7 +214,7 @@ WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover
 | `wts` | 秒级时间戳，见 §4.4 |
 | `w_rid` | WBI 签名 |
 | 请求头 | `Cookie: <账号 Cookie>; buvid3=<值>`（同 §3.2 的单条合成形式）；`Referer: https://live.bilibili.com/` |
-| 实现 | `http.rs:446-470` |
+| 实现 | `http.rs:441-494` |
 
 ### 5.2 响应字段
 
@@ -238,14 +236,14 @@ WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover
 | `data.max_delay` | int | 实测 `5000` |
 | `message` | string | 成功为 `OK` |
 
-端口数值、`max_delay` 等均为**当日实测值**，属服务端可调项，实现 MUST 从 `host_list` 读取而不得硬编码；`token` 或 `host_list` 缺失即报 `UPSTREAM_ERROR`（`http.rs:516-521`）。
+端口数值、`max_delay` 等均为**当日实测值**，属服务端可调项，实现 MUST 从 `host_list` 读取而不得硬编码；`token` 或 `host_list` 缺失即报 `UPSTREAM_ERROR`（`http.rs:496-501`）。
 
 ### 5.3 与服务端下发 wss 地址的关系
 
-- 连接地址由 `host_list[].host` 拼出：`wss://{host}/sub`（`crates/danmubox-bili/src/ws.rs:350-351`）。**端口字段（`port` / `ws_port` / `wss_port`）不参与拼接**，实现只收集 `host` 字符串（`http.rs:496-509`）；本项目固定走 `wss`（TLS），不使用 `ws_port`。
+- 连接地址由 `host_list[].host` 拼出：`wss://{host}/sub`（`crates/danmubox-bili/src/ws.rs:312-313`）。**端口字段（`port` / `ws_port` / `wss_port`）不参与拼接**，实现只收集 `host` 字符串（`http.rs:476-490`）；本项目固定走 `wss`（TLS），不使用 `ws_port`。
 - 本期请求 `protover=3`（brotli）；解码需同时支持 `0` / `1` / `2` / `3`（`contract.md` §4、`protocol.md` §8）。
-- 按 `host_list` 顺序尝试；某 host 连接失败（TCP/TLS 握手失败或认证失败）则换下一个（`ws.rs:340-394`）。
-- 重连**必须重新调用 `getDanmuInfo`**，不得复用旧 `token` 与旧 `host_list`；退避序列 `5s / 10s / 20s / 40s / 60s` 封顶（`contract.md` §4、`ws.rs:37-38`）。
+- 按 `host_list` 顺序尝试；某 host 连接失败（TCP/TLS 握手失败或认证失败）则换下一个（`ws.rs:302-351`）。
+- 重连**必须重新调用 `getDanmuInfo`**，不得复用旧 `token` 与旧 `host_list`；退避序列 `5s / 10s / 20s / 40s / 60s` 封顶（`contract.md` §4、`ws.rs:35-36`）。
 - `host_list` 为空或请求失败 → 按 `UPSTREAM_ERROR` 上抛，不进入连接循环。
 
 ### 5.4 与认证包的对应
@@ -260,7 +258,7 @@ WS wss://{host}/sub ──► op=7 认证包（key=token, buvid=buvid3, protover
 | `type` | 固定 `2` |
 | `key` | `data.token`；游客为 `""` |
 
-构造见 `ws.rs:400-420`。认证回应 `code = 0` 为成功；非 0 一律视为认证失败并按重连退避处理，**不得**在未知 code 上编造含义（`contract.md` §6）。
+构造见 `ws.rs:356-376`。认证回应 `code = 0` 为成功；非 0 一律视为认证失败并按重连退避处理，**不得**在未知 code 上编造含义（`contract.md` §6）。
 
 ---
 
@@ -291,11 +289,11 @@ stateDiagram-v2
 | 步骤 | IPC | 上游 | 说明 |
 |---|---|---|---|
 | 生成 | `account_qr_start(target?)` | `GET https://passport.bilibili.com/x/passport-login/web/qrcode/generate`（`http.rs:35-36`） | 返回 `code = 0`、`data.qrcode_key`、`data.url`；`data.url` 实测为 **`account.bilibili.com` 域名**下的链接，二维码里编码的就是它。`target` 指向不存在的账号 → `NOT_FOUND`；新一轮扫码作废上一轮未消费的 `key`（`auth.rs:298-331`） |
-| 渲染 | 无 | 无 | 二维码 `url` 由**外壳离线**编码成 SVG（`apps/desktop/src-tauri/src/lib.rs:811-832`），形状见 `ipc.md` §2；**不得**上传到任何第三方二维码服务（§12 第 8 条） |
+| 渲染 | 无 | 无 | 二维码 `url` 由**外壳离线**编码成 SVG（`apps/desktop/src-tauri/src/lib.rs:802-824`），形状见 `ipc.md` §2；**不得**上传到任何第三方二维码服务（§12 第 8 条） |
 | 轮询 | `account_qr_poll(key)` | `GET https://passport.bilibili.com/x/passport-login/web/qrcode/poll`（`http.rs:38`） | 上游响应有两层 code：外层 `code = 0` 表示请求本身成功，`data.code` 才是扫码状态；`key` 未开始或已消费 → `NOT_FOUND`（`auth.rs:333-345`） |
 | 完成 | 同上 | 同上 | 成功响应通过 `Set-Cookie` 下发凭据集；**先向 `nav` 求证**再落盘（求证同时得到昵称 / uid / 头像），然后原子写回目标账号并返回该 `Account`（`auth.rs:214-266`） |
 
-轮询间隔 2 秒（前端实现 `apps/desktop/ui/src/components/AccountManager.tsx:222`，不得低于 1 秒）；界面持续展示「等待扫码 / 已扫码，请在手机上确认」类提示。
+轮询间隔 2 秒（前端实现 `apps/desktop/ui/src/components/AccountManager.tsx:125`，不得低于 1 秒）；界面持续展示「等待扫码 / 已扫码，请在手机上确认」类提示。
 
 ### 6.3 `data.code` 语义表
 
@@ -324,7 +322,7 @@ stateDiagram-v2
 
 `state` 的 `confirmed` 只由 §6.3 的判定产生；`expired` 只由 `86038` 产生。确认与失效都会**消费掉 `key`**（终态），再轮询同一个 `key` 得 `NOT_FOUND`（`auth.rs:346-374`）。载荷形状与错误码见 `ipc.md` §2。
 
-登录态由 `session_status` 命令**现取**（返回 §8.6 的脱敏对象，绝不含 Cookie 值），**不经事件总线**——`danmubox://session` 只推房内身份（`ipc.md` §4）；`Account` 列表则由 `accounts_list` 现取。锚点：`apps/desktop/src-tauri/src/lib.rs:220-227`、`ports.rs:22-27`、`apps/desktop/src-tauri/src/lib.rs:959`。
+登录态由 `session_status` 命令**现取**（返回 §8.6 的脱敏对象，绝不含 Cookie 值），**不经事件总线**——`danmubox://session` 只推房内身份（`ipc.md` §4）；`Account` 列表则由 `accounts_list` 现取。锚点：`apps/desktop/src-tauri/src/lib.rs:211-219`、`ports.rs:22-27`、`apps/desktop/src-tauri/src/lib.rs:915`。
 
 ---
 
@@ -390,7 +388,7 @@ sid = ""
 
 ### 8.2 启动顺序（规范性）
 
-1. 读取 `config.toml`，取 `active_profile` 指向的账号。文件缺失 → 以空值继续、按游客链路启动；文件存在但**解析失败** → `ConfigStore::load` 报 `INTERNAL`（`config.rs:199-216`），桌面外壳打印后 `exit(1)`（`lib.rs:1308-1313`），CLI 同样报错退出（`crates/danmubox-cli/src/main.rs:117`）——**不写损坏副本、也不静默降级为游客态**（`prefs.json` 才有 `.bak` 机制，`crates/danmubox-core/src/prefs.rs:424-430`）。
+1. 读取 `config.toml`，取 `active_profile` 指向的账号。文件缺失 → 以空值继续、按游客链路启动；文件存在但**解析失败** → `ConfigStore::load` 报 `INTERNAL`（`config.rs:199-216`），桌面外壳打印后 `exit(1)`（`apps/desktop/src-tauri/src/lib.rs:1119-1124`），CLI 同样报错退出（`crates/danmubox-cli/src/main.rs:117`）——**不写损坏副本、也不静默降级为游客态**（`prefs.json` 才有 `.bak` 机制，`crates/danmubox-core/src/prefs.rs:436-442`）。
 2. 校验该账号的 `sessdata` / `bili_jct` / `dede_user_id` 三者是否**齐全且非空**（`config.rs:62-64` 只判 `is_empty`，不做空白收敛）。
 3. 齐全 → 进入登录态，`mode = "cookie"`，不触发扫码；随后向 `nav` 求证（`code = -101` 则按 §10 失效处理；网络错误**不改**登录态）。`crates/danmubox-bili/src/auth.rs:165-205`。
 4. 不齐全 → `mode = "anonymous"`，登录入口为扫码（默认）。
@@ -442,7 +440,7 @@ sid = ""
 
 定义 `ports.rs:63-77`；产出 `crates/danmubox-bili/src/auth.rs:275-296`（并发求证用 `join_all`，单个账号求证失败只影响它自己那一行）。
 
-身份三格取自 `nav` 的 `data.mid` / `data.uname` / `data.face`（`http.rs:562-597`）；`uname` 为空即按未登录处理，不臆造身份。网络不通时身份留空、登录态沿用文件里的结论——**不拿上一次的结果冒充这一次**。
+身份三格取自 `nav` 的 `data.mid` / `data.uname` / `data.face`（`http.rs:542-577`）；`uname` 为空即按未登录处理，不臆造身份。网络不通时身份留空、登录态沿用文件里的结论——**不拿上一次的结果冒充这一次**。
 
 `mode`（`anonymous` / `cookie` / `qrcode`）是文档层的**来源标记**，由凭据来源推导，不在载荷里；界面不要依赖它判断能力。
 
@@ -478,7 +476,7 @@ sid = ""
 - 凭据前提：**必须登录**（`crates/danmubox-bili/src/report.rs:131-140`）；举报是写操作，表单体必须携带 `csrf = bili_jct` 与同值的 `csrf_token`（§11.1；`report.rs:62-86`）。
 - 目标定位：以 `Message.upstream_id` 标识被举报弹幕（`contract.md` §5）。`upstream_id` 为空 → `BAD_REQUEST`（`report.rs:140-144`），不得用 `content` 或 `local_id` 替代。
 - 上下文：必须携带该弹幕所属真实 `room_id`（`report.rs:146-150`）；举报理由为上游枚举、按不透明字符串透传，本地不自定义语义、不写死枚举（`report.rs:39-59`、`report.rs:75-79`）。
-- 结果处理：只回报成功/失败与上游 `code` / `message`（`report.rs:88-108`）；不把举报人身份或理由回显到弹幕区；**不自动重试**——写请求可能已经生效，重试会重复提交（`crates/danmubox-bili/src/http.rs:595-598`）。
+- 结果处理：只回报成功/失败与上游 `code` / `message`（`report.rs:88-108`）；不把举报人身份或理由回显到弹幕区；**不自动重试**——写请求可能已经生效，重试会重复提交（`crates/danmubox-bili/src/http.rs:575-578`）。
 - 端点、字段与理由清单：`protocol.md` §11.5 与附录 A27。
 
 ### 9.3 关注列表与电池余额（只读）
@@ -525,7 +523,7 @@ sid = ""
 
 ### 11.1 `csrf` 来源
 
-`csrf` 取自当前账号的 `bili_jct`（§7、§8.1），无 `bili_jct` 即 `NOT_LOGGED_IN`（`crates/danmubox-bili/src/send.rs:143-152`）。发送请求在表单体中同时填 `csrf` 与 `csrf_token` 为同一值（上游两种字段名并存，同时填以兼容，`send.rs:169-180`；举报同口径 `report.rs:62-86`）。**严禁**把 `bili_jct` 写到请求 URL 的 query 中——query 会进日志、进浏览器历史、进代理记录。写请求一律 POST，且**从不重试**（`http.rs:595-598`）。
+`csrf` 取自当前账号的 `bili_jct`（§7、§8.1），无 `bili_jct` 即 `NOT_LOGGED_IN`（`crates/danmubox-bili/src/send.rs:143-152`）。发送请求在表单体中同时填 `csrf` 与 `csrf_token` 为同一值（上游两种字段名并存，同时填以兼容，`send.rs:169-180`；举报同口径 `report.rs:62-86`）。**严禁**把 `bili_jct` 写到请求 URL 的 query 中——query 会进日志、进浏览器历史、进代理记录。写请求一律 POST，且**从不重试**（`http.rs:575-578`）。
 
 ### 11.2 节流参数（`contract.md` §4，规范性）
 
@@ -571,10 +569,10 @@ sid = ""
 2. 任何日志（含 `DANMUBOX_LOG=debug` 全量调试模式）在输出请求/响应时，必须对 `Cookie`、`Set-Cookie`、`Authorization` 三个头整体做替换，而不是只替换其中的值——只替换值会漏掉字段名组合带来的推断空间。脱敏键名集合见 `crates/danmubox-bili/src/redact.rs:27-51`。
 3. 崩溃上报与错误信息中不得内嵌请求头或响应头原文；`UPSTREAM_ERROR` 的 `detail` 只允许放上游 `code` / `message` / 请求路径，不得放 Cookie。请求 URL 在成形的那一刻就过脱敏（`redact.rs` 的 `log_request`、`crates/danmubox-bili/src/http.rs:270-285`）。
 4. 凭据不得进入前端：`session_status` 返回 §8.6 的脱敏对象，`danmubox://session` 推的房内身份（`RoomSession`）同样不含任何凭据。绝不返回任何 Cookie 值或其长度、前缀、哈希。
-5. 凭据不得进入仓库：不得写入任何 fixture、测试样例或文档示例；测试中的凭据一律使用明显的伪造值（`crates/danmubox-bili/src/diagnose.rs:546-573` 的脱敏断言即该口径）。测试用房间号与账号标识同样适用。
+5. 凭据不得进入仓库：不得写入任何 fixture、测试样例或文档示例；测试中的凭据一律使用明显的伪造值（`crates/danmubox-bili/src/redact.rs:177-180` 的脱敏用例、`crates/danmubox-core/src/config.rs:519-525` 的 `profile_debug_never_leaks_values` 即该口径）。测试用房间号与账号标识同样适用。
 6. `config.toml` 只存在于本机应用数据目录，权限 MUST 为 0600（POSIX `write_private`，`crates/danmubox-core/src/config.rs:399-419`；Windows 为等价的用户私有 ACL）；不得把该文件路径或内容交给任何远程服务。
 7. 凭据只经 HTTPS / WSS 传输；本项目不提供任何供外部读取凭据的本地服务（无本地监听端口、无 token 文件），凭据只在本进程内使用。
-8. 二维码内容（`data.url`）只做本地渲染（`apps/desktop/src-tauri/src/lib.rs:811-832`），不得提交给任何第三方二维码生成服务，否则等同于把登录凭证转发给第三方。
+8. 二维码内容（`data.url`）只做本地渲染（`apps/desktop/src-tauri/src/lib.rs:802-824`），不得提交给任何第三方二维码生成服务，否则等同于把登录凭证转发给第三方。
 9. 界面与 CLI 都没有「粘贴 Cookie」的入口（§8.4）：程序只在扫码流程里接收凭据，凭据**只在进程内与磁盘之间移动**——不写日志、不进 `prefs.json`、不回传前端、不落任何中间文件。因此也不存在把凭据写进命令行参数（进程表与 shell 历史）的路径。
 10. 提供「登出」时，必须真正清空当前账号的**账号级**凭据字段（§8.3），而不是仅把内存状态置为未登录；账号条目与 `buvid3` / `buvid4` 保留。
 11. 凭据相关代码的任何改动都必须在变更说明中显式声明是否影响上述任一条；不影响也需说明。

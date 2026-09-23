@@ -62,7 +62,7 @@ danmubox/
 | `RoomCatalog` | 关注列表（`followed()`；定义见 `ports.rs:288-291`） |
 | `WalletProvider` | 电池余额（`ports.rs:294-296`） |
 | `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查（`ports.rs:257-285`）。仅房管可用；上游非 0 code 原样带回、不赋语义 |
-| `AnchorRoom` | **我自己的直播间**（主播视角）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此整块不渲染）、`set_title()` 改标题、`go_live()` 开播并返回推流端点、`end_live()` 下播（`ports.rs:307-323`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只允许发生在当前账号自己的直播间**，**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义** |
+| `AnchorRoom` | **我自己的直播间**（主播视角）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此整块不渲染）、`set_title()` 改标题、`go_live()` 开播（成功返回 §5 `StreamEndpoints`；**被上游身份校验挡住**时返回 §5 `AnchorGate`）、`end_live()` 下播（`ports.rs:307-323`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只允许发生在当前账号自己的直播间**，**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义**。**唯一的例外是 `AnchorGate`**：它承载的是「上游在响应里明说了该怎么继续」的那两个码（实测 `60043`、社区实现观察到的 `60024`，见 `protocol.md` §18.5），产出的是**引导**而不是判定——原 `code` / `msg` 一个字不改地一起带回，其余非 0 code 仍然不赋语义 |
 
 **架构约束**：`core` 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层。本期不定义任何 MCP 工具、协议或端点。
 
@@ -349,6 +349,19 @@ sessdata = ""
 
 **推流码是账号级凭据（规范性）**：`StreamEndpoints.code` 拿到就能向这个直播间推流。它只随 `anchor_live_set` 的**这一次返回值**进界面内存，**不进日志、不落盘、不进 `prefs.json` / `config.toml`**（§4.1 的安全红线一并适用；`AGENT.md` §8.1）。
 
+`AnchorGate`（开播被上游**身份校验**挡住时的引导产出，规范性；与 `StreamEndpoints` 互斥——`go_live()` 二选一）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `code` | i64 | 上游**原始**业务码，原样带回（已实测 `60043`；社区实现另观察到 `60024`） |
+| `message` | String | 上游**原始** `msg`，原样带回；引导**不代替**它 |
+| `kind` | 枚举 | `FaceAuth`（打开认证页）/ `QrConfirm`（就地画二维码）。**只这两个取值**：上游没在响应里明说怎么继续的码一律不进这一型（§3 `AnchorRoom` 的写操作纪律） |
+| `url` | String | `FaceAuth` 时的认证页地址；其余为空串 |
+| `qr` | String | `QrConfirm` 时的二维码**内容**（界面**离线**编码成图，与扫码登录同一条口径）；其余为空串 |
+
+- **上游隔离（规范性）**：认证页地址与二维码内容**由 `danmubox-bili` 产出**，`core` 只承载这两个字符串、**不拼装、不解析**（`AGENT.md` §8 第 3 条）；`kind` 的判定也只发生在 `danmubox-bili`。
+- **不是凭据**：`url` / `qr` 与推流码不同级——它们可以进日志与界面文本，但**二维码图片一律本地离线编码**（不把内容交给第三方服务生成）。
+
 `FollowedRoom`（关注列表，规范性，`model.rs:395`）：`room_id` / `uname` / `face` / `title` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
 
 | 字段 | 类型 | 说明 |
@@ -400,7 +413,7 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `account_qr_poll` | 扫码轮询：状态 + **确认时**已落盘并设为当前（`active=true`）的那个账号；确认后各房间以新凭据重连 |
 | `anchor_room` | **取当前账号自己的直播间**（§5 `OwnRoom`）。**该账号没有开通直播间 → `null`**（不是错误；界面据此整块不渲染）。登录才成立，游客 → `NOT_LOGGED_IN` |
 | `anchor_title_set` | 改**自己直播间**的标题（`title`）。写操作：**只作用在自己的直播间**；失败即停、不重试 |
-| `anchor_live_set` | 开播 / 下播（`live: bool`）。开播成功返回 §5 `StreamEndpoints`（含**推流码**），下播返回 `null`。分区沿用直播间当前值（**界面不做分区选择**）；上游非 0 code **原样带回、不赋语义** |
+| `anchor_live_set` | 开播 / 下播（`live: bool`）。开播成功返回 §5 `StreamEndpoints`（含**推流码**）；**被上游身份校验挡住**时返回 §5 `AnchorGate`（引导 + 原始 `code` / `msg`）；下播返回 `null`。分区沿用直播间当前值（**界面不做分区选择**）；其余上游非 0 code **原样带回、不赋语义**。**认证完成后由用户再点一次开播**：不轮询、不自动重试（写操作「失败即停」） |
 | `rooms_list` | 已登记房间：`RoomView`（= §5 `Room` + 连接态 + 当前会话缓冲条数） |
 | `rooms_refresh_status` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，§4）：按真实 `room_id` 逐个只读上游一次，把最新的 `live_status` 落到登记表并返回最新的 `RoomView` 列表。**只动 `live_status`**（标题 / 昵称另有来源）；单个房间失败只跳过它，**全部失败才报错**（前端据此退避）（`lib.rs:255-280`） |
 | `rooms_add` | 解析房间号 / 短号 / URL 并登记；**不建立连接** |
@@ -522,7 +535,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | §2.11 界面与布局 | 契约内只承载共享约定：§8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`（共享分区、分割条、长按换位）、§5 `Room.anchor_uname`（不露房间号）；其余在 `ui.md` 与组件层 |
 | §2.12 连接、保活与诊断 | §2（Android 保活例外）、§4 `DANMUBOX_LOG`、§4.4 与 §7 `diagnose_start` / `diagnose_export`、§6（心跳、重连退避与认证失败口径） |
 | §2.13 已删除 | §8 键表不含透明度键与 `filter.keywords*`；§4.1 无「手填 Cookie」导入入口；§4.3 无「最近发送记录」；`composer.phrases` 只承载用户自建短语 |
-| §2.14 我的直播间 | §3 `AnchorRoom`（与 `LiveSource` 的分工 + 写操作纪律）、§5 `OwnRoom` / `StreamEndpoint` / `StreamEndpoints`、§7 `anchor_room` / `anchor_title_set` / `anchor_live_set`（**事件清单不变**）；上游端点与三段式开播见 `protocol.md` §18，未实测登记见其附录 A66；界面落点 [`ui.md`](ui.md) §2.2.2 |
+| §2.14 我的直播间 | §3 `AnchorRoom`（与 `LiveSource` 的分工 + 写操作纪律 + `AnchorGate` 例外）、§5 `OwnRoom` / `StreamEndpoint` / `StreamEndpoints` / `AnchorGate`、§7 `anchor_room` / `anchor_title_set` / `anchor_live_set`（**事件清单不变**）；上游端点、三段式开播与身份校验引导见 `protocol.md` §18 / §18.5，未实测登记见其附录 A66；界面落点 [`ui.md`](ui.md) §2.2.2 |
 | §3 架构约束 | §3 依赖方向、上游隔离、端口表 |
 | §4 非目标 | §2 本期范围、§4.3（不建库 / 不回看 / 不导出）、§3（MCP 架构兼容约束） |
 | §5 参考与外部输入 | §1（bundle id） |

@@ -951,7 +951,7 @@ stateDiagram-v2
 
 需求溯源：`REQUIREMENTS.md` §2.14（我的直播间）；端口 `AnchorRoom`（`contract.md` §3）、命令 `anchor_room` / `anchor_title_set` / `anchor_live_set`（`contract.md` §7、[`ipc.md`](ipc.md) §3）；领域模型 `OwnRoom` / `StreamEndpoints`（`contract.md` §5）。实现落点 `crates/danmubox-bili/src/anchor.rs`（唯一允许出现这些端点与签名的模块）。
 
-**写操作纪律（`AGENT.md` §8.14–16）**：三件写操作**只作用于当前账号自己的直播间**（目标房间由下面第 1 步现取，不是调用方传的）；**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 `code` **原样带回、不赋语义**。**人脸认证那类码（社区实现观察到 `60024` / `60043`）不做任何特殊处理**：不辨认数值、不读 `data.qr`、不弹二维码，只把 `code` 与 `msg` 交给界面（`anchor.rs:110` 的 `ensure_ok`）。
+**写操作纪律（`AGENT.md` §8.14–16）**：三件写操作**只作用于当前账号自己的直播间**（目标房间由下面第 1 步现取，不是调用方传的）；**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 `code` **原样带回、不赋语义**（`anchor.rs:110` 的 `ensure_ok`）。**唯一例外是身份校验那两个码**（`60043` 已实测、`60024` 见两份社区实现）：它们按 §18.5 转成**引导产出** `AnchorGate`（`contract.md` §5）——原 `code` / `msg` 一字不改地一起带回。**除此之外的一切非 0 code 仍不辨认数值、不读 `data.qr`、不做任何弹窗**。
 
 ### 18.1 四类端点
 
@@ -1000,6 +1000,20 @@ stateDiagram-v2
 端点、字段与签名口径来自两份社区实现（`ChaceQC/bilibili_live_stream_code`、`Zeppelinpp/bilibili-streamer`）。**本仓的实测状态逐条登记在附录 A66**：
 **已实测（2026-09-19，真实登录态，目标为该账号自己的直播间）** —— `room_id_by_uid`、`get_info`（含分区字段形态）、`click/now`、`getHomePageLiveVersion`（**app 签名被上游接受**）、`Room/update` 改标题（成功，写回原值标题不变）；`startLive` 的**请求形状被接受**（上游返回业务码 `60043`「需要人脸认证」，非参数 / 签名错误）。
 **仍未实测** —— `startLive` 的**成功**分支（`data.rtmp` / `data.protocols[]`）、`stopLive`、`60024` 与 `data.qr`、「该账号没有开通直播间」的响应形态。核对方法：完成一次人脸认证后重跑同一探针（取状态 → 改标题回原值 → 开播 → 复查 → 下播，失败即停）。
+
+### 18.5 身份校验引导（`60043` / `60024`）
+
+需求溯源：`REQUIREMENTS.md` §2.14；产出 `AnchorGate`（`contract.md` §5），由 `anchor_live_set` 带出（`contract.md` §7）。口径参照 `Zeppelinpp/bilibili-streamer`（用户 2026-09-22 指定）。
+
+| 上游 `code` | 上游在响应里给了什么 | 本仓的引导 | 实测状态 |
+|---|---|---|---|
+| `60043` | `msg` =「本次开播需要身份验证，请在关播时点击开播唤起人脸认证」（2026-09-19 实测原话）；**没有**可用的 `data.qr` | `FaceAuth`：把认证页地址交给界面，由界面用 `open_url` 打开系统浏览器（`https://www.bilibili.com/blackboard/live/face-auth-middle.html?source_event=400&mid=<本人 uid>`） | `code` 与 `msg` **已实测**；认证页地址来自社区实现，**未实测** |
+| `60024` | `data.qr`（二维码内容） | `QrConfirm`：把 `data.qr` 交给界面，**离线**编码成图（与扫码登录同一条口径，不联网生成） | **未实测**（A66） |
+
+- **只认这两个码**：没有在响应里明说「该怎么继续」的非 0 code 一律不进这一型，仍按 §18 的纪律原样带回（`AGENT.md` §8 第 7 条：不得给未实测的码猜含义）。
+- **不代替原话**：`AnchorGate.code` / `AnchorGate.message` 是上游原值，界面与引导一起呈现。
+- **不轮询、不自动重试**：本仓没有「认证已完成」这条推送面，也没有可查认证状态的只读端点 —— 认证结束后**由用户自己再点一次开播**（写操作「失败即停」的口径不变）。
+- **上游隔离**：认证页的拼装与 `data.qr` 的读取都只在 `crates/danmubox-bili/src/anchor.rs`；`core` 只见 `AnchorGate` 那两个字符串（`contract.md` §5）。
 
 ---
 
@@ -1122,7 +1136,7 @@ stateDiagram-v2
 | A66 | **主播侧写链路**（开播三段式 / 下播 / 改标题，需求 §2.14）与「找自己直播间」的取数口径 | 七个端点的路径、方法与参数（`room/v2/Room/room_id_by_uid` / `room/v1/Room/get_info` / `room/v1/Room/update` / `x/report/click/now` / `xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion` / `room/v1/Room/startLive` / `room/v1/Room/stopLive`）；app 签名算法（参数加 `appkey` → 排序 → `urlencode` → `md5(query + appsec)`）与那两个公开 key 是否被接受、签名参数放 query 还是 form；`platform=pc_link`；`csrf` == `csrf_token` == `bili_jct`；`area_v2` 是否就是 `get_info` 的 `data.area_id`；`startLive` 成功时 `data.rtmp` / `data.protocols[]` 的实际形状；非 0 code（社区实现观察到人脸认证 `60024` / `60043`）的取值集合与 `data.qr` 形态 | 登录后对自己的直播间跑一次开播 / 下播 / 改标题（**Main 本轮会做**） | **部分实测（2026-09-19，公开测试房间 `1`，游客只读、不用任何凭据）**：① `room/v2/Room/room_id_by_uid` → `code=0`，`data` **只有 `room_id` 一个键**；② `room/v1/Room/get_info` → `code=0`、**37 个字段**，`data.area_id` 是 **int 且有值**（实测 `21`），`data.area_v2_id` **实测为 `null`**，`data.area_name` / `data.parent_area_name` 是字符串（实测「视频唱见」/「娱乐」），`data.live_status` 是 int（实测 `2` = 轮播），`area_v2_name` / `parent_area_v2_id` / `parent_area_v2_name` 实测均 `null`。负面对照：游客裸请求分区分页列表 `xlive/web-interface/v1/second/getList` 吃 `code=-352` 风控（与 `roadmap.md` 既有记载一致）。**未实测**：`update`、`click/now`、`getHomePageLiveVersion`、`startLive`、`stopLive` **一次都没打过**；「该账号**没有开通直播间**」的响应形态（`room_id_by_uid` 给 0 / 缺 `room_id`）同样未实测——端点 / 字段 / 签名口径全部来自两份社区实现（`ChaceQC/bilibili_live_stream_code`、`Zeppelinpp/bilibili-streamer`）；且本机两个 profile 的凭据当前都已失效（`nav` 返回 `-101`），本轮很可能实测不了，故**按未实测记账、不得写成已验证** | `crates/danmubox-bili/src/anchor.rs`、`contract.md` §3 / §5、[`ipc.md`](ipc.md) §3 |
 
 | A66 实测进展（2026-09-19） | 主播侧写链路在真实登录态下的实测 | 七个端点是否可通；app 签名是否被接受；`area_v2` 是否就是 `get_info` 的 `data.area_id` | 真实登录态下对自己的直播间跑一遍探针（取状态 → 改标题回原值 → 开播 → 复查 → 下播），**失败即停** | **实测（2026-09-19，真实登录态；目标 = 该账号**自己的**直播间，由 `AnchorRoom::own()` 现取）**：① `room/v2/Room/room_id_by_uid` → `code=0`、`data.room_id` 有值 ✓；② `room/v1/Room/get_info` → `live_status` / `area_id` / `parent_area_name` + `area_name` 齐备 ✓（同一次实测里 `area_v2_id` 为 `null` ✓，故分区只认 `area_id`，与 §18.1 一致）；③ `x/report/click/now` 与 `xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion`（**带 app 签名**）均 `code=0` 并给出 `data.now` / `data.build` / `data.curr_version` ✓ → **app 签名被上游接受** ✓；④ `room/v1/Room/update`（改标题：**不签名**、`csrf` == `csrf_token` == `bili_jct`）实测**成功**：读出原值再写回，标题逐字未变 ✓；⑤ `room/v1/Room/startLive`（三段式的第三段、app 签名、`platform=pc_link`、`area_v2` 取 `get_info` 的 `data.area_id`）**请求被上游接受**（返回的是业务码，不是参数 / 签名错误），结果为 **`60043`**，`msg` =「本次开播需要身份验证，请在关播时点击开播唤起人脸认证」。本仓按纪律**原样带回 `code` 与 `msg`、不赋语义**，且**失败即停、未重试、未换参数** —— 这条实测同时印证了「非 0 code 只透传」的行为 | 开播 / 改标题链路 |
-| A66 未实测（2026-09-19） | 上述链路仍缺的实测面 | — | 完成一次人脸认证后重跑同一探针 | **仍未实测**：① `startLive` 的**成功分支**（`data.rtmp` / `data.protocols[]` 的实际形状）—— 被上游人脸认证挡住，该账号未完成本次开播的身份验证；② `room/v1/Room/stopLive` —— 未曾进入直播态，没走到；③ 人脸认证的另一个码 `60024` 与 `data.qr` 的实际形态；④ 「该账号**没有**开通直播间」时 `room_id_by_uid` 的响应形态（本账号已开通，走的是 `code=0` + `room_id` 有值那一支）。**边界确认**：本次实测未让直播间真的开播（上游拒绝在前），事后只读复查 `live_status` 仍为 `0` | 开播 / 下播链路 |
+| A66 未实测（2026-09-19） | 上述链路仍缺的实测面 | — | 完成一次人脸认证后重跑同一探针 | **仍未实测**：① `startLive` 的**成功分支**（`data.rtmp` / `data.protocols[]` 的实际形状）—— 被上游人脸认证挡住，该账号未完成本次开播的身份验证；② `room/v1/Room/stopLive` —— 未曾进入直播态，没走到；③ 人脸认证的另一个码 `60024` 与 `data.qr` 的实际形态；④ 「该账号**没有**开通直播间」时 `room_id_by_uid` 的响应形态（本账号已开通，走的是 `code=0` + `room_id` 有值那一支）；⑤ `60043` 引导用的**认证页地址**（§18.5，取自社区实现 `Zeppelinpp/bilibili-streamer`）——它**不在**本仓实测到的那份响应里，只是需求指定的引导口径，待完成一次真实人脸认证时顺带核对能否唤起。**边界确认**：本次实测未让直播间真的开播（上游拒绝在前），事后只读复查 `live_status` 仍为 `0` | 开播 / 下播链路 |
 > A49–A65 由 `docs/auth.md` 原有的待实测表移交（该表已删，`AGENT.md` §6.5.2 第 6 条要求「待实测校准」只在本附录维护）；条目状态照原表记录、未做升级，核对面分别是扫码 / `nav` / WBI / `getDanmuInfo` / 表情包库 / 举报 / 钱包。
 > 其中两项已有实测结论、不另立条目：举报理由清单端点登录态返回 7 条 `{id, reason}`（`crates/danmubox-bili/src/report.rs:32-59`）；举报表单里 `csrf` 与 `csrf_token` 同值、放 query 一律禁止（`report.rs:80-81`）。A16 / A17 / A26 / A28 / A29 / A34 六条与本批移交内容重合，已合并进各自原行。
 > **A66 的编号口径**：主播侧写链路（需求 §2.14）追加在现表末尾，取**下一个空号** A66 —— `crates/danmubox-core/src/ports.rs` 的注释最初把它预留为「附录 A48」，但 **A48 已由 Android 诊断导出（MediaStore）占用**（[`roadmap.md`](roadmap.md) §2.1 引用它），故不重编号整表，**一律以本表的编号为准**。

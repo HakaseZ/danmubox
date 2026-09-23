@@ -153,7 +153,20 @@
 | 状态行（`db-anchor-status-row`） | 状态文本（`db-anchor-status`）+ 开播 / 下播按钮（`db-anchor-live`）。文案只从 `OwnRoom.live_status` 派生：`1` → `直播中`、`2` → `轮播`、其余一律 `未开播`（上游只给这三个数，界面**不给状态编语义**，`AccountManager.tsx:74-78`）；按钮文案随之在 `开播` / `下播` 之间切，`title` 写明「沿用当前分区」 |
 
 - 两个按钮的忙态**各管各的**（组件本地瞬态 `busy: "title" | "live"`，随对话框关闭消失）：**保存中只禁「保存」键**、**开播 / 下播请求中只禁那一枚按钮** —— 改标题与开播 / 下播是两条独立命令，谁也不必等谁。
-- 写操作口径（`contract.md` §3 `AnchorRoom`）：**只作用在当前账号自己的直播间**，**失败即停**、不自动重试；上游非 0 code **原样带回、不赋语义**（人脸认证那类码也只把原话写进错误行，不做二维码弹窗）。
+- 写操作口径（`contract.md` §3 `AnchorRoom`）：**只作用在当前账号自己的直播间**，**失败即停**、不自动重试；上游非 0 code **原样带回、不赋语义**（原话进错误行 `db-anchor-error`）。**唯一例外是身份校验那两个码**：开播返回 `AnchorGate`（`contract.md` §5）时，在错误行**同一块**里再给一条人能照做的引导，见下面「开播被身份校验挡住时」。
+
+**开播被身份校验挡住时（`AnchorGate`，需求 §2.14 / `protocol.md` §18.5）**
+
+错误行照旧显示上游原话（`code` + `msg`，**不因出了引导就把原值吞掉**），其下再加一块引导（`db-anchor-gate`）。按 `AnchorGate.kind` 二选一：
+
+| `kind` | 呈现 | 规则 |
+|---|---|---|
+| `FaceAuth` | 一枚入口按钮 `db-anchor-gate-open`（文案「去完成人脸认证」） | 点击走 `open_url`（`contract.md` §7）在系统浏览器打开 `AnchorGate.url`；**不内嵌网页、不做 webview 跳转** |
+| `QrConfirm` | 就地画二维码 `db-anchor-gate-qr` | 内容是 `AnchorGate.qr`，**离线编码**（与扫码登录同一条口径，不联网生成、不交给第三方服务） |
+
+- 两种 `kind` 都带一行提示 `db-anchor-gate-hint`：**「完成认证后再点一次开播」** —— 本仓没有「认证已完成」这条推送面，**不轮询、不自动重试**（写操作「失败即停」）。
+- 引导块随下一次开播 / 下播请求**重新求值**：成功开播后它连同错误行一起消失（那次返回的是 `StreamEndpoints` 而不是 `AnchorGate`）。
+- 换号 / 关掉对话框即清（与 `anchorRoom` / `anchorEndpoints` 一起走 `resetIdentityState`）。
 
 **双击状态文本展开「相关配置项」**
 
@@ -171,7 +184,7 @@
 
 **窄屏（≤ 520px）**：与宽屏**共用同一套规则**（没有 520px 专属分支）——卡片是纵向 flex、输入框与状态行 `flex: 1; min-width: 0`、推流地址 / 推流码是等宽体 + `word-break: break-all`，因此 360 宽下卡片不横向溢出、复制键不被挤出（`app.module.css:576-652`）。**本轮未跑冒烟**：手工验收条目见 [`testing.md`](testing.md) §10.1 的 C-16。
 
-**稳定钩子**：这一块的前缀是 `db-anchor-*`（`db-anchor-panel` / `db-anchor-title-row` / `db-anchor-title` / `db-anchor-title-save` / `db-anchor-status-row` / `db-anchor-status` / `db-anchor-live` / `db-anchor-error` / `db-anchor-config` / `db-anchor-area` / `db-anchor-rtmp-addr` / `db-anchor-copy-addr` / `db-anchor-rtmp-code` / `db-anchor-copy-code`），与账号块既有钩子（`db-account-*`）并列。
+**稳定钩子**：这一块的前缀是 `db-anchor-*`（`db-anchor-panel` / `db-anchor-title-row` / `db-anchor-title` / `db-anchor-title-save` / `db-anchor-status-row` / `db-anchor-status` / `db-anchor-live` / `db-anchor-error` / `db-anchor-gate` / `db-anchor-gate-open` / `db-anchor-gate-qr` / `db-anchor-gate-hint` / `db-anchor-config` / `db-anchor-area` / `db-anchor-rtmp-addr` / `db-anchor-copy-addr` / `db-anchor-rtmp-code` / `db-anchor-copy-code`），与账号块既有钩子（`db-account-*`）并列。
 
 ### 2.3 房间页与多标签
 

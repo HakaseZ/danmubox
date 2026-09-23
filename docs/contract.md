@@ -164,6 +164,8 @@ sessdata = ""
 
   各档上限只在**建立会话时**读一次；每档至少 1 条（`crates/danmubox-core/src/session.rs:104-118`）。
 
+  **前端侧的次级保险层（2026-09-22 第 5 条）**：房内的实时消息在前端 `apps/desktop/ui/src/session-messages.ts` 的 `appended()` 里**按 `kind` 分档裁剪**（`KIND_CAPS`，六档取值与上面逐项一致），礼物没到礼物档上限就**不**会被弹幕挤掉。它**只是不超过后端**的保险：不允许退化成一个不分 `kind` 的统一上限（那样又会把后端八道分档盖掉，表现为「礼物没到上限却丢失」，正是用户报的现象）。前端上限来源与后端同一套 `history.buffer_rows_*`，不做与后端不同口径的另一套。
+
 - **礼物按金额分级保留**（`Message.amount` 金瓜子，口径见 §5「金额单位」）：礼物档的额度再按 **10% / 40% / 50%** 切给低 / 中 / 高三档，**价值越高留得越多**。三档各自丢最旧。
   三档条数之和**恒等于**礼物档额度（取整的余数给高档）；每档至少 1 条（`session.rs:126`、`session.rs:155-160`）。
 
@@ -420,7 +422,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.gift_panel` | boolean | `true` | — | 是否显示独立礼物栏（`false` = 不渲染礼物栏） |
 | `ui.gift_pane_on_top` | boolean | `false` | — | 礼物栏与弹幕区**上下分区**的顺序：`false` = 弹幕在上、礼物在下（默认，与改前一致）；`true` = 礼物在上。分区、分割条与长按换位见 [`ui.md`](ui.md) §5.4 |
 | `ui.gift_pane_ratio` | number | `0.35` | 0.10–0.90 | 礼物栏占**共享分区**高度的份额；与它在上面还是下面**无关**（换位不改比例）。落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 它的折叠头、弹幕区 ≥ 3 行），因此存的是**指针意图**——同一窗口尺寸下重开必然得到同一画面 |
-| `ui.gift_collapse_cheap` | boolean | `false` | — | 把单个价值 ≤ 0.1 元（= 100 金瓜子）的礼物合并成**一条**（`false` = 默认，一条一行不变）。**两个区域都生效**：弹幕区与礼物栏**各折一次**（同一份判据、同一种桶形状）；SC / 大航海不在其列。折叠是**纯派生**——原始消息一条不动，关掉即逐条复原。门槛、落点判据与合并行的形状见 [`ui.md`](ui.md) §5.3「低价礼物桶」 |
+| `ui.gift_collapse_cheap` | boolean | `false` | — | 把单个价值 ≤ 0.1 元（= 100 金瓜子）的礼物合并成**一条**（`false` = 默认，一条一行不变）。**两个区域都生效**：弹幕区与礼物栏**各折一次**（同一份判据、同一种桶形状）；SC / 大航海不在其列。折叠是**纯派生**——原始消息一条不动，关掉即逐条复原。门槛、落点判据与合并行的形状见 [`ui.md`](ui.md) §5.3「低价礼物桶」。桶行的形态**与弹幕刷屏同一套**（带 `senders`：头像列 30% 错位堆叠前 3 位赠送者、身份位印数量、不再逐个显示用户名，用户 2026-09-22 第 3 条），`MessageRow` 不区分来源地渲染 |
 | `ui.gift_exclude_cheap_stats` | boolean | `false` | — | 把 ≤ 0.1 元的礼物从**折叠汇总 / 统计**里剔除（`false` = 默认，统计与展示一致）。**只改统计**：这些礼物作为消息的展示（礼物栏条目、弹幕区的行）不受影响。统计面只有**礼物栏折叠头**那一处（弹幕区没有统计面）——这张键**出现在哪就管到哪**，见 [`ui.md`](ui.md) §5.3「剔除的口径」 |
 | `ui.interact_auto_hide` | boolean | `true` | — | 互动/进场消息显示一会儿后自动消失（`false` = 常驻）。消失**只是显示层不画**（判据 `ts + INTERACT_AUTO_HIDE_MS`，`apps/desktop/ui/src/types.ts:566`）：消息仍留在会话缓冲里（§4.3），关掉这枚键先前消失的那些行**原样回来**——「自动消失」不许丢内容，见 [`ui.md`](ui.md) §4.8 |
 | `ui.danmaku_aggregate` | boolean | `true` | — | 同一条弹幕被不同观众在窗口内重复发送时折成一行（`×N` + 头像堆叠；规则与常量见 §4）。`false` = 逐条原样显示。**默认 `true` = 保留现有行为**——聚合本来就是现有效果，这枚键只是把它变成可关的开关（与 `ui.gift_collapse_cheap` 那两枚相反：它们默认 `false`，因为会改变现有效果）。与「不丢内容」同一口径：折叠**只是显示层的派生**，原始消息一条不动，关掉即逐条复原 |
@@ -479,7 +481,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | §2.6 房间与关注 | §5 `Room` / `FollowedRoom` / `RoomCatalog::followed()` 取数口径与展示排序、§7 `rooms_add` / `rooms_remove` / `rooms_reconnect` / `follow_list`、§8 `ui.recent_watched` |
 | §2.7 礼物 | §5 `amount` / `combo_id` / 「金额单位」（含大航海取实付）、§8 `ui.gift_in_danmaku` / `ui.gift_panel` / `ui.gift_pane_on_top` / `ui.gift_pane_ratio` / `ui.gift_collapse_cheap` / `ui.gift_exclude_cheap_stats`（含「不丢内容（硬口径）」）、§4.3 礼物三档 |
 | §2.8 展示与过滤 | §8 `ui.theme` / `ui.font_scale` / `ui.show_timestamp` / `filter.uids` / `filter.kinds` / `filter.medal_level_min`；`Message.face` 见 §5；筛选面板标题等纯视觉项落 `ui.md` 与组件层 |
-| §2.9 数据 | §4.3（会话生命周期、六档上限、礼物三档）、§8 六枚 `history.buffer_rows_*` |
+| §2.9 数据 | §4.3（会话生命周期、六档上限、礼物三档、**前端 `KIND_CAPS` 按 `kind` 分档的保险层**）、§8 六枚 `history.buffer_rows_*` |
 | §2.10 房管 | §3 `RoomAdmin`、§5 `SilentUser` / `BlacklistedUser` / `RoomSession.is_admin`、§7 `admin_*` |
 | §2.11 界面与布局 | 契约内只承载共享约定：§8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`（共享分区、分割条、长按换位）、§5 `Room.anchor_uname`（不露房间号）；其余在 `ui.md` 与组件层 |
 | §2.12 连接与保活 | §2（Android 保活例外）、§4 `DANMUBOX_LOG`、§6（心跳、重连退避与认证失败口径） |

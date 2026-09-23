@@ -552,6 +552,9 @@ fn superchat(room_id: i64, value: &Value) -> Option<Message> {
 /// 昵称优先取 `data.uname`；`ENTRY_EFFECT` 没有该字段，回落到
 /// `data.uinfo.base.name`（2026-09-11 实测）。头像走**同一个** `uinfo.base`：
 /// 这两条 JSON 路径都没有独立的昵称同层头像槽位（`docs/protocol.md` §10.4）。
+///
+/// **时间口径**：`ts` 一律是**本地收包时刻**，与 `interact_v2`（protobuf 那条路）同口径，
+/// 理由写在那里的注释 —— 两条路必须同口径，界面那两个判据才不会因命令不同而异。
 fn interact_json(room_id: i64, value: &Value) -> Option<Message> {
     let data = value.get("data")?;
     let mut message = Message::new(room_id, MessageKind::Interact, danmubox_core::now_ms());
@@ -572,6 +575,10 @@ fn interact_json(room_id: i64, value: &Value) -> Option<Message> {
 
 /// 互动（protobuf 载荷）：base64 位于 **`data.pb`**，不是 `data` 本身。
 /// 该路径于 2026-09-11 用真实流量确认（曾误把 `data` 当载荷，导致静默产出空消息）。
+///
+/// **时间口径**：与 JSON 那条路（`interact_json`）一致，`ts` 一律是**本地收包时刻**，
+/// 上游那两个时间戳槽位（`timestamp_millisecond` / `timestamp`）只留档、不写进
+/// `Message.ts`，理由见函数体里的注释。
 fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> {
     use base64::Engine as _;
 
@@ -608,6 +615,20 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
     };
 
     let (medal_level, medal_name) = decoded.medal();
+    // `ts` 一律取**本地收包时刻**（与 `interact_json` 同口径），上游那两个时间戳
+    // （`timestamp_millisecond` / `timestamp`）只在这里留档，不写进 `Message.ts`：
+    // ① 不可信 —— 上游时钟与本地的偏差没有实测依据（`protocol.md` 附录 A7 仍是
+    //    待实测校准）；② `ts` 只服务界面那两条判据（按时间排序、`interactAutoHidden`
+    //    的 `ts + 8000ms <= now`），拿上游时钟当判据就是「行刚出现就消失」或
+    //    「永不消失的透明占位」（用户 2026-09-22 报的第 1、2 条）。留档是为了字段
+    //    校准仍查得到原值。
+    if let Some(upstream_ts_ms) = decoded.ts_ms() {
+        tracing::debug!(
+            room_id,
+            upstream_ts_ms,
+            "INTERACT_WORD_V2 的载荷时间戳只留档，不写进 Message.ts"
+        );
+    }
     let mut message = Message::new(room_id, MessageKind::Interact, danmubox_core::now_ms());
     message.uid = decoded.uid as i64;
     message.uname = decoded.display_name();
@@ -615,10 +636,86 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
     message.face = decoded.face();
     message.medal_level = medal_level;
     message.medal_name = medal_name;
-    if let Some(ts) = decoded.ts_ms() {
-        message.ts = ts;
-    }
     Some(message)
+}
+
+/// 一次进场的键：`room_id` + `uid`。
+///
+/// `room_id` 必须在键里：合并器活在**房间运行时**之上（不随连接重建），
+/// 没有它两个房间的同一个 uid 会互相吞掉对方的进场。
+type InteractKey = (i64, i64);
+
+/// 一次进场只投一条的合并器（`docs/protocol.md` §10.4 / §12.3）。
+///
+/// 三条命令归一成同一个 `kind=interact`（见 [`dispatch`]）：`ENTRY_EFFECT`、
+/// `INTERACT_WORD`、`INTERACT_WORD_V2`。同一次进场上游会**先后**推其中两条，
+/// 两条都投就是「XX 进入直播间」连着两行 —— `docs/protocol.md` 那条
+/// 「`ENTRY_EFFECT` 与 `INTERACT_WORD` 不重复计数」的断言此前只有文档、没有代码兜着
+/// （用户 2026-09-22 报的第 1 条）。
+///
+/// | 到手的载荷 | 行为 |
+/// |---|---|
+/// | 窗口内这个 (`room_id`, `uid`) 没投过 | 立刻投 |
+/// | 窗口内已经投过（同源的第二条） | 压掉不投 |
+/// | 不同观众 | 各投一条 |
+/// | 同一观众在窗口过后的再次进场 | 照投一条 |
+///
+/// 窗口 **5s**（与 [`GuardMerge`] 同尺度）：两条同源载荷的间隔是毫秒级，5s 绰绰有余；
+/// 而真实「退出又进来」不会发生在 5s 内，压掉它正是想要的。状态只保留窗口内那几项
+/// （每次调用顺手清理），不随会话增长。
+///
+/// 与 [`GuardMerge`] 的形状差异是**故意**的：这里没有 `pending` / `deadline` /
+/// `flush` / `take_pending` —— 互动消息没有「等另一半」这回事，第一条就是完整的一条，
+/// 压后投递只会让它迟到，而 `Message.ts` 是本地收包时刻（界面按 `ts + 8s` 收起这一行），
+/// 压几秒再投等于让它刚出现就消失。因此没有待放项、也不需要定时器：压掉的那条
+/// 没有第二次机会。
+pub struct InteractMerge {
+    window: Duration,
+    /// 窗口内**已经投过**的进场与投递时刻。
+    seen: HashMap<InteractKey, Instant>,
+}
+
+impl Default for InteractMerge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InteractMerge {
+    /// 生产口径：窗口 5s（依据见类型文档）。
+    pub fn new() -> Self {
+        Self::with_window(Duration::from_secs(5))
+    }
+
+    /// 指定窗口，供测试卡住边界。
+    pub fn with_window(window: Duration) -> Self {
+        Self {
+            window,
+            seen: HashMap::new(),
+        }
+    }
+
+    /// 过一遍互动消息；返回**现在就该投递**的那一条（同源重复时为 `None`）。
+    pub fn absorb(&mut self, now: Instant, message: Message) -> Option<Message> {
+        self.prune(now);
+        let key = (message.room_id, message.uid);
+        if self.seen.contains_key(&key) {
+            tracing::debug!(
+                room_id = message.room_id,
+                "同一次进场又来了一条载荷，压掉不投"
+            );
+            return None;
+        }
+        self.seen.insert(key, now);
+        Some(message)
+    }
+
+    /// 丢掉窗口外的记录：`seen` 只用来压掉紧跟着到的另一条。
+    fn prune(&mut self, now: Instant) {
+        let window = self.window;
+        self.seen
+            .retain(|_, at| now.saturating_duration_since(*at) <= window);
+    }
 }
 
 /// 大航海载荷的来源命令（`docs/protocol.md` §10.6）。
@@ -710,12 +807,31 @@ fn guard_title(level: i64) -> &'static str {
     }
 }
 
-/// 同一笔大航海的键：`uid` + `guard_level` + 载荷起始时间（`ts`）。
+/// 同一笔大航海的键：`room_id` + `uid` + `guard_level`（**没有载荷时间戳**）。
 ///
-/// 实测 699 对样本里两条载荷的这三项**逐项相同**；`GUARD_BUY` 又没有 `payflow_id`，
-/// 认「同一笔」只能靠它们。同一用户在**同一秒**内买两次会被认成一笔（窗口内只投一条）——
-/// 代价是多投一条的漏报，比同一笔算两次金额（用户报的那个 bug）轻。
+/// 改前是 `(uid, guard_level, ts)`，`ts` 取自 `data.start_time`：该字段一旦缺失 /
+/// 非整数 / ≤ 0，两条载荷各自回落成收包时刻 → 键不同 → 同一笔**必然**投两行
+/// （播报立即投、购买行再被 `flush` 投出，就是用户 2026-09-22 报的第 4 条）。
+/// 认「同一笔」因此改由**到达时刻**负责（[`GuardMerge`] 的窗口与 `announced`）：
+/// 实测两条的间隔 p50 43ms / p90 113ms / p99 1.99s / 最大 2.16s（699 对），窗口足够。
+/// 代价是同一用户在 [`GUARD_ANNOUNCED_TTL`] 内再买同一档会被并成一条（只投一条）——
+/// 漏一条播报比同一笔算两次金额轻（issue 2609171849 #1）。
+///
+/// `room_id` 必须在键里：合并器活在**房间运行时**之上（不随连接重建），
+/// 没有它两个房间的同一 uid + 等级会互相吞掉对方的播报。
 type GuardKey = (i64, i64, i64);
+
+/// 购买事件等播报的窗口（依据见 [`GuardKey`] 上的实测间隔）。
+const GUARD_WINDOW: Duration = Duration::from_secs(5);
+
+/// 已投过的那笔在多久之内还认得出来 —— **必须比 `GUARD_WINDOW` 长**。
+///
+/// 两个出口会写 `announced`：窗口到期放行的 [`GuardMerge::flush`]，与连接收尾的
+/// [`GuardMerge::take_pending`]。放行之后同一笔的播报仍可能迟到（甚至落在下一条连接上），
+/// `announced` 若按窗口 5s 清理，那条迟到的播报就会变成第二行 —— 用户 2026-09-22
+/// 报的第 4 条正是这一种。取 30s：6 倍窗口，既盖得住「购买事件先放行、播报后到」，
+/// 也盖得住一次退避重连（5s 起）。
+const GUARD_ANNOUNCED_TTL: Duration = Duration::from_secs(30);
 
 /// 「一笔大航海只投一条播报」的合并器（`docs/protocol.md` §10.6 / §12.3）。
 ///
@@ -728,19 +844,23 @@ type GuardKey = (i64, i64, i64);
 /// | 先 `GUARD_BUY`、窗口内又收到 `USER_TOAST_MSG` | 只投**播报**那条（金额 = 实付），购买事件被吸收 |
 /// | 只有 `GUARD_BUY`（窗口内没等到播报） | 窗口到期后照投一条，**金额留 0**（标价不是实付，见 [`guard`]） |
 /// | 只有 `USER_TOAST_MSG` | 立即投播报（金额 = 实付） |
-/// | 同一笔的第二条（方向不限、窗口内） | 压掉不投 —— 一笔一条是硬口径 |
+/// | 同一笔的第二条（方向不限、[`GUARD_ANNOUNCED_TTL`] 内） | 压掉不投 —— 一笔一条是硬口径 |
 ///
-/// 窗口取 **5s**：实测两条到达间隔 p50 43ms / p90 113ms / p99 1.99s / 最大 2.16s（699 对）。
-/// 状态只保留窗口内的那几笔（每次调用顺手清理旧项），不会随会话增长。
+/// 窗口取 **5s**（`GUARD_WINDOW`）：实测两条到达间隔 p50 43ms / p90 113ms / p99 1.99s /
+/// 最大 2.16s（699 对）。状态只保留窗口内的那几笔（每次调用顺手清理旧项），不会随会话增长。
 ///
-/// 一个**未观测到**的降级：键里的起始时间取自 `data.start_time`，全部实测样本都有它。
-/// 若某个房间没给这个字段，两条的 `ts` 会各自回落成收包时刻、认不出是同一笔 ——
-/// 那时**金额口径仍然只算实付一次**（购买事件那条 `amount = 0`），只是会多出一条无金额的行。
+/// 它活在**房间运行时**上、**不随连接重建**（理由见 `ws::BiliLive` 上那两个字段的注释）：
+/// 同一笔的两条载荷完全可能分处两次连接（购买事件在这条、播报在下一条），
+/// 每次连接新建一个合并器就认不出是同一笔 —— 那时 `GUARD_BUY` 被 `take_pending` 放行、
+/// 播报随后又投一条，正是「一笔买出两行」。
 pub struct GuardMerge {
     window: Duration,
+    /// 已投过的那笔还能被认出多久（`GUARD_ANNOUNCED_TTL`）：与 `window` 分开，
+    /// 因为它要盖住「放行之后才到的那一半」，见常量上的说明。
+    announced_ttl: Duration,
     /// 已到、还没等到播报的购买事件（附到达时刻；窗口到期由 [`GuardMerge::flush`] 放出）。
     pending: HashMap<GuardKey, (Instant, Message)>,
-    /// 窗口内**已经投过**的那几笔：后到的另一半一律压掉。
+    /// 已经投过的那几笔：后到的另一半一律压掉。
     announced: HashMap<GuardKey, Instant>,
 }
 
@@ -753,13 +873,14 @@ impl Default for GuardMerge {
 impl GuardMerge {
     /// 生产口径：窗口 5s（依据见类型文档）。
     pub fn new() -> Self {
-        Self::with_window(Duration::from_secs(5))
+        Self::with_window(GUARD_WINDOW)
     }
 
-    /// 指定窗口，供测试卡住边界。
+    /// 指定窗口，供测试卡住边界（`announced` 的 TTL 用生产值 `GUARD_ANNOUNCED_TTL`）。
     pub fn with_window(window: Duration) -> Self {
         Self {
             window,
+            announced_ttl: GUARD_ANNOUNCED_TTL,
             pending: HashMap::new(),
             announced: HashMap::new(),
         }
@@ -779,7 +900,7 @@ impl GuardMerge {
         source: GuardSource,
     ) -> Option<Message> {
         self.prune(now);
-        let key = (message.uid, message.guard_level, message.ts);
+        let key = (message.room_id, message.uid, message.guard_level);
         if self.announced.contains_key(&key) {
             // 同一笔已经投过（另一条载荷早到、或购买事件已被 `flush` 放出）。
             tracing::debug!(
@@ -822,15 +943,23 @@ impl GuardMerge {
 
     /// 连接收尾：把还压着的购买事件**不论窗口**一律放出去。
     /// 断连 / 手停都不该吃掉一条已经收到的开通 —— 重连不清缓冲（§12.3），这条同理。
-    pub fn take_pending(&mut self) -> impl Iterator<Item = Message> + '_ {
+    ///
+    /// 放出去的也要记进 `announced`：连断在两条载荷之间时，播报会落在**下一条**连接上，
+    /// 没有这条记录它就会被当成新的一笔再投一行（用户 2026-09-22 报的第 4 条）。
+    pub fn take_pending(&mut self, now: Instant) -> impl Iterator<Item = Message> + '_ {
+        let keys: Vec<GuardKey> = self.pending.keys().copied().collect();
+        for key in keys {
+            self.announced.insert(key, now);
+        }
         self.pending.drain().map(|(_, (_, message))| message)
     }
 
-    /// 丢掉窗口外的记录：`announced` 只用于压掉紧跟着到的另一半，`pending` 由 `flush` 负责。
+    /// 丢掉过期的记录：`pending` 由 `flush` 负责（按 `window`），`announced` 用自己的
+    /// 更长 TTL（`announced_ttl`）—— 见 [`GUARD_ANNOUNCED_TTL`] 上的说明。
     fn prune(&mut self, now: Instant) {
-        let window = self.window;
+        let announced_ttl = self.announced_ttl;
         self.announced
-            .retain(|_, at| now.saturating_duration_since(*at) <= window);
+            .retain(|_, at| now.saturating_duration_since(*at) <= announced_ttl);
     }
 }
 
@@ -1255,7 +1384,14 @@ mod tests {
             message.face, "https://i0.hdslb.com/bfs/face/interact.png",
             "头像取 pb 的 user_info.base.face"
         );
-        assert_eq!(message.ts, 1_700_000_000_500);
+        // 口径（2026-09-22）：互动的 `ts` 一律是**本地收包时刻**，上游那两个时间戳槽位
+        // 只留档、不写进 `Message.ts`（理由见 `interact_v2`）。载荷里给的
+        // `1_700_000_000_500` 因此**不会**成为 `ts`。
+        assert!(
+            (message.ts - danmubox_core::now_ms()).abs() < 5_000,
+            "ts 必须是本地收包时刻，不是载荷里的 1700000000500（实测 {}）",
+            message.ts
+        );
     }
 
     #[test]
@@ -1313,6 +1449,95 @@ mod tests {
         assert_eq!(message.uid, 7757052);
         assert_eq!(message.uname, "包包子的der一个");
         assert_eq!(message.face, "https://i0.hdslb.com/bfs/face/entry.png");
+    }
+
+    /// 同一次进场上游推两条载荷（`ENTRY_EFFECT` + `INTERACT_WORD(_V2)`）：只投一条。
+    /// `docs/protocol.md` §10.4 的「不重复计数」此前只有文档、没有代码兜着
+    /// （用户 2026-09-22 报的第 1 条）。
+    #[test]
+    fn interact_merge_suppresses_the_second_payload_of_one_entry() {
+        let c = counters();
+        let mut merge = InteractMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        let entry = message(
+            7,
+            &json!({"cmd": "ENTRY_EFFECT", "data": {"uid": 7757052, "uinfo": {"base": {"name": "进房的人"}}}}),
+            &c,
+        )
+        .expect("进场特效要解出来");
+        let twin = message(
+            7,
+            &json!({"cmd": "INTERACT_WORD", "data": {"uid": 7757052, "uname": "进房的人"}}),
+            &c,
+        )
+        .expect("互动要解出来");
+
+        let published = merge.absorb(now, entry).expect("第一条要投");
+        assert_eq!(published.uid, 7757052);
+        assert!(
+            merge
+                .absorb(now + Duration::from_millis(43), twin)
+                .is_none(),
+            "同一次进场的第二条压掉不投"
+        );
+    }
+
+    /// 不同观众各投一条；同一观众窗口过后再次进场照投（`prune` 的边界）。
+    #[test]
+    fn interact_merge_keeps_other_viewers_and_later_entries() {
+        let c = counters();
+        let mut merge = InteractMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+        let enter = |uid: i64| {
+            message(
+                7,
+                &json!({"cmd": "INTERACT_WORD", "data": {"uid": uid}}),
+                &c,
+            )
+            .unwrap()
+        };
+
+        assert!(merge.absorb(now, enter(1)).is_some());
+        assert!(merge.absorb(now, enter(2)).is_some(), "不同观众互不影响");
+        assert!(
+            merge
+                .absorb(now + Duration::from_millis(10), enter(1))
+                .is_none(),
+            "窗口内的同源重复压掉"
+        );
+        assert!(
+            merge
+                .absorb(
+                    now + Duration::from_secs(5) + Duration::from_millis(1),
+                    enter(1)
+                )
+                .is_some(),
+            "窗口过后的再次进场照投"
+        );
+    }
+
+    /// `room_id` 在键里：两个房间的同一个 uid 互不吞（合并器活在房间运行时上）。
+    #[test]
+    fn interact_merge_scopes_the_key_to_the_room() {
+        let c = counters();
+        let mut merge = InteractMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+        let enter = |room_id: i64| {
+            message(
+                room_id,
+                &json!({"cmd": "INTERACT_WORD", "data": {"uid": 42}}),
+                &c,
+            )
+            .unwrap()
+        };
+        assert!(merge.absorb(now, enter(7)).is_some());
+        assert!(
+            merge
+                .absorb(now + Duration::from_millis(1), enter(8))
+                .is_some(),
+            "另一个房间的同一 uid 是另一次进场"
+        );
     }
 
     /// V1 礼物与大航海没有可靠的头像来源：这两支必须留空串，不许拿别的字段顶替
@@ -1527,10 +1752,173 @@ mod tests {
             let (buy, source) = guard_event(7, &guard_buy(uid, 3, 198_000, start), &c);
             assert!(merge.absorb(now, buy, source).is_none());
         }
-        let released: Vec<Message> = merge.take_pending().collect();
+        let released: Vec<Message> = merge.take_pending(now).collect();
         assert_eq!(released.len(), 2, "两条都还没投过，收尾时一并放行");
         assert!(released.iter().all(|message| message.amount == 0));
-        assert!(merge.take_pending().next().is_none(), "放完就空了");
+        assert!(merge.take_pending(now).next().is_none(), "放完就空了");
+    }
+
+    /// **「一笔买出两行」的回归**（用户 2026-09-22 报的第 4 条）：键里不再有 `ts`，
+    /// 因此两条载荷的 `start_time` 不同、缺失、甚至非整数，都仍认得出是同一笔 ——
+    /// 改前 `ts` 各自回落成收包时刻，键不同，播报投一条、购买行 5 秒后又被 `flush` 投一条。
+    #[test]
+    fn guard_key_ignores_the_payload_timestamp() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        // ① 两条的 `start_time` 不同（上游两条口径不一致时就是这样）。
+        let (buy, s1) = guard_event(7, &guard_buy(91001, 3, 198_000, 1_775_317_388), &c);
+        let (toast, s2) = guard_event(7, &guard_toast(91001, 3, 138_000, 1_775_317_399), &c);
+        assert!(merge.absorb(now, buy, s1).is_none());
+        let published = merge
+            .absorb(now + Duration::from_millis(43), toast, s2)
+            .expect("播报要投");
+        assert_eq!(published.amount, 138_000, "金额取实付");
+        assert!(merge.deadline().is_none(), "购买事件被吸收，没有待放项");
+        assert!(
+            merge.flush(now + Duration::from_secs(600)).is_none(),
+            "一笔一条"
+        );
+
+        // ② 两条都**没有** `start_time`（改前必然两行的那种）。
+        let no_start = |cmd: &str| {
+            json!({"cmd": cmd, "data": {
+                "uid": 91002, "username": "开舰长的人", "guard_level": 3, "num": 1,
+                "price": 138_000, "gift_name": "舰长", "role_name": "舰长"
+            }})
+        };
+        let (buy, s1) = guard_event(7, &no_start("GUARD_BUY"), &c);
+        let (toast, s2) = guard_event(7, &no_start("USER_TOAST_MSG"), &c);
+        assert!(merge.absorb(now, buy, s1).is_none());
+        assert!(merge
+            .absorb(now + Duration::from_millis(43), toast, s2)
+            .is_some());
+        assert!(merge.deadline().is_none(), "没有第二行");
+
+        // ③ `start_time` 不是整数（`as_i64` 返回 None，同样会回落本地时间）。
+        let weird = |cmd: &str| {
+            json!({"cmd": cmd, "data": {
+                "uid": 91003, "username": "开舰长的人", "guard_level": 3, "num": 1,
+                "price": 138_000, "start_time": "1775317388"
+            }})
+        };
+        let (buy, s1) = guard_event(7, &weird("GUARD_BUY"), &c);
+        let (toast, s2) = guard_event(7, &weird("USER_TOAST_MSG"), &c);
+        assert!(merge.absorb(now, buy, s1).is_none());
+        assert!(merge
+            .absorb(now + Duration::from_millis(43), toast, s2)
+            .is_some());
+        assert!(merge.deadline().is_none());
+    }
+
+    /// 购买事件被窗口放行之后，迟到的播报**不得**再投一行：放行也要写 `announced`，
+    /// 且 `announced` 的 TTL 必须比放行窗口长（改前共用 5s，播报晚于 ~10s 就漏压）。
+    #[test]
+    fn a_late_toast_after_the_buy_was_released_is_suppressed() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        let (buy, source) = guard_event(7, &guard_buy(91004, 3, 198_000, 1_775_317_388), &c);
+        assert!(merge.absorb(now, buy, source).is_none());
+        let released = merge
+            .flush(now + Duration::from_secs(5) + Duration::from_millis(1))
+            .expect("窗口到期放行");
+        assert_eq!(released.amount, 0, "放行的是购买事件，金额留 0");
+
+        // 播报迟到 10 秒（落在下一条连接上也不罕见）。
+        let (late, source) = guard_event(7, &guard_toast(91004, 3, 138_000, 1_775_317_388), &c);
+        assert!(
+            merge
+                .absorb(now + Duration::from_secs(10), late, source)
+                .is_none(),
+            "同一笔已经投过一行，迟到的播报不再投"
+        );
+    }
+
+    /// 反向护栏：`announced` 不是永久的 —— 过了 TTL，同一用户同一档的**新一笔**照投。
+    #[test]
+    fn a_new_purchase_after_the_announced_ttl_is_published_again() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        let (toast, source) = guard_event(7, &guard_toast(91005, 3, 138_000, 1_775_317_388), &c);
+        assert!(merge.absorb(now, toast, source).is_some());
+
+        let (twin, source) = guard_event(7, &guard_toast(91005, 3, 138_000, 1_775_317_500), &c);
+        assert!(
+            merge
+                .absorb(now + Duration::from_secs(10), twin, source)
+                .is_none(),
+            "TTL 内是同一笔，第二条压掉"
+        );
+
+        let (again, source) = guard_event(7, &guard_toast(91005, 3, 138_000, 1_775_317_600), &c);
+        assert!(
+            merge
+                .absorb(
+                    now + GUARD_ANNOUNCED_TTL + Duration::from_millis(1),
+                    again,
+                    source
+                )
+                .is_some(),
+            "过了 TTL 是新的一笔，照投"
+        );
+    }
+
+    /// `room_id` 在键里：两个房间的同一个 uid + 等级互不吞。
+    #[test]
+    fn guard_keys_are_scoped_to_the_room() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        let (buy, s1) = guard_event(7, &guard_buy(91006, 3, 198_000, 1_775_317_388), &c);
+        let (other, s2) = guard_event(8, &guard_buy(91006, 3, 198_000, 1_775_317_388), &c);
+        assert!(merge.absorb(now, buy, s1).is_none());
+        assert!(merge.absorb(now, other, s2).is_none());
+
+        let mut released: Vec<Message> = std::iter::from_fn(|| {
+            merge.flush(now + Duration::from_secs(5) + Duration::from_millis(1))
+        })
+        .collect();
+        released.sort_by_key(|message| message.room_id);
+        assert_eq!(
+            released
+                .iter()
+                .map(|message| message.room_id)
+                .collect::<Vec<_>>(),
+            vec![7, 8],
+            "两个房间各放行一条"
+        );
+        assert!(merge.flush(now + Duration::from_secs(600)).is_none());
+    }
+
+    /// 连接收尾放行的购买事件也要记进 `announced`：断连在两条载荷之间时，播报落在
+    /// **下一条**连接上，没有这条记录就会再投一行（第 4 条的第二种形态）。
+    #[test]
+    fn take_pending_marks_the_purchase_as_announced() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        let (buy, source) = guard_event(7, &guard_buy(91007, 3, 198_000, 1_775_317_388), &c);
+        assert!(merge.absorb(now, buy, source).is_none());
+        let released: Vec<Message> = merge
+            .take_pending(now + Duration::from_millis(10))
+            .collect();
+        assert_eq!(released.len(), 1, "收尾放行一条");
+
+        // 下一条连接上才到的播报。
+        let (toast, source) = guard_event(7, &guard_toast(91007, 3, 138_000, 1_775_317_388), &c);
+        assert!(
+            merge
+                .absorb(now + Duration::from_secs(6), toast, source)
+                .is_none(),
+            "收尾已经放过一行，迟到的播报不再投"
+        );
     }
 
     #[test]

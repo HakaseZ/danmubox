@@ -400,6 +400,30 @@ export function isCheapGift(message: Message): boolean {
 }
 
 /**
+ * 低价礼物桶的头像列画几位赠送者（与 `aggregate.ts` 的 `AGGREGATE_AVATARS_SHOWN` **同值**）。
+ *
+ * 两处不互相 import（`aggregate.ts` 已经从本文件取 `DisplayRow` / `SenderRef`，反向引常量
+ * 会绕成环），因此各写一份、注释里点明同源：它们是**同一套渲染**（`MessageRow` 的
+ * `AVATAR_STACK_OFFSET` 错位堆叠），取值必须一致，改一处要改两处。
+ */
+const CHEAP_GIFT_SENDERS_SHOWN = 3;
+
+/**
+ * 桶里出现过的赠送者：按首次出现顺序去重（与 `aggregate.ts` 的 `sendersOf` 同一手法），
+ * 最多收 `CHEAP_GIFT_SENDERS_SHOWN` 位；收到这个数就停，不必再扫一遍整桶。
+ */
+function cheapGiftSenders(bucket: DisplayRow[]): SenderRef[] {
+  const senders: SenderRef[] = [];
+  for (const row of bucket) {
+    const { uid, uname, face } = row.message;
+    if (senders.some((sender) => sender.uid === uid)) continue;
+    senders.push({ uid, uname, face: face ?? "" });
+    if (senders.length >= CHEAP_GIFT_SENDERS_SHOWN) break;
+  }
+  return senders;
+}
+
+/**
  * 低价礼物桶（`ui.gift_collapse_cheap`，docs/ui.md §5.3）：把低价礼物合并成**一条**。
  *
  * **两个区域各折一次**（issue 2609171849 第 5 条）：弹幕区与礼物栏都走这一个函数
@@ -433,6 +457,9 @@ export function collapseCheapGiftRows(rows: DisplayRow[]): DisplayRow[] {
       amount: bucket.reduce((sum, row) => sum + row.message.amount, 0),
     },
     count: bucket.reduce((sum, row) => sum + row.count, 0),
+    // 桶行的形态与弹幕刷屏**同一套**（`MessageRow` 只看 `senders` 在不在）：
+    // 头像列画这几位赠送者错位堆叠的头像，身份位改印数量、一个用户名都不出现。
+    senders: cheapGiftSenders(bucket),
     cheap: true,
   };
   const out: DisplayRow[] = [];

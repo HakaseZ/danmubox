@@ -5,7 +5,7 @@
 | 项目 | danmubox（弹幕框） |
 | 包标识 | `dev.kksk.danmubox` |
 | 状态 | 本期范围已确认，无待定项，可进入实现 |
-| 最近更新 | 2026-09-19 |
+| 最近更新 | 2026-09-23 |
 
 ## 1. 目标
 
@@ -25,6 +25,9 @@
 - 历史 10 条记录前面混入了本地的本人发言记录：**仅保留历史记录**（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §4.3、`protocol.md` A30
 - 历史记录与实时记录存在割裂，**保持显示效果的一致性**，不提示「以上为历史记录」（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §5 `is_history`
 - 互动（进场消息）**显示一会儿就自动消失**，只有常开才一直显示（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `ui.interact_auto_hide`
+- 互动（进场）消息**不许重复统计**：`INTERACT_WORD` / `INTERACT_WORD_V2` / `ENTRY_EFFECT` 三条归一到 `interact` 后，**同一个人的同一次进场只投一条**（用户 2026-09-22 反馈）— 落点 `protocol.md` §10.4、`crates/danmubox-bili/src/cmd.rs`（`InteractMerge`）
+- 互动（进场）消息的 **`ts` 一律取本地收包时刻**：上游载荷时间戳不可信（迟到包会让行刚出现就消失、偏快的时钟会让它永不消失）；**上游载荷时间戳不丢**，进 `tracing::debug!` 留档（用户 2026-09-22 反馈）— 落点 `contract.md` §5 `Message.ts`、`protocol.md` §10.4 与附录 A7
+- 互动行**消失后要补位**：到点从显示层移除后，下方弹幕**上移填空**，不是留一块透明占位；跟随态仍贴底，已暂停跟随态时用户正在读的那一行**不被推走**（用户 2026-09-22 反馈）— 落点 `contract.md` §8 `ui.interact_auto_hide`、`ui.md` §4.8 / §7.3
 - 系统通知（开播 / 下播 / 标题变更 / 公告）默认**关闭**，勾上「系统」才显示（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `filter.kinds`
 - 弹幕里的文字表情（`[dog]` 这类）要画出来：正文整条就是一个 token 的已修，token 夹在句中的仍按原文显示（部分落地，见 CHANGELOG）— 落点 `contract.md` §5 `Message.emote`、`protocol.md` A42
 - 弹幕里要看得见 @ 关系：正文里的 `@昵称` 就地高亮（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §5 `reply_to_uid`
@@ -93,9 +96,11 @@
 - SC 在礼物区域显示不全；礼物区域的显示和弹幕区直接保持一致（一样的布局、一样的背景颜色、一样的自动滚动）（用户反馈已落地，见 CHANGELOG）— 落点 `apps/desktop/ui/src/components/MessageRow.tsx`
 - 礼物 / 大航海的单位按**元**（1 元 = 1000 金瓜子；先前写的「电池」已作废）（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §5「金额单位」
 - 舰长金额按**真实金额**统计：不要 198 原价与 138 / 168 实付折后价各统计一次（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §5、`protocol.md` A12 / A13
+- 大航海**一笔只出一行**：同一次开通只出现一行、金额只按实付算一次 —— 已诊断清楚，不是「金额算两次」（购买行 `amount = 0`），实际现象是**两行、其中一行金额格空白**，且礼物栏折叠头汇总条数虚高（如「大航海 2 · 138 元」）；**本轮不按 1 / 2 / 3 档位拆分统计**（用户 2026-09-22 反馈）— 落点 `protocol.md` §10.6 / §12.3、`crates/danmubox-bili/src/cmd.rs`（`GuardMerge`）
 - 连击聚合展示 — 落点 `contract.md` §5、`filtering.toDisplayRows`
 - 独立礼物栏与弹幕内容区**共享同一个区域**，中间由分割条上下隔开，可以拖动分割条调整分割比例；长按某一区域可以开启拖动，拖到另一个区域上可以互相调换上下的位置（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`
 - 辅助功能增加一个**折叠低价礼物**（单个价值小于等于 0.1）的选项（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `ui.gift_collapse_cheap`
+- 低价礼物**折叠后改成刷屏那套形态**：沿用 `ui.gift_collapse_cheap` 这枚开关（**不新增偏好键**），**弹幕区与礼物栏两栏都改** —— 头像列按 30% 错位堆叠**前 3 位**赠送者的头像、身份位改印**数量**，**不再逐个显示用户名**；整桶金额合计照旧参与统计（`giftStatRows` 靠 `cheap` 标记剔除统计的口径不变）（用户 2026-09-22 反馈）— 落点 `contract.md` §8 `ui.gift_collapse_cheap`、`ui.md` §5.3 / §8.4
 - 辅助功能增加一个**剔除低价礼物统计**（单个价值小于等于 0.1）的选项（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `ui.gift_exclude_cheap_stats`
 - 折叠低价礼物和剔除低价礼物统计对 **2 个区域都生效**；所有剔除、折叠、隐藏、自动消失**都不会丢掉相应内容**，把开关关掉后要能恢复原样（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8「不丢内容（硬口径）」、§4.3
 
@@ -119,6 +124,7 @@
 
 - 只保留**单次房内会话**的弹幕：进房间算一次，退出到房间列表再进即刷新；不落盘，进程退出即丢 — 落点 `contract.md` §4.3
 - 礼物、弹幕、互动（进场消息）、系统通知**分开做缓存**，互动和系统通知存少一点，礼物分级缓存、价值越高权重越高（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §4.3、§8 `history.buffer_rows_*`
+- 分类型缓存要**真正生效**：弹幕 / 礼物 / SC / 大航海 / 互动 / 系统各走各的上限，**礼物没到礼物档上限就不能被弹幕挤掉**；**前端不得再用一个不分类型的统一上限裁剪**（用户 2026-09-22 反馈）— 落点 `contract.md` §4.3、`apps/desktop/ui/src/session-messages.ts`（`KIND_CAPS`）
 - 超管发了提示走的是 `NOTICE_MSG`（当系统消息、受「消息类型」门控）；真正那条 `WARNING` 未归一化，落进 `unknown_cmd`（用户反馈已落地，见 CHANGELOG）— 落点 `protocol.md` §10.7 / §10.8
 
 ### 2.10 房管

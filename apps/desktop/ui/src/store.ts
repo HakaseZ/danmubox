@@ -36,7 +36,7 @@ import type {
 // 值导入（上面那一组是 `import type`）：发送结果那句话在这里拼，行尾标记与浮片共用同一句。
 import { sendOutcomeText } from "./types";
 
-/** 前端日志只保留的行数（`docs/ipc.md` §8）；显示上限 `CLIENT_MESSAGE_CAP` 在 `session-messages.ts`。 */
+/** 前端日志只保留的行数（`docs/ipc.md` §8）；消息按 `kind` 分档的显示上限 `KIND_CAPS` 在 `session-messages.ts`。 */
 const LOG_CAP = 200;
 
 interface AppStore {
@@ -664,6 +664,12 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
  *
  * `roomId` 记下来是为了防房间切换后误判：`local_id` 只在一次房内会话内唯一，
  * 残留的定时器不该去动另一个房间的画面。
+ *
+ * **补位前提（issue 2026-09-22 第 2 条）**：`message.ts` 一律是**本地收包时刻**
+ * （`cmd.rs` 的 `interact_json` / `interact_v2` 同口径，上游载荷时间戳只进 debug 留档，
+ * 见 `protocol.md` §10.4），因此 `Math.max(0, ts + 8000 - now)` **必然到点** —— 行真的被
+ * 移除，下方的弹幕随虚拟列表自然上移填空（不是透明占位）。这正是「互动消失后空位被填充」
+ * 的唯一前提；若哪天改回取上游时钟，这条补位又会退化成「行只被 CSS 淡成透明、空位不补」。
  */
 function scheduleInteractHide(store: StoreApi<AppStore>, roomId: number, messages: Message[]) {
   const now = Date.now();

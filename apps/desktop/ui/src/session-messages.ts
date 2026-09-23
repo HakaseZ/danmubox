@@ -8,18 +8,57 @@
 // 契约依据：`local_id` 是**会话内**自增序号（`docs/contract.md` §5）；缓冲的生命周期 = 一次房内会话
 // （§4.3：离开房间即销毁、重进是全新会话）。
 
-import type { Message, RoomView } from "./types.ts";
+import type { Message, MessageKind, RoomView } from "./types.ts";
 
-/** 前端只保留的显示上限；真正的会话缓冲在后端（`docs/contract.md` §4.3）。 */
-export const CLIENT_MESSAGE_CAP = 2000;
+/**
+ * 前端**按 `kind` 分档**的显示上限（`docs/contract.md` §4.3，用户 2026-09-22 第 5 条）。
+ *
+ * 取值与后端 `BufferCaps::default()` 的六档**逐项一致**：真正的会话缓冲在后端，
+ * 前端这一层只是「不超过后端」的保险 —— 取更小会先于后端丢内容，取更大则等于没设。
+ *
+ * 为什么**不能**再有一个不分类型的统一上限：改前这里是一个 `CLIENT_MESSAGE_CAP = 2000`
+ * 的**总数**上限，它在前端按总数丢最旧，等于把后端那六条道重新铺成一条队 ——
+ * 礼物没到礼物档上限（2000）就被弹幕挤掉，正是用户报的「缓存好像没生效」。
+ *
+ * 礼物档内部**不再**按金额切三档（那三档是后端 `session.rs` 的保留策略）：
+ * 分档的意义是**互不挤占**，按 `kind` 分开已经达到；再细分只会在前端多一套口径。
+ */
+export const KIND_CAPS: Record<MessageKind, number> = {
+  danmaku: 5000,
+  gift: 2000,
+  superchat: 500,
+  guard: 200,
+  interact: 300,
+  system: 200,
+};
 
-/** 追加一条并守住前端显示上限 —— 实时消息与本地待确认行（乐观渲染）都从这条进列表。 */
+/**
+ * 追加一条并守住**各档自己的**上限 —— 实时消息与本地待确认行（乐观渲染）都从这条进列表。
+ *
+ * 超出时只丢**这一个 `kind` 里最旧的那几条**，其它 `kind` 一条不动：互动 / 进场的洪水
+ * 因此再也挤不掉弹幕与礼物（与后端 `MessageBuffer` 各道 FIFO 同一条口径）。
+ * 单趟过滤（从旧到新）即可，不需要先分桶再拼回。
+ */
 export function appended(messages: Message[], message: Message): Message[] {
   const next = [...messages, message];
-  if (next.length > CLIENT_MESSAGE_CAP) {
-    next.splice(0, next.length - CLIENT_MESSAGE_CAP);
+  const counts = new Map<MessageKind, number>();
+  for (const item of next) {
+    counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
   }
-  return next;
+  const overflow = new Map<MessageKind, number>();
+  for (const [kind, count] of counts) {
+    const cap = KIND_CAPS[kind] ?? 0;
+    if (count > cap) overflow.set(kind, count - cap);
+  }
+  if (overflow.size === 0) return next;
+  return next.filter((item) => {
+    const left = overflow.get(item.kind) ?? 0;
+    if (left > 0) {
+      overflow.set(item.kind, left - 1);
+      return false;
+    }
+    return true;
+  });
 }
 
 /**

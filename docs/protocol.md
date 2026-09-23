@@ -480,7 +480,7 @@ fn decode_stream(data, depth):
 | `uid` / `uname` | 触发用户槽位（JSON：`data.uid` / `data.uname` 回落 `data.uinfo.base.name`，`cmd.rs:558-562`） | `INTERACT_WORD_V2` 需经 protobuf 解码后再取 | 待实测校准（A10、A11） |
 | `medal_level` / `medal_name` / `guard_level` | 触发用户粉丝牌槽位 | 无则零值 | 待实测校准（A4） |
 | `face` | pb：`user_info.base.face`（tag 22 → `2: face`）；JSON：`data.uinfo.base.face` | 均与昵称同层；取不到为空串 | pb 路径已实测（A11、A14） |
-| `ts` | 载荷时间戳槽位 | 归一化为 UTC 毫秒 | 待实测校准（A7） |
+| `ts` | **本地收包时刻**（不取载荷时间戳；上游那两个槽位 `timestamp_millisecond` / `timestamp` 只进 `tracing::debug!` 留档，见 `cmd.rs` 的 `interact_v2`） | 与 `interact_json` 同口径，归一化为毫秒。`protocol.md` 附录 A7 标注的「待实测」在 2026-09-22 撤销：载荷时钟不可信（迟到包会让行瞬间消失、偏快时钟会让它永不消失），而 `ts` 只服务两个界面判据（§12.1 的自动消失 + 可选时间戳显示） |
 
 #### `INTERACT_WORD_V2` 的 protobuf 载荷
 
@@ -560,7 +560,7 @@ fn decode_stream(data, depth):
 
 噪声过滤与合并：
 
-- 同一笔的两条载荷**必须合并成一条播报**（§12.3）：实现见 `cmd.rs:739-760` 的 `GuardMerge`，窗口 **5s**，键 = `uid` + `guard_level` + 起始时间（`cmd.rs:718`）。到达间隔分布见附录 A13。
+- 同一笔的两条载荷**必须合并成一条播报**（§12.3）：实现见 `cmd.rs` 的 `GuardMerge`。键 = `room_id` + `uid` + `guard_level`（**已去掉起始时间 `start_time`**：两条的 `start_time` 缺失 / 非整数时各自回落本地时刻会让键对不上，正是「一笔出两行」的根因，见下）；窗口 **5s**，认同一笔靠**到达时刻**而非载荷时间。合并器活在**房间运行时**之上（**不随 `ws.rs` 的 `read_loop` 重建**），因为同一笔的两条载荷完全可能分处两次连接；`announced` 用独立的 **30s TTL**（比放行窗口长），放行 / 收尾放出的购买事件都写进它，避免迟到的播报再投第二行。金额仍只取播报的实付、标价不入 `amount`（见 `guard`）。到达间隔分布见附录 A13。
 - `num` 在全部样本里恒为 `1`；`op_type: 2` 的播报文案是「续费了提督」——续费与首购仍不区分（统一落 `guard`；该枚举尚未逐值校准）。
 - 命令名与字段的实测样本（含「本仓 10 分钟采集里零条」那一次）见附录 A12 / A13 / A33。
 
@@ -761,7 +761,8 @@ resp.msg / resp.message == "k"     → blocked_room
 |---|---|
 | 上游重复推送同一条弹幕 | 不做跨会话去重；相同内容由界面相似合并处理 |
 | 礼物连击 | `Message.combo_id`（上游 `batch_combo_id`）相同的礼物折叠成一行；由界面完成（`ui.md` §8.4），协议层逐条入缓冲 |
-| `GUARD_BUY` 与 `USER_TOAST_MSG` 同笔 | 按时间窗合并为一条播报：`cmd.rs` 的 `GuardMerge`（窗口 5s，键 = `uid` + `guard_level` + 起始时间，`cmd.rs:739-760`），金额取播报的**实付**、标价不入 `amount`（§10.6） |
+| `GUARD_BUY` 与 `USER_TOAST_MSG` 同笔 | 按时间窗合并为一条播报：`cmd.rs` 的 `GuardMerge`（窗口 5s；键 = `room_id` + `uid` + `guard_level`，**不含起始时间**，`cmd.rs` 的 `GuardKey`；合并器随房间运行时存活、跨 `read_loop`，`announced` 用 30s TTL，见 §10.6），金额取播报的**实付**、标价不入 `amount`（§10.6） |
+| `ENTRY_EFFECT` 与 `INTERACT_WORD` / `_V2` 同源 | 同一次进场的两条载荷在 `cmd::InteractMerge`（窗口 5s，键 = `room_id` + `uid`）压成一条；不同观众或窗口后再次进场各投一条（§10.4） |
 | 重连 | 不清空已收缓冲（同一次会话），重连后继续追加 |
 
 ---
@@ -987,7 +988,7 @@ stateDiagram-v2
 | A4 | 粉丝牌 / 勋章结构（`medal_level` / `medal_name` / `guard_level`） | 粉丝牌对象的位置、等级与名称字段名；`guard_level` 与勋章守护等级是否为同一值 | 同上，需覆盖有牌 / 无牌 / 舰长 / 提督 / 总督样本 | 收集至少 5 类样本建立映射表 | `medal_level`、`medal_name`、`guard_level`（影响全部命令） |
 | A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态（布尔 / 等级 / 位标志） | 同上，需一名房管账号发言样本 | 以已知房管与非房管各 3 条对照，确定判定式 | 房管徽标、`is_admin` |
 | A6 | `Message.upstream_id`（举报所需标识） | 举报弹幕所需的上游标识位于哪个槽位（弹幕 id / 消息 id / 组合串） | 同上，抓取一条可被举报的弹幕原文 | 用该标识对目标弹幕发起一次举报并核对是否命中，确认取哪个槽位 | `chat_report`、`upstream_id` |
-| A7 | 时间戳字段 | 各命令载荷中时间戳的字段名与单位（秒 / 毫秒）；缺失时是否可安全回退到本地时间 | 同上 | 与本地收帧时间比对，误差应在秒级以内；写入归一化规则 | `ts` 全命令 |
+| A7 | 时间戳字段 | 各命令载荷中时间戳的字段名与单位（秒 / 毫秒）；缺失时是否可安全回退到本地时间 | 同上 | **2026-09-22 结论（部分撤销「待实测」）**：`interact` 的 `ts` **不再取载荷时间戳**，一律用本地收包时刻（`cmd.rs` 的 `interact_json` / `interact_v2` 同口径，上游那两个槽位只进 debug 留档）——载荷时钟不可信，且 `ts` 只服务自动消失与可选时间戳显示两个判据；其余命令（弹幕 / 礼物 / SC / 大航海）的 `ts` 仍按载荷归一化（秒 ×1000 或毫秒），已稳定用于排序与展示 | `ts`（interact 为本地时刻；其余为载荷归一化） |
 | A8 | `SEND_GIFT`（含金额与连击字段） | 礼物名称、数量、单价（金瓜子）字段名；礼物标识与连击数（去重聚合用）字段名；用户 UID / 昵称字段名 | 同上，需真实礼物样本 | **按权威文档核对（2026-09-12），仍未实测**：`data.name`（礼物名）、`data.price`（金瓜子，文档记「该值/1000 的单位为元」）、`data.coin_type`（一般为 `gold`，即电池体系）。实现已按此填 `content` 与 `amount`。**但实测流量里没有 `SEND_GIFT`，只有 `SEND_GIFT_V2`**（后者字段抄自官方 proto，见 §10.2）。**头像（`Message.face`）无来源**：社区字段表里没有头像字段，载荷里也没有可确证的昵称同层头像槽位——刻意留空，等有样本再回填。**单位再核对（2026-09-16）**：社区字段表原文就是「该值 / 1000 的单位为元」，与 SC 的 `rate = 1000`（A9）互证；`coin_type = gold` 是币种名、**不等于**数值按电池计（§10.2「金额单位」）。仍属**文档口径**，未见真实礼物样本 | `cmd.rs` |
 | A9 | `SUPER_CHAT_MESSAGE` / `_JP`（含金额与去重字段） | SC 标识、金额、正文、时长字段名；`_JP` 与主命令的载荷差异 | 同上，需真实 SC 样本 | **已实测（2026-09-12）**：字段见 §10.3——`message` / `price`（**元**）/ `id` / `ts`（秒）/ `uinfo.base.name` / `user_info.{uname,guard_level,manager}` / `medal_info.{medal_level,medal_name,guard_level}`，另有 `rate = 1000`（1 元 = 1000 金瓜子）。10 分钟采集到 1 条 SC。**`_JP` 仍未见样本**。头像按同一 `uinfo.base` 层的 `face` 取用（**该键本轮未逐项记录**，实现按同路径取值，取不到即空串） | `cmd.rs`、§10.3 |
 | A10 | `INTERACT_WORD`（V1） | 互动类型枚举的字面值与取值集合（进入 / 关注 / 分享等） | 同上 | 按可触发的类型逐项采集，建立完整映射后再写描述文案 | `content` 文案 |

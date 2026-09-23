@@ -17,11 +17,13 @@ import { test } from "node:test";
 
 import {
   adoptSessionSnapshot,
+  appended,
   dropSessionMessages,
   insertIncoming,
+  KIND_CAPS,
   refreshMode,
 } from "./session-messages.ts";
-import type { Message, RoomView } from "./types.ts";
+import type { Message, MessageKind, RoomView } from "./types.ts";
 
 let seq = 0;
 
@@ -76,6 +78,36 @@ function refreshReenter(messages: Message[], rooms: RoomView[], roomId: number):
 function feed(messages: Message[], incoming: Message[]): Message[] {
   return incoming.reduce<Message[]>((acc, message) => insertIncoming(acc, message) ?? acc, messages);
 }
+
+test("按 kind 分档裁剪：礼物没到礼物档上限就不会被弹幕挤掉", () => {
+  // 用户 2026-09-22 第 5 条：改前是一个不分类型的总数上限（`CLIENT_MESSAGE_CAP`），
+  // 弹幕一多就把礼物顶掉 —— 看着像「分类型缓存没生效」。现在各 `kind` 只受自己的上限约束。
+  const cap = KIND_CAPS.danmaku;
+  let list: Message[] = [];
+  for (let i = 1; i <= cap; i += 1) {
+    list = appended(list, row(i, `弹幕${i}`));
+  }
+  assert.equal(list.length, cap, "前置：弹幕档正好填满");
+
+  // 一条礼物进的是**礼物档**，弹幕一条都不该被挤掉。
+  list = appended(list, row(cap + 1, "投喂 铅笔", { kind: "gift" as MessageKind, amount: 100 }));
+  assert.equal(
+    list.filter((item) => item.kind === "danmaku").length,
+    cap,
+    "弹幕档一条不少",
+  );
+  assert.equal(list.filter((item) => item.kind === "gift").length, 1, "礼物没被弹幕挤掉");
+
+  // 弹幕超档时只丢**弹幕里最旧**的那条，礼物照旧在（这就是「互不挤占」）。
+  const after = appended(list, row(cap + 2, "弹幕超了"));
+  assert.equal(
+    after.filter((item) => item.kind === "danmaku").length,
+    cap,
+    "弹幕档仍是上限条数",
+  );
+  assert.ok(!after.some((item) => item.content === "弹幕1"), "丢的是弹幕里最旧的一条");
+  assert.equal(after.filter((item) => item.kind === "gift").length, 1, "礼物一条不动");
+});
 
 test("断连之后再点「刷新」：新会话的弹幕照旧上屏（修前这一按一条都进不来）", () => {
   // 上一个会话：界面上已经收了 3 条，号是 1..3。

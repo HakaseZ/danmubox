@@ -13,12 +13,14 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use danmubox_core::ports::LiveSource;
 use danmubox_core::{
-    Cancel, ConnState, Counters, Error, Message, MessageSink, Result, Room, RoomSession,
+    Cancel, ConnState, Counters, Error, Message, MessageKind, MessageSink, Result, Room,
+    RoomSession,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
@@ -222,6 +224,18 @@ pub struct BiliLive {
     /// 有凭据文件时，`buvid3` 优先用配置里的（登录后由上游下发），
     /// 省掉一次 `finger/spi` 请求，也让连接与账号绑定。
     store: Option<Arc<danmubox_core::ConfigStore>>,
+    /// 大航海按笔合并器（`cmd::GuardMerge`）：活在**房间运行时**这一层，不是每次连接 ——
+    /// 同一笔购买的两条载荷完全可能分处两次连接（`GUARD_BUY` 在这条、播报在下一条），
+    /// 每次连接新建一个就认不出是同一笔，于是「一笔买出两行」（用户 2026-09-22 第 4 条）。
+    ///
+    /// 用同步锁而不是把 `&mut` 传进 `read_loop`：`read_loop` 之上是重连循环的 `FnMut`
+    /// 闭包，把 `&mut` 借进闭包返回的 future 会要求 `Fut` 带上调用点的生命周期；
+    /// 而会话的 future 必须 `Send`，也不能把 `MutexGuard` 挂在 await 上。
+    /// 临界区里只做一次 HashMap 操作，不跨 await。
+    guard_merge: StdMutex<cmd::GuardMerge>,
+    /// 互动（进场）同源去重器（`cmd::InteractMerge`）：与上面同一个理由活在这一层 ——
+    /// 同一次进场的两条载荷同样可能分处两条连接。
+    interact_merge: StdMutex<cmd::InteractMerge>,
 }
 
 impl BiliLive {
@@ -236,6 +250,8 @@ impl BiliLive {
             counters: Arc::new(Counters::default()),
             buvid3: Mutex::new(None),
             store: None,
+            guard_merge: StdMutex::new(cmd::GuardMerge::new()),
+            interact_merge: StdMutex::new(cmd::InteractMerge::new()),
         })
     }
 
@@ -246,6 +262,8 @@ impl BiliLive {
             counters: Arc::new(Counters::default()),
             buvid3: Mutex::new(None),
             store: Some(store),
+            guard_merge: StdMutex::new(cmd::GuardMerge::new()),
+            interact_merge: StdMutex::new(cmd::InteractMerge::new()),
         })
     }
 
@@ -438,14 +456,49 @@ impl BiliLive {
         }
     }
 
-    /// 读循环的外层：与 [`Self::read_loop_inner`] 只差**大航海按笔合并器**的生命周期。
+    /// 大航海：同一笔的两条载荷在这里合成**一条**（`cmd::GuardMerge`，§10.6 / §12.3）。
+    /// 返回 `None` = 这一条要压着等播报，或是同一笔已投过之后的第二条。
+    fn absorb_guard(&self, message: Message, source: cmd::GuardSource) -> Option<Message> {
+        self.guard_merge
+            .lock()
+            .expect("guard merge poisoned")
+            .absorb(tokio::time::Instant::now(), message, source)
+    }
+
+    /// 大航海窗口到期：放出「没等到播报」的购买事件（金额留 0）。
+    fn flush_guard(&self) -> Option<Message> {
+        self.guard_merge
+            .lock()
+            .expect("guard merge poisoned")
+            .flush(tokio::time::Instant::now())
+    }
+
+    /// 大航海还压着的购买事件最早什么时候到期（`None` = 没有待放项，不起定时器）。
+    fn guard_deadline(&self) -> Option<tokio::time::Instant> {
+        self.guard_merge
+            .lock()
+            .expect("guard merge poisoned")
+            .deadline()
+    }
+
+    /// 互动（进场）：同一次进场的两条载荷只投第一条（`cmd::InteractMerge`，§10.4）。
+    fn absorb_interact(&self, message: Message) -> Option<Message> {
+        self.interact_merge
+            .lock()
+            .expect("interact merge poisoned")
+            .absorb(tokio::time::Instant::now(), message)
+    }
+
+    /// 读循环的外层：与 [`Self::read_loop_inner`] 只差**大航海按笔合并器**的收尾。
     ///
     /// 合并器要在退出前把还压着的购买事件放出去（[`cmd::GuardMerge::take_pending`]），
     /// 而内层有 5 条 `return` 出口（取消 / 认证超时 / 僵死 / 对端关闭 / 读失败），
     /// 统一收在这一层才不会漏 —— 否则那条开通播报会随断连一起消失。
     ///
+    /// 合并器本身由 [`BiliLive`] 持有（**不随连接重建**，理由见那两个字段的注释），
+    /// 因此这一层只做收尾、不负责建。
+    ///
     /// 签名与拆分前逐字一致：`ws::tests` 有 6 个用例直接调它。
-    #[allow(clippy::too_many_arguments)]
     async fn read_loop<S>(
         &self,
         room_id: i64,
@@ -459,19 +512,15 @@ impl BiliLive {
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
             + Unpin,
     {
-        let mut guard_merge = cmd::GuardMerge::new();
         let attempt = self
-            .read_loop_inner(
-                room_id,
-                sink,
-                cancel,
-                verify,
-                limits,
-                read,
-                &mut guard_merge,
-            )
+            .read_loop_inner(room_id, sink, cancel, verify, limits, read)
             .await;
-        for message in guard_merge.take_pending() {
+        for message in self
+            .guard_merge
+            .lock()
+            .expect("guard merge poisoned")
+            .take_pending(tokio::time::Instant::now())
+        {
             sink.publish_message(message);
         }
         attempt
@@ -484,7 +533,7 @@ impl BiliLive {
     /// 由它补上。
     ///
     /// 参数多是因为它同时握着「会话内五件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
-    /// 入站流）与大航海的按笔合并器 —— 收成结构只会让调用点更长，
+    /// 入站流）—— 收成结构只会让调用点更长，
     /// 与 `send::build_params` 同一取舍（那里的 `#[allow]` 注释同样说明了这点）。
     #[allow(clippy::too_many_arguments)]
     async fn read_loop_inner<S>(
@@ -495,7 +544,6 @@ impl BiliLive {
         verify: &Notify,
         limits: &Limits,
         read: &mut S,
-        guard_merge: &mut cmd::GuardMerge,
     ) -> Attempt
     where
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
@@ -514,10 +562,10 @@ impl BiliLive {
             };
             // 大航海按笔合并的到期时刻（`docs/protocol.md` §10.6）：只有真压着「等播报的
             // 购买事件」时才有值，没有时不 arm 分支 —— 移动端不该为此常驻唤醒。
-            let guard_deadline = guard_merge.deadline();
+            let guard_deadline = self.guard_deadline();
             tokio::select! {
                 _ = guard_flush_when_due(guard_deadline) => {
-                    if let Some(message) = guard_merge.flush(tokio::time::Instant::now()) {
+                    if let Some(message) = self.flush_guard() {
                         sink.publish_message(message);
                     }
                 }
@@ -592,17 +640,27 @@ impl BiliLive {
                                         // 观众数走单独支路：它不进会话缓冲，只更新界面数字。
                                         match cmd::dispatch(room_id, &value, &self.counters) {
                                             Some(cmd::Dispatch::Message(message)) => {
-                                                sink.publish_message(message)
+                                                // 互动（进场）先过同源去重：同一次进场上游推两条
+                                                // 载荷（`ENTRY_EFFECT` 与 `INTERACT_WORD(_V2)`），
+                                                // 两条都投就是「XX 进入直播间」连着两行（§10.4）。
+                                                let message =
+                                                    if message.kind == MessageKind::Interact {
+                                                        match self.absorb_interact(message) {
+                                                            Some(message) => message,
+                                                            None => continue,
+                                                        }
+                                                    } else {
+                                                        message
+                                                    };
+                                                sink.publish_message(message);
                                             }
                                             // 大航海：同一笔购买的 `GUARD_BUY` 与
                                             // `USER_TOAST_MSG` 在这里合成**一条**播报
                                             // （§10.6 / §12.3），金额取实付那一份。
                                             Some(cmd::Dispatch::Guard { message, source }) => {
-                                                if let Some(message) = guard_merge.absorb(
-                                                    tokio::time::Instant::now(),
-                                                    message,
-                                                    source,
-                                                ) {
+                                                if let Some(message) =
+                                                    self.absorb_guard(message, source)
+                                                {
                                                     sink.publish_message(message);
                                                 }
                                             }

@@ -145,6 +145,38 @@ test("折叠低价礼物对两个区域都生效：弹幕区与礼物栏各折�
   assert.equal(after.giftRows.filter((row) => row.message.content === "投喂 橡皮").length, 1);
 });
 
+test("低价礼物桶带上 senders：两栏的桶行都是同一套刷屏形态的入参", () => {
+  // 用户 2026-09-22 第 3 条：桶改成与弹幕刷屏一致的形态 —— `MessageRow` 只看
+  // `senders` 在不在（`aggregated`），因此两个区域各折出来的那条桶行都必须带上它。
+  const crowd = [
+    msg("gift", "投喂 铅笔", { ...CHEAP_A, uid: 501, uname: "甲" }),
+    msg("gift", "投喂 铅笔", { ...CHEAP_A, uid: 502, uname: "乙" }),
+    msg("gift", "投喂 铅笔", { ...CHEAP_A, uid: 501, uname: "甲" }),
+    msg("gift", "投喂 铅笔", { ...CHEAP_A, uid: 503, uname: "丙" }),
+    msg("gift", "投喂 铅笔", { ...CHEAP_A, uid: 504, uname: "丁" }),
+  ];
+  const rows = toDisplayRows(crowd, prefs());
+  const { chatRows, giftRows } = splitGiftRows(
+    rows,
+    prefs({ "ui.gift_collapse_cheap": true }),
+  );
+
+  for (const [area, bucket] of [
+    ["弹幕区", chatRows.find((row) => row.cheap)],
+    ["礼物栏", giftRows.find((row) => row.cheap)],
+  ] as const) {
+    assert.ok(bucket, `${area} 有一条桶行`);
+    assert.ok(bucket.senders, `${area} 的桶行带 senders（否则画不出堆叠头像）`);
+    // 按首次出现去重、最多 3 位（与 `aggregate.ts` 的 `AGGREGATE_AVATARS_SHOWN` 同值）。
+    assert.deepEqual(
+      bucket.senders?.map((sender) => sender.uid),
+      [501, 502, 503],
+      `${area}：uid 去重后取前三位，第四位不画`,
+    );
+  }
+  assert.equal(chatRows.find((row) => row.cheap)?.count, 5, "数量是整桶条数，与 senders 的位数无关");
+});
+
 test("折叠是纯派生：不改入参，关掉开关逐条按原序、原对象回来", () => {
   const rows = toDisplayRows(conversation(), prefs());
   const snapshot = structuredClone(rows.map((row) => row.message));

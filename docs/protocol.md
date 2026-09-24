@@ -572,7 +572,7 @@ fn decode_stream(data, depth):
 |---|---|---|---|
 | `LIVE` | 开播 | 固定文案 + 房间标题（若载荷携带） | 与 `PREPARING` 状态互斥，按最新状态覆盖，不逐条展示 |
 | `PREPARING` | 下播 / 准备中 | 固定文案 | 同上；连续重复仅计一次状态变更 |
-| `ROOM_CHANGE` | 房间信息变更（标题 / 分区 / 封面） | 变更后的标题或分区名 | 仅当房间内存态字段确实变化时写入并广播 |
+| `ROOM_CHANGE` | 房间信息变更（标题 / 分区 / 封面） | 固定文案「标题或分区变更」（与 `LIVE` / `PREPARING` 同口径，**不解析载荷猜文案**） | 仅当房间内存态字段确实变化时写入并广播 |
 | `CUT_OFF` | 直播间被切断 | 固定文案 | 写入缓冲；触发界面断流提示 |
 | `POPULARITY_CHANGE` | 人气值变化 | 人气数值 | **高频**：只更新房间内存计数，**不写入会话缓冲**（`cmd.rs:145-146`）。`op=3` 心跳回应携带同一口径的值，只记 `debug` 日志（`ws.rs:629-630`）；人气值的展示口径见 [`ui.md`](ui.md) §3.1 |
 | `LIKE_INFO_V3_UPDATE` | 点赞计数更新 | 点赞计数描述 | 同 `LIKE_INFO_V3_CLICK`：只更新计数 |
@@ -586,6 +586,8 @@ fn decode_stream(data, depth):
 | `HOT_ROOM_NOTIFY` | 客户端刷新提示 | — | 已列入「已知但直接丢弃」（§10.0），不计入 `unknown_cmd` |
 
 **`LIVE` / `PREPARING` 另有一条侧路**：这两条命令到达时，除按 §10.7 表的缓冲策略入缓冲外，还会把**本房间的开播状态**一并置上并冒泡给界面——`LIVE` → `live_status = 1`、`PREPARING` → `0`（`cmd.rs:25-26` 的标注、`cmd.rs:179-182` 赋值、`cmd.rs:210-213` 产出 `Dispatch::LiveStatus`；投递处 `ws.rs:617-623`）。`2`（轮播）**不**由这两条命令推出——轮播是主播另设的状态，无实测表明 `PREPARING` 会切到轮播；推错也只是短暂不一致，列表页那一拍（`contract.md` §4）会用上游的只读值纠回来（`http.rs:813-819`）。
+
+**`ROOM_CHANGE` 另有一条侧路**（issue202609241553 第 6 条）：除按 §10.7 表入缓冲外，若载荷 `data.room_id` 与 `data.title` 都能取到（参照实现 `HakaseZ/BiliLiveWatcher` 的 `deal_ROOM_CHANGE` 只读了这两个字段——**分区不在事件里**），则额外产出 `Dispatch::RoomTitle`（`cmd.rs` 的 `ROOM_CHANGE` 分支，任一取不到就退回 §10.7 的固定 `system` 文案、绝不猜）。`room_id` + 新 `title` 经 `ws.rs` 投到 `Event::RoomTitle`，由 `lib.rs` 在命中已登记房间时冒泡为 `danmubox://room`；前端 `store.onRoom` 命中 `anchorRoom.room_id` 就地更新标题输入框。**限制**：只有连接着自己直播间时才收得到这条——未连接则收不到，是弹幕 WS 的固有约束（不是 bug）。**字段形态取自参照实现、待真机回填**（A66，AGENT.md §8.7）。
 
 ### 10.8 未知 `cmd` 与载荷形态异常
 
@@ -961,15 +963,17 @@ stateDiagram-v2
 | 找自己直播间 | `GET https://api.live.bilibili.com/room/v2/Room/room_id_by_uid` | query `uid`（取当前凭据里的 `DedeUserID`，不再多打一次 `nav`） | `data.room_id` |
 | 房间信息 | `GET https://api.live.bilibili.com/room/v1/Room/get_info` | query `room_id` | `data.title` / `data.live_status` / `data.area_id` / `data.area_name`（+ `data.parent_area_name` 拼「父 · 子」） |
 | 改标题 | `POST https://api.live.bilibili.com/room/v1/Room/update` | form：`room_id` / `platform=pc_link` / `title` / `csrf_token` / `csrf` | `code`（0 = 成功） |
+| 改分区 | `POST https://api.live.bilibili.com/room/v1/Room/update` | form：`room_id` / `platform=pc_link` / `area_id` / `csrf_token` / `csrf` | `code`（0 = 成功）。与「改标题」同一端点、同一套签名口径，只是字段换成 `area_id`（**子分区 id**，`anchor_area_set` 走这条，issue202609241553 第 4 条：改分区是独立写入口） |
 | 下播 | `POST https://api.live.bilibili.com/room/v1/Room/stopLive` | form：`room_id` / `platform=pc_link` / `csrf_token` / `csrf` | `code` |
-| 开播分区列表 | `GET https://api.live.bilibili.com/room/v1/Area/getList` | query：`platform=pc_link` | `data.list[]`：父分区（`id` / `name` / `list[]` 子分区 `{id, name}`） |
+| 开播分区列表 | `GET https://api.live.bilibili.com/room/v1/Area/getList` | query：`show_pinyin=1` | `data[]` **直接是数组**：父分区（`id` / `name` / `list[]` 子分区 `{id, name}`）。**父分区 id 取 `data[].id`，取不到置 0，只作 React key、不参与任何写**（见 A66） |
 | 开播 | 三段式，见 §18.2 | — | `data.rtmp`（+ `data.protocols[]`） |
 
 - **`csrf` 与 `csrf_token` 同值，都是凭据文件里的 `bili_jct`**（`anchor.rs:261` 的 `csrf()`；缺它或凭据不完整 → `NOT_LOGGED_IN`）。这条与房管写操作（§A36）同一口径。
-- **改标题与下播不签名**：只带上面那几个字段（两份社区实现一致）。
-- **`platform` 恒为 `pc_link`**（`anchor.rs:66`）：沿用 web 端开播的形态，界面**不做平台选择**。
+- **改标题 / 改分区 / 下播不签名**：只带上面那几个字段（两份社区实现一致）。
+- **`platform` 恒为 `pc_link`**（`anchor.rs:66`）：沿用 web 端开播的形态，界面**不做平台选择**。开播分区列表例外——它用 `show_pinyin=1`（见下）。
 - 空标题在**发请求之前**就被拒（`BAD_REQUEST`，`anchor.rs:321`）：上游唯一可能的答复是报错，没有理由打这一枪。
-- 「找自己直播间」的「没有直播间」**只有一条判据**：`code == 0` 且 `data.room_id` 缺失或 ≤ 0（`anchor.rs:132` 的 `own_room_id` → `Ok(None)`）——这不是错误，界面据此整块不渲染。**非 0 `code` 不在此列**：它一律是上游错误，原样带回、不赋语义（不拿它推「没开通」）。
+- 「找自己直播间」的「没有直播间」**只有一条判据**：`code == 0` 且 `data.room_id` 缺失或 ≤ 0（`anchor.rs:132` 的 `own_room_id` → `Ok(None)`）——这不是错误，界面据此不渲染那行的按钮。**非 0 `code` 不在此列**：它一律是上游错误，原样带回、不赋语义（不拿它推「没开通」）。
+- **开播分区列表的解析路径**（`anchor.rs` 的 `map_areas`）：响应 `data` **直接是数组**，每个元素是父分区（含 `name` 与 `list[]` 子分区）；与早期 `data.list[]` 的写法不同——后者会把分区读成空数组、界面降级为只读（issue202609241553 第 4 条的根因）。query 用 `show_pinyin=1`（参照实现 `Zeppelinpp/bilibili-streamer` 的 `get_area_list`）。**字段形态来自参照实现、待真机回填**（A66，AGENT.md §8.7）。
 
 ### 18.2 开播的三段式（缺一不可）
 
@@ -1137,6 +1141,7 @@ stateDiagram-v2
 
 | A66 实测进展（2026-09-19） | 主播侧写链路在真实登录态下的实测 | 七个端点是否可通；app 签名是否被接受；`area_v2` 是否就是 `get_info` 的 `data.area_id` | 真实登录态下对自己的直播间跑一遍探针（取状态 → 改标题回原值 → 开播 → 复查 → 下播），**失败即停** | **实测（2026-09-19，真实登录态；目标 = 该账号**自己的**直播间，由 `AnchorRoom::own()` 现取）**：① `room/v2/Room/room_id_by_uid` → `code=0`、`data.room_id` 有值 ✓；② `room/v1/Room/get_info` → `live_status` / `area_id` / `parent_area_name` + `area_name` 齐备 ✓（同一次实测里 `area_v2_id` 为 `null` ✓，故分区只认 `area_id`，与 §18.1 一致）；③ `x/report/click/now` 与 `xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion`（**带 app 签名**）均 `code=0` 并给出 `data.now` / `data.build` / `data.curr_version` ✓ → **app 签名被上游接受** ✓；④ `room/v1/Room/update`（改标题：**不签名**、`csrf` == `csrf_token` == `bili_jct`）实测**成功**：读出原值再写回，标题逐字未变 ✓；⑤ `room/v1/Room/startLive`（三段式的第三段、app 签名、`platform=pc_link`、`area_v2` 取 `get_info` 的 `data.area_id`）**请求被上游接受**（返回的是业务码，不是参数 / 签名错误），结果为 **`60043`**，`msg` =「本次开播需要身份验证，请在关播时点击开播唤起人脸认证」。本仓按纪律**原样带回 `code` 与 `msg`、不赋语义**，且**失败即停、未重试、未换参数** —— 这条实测同时印证了「非 0 code 只透传」的行为 | 开播 / 改标题链路 |
 | A66 未实测（2026-09-19） | 上述链路仍缺的实测面 | — | 完成一次人脸认证后重跑同一探针 | **仍未实测**：① `startLive` 的**成功分支**（`data.rtmp` / `data.protocols[]` 的实际形状）—— 被上游人脸认证挡住，该账号未完成本次开播的身份验证；② `room/v1/Room/stopLive` —— 未曾进入直播态，没走到；③ 人脸认证的另一个码 `60024` 与 `data.qr` 的实际形态；④ 「该账号**没有**开通直播间」时 `room_id_by_uid` 的响应形态（本账号已开通，走的是 `code=0` + `room_id` 有值那一支）；⑤ `60043` 引导用的**认证页地址**（§18.5，取自社区实现 `Zeppelinpp/bilibili-streamer`）——它**不在**本仓实测到的那份响应里，只是需求指定的引导口径，待完成一次真实人脸认证时顺带核对能否唤起。**边界确认**：本次实测未让直播间真的开播（上游拒绝在前），事后只读复查 `live_status` 仍为 `0` | 开播 / 下播链路 |
+| A66-1 | 开播分区列表解析 + `ROOM_CHANGE` 字段形态 | `Area/getList` 的 query（`show_pinyin=1`）与响应 `data[]` **直接数组**路径（父 `id`/`name` + `list[]` 子分区）；`ROOM_CHANGE` 只读 `data.room_id` / `data.title`（**分区不在事件里**） | 真实登录态下对照原始响应复核 | **来自参照实现（未真机回填）**：`show_pinyin=1` 与 `data[]` 数组路径取自 `Zeppelinpp/bilibili-streamer` 的 `get_area_list`；`data.room_id` / `data.title` 取自 `HakaseZ/BiliLiveWatcher` 的 `deal_ROOM_CHANGE`。本仓**未实测**这两条，仅按参照实现构建（AGENT.md §8.7：不得编造未实测字段）。复核时确认：① `getList` 响应是否真的是 `data[]` 而非 `data.list[]`（本仓早期写成 `data.list[]` 会把分区读成空数组、界面降级只读，issue202609241553 第 4 条根因）；② `ROOM_CHANGE` 事件里是否确有 `data.title`（主播改名时） | 分区列表 / ROOM_CHANGE |
 > A49–A65 由 `docs/auth.md` 原有的待实测表移交（该表已删，`AGENT.md` §6.5.2 第 6 条要求「待实测校准」只在本附录维护）；条目状态照原表记录、未做升级，核对面分别是扫码 / `nav` / WBI / `getDanmuInfo` / 表情包库 / 举报 / 钱包。
 > 其中两项已有实测结论、不另立条目：举报理由清单端点登录态返回 7 条 `{id, reason}`（`crates/danmubox-bili/src/report.rs:32-59`）；举报表单里 `csrf` 与 `csrf_token` 同值、放 query 一律禁止（`report.rs:80-81`）。A16 / A17 / A26 / A28 / A29 / A34 六条与本批移交内容重合，已合并进各自原行。
 

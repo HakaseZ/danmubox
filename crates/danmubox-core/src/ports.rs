@@ -301,16 +301,23 @@ pub trait WalletProvider: Send + Sync {
 /// 与 `LiveSource` 的分工：后者是「看别人的房间」（只读，游客也可用），
 /// 这里是「管自己的房间」——三件写操作 + 取分区全落在这里。
 ///
-/// 写操作纪律（`docs/contract.md` §3 / `AGENT.md` §8.14–16）：只作用于当前账号自己的直播间，
-/// 失败即停、不换房间 / 账号 / 参数重试；上游非 0 code 原样带回、不赋语义。
+/// 写操作纪律（`docs/contract.md` §3 / `AGENT.md` §8.14–16）：只作用于**该账号自己的直播间**
+/// （账号在**构造期**定死，见 `danmubox_bili::BiliAnchor::new_for`：缺省当前账号，也可按账号名
+/// 指定 —— 管理别的账号的直播间不必先切号），失败即停、不换房间 / 账号 / 参数重试；
+/// 上游非 0 code 原样带回、不赋语义。
 /// 唯一的例外是 `AnchorGate`：开播被身份校验挡住时产出引导而不是判定。
 #[async_trait]
 pub trait AnchorRoom: Send + Sync {
-    /// 取当前账号自己的直播间。**没开通返回 `Ok(None)`，不是错误**——界面据此整块不渲染。
+    /// 取该账号自己的直播间。**没开通返回 `Ok(None)`，不是错误**——界面据此整块不渲染。
     async fn own(&self) -> Result<Option<OwnRoom>>;
 
     /// 改自己直播间标题。空标题由调用方前置拒绝（见 `anchor_title_set`）。成功返回重读后的 `OwnRoom`。
     async fn set_title(&self, title: &str) -> Result<OwnRoom>;
+
+    /// 改分区（`area_v2` = **子分区 id**）。这是**独立于开播**的写入口：不必等到开播就能改，
+    /// 与 `go_live` 的 `area_v2` 覆盖互不替代。`<= 0` 为非法值 → `BAD_REQUEST`。
+    /// 成功返回重读后的 `OwnRoom`。
+    async fn set_area(&self, area_v2: i64) -> Result<OwnRoom>;
 
     /// 开播。`area_v2` 缺省沿用直播间当前 `area_id`（上次开播分区）；`Some(v)` 为界面所选子分区覆盖。
     ///

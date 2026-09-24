@@ -679,6 +679,18 @@ impl BiliLive {
                                                 sink.publish_message(message);
                                                 sink.publish_live_status(room_id, live_status);
                                             }
+                                            // `ROOM_CHANGE`：同样是「先投消息、再冒泡」——
+                                            // 主播改了标题时，界面上挂着的旧标题要原地换掉
+                                            // （issue202609241553 第 6 条）。房间号取载荷里的
+                                            // `data.room_id`（不是连接的这个房间号）。
+                                            Some(cmd::Dispatch::RoomTitle {
+                                                message,
+                                                room_id,
+                                                title,
+                                            }) => {
+                                                sink.publish_message(message);
+                                                sink.publish_room_title(room_id, title);
+                                            }
                                             None => {}
                                         }
                                     }

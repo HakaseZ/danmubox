@@ -1,11 +1,12 @@
-// 场景块：「我的直播间」—— 账号行按钮展开管理区（docs/ui.md §2.2.2）
-//   ① 入口：每行都有「我的直播间」按钮、排在「删除」右侧；**点开才拉数据**（不点不发请求）
-//   ② 管理区：标题草稿 = 远端（一字不差禁用保存）、两级联动分区（父→子）、开播 / 下播按
-//      live_status 自适应
-//   ③ 开播被身份校验挡住 → 弹提示框（QrConfirm 离线二维码 / FaceAuth 走 open_url），
-//      **不轮询不重试**，上游原话照旧留在错误行
-//   ④ 开播成功 → 下方直接渲染推流地址与推流码（等宽体、不横向溢出）；下播即消失
-//   ⑤ 读失败 / 没开通直播间：只渲染错误行或什么都不渲染，**不静默**
+// 场景块：「我的直播间」—— 账号行按钮展开管理区（docs/ui.md §2.2.2，issue202609241553）
+//   ① 入口：按钮只出现在「有直播间」的行、贴行右端（与账号管理组隔离）；没开通 / 未登录不渲染
+//   ② 打开对话框即预取所有已登录账号的房间（按钮显隐靠这份映射）；不必切号即可跨账号管理
+//   ③ 管理区：状态在标题左边、标题草稿 = 远端（一字不差禁用保存）、开播 / 下播独占一行
+//   ④ 分区改动即存（`anchor_area_set`，独立写入口，不必等到开播）
+//   ⑤ 开播被身份校验挡住 → 弹提示框（QrConfirm 离线二维码 / FaceAuth 走 open_url），
+//      **不轮询不重试**，上游原话照旧留在错误行；开播成功渲染推流码、下播即消失
+//   ⑥ 读失败 / 没开通直播间：只渲染错误行或什么都不渲染，**不静默**
+//   ⑦ ROOM_CHANGE：上游推来标题变更（`danmubox://room`，房间号命中当前直播间）→ 就地更新标题
 //
 // 页内脚本片段：由 smoke/room-page.mjs **原样拼进** `window.__smoke_run` 的函数体，与相邻块共用同一条
 // 作用域（out / snap / byTestId / sleep / … 都是 10-harness.mjs 里的工具）。准入条件见 docs/testing.md §9.3。
@@ -15,20 +16,30 @@
        · 账号行里另有一条**未登录**的行（账号那段最后退出登录留下的），正好用来验「不发请求」那条。
        三条都不靠上一段的收尾状态白拿：缺哪一条就在这里补，补不上就把 anchorBlockRan 置 false。 */
     try {
+      // 临时注入「跨账号 / 没开通 / 未登录」三个账号，验证按钮显隐与跨账号管理；
+      // 块末还原，免得污染后面的场景块（账号场景块 32 要求恰好 1 个账号、且是 default）。
+      var anSavedAccounts = window.__accountsRef();
+      window.__setAccounts([
+        { name: "default", nickname: "本地测试", uid: 1000, logged_in: true, active: true, face: FACE_512 },
+        { name: "alt", nickname: "二号账号", uid: 1001, logged_in: true, active: false, face: FACE_512 },
+        { name: "noroom", nickname: "没开播的账号", uid: 1002, logged_in: true, active: false, face: FACE_512 },
+        { name: "guest", nickname: "未登录账号", uid: 0, logged_in: false, active: false, face: "" },
+      ]);
       if (!byTestId("db-list-page")) {
         byTestId("db-header-back").click();
         await sleep(600);
       }
+      // 打开对话框**之前**的 anchor_room 次数（bootstrap 给当前账号拉过一次，算基线）：
+      // 「打开即预取」比的应是「比基线多 3 次」（3 个已登录账号各一次），不是绝对 3。
+      var anRoomCallsBase = callsWithArgs.filter(function (c) {
+        return c.cmd === "anchor_room";
+      }).length;
       byTestId("db-account").click();
       await sleep(400);
-      var anCurrentRow = function () {
+      // 行助手：按昵称定位账号行（default=本地测试 / alt=二号账号 / noroom=没开播的账号 / guest=未登录账号）
+      var anRowByName = function (name) {
         return allByTestId("db-account-row").filter(function (r) {
-          return r.innerText.indexOf("已登录 · 当前") >= 0;
-        })[0];
-      };
-      var anOtherRow = function () {
-        return allByTestId("db-account-row").filter(function (r) {
-          return r.innerText.indexOf("已登录 · 当前") < 0;
+          return r.innerText.indexOf(name) >= 0;
         })[0];
       };
       var anToggle = function (row) { return row ? buttonWith(row, "我的直播间") : null; };
@@ -47,40 +58,43 @@
         return (byTestId(id) || { innerText: "" }).innerText.trim();
       };
 
-      var anRows = allByTestId("db-account-row");
-      var anRow = anCurrentRow();
-      out.anchorDialogOpened = !!byTestId("db-account-dialog") && !!anRow;
-      // ---- ① 入口：每一行都有一枚「我的直播间」，且在「删除」**右侧**（文档序：它排在后面）
-      out.anchorToggleOnEveryRow = anRows.length > 0 && anRows.every(function (r) {
-        return !!buttonWith(r, "我的直播间");
-      });
-      var anRemove = anRow ? anRow.querySelector('[data-testid="db-account-remove"]') : null;
-      var anToggleBtn = anToggle(anRow);
+      var anDefaultRow = anRowByName("本地测试");   // 当前已登录、有直播间
+      var anAltRow = anRowByName("二号账号");        // 另一个已登录、有直播间（跨账号）
+      var anNoRoomRow = anRowByName("没开播的账号"); // 已登录但没开通直播间
+      var anGuestRow = anRowByName("未登录账号");    // 未登录
+      out.anchorDialogOpened = !!byTestId("db-account-dialog") && !!anDefaultRow;
+      // ---- ① 入口：按钮只在「有直播间」的行出现，且贴行右端（与账号管理组隔离，第 1 条）
+      out.anchorToggleOnRowWithRoom = !!anToggle(anDefaultRow) && !!anToggle(anAltRow);
+      out.anchorNoToggleOnNoRoom = !anToggle(anNoRoomRow);   // 没开通 → 不渲染（第 2 条）
+      out.anchorNoToggleOnGuest = !anToggle(anGuestRow);     // 未登录 → 不渲染
+      var anRemove = anDefaultRow.querySelector('[data-testid="db-account-remove"]');
+      var anToggleBtn = anToggle(anDefaultRow);
       out.anchorToggleRightOfRemove = !!anRemove && !!anToggleBtn &&
         (anRemove.compareDocumentPosition(anToggleBtn) & 4) > 0;
-      // 不点就不拉：展开之前既不渲染面板、也不发 anchor_room
+
+      // ---- ② 打开对话框即预取所有**已登录**账号的房间（第 2 条判定靠这份映射；3 个已登录账号）
       var anRoomCalls0 = anCalls("anchor_room").length;
+      out.anchorPrefetchOnOpen = anRoomCalls0 === anRoomCallsBase + 3;
       out.anchorPanelHiddenBeforeToggle = anPanel() === null;
-      out.anchorNoRequestBeforeToggle = anRoomCalls0 === 0;
 
-      // ---- ⑤a 展开**非当前 / 未登录**那一行：不发请求，只给错误行（后端读的是当前账号自己的）
-      var anOther = anOtherRow();
-      if (anOther) {
-        anToggle(anOther).click();
-        await sleep(500);
-        out.anchorOtherRowNoRequest = anCalls("anchor_room").length === anRoomCalls0;
-        out.anchorOtherRowErrorShown = anText("db-anchor-error").length > 0;
-        out.anchorOtherRowNoBody = byTestId("db-anchor-title") === null &&
-          byTestId("db-anchor-live") === null;
-        anToggle(anOtherRow()).click();
-        await sleep(300);
-      }
+      // ---- ③ 跨账号管理（第 3 条）：展开 alt（非当前账号）就能管理它的房间，不必先切号
+      anToggle(anAltRow).click();
+      await sleep(600);
+      out.anchorAltPanelShown = !!anPanel();
+      out.anchorAltRoomFetched = anCalls("anchor_room").length === anRoomCalls0 + 1; // 面板拉自己那份
+      out.anchorAltTitleFromRemote = !!byTestId("db-anchor-title") &&
+        byTestId("db-anchor-title").value === "二号直播间";
+      out.anchorAltStatus = anText("db-anchor-status") === "未开播";
+      anToggle(anAltRow).click();
+      await sleep(300);
 
-      // ---- ② 展开当前账号行：拉一次，标题 / 分区 / 状态都从远端来
-      anToggle(anCurrentRow()).click();
+      // ---- ④ 展开当前账号行：拉自己那份，标题 / 分区 / 状态都从远端来
+      var anRoomCalls1 = anCalls("anchor_room").length;
+      anToggle(anDefaultRow).click();
       await sleep(600);
       out.anchorPanelShown = !!anPanel();
-      out.anchorRoomFetched = anCalls("anchor_room").length === anRoomCalls0 + 1;
+      out.anchorRoomFetched = anCalls("anchor_room").length === anRoomCalls1 + 1;
+      out.anchorLiveRowExists = !!byTestId("db-anchor-live-row"); // 开播 / 下播独占一行（第 5 条）
       out.anchorTitleFromRemote = !!byTestId("db-anchor-title") &&
         byTestId("db-anchor-title").value === "冒烟直播间";
       // 草稿与远端一字不差 → 保存键禁用（没改就不必发）
@@ -115,14 +129,22 @@
       snap();
       await sleep(700);
 
-      // 换分区：父 → 子联动（选父落到它的第一个子分区，再选到「美食」= 22）
+      // ---- 第 4 条：改分区 = 独立写，改动即存（不必等到开播）
       var anSel0 = [].slice.call(anPanel().querySelectorAll("select"));
-      anSetSelect(anSel0[0], "1");
+      anSetSelect(anSel0[0], "1"); // 父「娱乐」→ 子落到第一个「生活」=21
       await sleep(350);
       var anSel1 = [].slice.call(anPanel().querySelectorAll("select"));
       out.anchorChildFollowsParent = anSel1.length === 2 && anSel1[1].value === "21";
-      anSetSelect(anSel1[1], "22");
-      await sleep(300);
+      anSetSelect(anSel1[1], "22"); // 子选到「美食」=22
+      await sleep(400);
+      var anSel2 = [].slice.call(anPanel().querySelectorAll("select"));
+      out.anchorChildSelected = anSel2.length === 2 && anSel2[1].value === "22";
+      // 两次改动各发一次 anchor_area_set（父联动一次 + 子一次），都带 account
+      var anAreaCalls = anCalls("anchor_area_set");
+      out.anchorAreaSetCalled = anAreaCalls.length === 2 &&
+        anAreaCalls.every(function (c) { return c.args.account === "default"; }) &&
+        anAreaCalls[anAreaCalls.length - 1].args.areaV2 === 22;
+      var anLiveBefore = anCalls("anchor_live_set").length;
 
       // ---- ③ 开播被挡：QrConfirm（离线二维码）+ 错误行留上游原话 + 不轮询
       window.__anchorGate = true;
@@ -130,8 +152,10 @@
       buttonWith(anPanel(), "开播").click();
       await sleep(700);
       var anLiveCalls = anCalls("anchor_live_set");
-      out.anchorLiveSetSendsAreaV2 = anLiveCalls.length === 1 &&
-        anLiveCalls[0].args.live === true && anLiveCalls[0].args.areaV2 === 22;
+      out.anchorLiveSetSendsAreaV2 = anLiveCalls.length === anLiveBefore + 1 &&
+        anLiveCalls[anLiveCalls.length - 1].args.live === true &&
+        anLiveCalls[anLiveCalls.length - 1].args.account === "default" &&
+        anLiveCalls[anLiveCalls.length - 1].args.areaV2 === 22;
       out.anchorGateModalShown = !!byTestId("db-anchor-gate-modal");
       var anQr = byTestId("db-anchor-gate-qr");
       out.anchorGateQrRendered = !!anQr && anQr.tagName.toLowerCase() === "img" &&
@@ -190,36 +214,57 @@
       await sleep(800);
       var anStopCalls = anCalls("anchor_live_set");
       out.anchorStopSendsLiveFalse = anStopCalls.length > 0 &&
-        anStopCalls[anStopCalls.length - 1].args.live === false;
+        anStopCalls[anStopCalls.length - 1].args.live === false &&
+        anStopCalls[anStopCalls.length - 1].args.account === "default";
       out.anchorConfigGoneAfterStop = !byTestId("db-anchor-config");
       out.anchorStatusBackToIdle = anText("db-anchor-status") === "未开播";
 
       // ---- ⑤b 读失败：**不静默** —— 只渲染错误行（后端原话），不画半截管理区
       window.__anchorFail = true;
-      anToggle(anCurrentRow()).click();
+      anToggle(anDefaultRow).click();
       await sleep(300);
-      anToggle(anCurrentRow()).click();
+      anToggle(anDefaultRow).click();
       await sleep(600);
       out.anchorReadErrorShown = anText("db-anchor-error").indexOf("读取直播间失败") >= 0;
       out.anchorNoBodyOnReadError = byTestId("db-anchor-title") === null &&
         byTestId("db-anchor-live") === null;
+      // 读失败后这枚按钮**也不渲染**（`anchorRooms[name]` 被置回 null）：不给入口，原因留痕
+      out.anchorNoToggleOnReadError = !anToggle(anDefaultRow);
       window.__anchorFail = false;
-
-      // ---- ⑤c 该账号没开通直播间（anchor_room 返回 null）：**不是错误**，整块不渲染、也不报错
-      var anKeptRoom = window.__anchor;
-      window.__anchor = null;
-      anToggle(anCurrentRow()).click();
-      await sleep(300);
-      anToggle(anCurrentRow()).click();
-      await sleep(600);
-      out.anchorNoRoomNoBody = byTestId("db-anchor-title") === null;
-      out.anchorNoRoomNoError = anText("db-anchor-error").length === 0;
-      window.__anchor = anKeptRoom;
-
-      // ---- 收起：面板与里面的推流参数一起消失（推流码是账号级凭据，收起即清）
-      anToggle(anCurrentRow()).click();
+      pressEscape(); // 读失败后按钮已不渲染，收尾只能关对话框（顺带清展开态与错误行）
       await sleep(400);
-      out.anchorCollapseClearsPanel = anPanel() === null && !byTestId("db-anchor-config");
+
+      // ---- ⑤c 没开通直播间（anchor_room 返回 null）：**不是错误**，整块不渲染、也不报错（第 2 条）
+      //   把 default 的状态置 null、重开对话框重新预取 → 那行按钮消失。
+      var anKeptRoom = window.__anchorByAccount.default;
+      window.__anchorByAccount.default = null;
+      pressEscape();
+      await sleep(400);
+      byTestId("db-account").click();
+      await sleep(600);
+      out.anchorNoRoomNoToggle = !anToggle(anRowByName("本地测试"));
+      window.__anchorByAccount.default = anKeptRoom; // 恢复，留给下面的 ROOM_CHANGE 段
+      pressEscape();
+      await sleep(400);
+
+      // ---- ⑥ ROOM_CHANGE 自动更新标题（第 6 条）：上游推来标题变更（danmubox://room，
+      //   房间号命中当前直播间），管理区就地换掉标题输入框，不必手动重读。
+      byTestId("db-account").click();
+      await sleep(500);
+      anToggle(anRowByName("本地测试")).click();
+      await sleep(500);
+      window.__emit("danmubox://room", { room_id: 515151, title: "被弹幕端改的标题" });
+      await sleep(400);
+      out.anchorTitleUpdatedByRoomChange =
+        !!byTestId("db-anchor-title") &&
+        byTestId("db-anchor-title").value === "被弹幕端改的标题";
+      anToggle(anRowByName("本地测试")).click(); // 收起管理区
+      await sleep(300);
+      out.anchorCollapseClearsPanel = anPanel() === null;
+
+      // 还原账号表与 default 的直播间状态，免得污染后面的场景块
+      window.__setAccounts(anSavedAccounts);
+      // ---- 收起对话框（推流码是账号级凭据，关掉对话框即清）
       pressEscape();
       await sleep(400);
       out.anchorDialogClosedAfterBlock = !byTestId("db-account-dialog");

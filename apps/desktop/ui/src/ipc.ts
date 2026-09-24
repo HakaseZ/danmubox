@@ -160,20 +160,34 @@ export const api = {
   followList: () => call<FollowedRoom[]>("follow_list"),
   walletBalance: () => call<number>("wallet_balance"),
 
-  // 我的直播间（契约 §7）：房间号一律由后端按当前账号现取，本层不接受房间号参数。
-  /** 取当前账号自己的直播间；`null` = 该账号没开通直播间（**不是错误**）。 */
-  anchorRoom: () => call<OwnRoom | null>("anchor_room"),
-  /** 改自己直播间标题。空标题由后端拒（`BAD_REQUEST`）。 */
-  anchorTitleSet: (title: string) => call<OwnRoom>("anchor_title_set", { title }),
+  // 我的直播间（契约 §7）：房间号一律由后端按账号现取，本层不接受房间号参数。
+  // `account` 缺省 = 当前账号，**指定即管理那个账号**——不必先切号（issue202609241553 第 3 条）。
+  /** 取某账号自己的直播间；`null` = 该账号没开通直播间（**不是错误**）。 */
+  anchorRoom: (account?: string) =>
+    call<OwnRoom | null>("anchor_room", account === undefined ? {} : { account }),
+  /** 改某账号自己直播间标题。空标题由后端拒（`BAD_REQUEST`）。 */
+  anchorTitleSet: (account: string, title: string) =>
+    call<OwnRoom>("anchor_title_set", { account, title }),
   /** 开播分区树（两级）。上游分区是公开数据，不登录也可。 */
-  anchorAreaList: () => call<AnchorArea[]>("anchor_area_list"),
+  anchorAreaList: (account?: string) =>
+    call<AnchorArea[]>("anchor_area_list", account === undefined ? {} : { account }),
+  /**
+   * 改某账号自己直播间的分区（独立写入口，issue202609241553 第 4 条）。
+   * `areaV2` = 子分区 id；成功返回重读后的 `OwnRoom`。
+   */
+  anchorAreaSet: (account: string, areaV2: number) =>
+    call<OwnRoom>("anchor_area_set", { account, areaV2 }),
   /**
    * 开播 / 下播。`live=false` 下播返回 `null`；开播成功返回 `StreamEndpoints`
    * （含推流码）、被身份校验挡住返回 `AnchorGate`。
    * `areaV2` 缺省沿用直播间当前分区（上次开播分区）。
    */
-  anchorLiveSet: (live: boolean, areaV2?: number) =>
-    call<StreamEndpoints | AnchorGateView | null>("anchor_live_set", { live, areaV2 }),
+  anchorLiveSet: (account: string, live: boolean, areaV2?: number) =>
+    call<StreamEndpoints | AnchorGateView | null>("anchor_live_set", {
+      account,
+      live,
+      areaV2,
+    }),
 
   prefsGet: () => call<Prefs>("prefs_get"),
   prefsSet: (patch: Partial<Prefs>) => call<Prefs>("prefs_set", { patch }),

@@ -85,6 +85,21 @@ pub enum Dispatch {
         message: Message,
         live_status: i32,
     },
+    /// **房间的标题变了**（`ROOM_CHANGE`，协议 §10.7）。
+    ///
+    /// 与 [`Dispatch::LiveStatus`] 同一条路子：这条命令**照旧**入会话缓冲一条 `system` 消息
+    /// （「标题或分区变更」），同时把新标题冒泡给界面 —— 主播自己改了标题时，
+    /// 「我的直播间」面板不该还挂着改之前那一份（issue202609241553 第 6 条）。
+    ///
+    /// 字段名取自参照实现 `HakaseZ/BiliLiveWatcher`（`ROOM_CHANGE.go` 只读 `data.room_id` 与
+    /// `data.title`，用户自有、已实跑）；**本仓未实测**，两个字段任一取不到就退回
+    /// [`Dispatch::Message`]，绝不猜。分区不在该事件的载荷里（参照实现也没读），
+    /// 仍以 `anchor_room` 重读为准。
+    RoomTitle {
+        message: Message,
+        room_id: i64,
+        title: String,
+    },
     /// **大航海**（`GUARD_BUY` / `USER_TOAST_MSG`，协议 §10.6）：同一笔购买上游会拆成两条载荷，
     /// 两条都投就会同一笔算两次金额（issue 2609171849 #1）。消费方**不得**直接投递，
     /// 必须先经 [`GuardMerge`] 按笔合并（§12.3「按时间窗合并为一条播报」）。
@@ -110,6 +125,9 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
     // 大航海的来源命令（协议 §10.6）：只有 `GUARD_BUY` / `USER_TOAST_MSG` 两条会给它赋值，
     // 赋了值就说明这条产出是「一笔购买的一半」，必须走 `Dispatch::Guard` 交给 [`GuardMerge`]。
     let mut guard_source: Option<GuardSource> = None;
+    // `ROOM_CHANGE` 顺带带出的新标题（协议 §10.7）：只有这条命令会给它赋值，
+    // 且只在 `data.room_id` / `data.title` **都**取到时才赋（取不到就当普通系统消息）。
+    let mut title_update: Option<(i64, String)> = None;
 
     let message = match cmd {
         "DANMU_MSG" => danmaku(room_id, value),
@@ -172,13 +190,28 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
                 None
             } else {
                 match SYSTEM_CMDS.iter().find(|(name, _, _)| *name == other) {
-                    Some((_, label, live)) => {
+                    Some((name, label, live)) => {
                         let mut m =
                             Message::new(room_id, MessageKind::System, danmubox_core::now_ms());
                         m.content = (*label).to_string();
                         // `LIVE` / `PREPARING` 另带开播状态（协议 §10.7 的侧路）：
                         // 界面靠它把房间头 / 标签页 / 列表卡片的状态点在原地换掉，不必重连重刷。
                         status_update = *live;
+                        // `ROOM_CHANGE` 另带新标题：两个字段齐了才冒泡，缺一个就只当系统消息。
+                        if *name == "ROOM_CHANGE" {
+                            let changed_room = value
+                                .pointer("/data/room_id")
+                                .and_then(Value::as_i64)
+                                .unwrap_or_default();
+                            let title = value
+                                .pointer("/data/title")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            if changed_room > 0 && !title.is_empty() {
+                                title_update = Some((changed_room, title));
+                            }
+                        }
                         Some(m)
                     }
                     None => {
@@ -206,13 +239,20 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
         // 大航海不在这里定去留：同一笔的另一半随时可能到，合并由 [`GuardMerge`] 按时间窗完成。
         return message.map(|message| Dispatch::Guard { message, source });
     }
-    match (message, status_update) {
-        (Some(message), Some(live_status)) => Some(Dispatch::LiveStatus {
+    // `LIVE` / `PREPARING` 不会同时带标题，`ROOM_CHANGE` 也不会带开播状态 ——
+    // 两条侧路互斥，与各自的命令一一对应；都没带就是一条普通系统消息。
+    match (message, title_update, status_update) {
+        (Some(message), Some((room_id, title)), _) => Some(Dispatch::RoomTitle {
+            message,
+            room_id,
+            title,
+        }),
+        (Some(message), None, Some(live_status)) => Some(Dispatch::LiveStatus {
             message,
             live_status,
         }),
-        (Some(message), None) => Some(Dispatch::Message(message)),
-        (None, _) => None,
+        (Some(message), None, None) => Some(Dispatch::Message(message)),
+        (None, _, _) => None,
     }
 }
 
@@ -980,6 +1020,9 @@ mod tests {
             // `LIVE` / `PREPARING` 也带一条 `system` 消息（另外那份开播状态由
             // `live_and_preparing_bubble_the_room_status` 单独断言）。
             Some(Dispatch::LiveStatus { message, .. }) => Some(message),
+            // `ROOM_CHANGE` 也带一条 `system` 消息（另外那份新标题由
+            // `room_change_bubbles_title` 单独断言）。
+            Some(Dispatch::RoomTitle { message, .. }) => Some(message),
             // 大航海走 `Dispatch::Guard`（同一笔的两条载荷由 `GuardMerge` 合并，
             // 见 `guard_pair_is_merged_into_one_announcement_with_the_paid_price`）。
             Some(Dispatch::Guard { message, .. }) => Some(message),
@@ -2227,6 +2270,38 @@ mod tests {
         assert!(
             matches!(other, Dispatch::Message(_)),
             "只有 LIVE / PREPARING 带开播状态"
+        );
+    }
+
+    #[test]
+    fn room_change_bubbles_title() {
+        let c = counters();
+        // ① 带 `data.room_id` 与 `data.title` → 产出 `RoomTitle`（issue202609241553 第 6 条），
+        //    且仍带一条「标题或分区变更」的 `system` 消息（先投消息、再冒泡标题）。
+        //    字段名取自参照实现 `HakaseZ/BiliLiveWatcher` 的 `ROOM_CHANGE.go`。
+        let value = json!({
+            "cmd": "ROOM_CHANGE",
+            "data": {"room_id": 777, "title": "新标题"}
+        });
+        let dispatched = dispatch(1, &value, &c).expect("ROOM_CHANGE 必须产生产出");
+        let Dispatch::RoomTitle {
+            message,
+            room_id,
+            title,
+        } = dispatched
+        else {
+            panic!("ROOM_CHANGE 带 room_id/title 必须产 RoomTitle");
+        };
+        assert_eq!(room_id, 777);
+        assert_eq!(title, "新标题");
+        assert_eq!(message.kind, MessageKind::System);
+        assert_eq!(message.content, "标题或分区变更");
+
+        // ② 缺字段 → 退回普通 `system` 消息（绝不猜）：任一取不到都不冒泡标题。
+        let empty = dispatch(1, &json!({"cmd": "ROOM_CHANGE"}), &c).expect("仍产生产出");
+        assert!(
+            matches!(empty, Dispatch::Message(_)),
+            "缺 room_id/title 退回 Message"
         );
     }
 

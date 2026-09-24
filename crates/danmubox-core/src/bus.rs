@@ -79,7 +79,10 @@ pub enum Event {
     /// （参照实现 `HakaseZ/BiliLiveWatcher` 的 `ROOM_CHANGE.go` 只读 `data.room_id` / `data.title`）。
     /// 整条 `Room` 由外壳用登记表补全后再发 `danmubox://room` —— 与 `LiveStatus` 那条同款，
     /// **不新增对外事件名**。
-    RoomTitle { room_id: i64, title: String },
+    RoomTitle {
+        room_id: i64,
+        title: String,
+    },
 }
 
 /// 广播总线。慢消费者由 `broadcast` 自行丢弃旧值，不阻塞上游。

@@ -1065,10 +1065,7 @@ fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus, rooms: Arc<Mutex<
                         }
                         // 没登记过的房间（比如主播自己的直播间没被加进列表）：不推半条假元信息，
                         // 「我的直播间」面板那一侧另走 `anchor_room` 重读。
-                        None => tracing::debug!(
-                            room_id,
-                            "标题变更事件来自未登记的房间，忽略"
-                        ),
+                        None => tracing::debug!(room_id, "标题变更事件来自未登记的房间，忽略"),
                     }
                 }
                 Ok(Event::Session(session)) => {

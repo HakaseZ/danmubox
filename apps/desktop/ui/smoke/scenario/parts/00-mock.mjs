@@ -139,13 +139,16 @@
     { room_id: 200, uname: "离线乙", face: "", title: "离线乙的直播间标题", live_status: 0, group_name: "", live_start_at: 1789500000, online: 0 },
     { room_id: 300, uname: "离线甲", face: "", title: "", live_status: 0, group_name: "", live_start_at: 1700000000, online: 0 }
   ]);
-  // 账号（契约 §7 accounts_list）：条目自带登录状态与身份。
+  // 账号（契约 §7 accounts_list）：条目自带登录状态与身份。这里只放一个「当前已登录」账号——
+  // 「跨账号 / 没开通 / 未登录」那几个账号由 `37-anchor-room.mjs` 在它自己的块里**临时注入**
+  // （在账号场景块 32 之后才跑），避免污染「账号场景块要求恰好 1 个账号」的断言。
   var accounts = [
-    {
-      name: "default", nickname: "本地测试", uid: 1000, logged_in: true, active: true,
-      face: FACE_512
-    }
+    { name: "default", nickname: "本地测试", uid: 1000, logged_in: true, active: true, face: FACE_512 },
   ];
+  // 场景块可以**整张替换**账号表（读 / 写都走这两个口子，用完还原）：mock 里 `accounts`
+  // 是闭包变量，光改 `window.accounts` 不生效（那不是事实来源）。
+  window.__accountsRef = function () { return accounts; };
+  window.__setAccounts = function (list) { accounts = list; return syncSession(); };
   // 假二维码（21×21 图案）：真二维码由后端离线渲染，这里只要截图里**看得到图案**，
   // 免得「二维码是空白」被误读成界面 bug。
   var qrSvg = (function () {
@@ -188,13 +191,17 @@
   window.__qrTarget = null;
   // 轮询失败开关：验证「失败要能重试」（面板留在原地 + 重新获取按钮）
   window.__qrFail = false;
-  // ---- 「我的直播间」（契约 §7 anchor_*）的替身状态与开关
-  //   __anchor        = null 时表示「该账号没开通直播间」（**不是错误**，界面据此整块不渲染）
+  // ---- 「我的直播间」（契约 §7 anchor_*）的替身状态与开关（**按账号**）
+  //   __anchorByAccount[name] = 该账号自己的直播间；null = 没开通（**不是错误**，按钮据此不渲染）
+  //      未登记的账号一律当「没开通」（新扫码的号不会有房间）
   //   __anchorGate    = 开播被身份校验挡住（默认关）；__anchorGateKind 切 `qrconfirm` / `faceauth`
-  //   __anchorFail    = 读取失败（验证「失败不静默」，只渲染错误行）
-  //   __anchorAreas   = 两级分区树；`children` 末端的 id 即 anchor_live_set 的 area_v2
-  window.__anchor = {
-    room_id: 515151, title: "冒烟直播间", live_status: 0, area_id: 371, area_name: "虚拟主播",
+  //   __anchorFail    = 读取失败（验证「失败不静默」，作用于所有账号，只渲染错误行）
+  //   __anchorAreas   = 两级分区树（公开数据，同一份）；`children` 末端的 id 即写分区 / 开播的 area_v2
+  window.__anchorByAccount = {
+    default: { room_id: 515151, title: "冒烟直播间", live_status: 0, area_id: 371, area_name: "虚拟主播" },
+    alt:     { room_id: 616161, title: "二号直播间", live_status: 0, area_id: 21, area_name: "生活" },
+    noroom:  null,
+    guest:   null,
   };
   window.__anchorGate = false;
   window.__anchorGateKind = "qrconfirm";
@@ -203,6 +210,17 @@
     { id: 9, name: "虚拟主播", children: [{ id: 371, name: "虚拟主播" }, { id: 372, name: "电台" }] },
     { id: 1, name: "娱乐", children: [{ id: 21, name: "生活" }, { id: 22, name: "美食" }] },
   ];
+  // 取某账号的直播间状态（未登记 → null）；读内部表，便于场景块改它。
+  // `name` 缺省 = **当前账号**（与后端 `active()` 同口径）。
+  window.__anchorOf = function (name) {
+    var who = name;
+    if (who === undefined || who === null) {
+      var act = accounts.filter(function (a) { return a.active; })[0];
+      who = act ? act.name : "";
+    }
+    if (!window.__anchorByAccount.hasOwnProperty(who)) return null;
+    return window.__anchorByAccount[who];
+  };
   window.__mk = msg;
   /**
    * 夹具里的一条礼物 / SC / 大航海 → Message 并广播（**归一化层**：夹具给的已经是 Message
@@ -370,31 +388,51 @@
         case "admin_keywords_add":
         case "admin_keywords_del": return Promise.resolve(null);
         case "wallet_balance": return Promise.resolve(150);
-        // ---- 「我的直播间」（契约 §7）：房间号一律后端现取，这四条命令都**不接受房间号参数**
+        // ---- 「我的直播间」（契约 §7）：房间号一律后端按 `account` 现取，这五条命令都
+        //      **不接受房间号参数**；`account` 缺省 = 当前账号，指定即管理那个账号（跨账号）。
         case "anchor_room": {
           if (window.__anchorFail) {
             return Promise.reject({ code: "UPSTREAM_ERROR", message: "读取直播间失败（冒烟替身）" });
           }
-          return Promise.resolve(window.__anchor ? Object.assign({}, window.__anchor) : null);
+          var ar = window.__anchorOf(args.account);
+          return Promise.resolve(ar ? Object.assign({}, ar) : null);
         }
         case "anchor_title_set": {
           // 空标题由后端拒（`BAD_REQUEST`）；界面侧那枚「保存」键同时也该是禁用的
           if (String(args.title || "").trim().length === 0) {
             return Promise.reject({ code: "BAD_REQUEST", message: "直播间标题不能为空" });
           }
-          window.__anchor.title = args.title;
-          return Promise.resolve(Object.assign({}, window.__anchor));
+          var at = window.__anchorOf(args.account);
+          if (!at) return Promise.reject({ code: "UPSTREAM_ERROR", message: "该账号没有开通直播间" });
+          at.title = args.title;
+          return Promise.resolve(Object.assign({}, at));
         }
         case "anchor_area_list": {
+          // 公开数据：与账号无关，同一份两级树。
           return Promise.resolve(window.__anchorAreas.map(function (a) {
             return { id: a.id, name: a.name, children: (a.children || []).map(function (c) {
               return { id: c.id, name: c.name, children: [] };
             }) };
           }));
         }
+        case "anchor_area_set": {
+          // 独立改分区入口（issue202609241553 第 4 条）：选中即存，不必等到开播。
+          // `area_v2` = 子分区 id；成功返回重读后的房间（含新 area_name）。
+          var aa = window.__anchorOf(args.account);
+          if (!aa) return Promise.reject({ code: "UPSTREAM_ERROR", message: "该账号没有开通直播间" });
+          aa.area_id = args.area_v2;
+          var an = null;
+          window.__anchorAreas.forEach(function (p) {
+            (p.children || []).forEach(function (c) { if (c.id === args.area_v2) an = c.name; });
+          });
+          aa.area_name = an || aa.area_name;
+          return Promise.resolve(Object.assign({}, aa));
+        }
         case "anchor_live_set": {
+          var al = window.__anchorOf(args.account);
+          if (!al) return Promise.reject({ code: "UPSTREAM_ERROR", message: "该账号没有开通直播间" });
           if (!args.live) {
-            window.__anchor.live_status = 0;
+            al.live_status = 0;
             return Promise.resolve(null);
           }
           if (window.__anchorGate) {
@@ -409,8 +447,8 @@
                 });
           }
           // 成功：area_v2 缺省沿用直播间当前分区，Some 则按界面所选覆盖（并记进房间状态）
-          if (args.area_v2 !== undefined) window.__anchor.area_id = args.area_v2;
-          window.__anchor.live_status = 1;
+          if (args.area_v2 !== undefined) al.area_id = args.area_v2;
+          al.live_status = 1;
           return Promise.resolve({
             rtmp: { addr: "rtmp://live-push.example/live", code: "smoke-stream-key-0001" },
             rtmp_backup: null,

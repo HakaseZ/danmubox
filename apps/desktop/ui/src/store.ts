@@ -129,6 +129,17 @@ interface AppStore {
   anchorGate: AnchorGateView | null;
   /** 这一块读 / 写失败的原因：**后端原话**，失败不静默。 */
   anchorError?: string;
+  /**
+   * 每个账号自己的直播间（`anchor_room(account)` 的预取结果，`docs/ui.md` §2.2.2）：
+   * 账号名 → `OwnRoom | null`。`null` = 该账号**没开通**直播间（不是错误），界面据此
+   * **不渲染**那行的「我的直播间」按钮（issue202609241553 第 2 条）。
+   */
+  anchorRooms: Record<string, OwnRoom | null>;
+  /**
+   * 每个账号「取自己直播间」失败的原因（同上，按账号名）。有错误 → 也不渲染按钮，
+   * 但原因留痕（失败不静默，`AGENT.md` §8.7）。
+   */
+  anchorRoomErrors: Record<string, string>;
 
   bootstrap: () => Promise<void>;
   addRoom: (input: string) => Promise<void>;
@@ -211,18 +222,29 @@ interface AppStore {
   /** 执行一次房管写操作；调用方负责二次确认。成功返回 true。 */
   runAdmin: (roomId: number, action: AdminAction) => Promise<boolean>;
   /**
-   * 展开 / 收起某个账号行的「我的直播间」管理区（再点一次收起）。
-   * 展开时才拉 `anchor_room` 与 `anchor_area_list`；**游客态与非当前账号不发请求**。
+   * 展开 / 收起某个账号行的「我的直播间」管理区（再点一次收起）。**不必切到该账号**
+   * （issue202609241553 第 3 条）：展开即按 `name` 拉那个账号的房间与分区。
    */
   toggleAnchorPanel: (name: string) => Promise<void>;
   closeAnchorPanel: () => void;
-  loadAnchorRoom: () => Promise<void>;
+  /**
+   * 打开账号对话框时**并发**预取所有已登录账号的「自己的直播间」（`anchor_room(account)`），
+   * 落到 `anchorRooms` / `anchorRoomErrors`，供按钮显隐判断（第 2 条）。已在的条目会被刷新。
+   */
+  loadAnchorRooms: () => Promise<void>;
+  /** 拉（或重拉）某个账号的直播间；不传 `name` = 当前展开的那个。同时回填 `anchorRoom`。 */
+  loadAnchorRoom: (name?: string) => Promise<void>;
   /** 拉开播分区树。取不到只降级为只读分区名，不当作这一块的致命错误。 */
   loadAnchorAreas: () => Promise<void>;
   /** 标题草稿；传空串等于「清空」。 */
   setAnchorTitleDraft: (value: string) => void;
   /** 选中的子分区（`undefined` = 沿用直播间当前分区）。 */
   setAnchorAreaId: (id?: number) => void;
+  /**
+   * 改分区且**立即存**（issue202609241553 第 4 条）：改即发一次 `anchor_area_set` 写，
+   * 与标题的「改完点保存」分开提交。成功就地换分区名；失败回退选择并留原话在错误行。
+   */
+  saveAnchorArea: (id: number) => Promise<void>;
   /** 保存标题；成功返回 true（成功后远端为准，就地重读）。 */
   saveAnchorTitle: () => Promise<boolean>;
   /** 开播 / 下播。开播成功落推流端点、被身份校验挡住落引导。 */
@@ -709,9 +731,11 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
     lastSend: undefined,
     // 「我的直播间」整块跟着身份走：房间、分区、推流码（**账号级凭据**）、人脸认证
     // 引导、展开态与草稿一并清 —— 留下任何一块都是把上一个人的直播间摆在新账号面前
-    // （`docs/ui.md` §2.2.2：换号 / 登出即清）。
+    // （`docs/ui.md` §2.2.2：换号 / 登出即清）。按账号的房间映射也清（那一份是身份派生）。
     anchorPanelFor: null,
     anchorRoom: null,
+    anchorRooms: {},
+    anchorRoomErrors: {},
     anchorAreas: [],
     anchorAreaError: undefined,
     anchorTitleDraft: undefined,
@@ -830,6 +854,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
   adminBusy: false,
   anchorPanelFor: null,
   anchorRoom: null,
+  anchorRooms: {},
+  anchorRoomErrors: {},
   anchorAreas: [],
   anchorEndpoints: null,
   anchorGate: null,
@@ -922,19 +948,39 @@ export const useApp = create<AppStore>((set, get, store) => ({
         // 只有在载荷真的带了 `live_status` 时才动关注行：载荷按契约是整条 `Room`，但**不许**
         // 把「这一份没带」当成「状态是 undefined」写进去（那会把关注行的状态标签打空）。
         onRoom: (room) =>
-          set((state) => ({
-            rooms: state.rooms.map((item) =>
+          set((state) => {
+            // 房间列表与关注行照旧跟着变（见上方注释）。
+            const rooms = state.rooms.map((item) =>
               item.room_id === room.room_id ? { ...item, ...room } : item,
-            ),
-            followed:
+            );
+            const followed =
               typeof room.live_status === "number"
                 ? state.followed.map((item) =>
                     item.room_id === room.room_id
                       ? { ...item, live_status: room.live_status }
                       : item,
                   )
-                : state.followed,
-          })),
+                : state.followed;
+            // 「我的直播间」面板：主播自己改了标题时（`ROOM_CHANGE` 经 `danmubox://room`
+            // 推来，只带房间号与新标题），面板不该还挂着改之前那一份
+            // （issue202609241553 第 6 条）。未连接自己直播间收不到这条（限制见 ui.md）。
+            let anchorRoom = state.anchorRoom;
+            let anchorRooms = state.anchorRooms;
+            if (
+              state.anchorRoom &&
+              room.title !== undefined &&
+              state.anchorRoom.room_id === room.room_id
+            ) {
+              anchorRoom = { ...state.anchorRoom, title: room.title };
+              if (state.anchorPanelFor) {
+                anchorRooms = {
+                  ...state.anchorRooms,
+                  [state.anchorPanelFor]: anchorRoom,
+                };
+              }
+            }
+            return { rooms, followed, anchorRoom, anchorRooms };
+          }),
         // 登录态变了（扫码确认 / Cookie 失效 / 后端切号）就顺手重拉账号列表，
         // 否则对话框会一直显示过期的「已登录」标记；不递归：只重拉列表，不碰 session。
         onSession: (session) => {
@@ -1503,18 +1549,14 @@ export const useApp = create<AppStore>((set, get, store) => ({
       anchorTitleDraft: undefined,
       anchorAreaId: undefined,
     });
-    // 只有**当前且已登录**的账号才有「自己的直播间」可读：后端按当前凭据取，
-    // 对着别的账号行发请求会拿回另一个人的房间（docs/ui.md §2.2.2）。
+    // **不必切到该账号**（issue202609241553 第 3 条）：展开即按 `name` 拉那个账号的房间与分区。
+    // 未登录账号没房间可读（预取阶段就不会给它按钮），这里再拦一道。
     const account = get().accounts.find((item) => item.name === name);
     if (!account?.logged_in) {
       set({ anchorError: "该账号未登录，扫码登录后才能管理直播间" });
       return;
     }
-    if (!account.active) {
-      set({ anchorError: "先切到该账号，再管理它的直播间" });
-      return;
-    }
-    await get().loadAnchorRoom();
+    await get().loadAnchorRoom(name);
     await get().loadAnchorAreas();
   },
 
@@ -1533,24 +1575,66 @@ export const useApp = create<AppStore>((set, get, store) => ({
     });
   },
 
-  async loadAnchorRoom() {
+  async loadAnchorRooms() {
+    // 并发预取所有**已登录**账号的「自己的直播间」：账号通常 1–3 个，`Promise.all`
+    // 与 `loadAdmin` 并发同款（docs/ui.md §2.2.2）。单个失败不影响其余（各自 try）。
+    const accounts = get().accounts.filter((item) => item.logged_in);
+    const results = await Promise.all(
+      accounts.map(async (item) => {
+        try {
+          const room = await api.anchorRoom(item.name);
+          return [item.name, room, undefined] as const;
+        } catch (error) {
+          return [item.name, null, describeError(error)] as const;
+        }
+      }),
+    );
+    set((state) => {
+      const rooms = { ...state.anchorRooms };
+      const errors = { ...state.anchorRoomErrors };
+      for (const [name, room, error] of results) {
+        rooms[name] = room;
+        // 成功（error 为 undefined）也清掉旧错误：统一落字符串，`""` = 无错误。
+        errors[name] = error ?? "";
+      }
+      return { anchorRooms: rooms, anchorRoomErrors: errors };
+    });
+  },
+
+  async loadAnchorRoom(name) {
+    const account = name ?? get().anchorPanelFor;
+    if (!account) return;
     const epoch = identityEpoch;
     try {
-      const room = await api.anchorRoom();
+      const room = await api.anchorRoom(account);
       if (epoch !== identityEpoch) return;
       // 远端为准：重读后草稿回到跟随远端，界面不拿旧草稿盖住上游改过的标题。
-      set({ anchorRoom: room, anchorTitleDraft: undefined, anchorError: undefined });
+      // 同时回填按账号的映射（按钮显隐靠它）；若是当前展开面板，另镜像到 `anchorRoom`。
+      set((state) => ({
+        anchorRooms: { ...state.anchorRooms, [account]: room },
+        anchorRoomErrors: { ...state.anchorRoomErrors, [account]: "" },
+        anchorRoom: state.anchorPanelFor === account ? room : state.anchorRoom,
+        anchorTitleDraft: state.anchorPanelFor === account ? undefined : state.anchorTitleDraft,
+        anchorError: state.anchorPanelFor === account ? undefined : state.anchorError,
+      }));
     } catch (error) {
       if (epoch !== identityEpoch) return;
       // 读失败也要留痕（凭据失效 / 风控…）：只渲染错误行，不编一行假状态。
-      set({ anchorRoom: null, anchorError: describeError(error) });
+      const reason = describeError(error);
+      set((state) => ({
+        anchorRooms: { ...state.anchorRooms, [account]: null },
+        anchorRoomErrors: { ...state.anchorRoomErrors, [account]: reason },
+        anchorRoom: state.anchorPanelFor === account ? null : state.anchorRoom,
+        anchorError: state.anchorPanelFor === account ? reason : state.anchorError,
+      }));
     }
   },
 
   async loadAnchorAreas() {
+    const account = get().anchorPanelFor;
     const epoch = identityEpoch;
     try {
-      const areas = await api.anchorAreaList();
+      const areas = await api.anchorAreaList(account ?? undefined);
       if (epoch !== identityEpoch) return;
       set({ anchorAreas: areas, anchorAreaError: undefined });
     } catch (error) {
@@ -1570,15 +1654,22 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   async saveAnchorTitle() {
+    const account = get().anchorPanelFor;
+    if (!account) return false;
     const title = (get().anchorTitleDraft ?? get().anchorRoom?.title ?? "").trim();
     // 空标题界面已禁用保存键，后端也会拒（BAD_REQUEST）；这里不再发一次无效请求。
     if (title.length === 0) return false;
     const epoch = identityEpoch;
     try {
-      const room = await api.anchorTitleSet(title);
+      const room = await api.anchorTitleSet(account, title);
       if (epoch !== identityEpoch) return false;
       // 保存成功就地重读：不猜上游怎么改的，以远端为准。
-      set({ anchorRoom: room, anchorTitleDraft: undefined, anchorError: undefined });
+      set((state) => ({
+        anchorRoom: room,
+        anchorRooms: { ...state.anchorRooms, [account]: room },
+        anchorTitleDraft: undefined,
+        anchorError: undefined,
+      }));
       return true;
     } catch (error) {
       if (epoch !== identityEpoch) return false;
@@ -1587,14 +1678,42 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
+  async saveAnchorArea(id: number) {
+    const account = get().anchorPanelFor;
+    if (!account) return;
+    const epoch = identityEpoch;
+    // 选中即写（issue202609241553 第 4 条）：先记下选择（供开播覆盖与显示），
+    // 再发一次 `anchor_area_set`；失败回退选择并留原话。
+    set({ anchorAreaId: id });
+    try {
+      const room = await api.anchorAreaSet(account, id);
+      if (epoch !== identityEpoch) return;
+      // 写成功就地换分区名：不猜上游怎么改的，以远端为准。
+      set((state) => ({
+        anchorRoom: room,
+        anchorRooms: { ...state.anchorRooms, [account]: room },
+        anchorError: undefined,
+      }));
+    } catch (error) {
+      if (epoch !== identityEpoch) return;
+      // 失败即停、不重试：选择回退到服务端当前分区，错误原话进错误行。
+      set((state) => ({
+        anchorAreaId: state.anchorRoom?.area_id,
+        anchorError: describeError(error),
+      }));
+    }
+  },
+
   async setAnchorLive(live) {
+    const account = get().anchorPanelFor;
+    if (!account) return;
     const epoch = identityEpoch;
     // 被挡住时上游原话要**留过**下面那次重读：重读成功会清 `anchorError`，
     // 而「引导不代替上游原话」——认证码与 msg 必须一直挂在错误行上（`ui.md` §2.2.2）。
     let blockedReason: string | undefined;
     try {
       // `areaV2` 缺省 = 沿用直播间当前分区（上次开播分区）；界面选了才覆盖。
-      const result = await api.anchorLiveSet(live, get().anchorAreaId);
+      const result = await api.anchorLiveSet(account, live, get().anchorAreaId);
       if (epoch !== identityEpoch) return;
       if (!live) {
         // 下播：推流码**立刻**从内存里消失，不留残留。
@@ -1608,7 +1727,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
         set({ anchorEndpoints: result ?? null, anchorGate: null, anchorError: undefined });
       }
       // 不论成败都重读一次：开播状态由上游说了算，界面不自己推。
-      await get().loadAnchorRoom();
+      await get().loadAnchorRoom(account);
       if (blockedReason !== undefined) set({ anchorError: blockedReason });
     } catch (error) {
       if (epoch !== identityEpoch) return;

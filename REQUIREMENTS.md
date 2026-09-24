@@ -192,6 +192,15 @@
 
 - 账号管理界面里，**每个账号的删除按钮右侧新增一枚「我的直播间」按钮**（`db-anchor-toggle`）；点击**展开**该账号的直播间管理区（不是常驻面板）。没开通直播间 / 读失败时仍可按，展开后只渲染错误行 — 落点 `contract.md` §3 `AnchorRoom`、§5 `OwnRoom`、§7 `anchor_room`、`ui.md` §2.2.2
 - 管理区里有三样：**直播间标题（可改）**、**分区选择（两级联动父→子）**、**开播状态 + 开播 / 下播按钮** — 落点 `contract.md` §7 `anchor_title_set` / `anchor_live_set` / `anchor_area_list`、`ui.md` §2.2.2
+
+**2026-09-24 二次修订（issue202609241553）**：按用户在该 issue 的六条要求进一步收紧入口形态与交互（落点 `ui.md` §2.2.2、`protocol.md` §18.1 / §10.7 / A66-1、`testing.md` C-16）：
+
+- **按钮右端隔离**：「我的直播间」从账号管理按钮组（重新登录 / 退出登录 / 删除）里**挪出**，单独成组贴在**账号行最右端**（`db-anchor-entry`，`margin-left:auto`），用一道间距与竖分隔把两类不同级的功能读开（第 1 条）。
+- **没开通 / 未登录不显示按钮**（第 2 条）：某账号**没开通直播间**（`anchor_room` 返回 `null`）或**未登录**的行，**根本不渲染**这枚按钮——不编一行假状态、也不给入口；打开账号对话框时对**已登录**账号并发预取 `anchor_room`（落到 `anchorRooms` / `anchorRoomErrors`），按钮显隐直接由这份映射决定。读失败也不渲染按钮，但原因留痕于映射（失败不静默）。
+- **不必切号即可跨账号管理**（第 3 条）：任一账号行都能直接管理**那个账号**的直播间——`anchor_*` 命令新增 `account` 参数，由 `BiliAnchor::new_for(account)` 走那份凭据，目标房间仍由 `own()` 现取、上层不传房间号（落点 `contract.md` §7、§2.14 写操作纪律）。
+- **分区可改且改动即存**（第 4 条）：大区 + 小区两级都能改，且改分区是**独立写入口**（`anchor_area_set`，不必等到开播），选中即发一次写；解析路径按参照项目修正为 `data[]` 直接数组 + `show_pinyin=1`（早期写成 `data.list[]` 会把分区读空、界面降级只读，是根因）。
+- **布局调整**（第 5 条）：直播间状态移到**标题输入框左边**；开播 / 下播按钮**独占一行**（不与标题 / 分区挤在一起）。
+- **ROOM_CHANGE 自动更新**（第 6 条）：弹幕 WS 推来的 `ROOM_CHANGE`（带 `data.room_id` 与 `data.title`，字段形态见 `protocol.md` A66-1）经 `danmubox://room` 回到前端，命中 `anchorRoom.room_id` 时就地更新标题输入框（限制：未连接自己直播间收不到）。
 - **默认值 = 上次开播（下播 / 准备中）保留的数据**：标题与分区直接取 `OwnRoom.title` / `area_id` / `area_name`，**用户不改即可直接沿用开播、不必重填**；仅想换时才编辑 — 落点 `contract.md` §5 `OwnRoom`、`protocol.md` §18
 - **分区选择**：新增两级联动分区选择器，数据来自 `anchor_area_list`（父分区 → 子分区）；默认选中 = `OwnRoom.area_id`（上次开播分区），取不到列表时降级为只读显示 `area_name`；`anchor_live_set` 接受可选 `area_v2` 覆盖（缺省沿用当前分区） — 落点 `contract.md` §5 `AnchorArea`、§7 `anchor_area_list`、`protocol.md` §18.1
 - **开播成功后在管理区下方直接渲染推流参数**（当前分区 + 推流地址 + 推流码），**长按该值即复制、不显示复制键**，复制失败静默，下播即消失 — 落点 `contract.md` §5 `StreamEndpoints`、`ui.md` §2.2.2

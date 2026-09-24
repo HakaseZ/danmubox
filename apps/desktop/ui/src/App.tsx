@@ -349,6 +349,8 @@ export function App() {
   const followed = useApp((state) => state.followed);
   const balance = useApp((state) => state.balance);
   const anchorFor = useApp((state) => state.anchorPanelFor);
+  const anchorRooms = useApp((state) => state.anchorRooms);
+  const anchorRoomErrors = useApp((state) => state.anchorRoomErrors);
   const anchorRoom = useApp((state) => state.anchorRoom);
   const anchorAreas = useApp((state) => state.anchorAreas);
   const anchorAreaError = useApp((state) => state.anchorAreaError);
@@ -358,8 +360,9 @@ export function App() {
   const anchorGate = useApp((state) => state.anchorGate);
   const anchorError = useApp((state) => state.anchorError);
   const toggleAnchorPanel = useApp((state) => state.toggleAnchorPanel);
+  const loadAnchorRooms = useApp((state) => state.loadAnchorRooms);
   const setAnchorTitleDraft = useApp((state) => state.setAnchorTitleDraft);
-  const setAnchorAreaId = useApp((state) => state.setAnchorAreaId);
+  const saveAnchorArea = useApp((state) => state.saveAnchorArea);
   const saveAnchorTitle = useApp((state) => state.saveAnchorTitle);
   const setAnchorLive = useApp((state) => state.setAnchorLive);
   const closeAnchorPanel = useApp((state) => state.closeAnchorPanel);
@@ -516,9 +519,15 @@ export function App() {
           onOpen={(roomId) => void openRoom(roomId)}
           accounts={accounts}
           onOpenAccounts={() => {
-            // 打开就先重拉一次：用户可能刚在别处登过号，列表必须说当下的事实。
-            void loadAccounts();
+            // 打开对话框：先把开关打开（界面立刻有响应），再重拉账号、再预取各账号直播间。
             setAccountsOpen(true);
+            // 重拉一次：用户可能刚在别处登过号，列表必须说当下的事实。
+            // **预取必须在 accounts 落地之后**：否则 `loadAnchorRooms` 读到旧的 / 空的账号表，
+            // 按钮显隐映射就是空的（issue202609241553 第 2 条靠它）。
+            void (async () => {
+              await loadAccounts();
+              void loadAnchorRooms();
+            })();
           }}
           onRemove={(roomId) => void removeRoom(roomId)}
           onRefreshFollowed={() => void loadFollowed()}
@@ -534,6 +543,8 @@ export function App() {
           qrState={qrState}
           qrError={qrError}
           anchorFor={anchorFor}
+          anchorRooms={anchorRooms}
+          anchorRoomErrors={anchorRoomErrors}
           anchorRoom={anchorRoom}
           anchorAreas={anchorAreas}
           anchorAreaError={anchorAreaError}
@@ -551,7 +562,7 @@ export function App() {
           onPollQr={() => void pollAccountQr()}
           onToggleAnchor={(name) => void toggleAnchorPanel(name)}
           onAnchorTitleDraft={setAnchorTitleDraft}
-          onAnchorArea={setAnchorAreaId}
+          onAnchorArea={(id) => void saveAnchorArea(id)}
           onAnchorSaveTitle={saveAnchorTitle}
           onAnchorLive={(live) => setAnchorLive(live)}
           onAnchorOpenGateUrl={() => void openAnchorGateUrl()}

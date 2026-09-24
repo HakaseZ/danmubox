@@ -761,31 +761,61 @@ async fn admin_keywords_del(
         .map_err(ApiError::from)
 }
 
-/// 取**当前账号自己的**直播间（契约 §7）。
+/// 取某账号自己的直播间（契约 §7）。`account` 缺省 = 当前账号，**指定即管理那个账号**——
+/// 不必先切号（issue202609241553 第 3 条）。
 ///
-/// 该账号**没开通直播间返回 `null`**，不是错误——界面据此只留错误行。
+/// 该账号**没开通直播间返回 `null`**，不是错误——界面据此不渲染「我的直播间」按钮。
 /// 房间号由实现侧现取，命令**不接受**房间号参数：写操作只作用在自己房间。
 #[tauri::command]
-async fn anchor_room(state: State<'_, AppState>) -> ApiResult<Option<OwnRoom>> {
-    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+async fn anchor_room(
+    state: State<'_, AppState>,
+    account: Option<String>,
+) -> ApiResult<Option<OwnRoom>> {
+    let anchor = BiliAnchor::new_for(Arc::clone(&state.store), account.as_deref())
+        .map_err(ApiError::from)?;
     anchor.own().await.map_err(ApiError::from)
 }
 
-/// 改**自己直播间**的标题（契约 §7）。空标题由实现侧拒（`BAD_REQUEST`）。
+/// 改某账号自己直播间的标题（契约 §7）。`account` 缺省 = 当前账号。
+/// 空标题由实现侧拒（`BAD_REQUEST`）。
 #[tauri::command]
-async fn anchor_title_set(state: State<'_, AppState>, title: String) -> ApiResult<OwnRoom> {
-    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+async fn anchor_title_set(
+    state: State<'_, AppState>,
+    account: Option<String>,
+    title: String,
+) -> ApiResult<OwnRoom> {
+    let anchor = BiliAnchor::new_for(Arc::clone(&state.store), account.as_deref())
+        .map_err(ApiError::from)?;
     anchor.set_title(&title).await.map_err(ApiError::from)
 }
 
-/// 开播分区树（契约 §7）：两级，供界面做父→子联动选择。上游分区是公开数据，**不登录也可**。
+/// 开播分区树（契约 §7）：两级，供界面做父→子联动选择。上游分区是公开数据，**不登录也可**；
+/// `account` 仅决定走哪份凭据（公开数据其实无需登录，透传即可）。
 #[tauri::command]
-async fn anchor_area_list(state: State<'_, AppState>) -> ApiResult<Vec<AnchorArea>> {
-    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+async fn anchor_area_list(
+    state: State<'_, AppState>,
+    account: Option<String>,
+) -> ApiResult<Vec<AnchorArea>> {
+    let anchor = BiliAnchor::new_for(Arc::clone(&state.store), account.as_deref())
+        .map_err(ApiError::from)?;
     anchor.area_list().await.map_err(ApiError::from)
 }
 
-/// 开播 / 下播（契约 §7）。
+/// 改某账号自己直播间的分区（契约 §7，issue202609241553 第 4 条）。这是**独立于开播**的写入口：
+/// 不必等到开播就能改。`area_v2` 是**子分区 id**（与 `go_live` 同口径）；`<= 0` 由实现侧拒。
+/// 成功返回重读后的 `OwnRoom`，界面就地换掉分区名，不猜上游怎么改的。
+#[tauri::command]
+async fn anchor_area_set(
+    state: State<'_, AppState>,
+    account: Option<String>,
+    area_v2: i64,
+) -> ApiResult<OwnRoom> {
+    let anchor = BiliAnchor::new_for(Arc::clone(&state.store), account.as_deref())
+        .map_err(ApiError::from)?;
+    anchor.set_area(area_v2).await.map_err(ApiError::from)
+}
+
+/// 开播 / 下播（契约 §7）。`account` 缺省 = 当前账号。
 ///
 /// 开播成功给 `StreamEndpoints`（**含推流码**：只随这一次返回值进界面内存，
 /// 本层不打日志、不落盘）；被身份校验挡住给 `AnchorGate`（引导 + 上游原话）；下播给 `null`。
@@ -793,10 +823,12 @@ async fn anchor_area_list(state: State<'_, AppState>) -> ApiResult<Vec<AnchorAre
 #[tauri::command]
 async fn anchor_live_set(
     state: State<'_, AppState>,
+    account: Option<String>,
     live: bool,
     area_v2: Option<i64>,
 ) -> ApiResult<Option<AnchorLiveView>> {
-    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    let anchor = BiliAnchor::new_for(Arc::clone(&state.store), account.as_deref())
+        .map_err(ApiError::from)?;
     if !live {
         anchor.end_live().await.map_err(ApiError::from)?;
         return Ok(None);
@@ -1013,6 +1045,27 @@ fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus, rooms: Arc<Mutex<
                             room_id = status.room_id,
                             "开播状态事件来自未登记的房间，忽略"
                         ),
+                    }
+                }
+                // `ROOM_CHANGE`（主播改了标题）：与上面同一条路子 —— 先把标题落进登记表，
+                // 再把**补全后的整条 `Room`** 推给界面，因此对外**不新增事件名**（仍是
+                // `danmubox://room`）。载荷里只带房间号与新标题（参照实现
+                // `HakaseZ/BiliLiveWatcher` 的 `ROOM_CHANGE.go`），其余字段照旧由登记表给出。
+                Ok(Event::RoomTitle { room_id, title }) => {
+                    let room = {
+                        let mut rooms = rooms.lock().expect("rooms poisoned");
+                        rooms.meta.get_mut(&room_id).map(|room| {
+                            room.title = title;
+                            room.clone()
+                        })
+                    };
+                    match room {
+                        Some(room) => {
+                            let _ = app.emit("danmubox://room", &room);
+                        }
+                        // 没登记过的房间（比如主播自己的直播间没被加进列表）：不推半条假元信息，
+                        // 「我的直播间」面板那一侧另走 `anchor_room` 重读。
+                        None => tracing::debug!(room_id, "标题变更事件来自未登记的房间，忽略"),
                     }
                 }
                 Ok(Event::Session(session)) => {
@@ -1285,6 +1338,7 @@ pub fn run() {
             anchor_room,
             anchor_title_set,
             anchor_area_list,
+            anchor_area_set,
             anchor_live_set,
             follow_list,
             wallet_balance,

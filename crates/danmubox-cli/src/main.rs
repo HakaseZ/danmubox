@@ -438,6 +438,13 @@ async fn watch(store: &Arc<ConfigStore>, input: String, seconds: u64, quiet: boo
                     }
                 }
                 Ok(Event::Room(_)) => {}
+                // `ROOM_CHANGE` 的侧路（`docs/protocol.md` §10.7 / issue202609241553 第 6 条）：
+                // 只带房间号与新标题，与那条 `system` 消息各走各的；命令行这里打一行方便核对。
+                Ok(Event::RoomTitle { room_id, title }) => {
+                    if !quiet {
+                        println!("# 直播间标题变更 room_id={room_id} title={title}");
+                    }
+                }
                 Ok(Event::RoomClosed(id)) => {
                     println!("# 房间 {id} 会话关闭");
                     break;

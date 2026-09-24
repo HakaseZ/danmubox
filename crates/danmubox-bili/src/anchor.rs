@@ -7,7 +7,12 @@
 //! 逐条登记在 `docs/protocol.md` 附录 A66：已实测 `room_id_by_uid` / `get_info` / `click/now` /
 //! `getHomePageLiveVersion`（app 签名被接受）/ `Room/update` 改标题；`startLive` 的请求形状被接受
 //! （返回业务码 `60043`），成功分支（`data.rtmp` / `data.protocols[]`）、`stopLive`、`60024` 与
-//! `data.qr`、**分区列表的真实字段形态**仍未实测。
+//! `data.qr` 仍未实测。
+//!
+//! **分区列表 `Area/getList` 的字段形态来自参照实现**（`Zeppelinpp/bilibili-streamer` 的
+//! `live_service.rs::refresh_partitions`），**未经本仓实测**：`data` 直接是数组、父名在
+//! `data[].name`、子分区在 `data[].list[]`、子 id 在 `data[].list[].id`；父 id 参照实现压根没读。
+//! 详见 `map_areas` 的注释与附录 A66 —— 不得读成已实测（issue202609241553 第 4 条按此落地）。
 //!
 //! # 上游隔离
 //!
@@ -16,7 +21,8 @@
 //!
 //! # 纪律
 //!
-//! 写操作**只作用于当前账号自己的直播间**（房间号由 `own_room_id()` 现取），失败即停、不重试；
+//! 写操作**只作用于该账号自己的直播间**（账号在 `new_for` 构造时定死：缺省当前账号，
+//! `Some(name)` 按账号名取，**不必切号**；房间号由 `own_room_id()` 现取），失败即停、不重试；
 //! 上游非 0 code 原样带回、不赋语义；仅 `60043` / `60024` 转 `AnchorGate` 引导（`docs/protocol.md`
 //! §18.5）。推流码是账号级凭据，Rust 侧绝不打印（日志一律 `redact`）。
 
@@ -25,8 +31,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use danmubox_core::ports::{AnchorLiveOutcome, AnchorRoom};
 use danmubox_core::{
-    AnchorArea, AnchorGate, AnchorGateKind, ConfigStore, Error, OwnRoom, Result, StreamEndpoint,
-    StreamEndpoints,
+    AnchorArea, AnchorGate, AnchorGateKind, ConfigStore, Error, OwnRoom, Profile, Result,
+    StreamEndpoint, StreamEndpoints,
 };
 use serde_json::Value;
 
@@ -47,45 +53,61 @@ const EP_HOME_VER: &str =
     "https://api.live.bilibili.com/xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion";
 const EP_START_LIVE: &str = "https://api.live.bilibili.com/room/v1/Room/startLive";
 
-/// 主播视角适配器。凭据由 `BiliHttp` 实时读取当前 profile。
+/// 主播视角适配器。
+///
+/// **作用于哪个账号在构造时定死**：缺省是当前账号，`account` 指定时按账号名取该账号的凭据
+/// —— 管理别的账号的直播间**不必先切号**（issue202609241553 第 3 条）。
 pub struct BiliAnchor {
     http: BiliHttp,
-    #[allow(dead_code)]
-    store: Arc<ConfigStore>,
+    /// 构造时取下的凭据快照：`uid` / `csrf` 都从它来，之后不再回头看「当前账号」。
+    profile: Profile,
 }
 
 impl BiliAnchor {
+    /// 当前账号（缺省行为）。
     pub fn new(store: Arc<ConfigStore>) -> Result<Self> {
-        Ok(Self {
-            http: BiliHttp::with_store(Arc::clone(&store))?,
-            store,
-        })
+        Self::new_for(store, None)
+    }
+
+    /// 指定账号：`None` = 当前账号，`Some(name)` = 该账号（凭据在 `config.toml` 里按名字存）。
+    ///
+    /// 为什么取**快照**而不是让 `BiliHttp` 每次现读：后者那条通道（`with_store`）读的永远是当前
+    /// 账号，用它去开别人的直播等于拿错人的凭据。指定账号时改走固定 cookie 通道
+    /// （`BiliHttp::with_cookie`），一次定死、读写同源。
+    pub fn new_for(store: Arc<ConfigStore>, account: Option<&str>) -> Result<Self> {
+        let profile = match account {
+            None => store.active(),
+            Some(name) => store.profile(name),
+        };
+        let profile = profile.ok_or_else(|| match account {
+            Some(name) => Error::BadRequest(format!("账号不存在：{name}")),
+            None => Error::NotLoggedIn,
+        })?;
+        if !profile.is_complete() {
+            // 指定了一个没登录（凭据不全）的账号：不许悄悄退回当前账号顶替。
+            return Err(Error::NotLoggedIn);
+        }
+        let http = match account {
+            None => BiliHttp::with_store(store)?,
+            Some(_) => BiliHttp::with_cookie(profile.cookie_header())?,
+        };
+        Ok(Self { http, profile })
     }
 
     /// 当前账号 uid（即凭据里的 `DedeUserID`）。账号级标识不进日志。
     fn uid(&self) -> Result<String> {
-        let profile = self
-            .store
-            .active()
-            .filter(|p| p.is_complete())
-            .ok_or(Error::NotLoggedIn)?;
-        if profile.dede_user_id.is_empty() {
+        if self.profile.dede_user_id.is_empty() {
             return Err(Error::NotLoggedIn);
         }
-        Ok(profile.dede_user_id)
+        Ok(self.profile.dede_user_id.clone())
     }
 
     /// 取 `csrf`（即 `bili_jct`）。所有 web 写操作都要它。
     fn csrf(&self) -> Result<String> {
-        let profile = self
-            .store
-            .active()
-            .filter(|p| p.is_complete())
-            .ok_or(Error::NotLoggedIn)?;
-        if profile.bili_jct.is_empty() {
+        if self.profile.bili_jct.is_empty() {
             return Err(Error::NotLoggedIn);
         }
-        Ok(profile.bili_jct)
+        Ok(self.profile.bili_jct.clone())
     }
 
     /// 找自己直播间：返回房间号；没开通（`code==0` 且 `data.room_id<=0`）→ `Ok(None)`。
@@ -201,6 +223,37 @@ impl AnchorRoom for BiliAnchor {
             .ok_or_else(|| Error::Upstream("改标题后读不到直播间".into()))
     }
 
+    async fn set_area(&self, area_v2: i64) -> Result<OwnRoom> {
+        // 与开播同一条口径：`area_id` / `area_v2` 都是**子分区 id**（参照实现
+        // `Zeppelinpp/bilibili-streamer` 的 `update_area` 与 `start_live` 传的是同一个值；
+        // 本仓已实测的 `get_info.data.area_id` 亦同）。非法值一律 `BAD_REQUEST`，不静默回退。
+        if area_v2 <= 0 {
+            return Err(Error::BadRequest("开播分区非法".into()));
+        }
+        let Some(room_id) = self.own_room_id().await? else {
+            return Err(Error::Upstream("该账号没有开通直播间".into()));
+        };
+        let csrf = self.csrf()?;
+        // 改分区是**独立入口**：不必等到开播，`Room/update` 带 `area_id` 就能改
+        // （参照实现的 `update_area` 就是这么做的）。
+        let value = self
+            .post(
+                EP_UPDATE,
+                &csrf,
+                vec![
+                    ("room_id", room_id.to_string()),
+                    ("platform", "pc_link".to_string()),
+                    ("area_id", area_v2.to_string()),
+                ],
+            )
+            .await?;
+        ensure_ok(&value, "Room/update")?;
+        // 写成功就地重读：不猜上游怎么改的，以远端为准。
+        self.own()
+            .await?
+            .ok_or_else(|| Error::Upstream("改分区后读不到直播间".into()))
+    }
+
     async fn go_live(&self, area_v2: Option<i64>) -> Result<AnchorLiveOutcome> {
         let Some(room_id) = self.own_room_id().await? else {
             return Err(Error::Upstream("该账号没有开通直播间".into()));
@@ -290,7 +343,7 @@ impl AnchorRoom for BiliAnchor {
     async fn area_list(&self) -> Result<Vec<AnchorArea>> {
         let value = self
             .http
-            .get_with_cookies(&format!("{EP_AREA_LIST}?platform=pc_link"))
+            .get_with_cookies(&format!("{EP_AREA_LIST}?show_pinyin=1"))
             .await?
             .0;
         ensure_ok(&value, "Area/getList")?;
@@ -361,24 +414,38 @@ fn map_endpoints(d: &Value) -> StreamEndpoints {
     }
 }
 
-/// 分区列表响应 → `AnchorArea[]`（两级：父 `list[]` 子）。
+/// 分区列表响应 → `AnchorArea[]`（两级：父 → 子）。
+///
+/// **字段形态来自参照实现** `Zeppelinpp/bilibili-streamer`
+/// （`src-tauri/src/services/live_service.rs::refresh_partitions`）：`data` **直接是数组**，
+/// `data[].name` 是父分区名、`data[].list[]` 是子分区数组、子分区 id 取 `data[].list[].id`
+/// —— 与 `startLive` 的 `area_v2`、`Room/update` 的 `area_id` 同口径，都是**子分区 id**
+/// （同文件 `update_area` / `start_live` 双向印证；本仓已实测的 `get_info.data.area_id` 亦同）。
+///
+/// ⚠ 该端点的**真实响应未经本仓实测**（`docs/protocol.md` 附录 A66），这里是照参照实现落地、
+/// 待真机回填，不得读成已实测。父分区 id 参照实现**根本没有读**（它只用名字做 key），因此
+/// 取到就用、取不到置 0 —— **父 id 只作界面的 key，不参与任何写操作**。
 fn map_areas(value: &Value) -> Vec<AnchorArea> {
-    let Some(parents) = value.pointer("/data/list").and_then(Value::as_array) else {
+    let Some(parents) = value.get("data").and_then(Value::as_array) else {
         return Vec::new();
     };
     parents
         .iter()
         .filter_map(|parent| {
-            let id = int(parent, &["id"]);
             let name = text(parent, &["name"]);
+            // 父分区只按名字认（参照实现同口径）：没有名字的一级不渲染成空行。
+            if name.is_empty() {
+                return None;
+            }
             let children = parent
                 .get("list")
                 .and_then(Value::as_array)
-                .map(|c| {
-                    c.iter()
+                .map(|list| {
+                    list.iter()
                         .filter_map(|child| {
                             let cid = int(child, &["id"]);
                             let cname = text(child, &["name"]);
+                            // 子分区 id 才是开播 / 改分区要用的值，取不到就不能进桶。
                             (cid > 0).then_some(AnchorArea {
                                 id: cid,
                                 name: cname,
@@ -388,7 +455,11 @@ fn map_areas(value: &Value) -> Vec<AnchorArea> {
                         .collect()
                 })
                 .unwrap_or_default();
-            (id > 0).then_some(AnchorArea { id, name, children })
+            Some(AnchorArea {
+                id: int(parent, &["id"]),
+                name,
+                children,
+            })
         })
         .collect()
 }
@@ -548,11 +619,15 @@ mod tests {
         assert!(rendered.contains("请先登录"));
     }
 
+    /// `data` **直接是数组** —— 参照实现 `Zeppelinpp/bilibili-streamer`
+    /// （`live_service.rs::refresh_partitions`）就是这么读的：`data[].name` / `data[].list[].id`。
+    /// 改前本仓读的是 `data.list[]`（把 `data` 当对象），解析恒为空 → 界面降级成只读分区名、
+    /// 用户看到「分区没有修改选项」（issue202609241553 第 4 条）。这条夹具就是那次错误的回归闸。
     #[test]
     fn area_list_parses_two_levels() {
         let value = json!({
             "code": 0,
-            "data": {"list": [
+            "data": [
                 {"id": 1, "name": "娱乐", "list": [
                     {"id": 11, "name": "视频唱见"},
                     {"id": 12, "name": "聊天"}
@@ -560,7 +635,7 @@ mod tests {
                 {"id": 2, "name": "游戏", "list": [
                     {"id": 21, "name": "单机"}
                 ]}
-            ]}
+            ]
         });
         let areas = map_areas(&value);
         assert_eq!(areas.len(), 2);
@@ -571,9 +646,38 @@ mod tests {
         assert_eq!(areas[1].children[0].id, 21);
     }
 
+    /// 父分区 id **不是**判据：参照实现只读父名、不读父 id（用名字做 key），
+    /// 因此上游不给父 id 时这一级照样要出现在界面上（父 id 取 0，不参与写）。
+    #[test]
+    fn area_list_parent_without_id_is_kept() {
+        let value = json!({
+            "code": 0,
+            "data": [{"name": "虚拟主播", "list": [{"id": 371, "name": "虚拟主播"}]}]
+        });
+        let areas = map_areas(&value);
+        assert_eq!(areas.len(), 1);
+        assert_eq!(areas[0].id, 0);
+        assert_eq!(areas[0].children.len(), 1);
+        assert_eq!(areas[0].children[0].id, 371);
+    }
+
+    /// 子分区 id 取不到就不能进桶：它是开播 / 改分区真正要用的值，缺了等于这一项是坏的。
+    #[test]
+    fn area_list_drops_children_without_id() {
+        let value = json!({
+            "code": 0,
+            "data": [{"id": 1, "name": "娱乐", "list": [{"name": "没有 id"}, {"id": 12, "name": "聊天"}]}]
+        });
+        let areas = map_areas(&value);
+        assert_eq!(areas[0].children.len(), 1);
+        assert_eq!(areas[0].children[0].id, 12);
+    }
+
     #[test]
     fn area_list_tolerates_missing_envelope() {
-        assert!(map_areas(&json!({"code": 0, "data": {"list": null}})).is_empty());
+        // `data` 不是数组（含旧写法假设的 `data.list` 那种对象形态）→ 一律空，不 panic。
+        assert!(map_areas(&json!({"code": 0, "data": {"list": []}})).is_empty());
+        assert!(map_areas(&json!({"code": 0, "data": null})).is_empty());
         assert!(map_areas(&json!({})).is_empty());
     }
 

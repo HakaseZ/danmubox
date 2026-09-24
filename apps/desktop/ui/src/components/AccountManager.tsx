@@ -77,7 +77,14 @@ interface Props {
   qrError: string | null;
   /** 「我的直播间」：展开的是哪个账号（`null` = 都收着）。 */
   anchorFor: string | null;
-  /** 当前账号自己的直播间；`null` = 没开通 / 还没读到 / 读失败。 */
+  /**
+   * 每个账号自己的直播间（预取结果，`docs/ui.md` §2.2.2）：账号名 → `OwnRoom | null`。
+   * `null` = 该账号**没开通**直播间 → 不渲染那行的「我的直播间」按钮（第 2 条）。
+   */
+  anchorRooms: Record<string, OwnRoom | null>;
+  /** 每个账号取直播间失败的原因；有值 → 也不渲染按钮，但留痕（失败不静默）。 */
+  anchorRoomErrors: Record<string, string>;
+  /** 当前展开账号的直播间；`null` = 没开通 / 还没读到 / 读失败。 */
   anchorRoom: OwnRoom | null;
   /** 开播分区树（两级）；取不到时为空，界面降级为只读分区名。 */
   anchorAreas: AnchorArea[];
@@ -101,7 +108,7 @@ interface Props {
   onPollQr: () => void;
   onToggleAnchor: (name: string) => void;
   onAnchorTitleDraft: (value: string) => void;
-  onAnchorArea: (id?: number) => void;
+  onAnchorArea: (id: number) => void;
   /** 保存标题；成功返回 true（界面据此只清忙态，文案由后端原话说）。 */
   onAnchorSaveTitle: () => Promise<boolean>;
   onAnchorLive: (live: boolean) => Promise<void>;
@@ -191,6 +198,8 @@ export function AccountManager({
   qrState,
   qrError,
   anchorFor,
+  anchorRooms,
+  anchorRoomErrors,
   anchorRoom,
   anchorAreas,
   anchorAreaError,
@@ -384,16 +393,30 @@ export function AccountManager({
                   >
                     删除
                   </button>
-                  {/* 「我的直播间」在删除按钮**右侧**：点开才拉数据、才展开管理区
-                      （docs/ui.md §2.2.2）。没开通 / 读失败也按得出，展开后只给错误行。 */}
-                  <button
-                    data-testid="db-anchor-toggle"
-                    title={`查看 / 管理「${who(account)}」自己的直播间`}
-                    onClick={() => onToggleAnchor(account.name)}
-                  >
-                    我的直播间
-                  </button>
                 </div>
+                {/* 「我的直播间」单独成组、贴账号行**最右端**（issue202609241553 第 1 条）：
+                    它和上面的「账号管理按钮组」是两类不同级的功能，用一道间距与分隔把它们读开。
+                    第 2 条：没开通直播间（`anchorRooms[name]` 为 `null`）/ 未登录 / 读失败都不渲染
+                    这枚按钮 —— 不渲染的账号自然没有入口，失败原因只在 `anchorRoomErrors` 里留痕。 */}
+                {account.logged_in &&
+                  anchorRooms[account.name] != null &&
+                  !anchorRoomErrors[account.name] && (
+                    <div
+                      className={styles.anchorEntry}
+                      // 与 `.accountActions` 同款：行内动作一律不冒泡到行 —— 点「我的直播间」
+                      // 是**看 / 管这个账号的直播间**，不是切到那个账号（切号会清掉刚展开的管理区）。
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
+                      <button
+                        data-testid="db-anchor-toggle"
+                        title={`查看 / 管理「${who(account)}」自己的直播间`}
+                        onClick={() => onToggleAnchor(account.name)}
+                      >
+                        我的直播间
+                      </button>
+                    </div>
+                  )}
               </div>
 
               {anchorFor === account.name && (
@@ -401,6 +424,14 @@ export function AccountManager({
                   {anchorRoom && (
                     <>
                       <div className={styles.anchorRow} data-testid="db-anchor-title-row">
+                        {/* 直播间状态移到标题**左边**（issue202609241553 第 5 条）：
+                            一眼先看到「在不在播」，再看标题。 */}
+                        <span
+                          className={styles.anchorStatusInline}
+                          data-testid="db-anchor-status"
+                        >
+                          {liveStatusText(anchorRoom.live_status)}
+                        </span>
                         <input
                           className={styles.anchorTitle}
                           data-testid="db-anchor-title"
@@ -433,7 +464,8 @@ export function AccountManager({
                                   (item) => item.id === Number(event.target.value),
                                 );
                                 // 换了父分区就落到它的第一个子分区：开播要的 `area_v2` 是子分区 id。
-                                onAnchorArea(next?.children?.[0]?.id ?? next?.id);
+                                const childId = next?.children?.[0]?.id ?? next?.id;
+                                if (childId != null) onAnchorArea(childId);
                               }}
                             >
                               {anchorAreas.map((item) => (
@@ -468,10 +500,12 @@ export function AccountManager({
                         )}
                       </div>
 
-                      <div className={styles.anchorRow} data-testid="db-anchor-status-row">
-                        <span className={styles.anchorStatus} data-testid="db-anchor-status">
-                          {liveStatusText(anchorRoom.live_status)}
-                        </span>
+                      {/* 开播 / 下播**独占一行**（issue202609241553 第 5 条）：点它只是切状态，
+                          不与标题 / 分区挤在同一排，点击区域也更大。文案随状态在「开播 / 下播」间切。 */}
+                      <div
+                        className={`${styles.anchorRow} ${styles.anchorLiveRow}`}
+                        data-testid="db-anchor-live-row"
+                      >
                         <button
                           data-testid="db-anchor-live"
                           disabled={busy === "live"}

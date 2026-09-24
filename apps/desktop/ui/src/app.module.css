@@ -556,6 +556,18 @@
   flex-wrap: wrap;
 }
 
+/* 「我的直播间」入口：与账号管理按钮组（重新登录 / 退出登录 / 删除）分开成组，
+   贴账号行最右端（issue202609241553 第 1 条）。`margin-left: auto` 把它推到行末，
+   左侧留一道间距与竖分隔，两类不同级的功能一眼读开。 */
+.anchorEntry {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--border);
+}
+
 /* 「＋ 添加账号」：**在对话框内容宽里居中**（用户 2026-09-13 #3「添加账号按钮居中」）。
    改前是 `align-self: flex-start`，这枚胶囊贴在最左边、与上下两块都不对齐（宽度仍是内容宽，
    不拉伸成整行 —— 用户要的是居中，不是把按钮拉满）。 */
@@ -612,6 +624,29 @@
   min-width: 0;
   font-size: var(--fs-2);
   color: var(--fg-dim);
+}
+
+/* 标题行左端的直播间状态：紧凑、不抢输入框的空间（与降级区用的 .anchorStatus 区分，
+   issue202609241553 第 5 条把状态移到标题左边）。 */
+.anchorStatusInline {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: var(--fs-2);
+  font-weight: 500;
+  color: var(--fg-dim);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-2);
+  background: var(--hover-wash);
+}
+
+/* 开播 / 下播独占一行（issue202609241553 第 5 条）：按钮拉满整行，点击区域大、
+   与标题 / 分区不挤在同一排。 */
+.anchorLiveRow {
+  justify-content: stretch;
+}
+
+.anchorLiveRow button {
+  flex: 1;
 }
 
 /* 写失败 / 读失败：只渲染后端原话，失败不静默 */

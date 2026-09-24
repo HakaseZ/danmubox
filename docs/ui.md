@@ -128,34 +128,36 @@
 | 退出登录 | `account_logout(name)` | **必须确认**，文案说明「清掉该账号凭据、界面回到游客态；账号条目保留，可随时重新扫码」。登出的是**当前账号**时与切号同款清掉上一个身份的界面状态；登出别的账号不动当前界面 |
 | 删除 | `account_remove(name)` | **必须确认**，文案说明「条目与凭据一并删除、不可恢复」；删的是当前账号时补一句「会自动切到另一个账号」，并同样清掉上一个身份的界面状态。**只剩一个账号时按钮置灰**并给出 `title`（后端也会拒） |
 
-账号对话框里，**每个账号行的删除按钮右侧**有一枚「我的直播间」按钮（`db-anchor-toggle`）；点击**展开**该账号的直播间管理区（需求 §2.14）。渲染条件、管理区布局、人脸认证二维码提示框与 `db-anchor-*` 钩子见 §2.2.2。
+账号对话框里，**每个账号行的最右端、与账号管理按钮组隔离开**有一枚「我的直播间」按钮（`db-anchor-toggle`，包在 `db-anchor-entry` 里）；点击**展开**该账号的直播间管理区（需求 §2.14，issue202609241553 第 1 / 2 条）。渲染条件、管理区布局、人脸认证二维码提示框与 `db-anchor-*` 钩子见 §2.2.2。
 
 ### 2.2.2 「我的直播间」按钮与展开区（`anchor_*`，需求 §2.14）
 
-账号对话框里，**每个账号行的删除按钮右侧**有一枚「我的直播间」按钮（`db-anchor-toggle`）；点击**展开**该账号的直播间管理区（与账号行同款深色卡片，位于账号行之下、`＋ 添加账号` / 二维码面板之上）。**不采用常驻面板**：没开通直播间 / 读失败时仍可按按钮，展开后只渲染错误行。开播沿用 web 端已有配置：**标题与分区默认取该直播间当前值（即上次开播 / 下播保留的数据），用户不改即可直接沿用开播、不必重填**。
+账号对话框里，**每个账号行的最右端、与账号管理按钮组（重新登录 / 退出登录 / 删除）隔离开**有一枚「我的直播间」按钮（`db-anchor-toggle`，包在 `db-anchor-entry` 里、`margin-left:auto` 推到行末）：这是与账号管理**不同级**的功能，用一道间距与竖分隔读开（issue202609241553 第 1 条）。**只渲染在「已登录且 `anchor_room` 给出直播间」的行**——没开通 / 未登录的行**不出现这枚按钮**（第 2 条，按钮显隐由打开对话框时预取的 `anchorRooms` 映射决定）。点击**展开**该账号的直播间管理区（与账号行同款深色卡片，位于账号行之下、`＋ 添加账号` / 二维码面板之上）。**点这枚按钮不切号**：`db-anchor-entry` 与 `.accountActions` 同款 `stopPropagation`（点它是「看 / 管**这个账号**的直播间」，不是「切到那个账号」——切号会把刚展开的管理区与按账号映射一并清掉）。开播沿用 web 端已有配置：**标题与分区默认取该直播间当前值（即上次开播 / 下播保留的数据），用户不改即可直接沿用开播、不必重填**。
+
+**按钮显隐（issue202609241553 第 2 条）**：打开账号对话框时 `loadAnchorRooms` 并发预取所有**已登录**账号的 `anchor_room`，落到 `anchorRooms` / `anchorRoomErrors`。某行**当且仅当** `anchorRooms[name]` 非 `null` 且无错误时才渲染按钮；`null`（没开通）/ 有错误 / 未登录（不在映射里）一律不渲染——不编一行假状态、也不给入口。
 
 **展开区渲染条件**
 
 | 情况 | 表现 |
 |---|---|
-| 当前账号**已登录**，且 `anchor_room` 给出了直播间 | 正常渲染：标题行 + 分区选择 + 状态行 |
-| 该账号**没有开通直播间**（后端 `anchor_room` 返回 `null`） | 仍可按按钮，展开后**只渲染错误行**（`db-anchor-error`）——不编一行假状态 |
-| **游客态**（未登录） | 按钮仍显示，展开后渲染错误行（不发请求） |
-| **读失败**（凭据失效 `-101`、风控 `-352` …） | `anchorRoom` 为 `null`，但**错误行必须留痕**（后端原话），**失败不许静默消失** |
-| 展开的是**非当前账号**的那一行 | 同上：只渲染错误行，**不发请求**。后端读的永远是**当前账号**自己的直播间（契约 §7），对着别的账号行发请求会拿回另一个人的房间——先切到该账号再看 |
+| 账号**已登录**且 `anchor_room` 给出了直播间 | 正常渲染：状态 + 标题行 + 分区选择 + 开播 / 下播行 |
+| 该账号**没有开通直播间**（后端 `anchor_room` 返回 `null`） | **按钮不显示**（第 2 条）：界面按 `anchorRooms[name]` 为 `null` 直接判定，根本不给入口，不渲染半截管理区 |
+| **游客态**（未登录） | **按钮不显示**：未登录账号不在 `anchorRooms` 映射里，不给入口（第 2 条） |
+| **读失败**（凭据失效 `-101`、风控 `-352` …） | `anchorRoomErrors[name]` 有值 → **按钮同样不显示**（失败不静默，原因留痕于映射；不渲染但可追溯），展开态不会发生 |
+| **跨账号管理**（issue202609241553 第 3 条） | **不必切到该账号**——按钮直接按 `name` 展开那个账号的直播间管理区，命令带 `account` 参数走那份凭据。后端读的是 `account` 指定账号自己的直播间（契约 §7） |
 
-取数时机：展开时拉 `anchor_room` 与 `anchor_area_list`（`loadAnchorRoom` / `loadAnchorAreas` 依赖 `loggedIn` 与 `active_profile`）；切号 / 登出由 `store.resetIdentityState` 清掉这几份状态。**读的永远是当前账号自己的直播间。**
+取数时机：打开账号对话框时 `loadAnchorRooms` 并发预取所有已登录账号的 `anchor_room`（按钮显隐靠这份映射）；展开某行时再拉 `anchor_room`（填充展开面板的 `anchorRoom`）与 `anchor_area_list`。切号 / 登出由 `store.resetIdentityState` 清掉这些状态（含按账号映射）。**读的是 `account` 指定账号自己的直播间，不必切号。**
 
-**管理区布局**
+**管理区布局（issue202609241553 第 5 条）**
 
 | 行 / 块 | 内容与规则 |
 |---|---|
-| 标题行（`db-anchor-title-row`） | 直播间标题输入框（`db-anchor-title`）+ 「保存」（`db-anchor-title-save`）。**草稿初值 = `OwnRoom.title`（上次开播保留的标题）**，远端变了以远端为准；与远端一字不差时保存键禁用。保存成功**就地重读** |
-| 分区选择（`db-anchor-area-select`） | 两级联动父→子下拉，数据来自 `anchor_area_list`（`AnchorArea` 树）；**默认选中 = `OwnRoom.area_id`（上次开播沿用分区）**；取不到列表时降级为只读显示 `area_name`。开播时把所选子分区 `id` 作为 `area_v2` 发给 `anchor_live_set` |
-| 状态 / 动作行（`db-anchor-status-row`） | 状态文本（`db-anchor-status`）+ 开播 / 下播按钮（`db-anchor-live`）。文案只从 `OwnRoom.live_status` 派生：`1` → `直播中`、`2` → `轮播`、其余 `未开播`；按钮文案随之在 `开播` / `下播` 之间切，`title` 写明「沿用所选分区」。忙态只禁本钮 |
+| 状态 + 标题行（`db-anchor-title-row`） | **直播间状态（`db-anchor-status`，在输入框左边）** + 标题输入框（`db-anchor-title`）+ 「保存」（`db-anchor-title-save`）。状态移到标题左边：一眼先看到「在不在播」，再看标题。草稿初值 = `OwnRoom.title`（上次开播保留的标题），远端变了以远端为准；与远端一字不差时保存键禁用。保存成功**就地重读** |
+| 分区选择（`db-anchor-area-select`） | 两级联动父→子下拉，数据来自 `anchor_area_list`（`AnchorArea` 树）；**默认选中 = `OwnRoom.area_id`（上次开播沿用分区）**；取不到列表时降级为只读显示 `area_name`。**改动即发一次 `anchor_area_set` 写（`saveAnchorArea`），与标题的「改完点保存」分开提交**（issue202609241553 第 4 条：改分区是**独立写入口**，不必等到开播）。开播时仍把所选子分区 `id` 作为 `area_v2` 发给 `anchor_live_set` |
+| 开播 / 下播行（`db-anchor-live-row`，**独占一行**） | 开播 / 下播按钮（`db-anchor-live`）独占一行（不与标题 / 分区挤在一起，点击区域更大）。文案只从 `OwnRoom.live_status` 派生：`1` → `直播中`、`2` → `轮播`、其余 `未开播`；按钮文案随之在 `开播` / `下播` 之间切，`title` 写明「沿用所选分区」。忙态只禁本钮 |
 
 - 两个按钮的忙态**各管各的**（组件本地瞬态）：保存中只禁「保存」、开播 / 下播请求中只禁那一枚按钮 —— 改标题与开播 / 下播是两条独立命令，谁也不必等谁。
-- 写操作口径（`contract.md` §3 `AnchorRoom`）：**只作用在当前账号自己的直播间**，**失败即停**、不自动重试；上游非 0 code **原样带回、不赋语义**（原话进错误行 `db-anchor-error`）。**唯一例外是身份校验那两个码**：开播返回 `AnchorGate`（`contract.md` §5）时，**弹出二维码提示框**（`db-anchor-gate-modal`），见下。
+- 写操作口径（`contract.md` §3 `AnchorRoom`）：**只作用在 `account` 指定账号自己的直播间**，**失败即停**、不自动重试；上游非 0 code **原样带回、不赋语义**（原话进错误行 `db-anchor-error`）。**唯一例外是身份校验那两个码**：开播返回 `AnchorGate`（`contract.md` §5）时，**弹出二维码提示框**（`db-anchor-gate-modal`），见下。
 
 **开播被身份校验挡住时（`AnchorGate`，需求 §2.14 / `protocol.md` §18.5）—— 弹出二维码提示框**
 
@@ -182,9 +184,11 @@
 
 **推流码是账号级凭据**：只进界面内存（store 的 `anchorEndpoints`），**不写 `prefs.json`、不落盘、不打日志**；`anchor_live_set(false)` 返回 `null` 即清空，换人由 `resetIdentityState` 一并清。长按复制失败**静默**（拿不到剪贴板不是这一块要报的错）。
 
+**ROOM_CHANGE 自动更新标题（issue202609241553 第 6 条）**：弹幕 WS 推来的 `ROOM_CHANGE`（只带 `data.room_id` 与 `data.title`，字段形态见 `protocol.md` A66，取自参照实现 `HakaseZ/BiliLiveWatcher`）经 `danmubox://room` 事件回到前端，`store.onRoom` 命中 `anchorRoom.room_id` 时**就地更新**标题输入框，**不必手动重读**。限制：本仓只在「连接着自己直播间」时才收得到这条（`cmd.rs` 只在命中已登记房间时才冒泡标题）——未连接则收不到，这是弹幕 WS 的固有约束，不是 bug（`ui.md` 与 `protocol.md` 均已写明）。
+
 **窄屏（≤ 520px）**：与宽屏**共用同一套规则**——卡片纵向 flex、输入框与状态行 `flex: 1; min-width: 0`、推流地址 / 码等宽体 + `word-break: break-all`，360 宽不横向溢出。
 
-**稳定钩子**：这一块的前缀是 `db-anchor-*`（`db-anchor-toggle` / `db-anchor-panel` / `db-anchor-title-row` / `db-anchor-title` / `db-anchor-title-save` / `db-anchor-area-select` / `db-anchor-status-row` / `db-anchor-status` / `db-anchor-live` / `db-anchor-error` / `db-anchor-gate-modal` / `db-anchor-gate-open` / `db-anchor-gate-qr` / `db-anchor-gate-hint` / `db-anchor-config` / `db-anchor-area` / `db-anchor-rtmp-addr` / `db-anchor-rtmp-code`），与账号块既有钩子（`db-account-*`）并列。
+**稳定钩子**：这一块的前缀是 `db-anchor-*`（`db-anchor-entry` / `db-anchor-toggle` / `db-anchor-panel` / `db-anchor-title-row` / `db-anchor-title` / `db-anchor-title-save` / `db-anchor-area-select` / `db-anchor-status` / `db-anchor-live-row` / `db-anchor-live` / `db-anchor-error` / `db-anchor-gate-modal` / `db-anchor-gate-open` / `db-anchor-gate-qr` / `db-anchor-gate-hint` / `db-anchor-config` / `db-anchor-area` / `db-anchor-rtmp-addr` / `db-anchor-rtmp-code`），与账号块既有钩子（`db-account-*`）并列。
 
 ### 2.3 房间页与多标签
 

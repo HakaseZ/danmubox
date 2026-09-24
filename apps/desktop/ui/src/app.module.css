@@ -563,6 +563,139 @@
   align-self: center;
 }
 
+/* ============================================================ 「我的直播间」展开区
+   账号行上那枚「我的直播间」按钮（`db-anchor-toggle`）展开出来的管理区（docs/ui.md §2.2.2）。
+   纵向 flex 卡片、输入框与状态行 `flex: 1; min-width: 0` —— 窄屏与宽屏共用这一套规则，
+   360 宽下不横向溢出。 */
+.anchorPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--bg-input);
+}
+
+.anchorRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* 输入框与状态行都吃满剩余宽度、且允许被压缩（长标题 / 长状态不把按钮挤出去） */
+.anchorTitle {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.anchorSelect {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-2);
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--sp-1);
+}
+
+.anchorStatus {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-2);
+  color: var(--fg-dim);
+}
+
+/* 写失败 / 读失败：只渲染后端原话，失败不静默 */
+.anchorError {
+  font-size: var(--fs-2);
+  color: var(--danger);
+  word-break: break-word;
+}
+
+/* 开播成功后的推流参数：分区 / 推流地址 / 推流码 */
+.anchorConfig {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.anchorConfigRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.anchorLabel {
+  font-size: var(--fs-2);
+  color: var(--fg-dim);
+}
+
+/* 推流地址 / 推流码：等宽体 + 可断行（长串不横向溢出），长按即复制、不显示复制键 */
+.anchorValue {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-2);
+  color: var(--fg);
+  word-break: break-all;
+  user-select: text;
+  cursor: text;
+}
+
+/* 人脸认证提示框：与账号对话框同款遮罩层级，点遮罩 / Esc 关闭 */
+.anchorModalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: var(--overlay);
+}
+
+.anchorModal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  max-width: 360px;
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-4);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-dialog);
+}
+
+.anchorModalTitle {
+  font-size: var(--fs-5);
+  font-weight: 600;
+}
+
+.anchorModal img {
+  width: 200px;
+  height: 200px;
+  background: #fff;
+  padding: var(--sp-2);
+  border-radius: var(--r-1);
+}
+
+.anchorModalHint {
+  font-size: var(--fs-2);
+  color: var(--fg-dim);
+  text-align: center;
+}
+
 .addRow {
   display: flex;
   gap: var(--sp-2);

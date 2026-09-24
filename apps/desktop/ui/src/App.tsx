@@ -348,6 +348,23 @@ export function App() {
   const pollAccountQr = useApp((state) => state.pollAccountQr);
   const followed = useApp((state) => state.followed);
   const balance = useApp((state) => state.balance);
+  const anchorFor = useApp((state) => state.anchorPanelFor);
+  const anchorRoom = useApp((state) => state.anchorRoom);
+  const anchorAreas = useApp((state) => state.anchorAreas);
+  const anchorAreaError = useApp((state) => state.anchorAreaError);
+  const anchorTitleDraft = useApp((state) => state.anchorTitleDraft);
+  const anchorAreaId = useApp((state) => state.anchorAreaId);
+  const anchorEndpoints = useApp((state) => state.anchorEndpoints);
+  const anchorGate = useApp((state) => state.anchorGate);
+  const anchorError = useApp((state) => state.anchorError);
+  const toggleAnchorPanel = useApp((state) => state.toggleAnchorPanel);
+  const setAnchorTitleDraft = useApp((state) => state.setAnchorTitleDraft);
+  const setAnchorAreaId = useApp((state) => state.setAnchorAreaId);
+  const saveAnchorTitle = useApp((state) => state.saveAnchorTitle);
+  const setAnchorLive = useApp((state) => state.setAnchorLive);
+  const closeAnchorPanel = useApp((state) => state.closeAnchorPanel);
+  const openAnchorGateUrl = useApp((state) => state.openAnchorGateUrl);
+  const closeAnchorGate = useApp((state) => state.closeAnchorGate);
 
   const [accountsOpen, setAccountsOpen] = useState(false);
   const bootstrap = useApp((state) => state.bootstrap);
@@ -369,8 +386,10 @@ export function App() {
   /** 关掉账号对话框 = 放弃这次扫码：面板不再留在后台偷偷轮询。**关闭按钮与返回手势共用这一处**。 */
   const closeAccounts = useCallback(() => {
     cancelAccountQr();
+    // 「我的直播间」的展开态一起收起：推流码是账号级凭据，关了对话框就不该还留在内存里。
+    closeAnchorPanel();
     setAccountsOpen(false);
-  }, [cancelAccountQr]);
+  }, [cancelAccountQr, closeAnchorPanel]);
 
   // 系统返回手势第 1 级：账号对话框是盖在最上面的模态，先关它（关法与「✕」同源）。
   // 常驻注册、由**当下状态**决定认不认领（同 RoomView：注册/注销要等 effect，会落后一帧）。
@@ -514,6 +533,15 @@ export function App() {
           qr={qr}
           qrState={qrState}
           qrError={qrError}
+          anchorFor={anchorFor}
+          anchorRoom={anchorRoom}
+          anchorAreas={anchorAreas}
+          anchorAreaError={anchorAreaError}
+          anchorTitleDraft={anchorTitleDraft}
+          anchorAreaId={anchorAreaId}
+          anchorEndpoints={anchorEndpoints}
+          anchorGate={anchorGate}
+          anchorError={anchorError}
           onClose={closeAccounts}
           onSwitch={(name) => void switchAccount(name)}
           onLogout={(name) => void logoutAccount(name)}
@@ -521,6 +549,13 @@ export function App() {
           onStartQr={(target) => void startAccountQr(target)}
           onCancelQr={cancelAccountQr}
           onPollQr={() => void pollAccountQr()}
+          onToggleAnchor={(name) => void toggleAnchorPanel(name)}
+          onAnchorTitleDraft={setAnchorTitleDraft}
+          onAnchorArea={setAnchorAreaId}
+          onAnchorSaveTitle={saveAnchorTitle}
+          onAnchorLive={(live) => setAnchorLive(live)}
+          onAnchorOpenGateUrl={() => void openAnchorGateUrl()}
+          onAnchorCloseGate={closeAnchorGate}
         />
       )}
 

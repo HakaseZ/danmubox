@@ -948,6 +948,77 @@ stateDiagram-v2
 
 ---
 
+## 18. 开播 / 下播 / 改标题（主播侧）
+
+需求溯源：`REQUIREMENTS.md` §2.14（我的直播间）；端口 `AnchorRoom`（`contract.md` §3）、命令 `anchor_room` / `anchor_title_set` / `anchor_live_set`（`contract.md` §7、[`ipc.md`](ipc.md) §3）；领域模型 `OwnRoom` / `StreamEndpoints`（`contract.md` §5）。实现落点 `crates/danmubox-bili/src/anchor.rs`（唯一允许出现这些端点与签名的模块）。
+
+**写操作纪律（`AGENT.md` §8.14–16）**：三件写操作**只作用于当前账号自己的直播间**（目标房间由下面第 1 步现取，不是调用方传的）；**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 `code` **原样带回、不赋语义**（`anchor.rs:110` 的 `ensure_ok`）。**唯一例外是身份校验那两个码**（`60043` 已实测、`60024` 见两份社区实现）：它们按 §18.5 转成**引导产出** `AnchorGate`（`contract.md` §5）——原 `code` / `msg` 一字不改地一起带回。**除此之外的一切非 0 code 仍不辨认数值、不读 `data.qr`、不做任何弹窗**。
+
+### 18.1 四类端点
+
+| 动作 | 方法与端点 | 参数 | 产出 |
+|---|---|---|---|
+| 找自己直播间 | `GET https://api.live.bilibili.com/room/v2/Room/room_id_by_uid` | query `uid`（取当前凭据里的 `DedeUserID`，不再多打一次 `nav`） | `data.room_id` |
+| 房间信息 | `GET https://api.live.bilibili.com/room/v1/Room/get_info` | query `room_id` | `data.title` / `data.live_status` / `data.area_id` / `data.area_name`（+ `data.parent_area_name` 拼「父 · 子」） |
+| 改标题 | `POST https://api.live.bilibili.com/room/v1/Room/update` | form：`room_id` / `platform=pc_link` / `title` / `csrf_token` / `csrf` | `code`（0 = 成功） |
+| 下播 | `POST https://api.live.bilibili.com/room/v1/Room/stopLive` | form：`room_id` / `platform=pc_link` / `csrf_token` / `csrf` | `code` |
+| 开播分区列表 | `GET https://api.live.bilibili.com/room/v1/Area/getList` | query：`platform=pc_link` | `data.list[]`：父分区（`id` / `name` / `list[]` 子分区 `{id, name}`） |
+| 开播 | 三段式，见 §18.2 | — | `data.rtmp`（+ `data.protocols[]`） |
+
+- **`csrf` 与 `csrf_token` 同值，都是凭据文件里的 `bili_jct`**（`anchor.rs:261` 的 `csrf()`；缺它或凭据不完整 → `NOT_LOGGED_IN`）。这条与房管写操作（§A36）同一口径。
+- **改标题与下播不签名**：只带上面那几个字段（两份社区实现一致）。
+- **`platform` 恒为 `pc_link`**（`anchor.rs:66`）：沿用 web 端开播的形态，界面**不做平台选择**。
+- 空标题在**发请求之前**就被拒（`BAD_REQUEST`，`anchor.rs:321`）：上游唯一可能的答复是报错，没有理由打这一枪。
+- 「找自己直播间」的「没有直播间」**只有一条判据**：`code == 0` 且 `data.room_id` 缺失或 ≤ 0（`anchor.rs:132` 的 `own_room_id` → `Ok(None)`）——这不是错误，界面据此整块不渲染。**非 0 `code` 不在此列**：它一律是上游错误，原样带回、不赋语义（不拿它推「没开通」）。
+
+### 18.2 开播的三段式（缺一不可）
+
+| 段 | 方法 + 端点 | 参数 | 产出 |
+|---|---|---|---|
+| a | `GET https://api.bilibili.com/x/report/click/now` | 无（带当前账号 Cookie） | `data.now`（服务端当前时间戳，取文本形态） |
+| b | `GET https://api.live.bilibili.com/xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion` | query：`system_version=2` / `ts=<a 的 data.now>`，**并做 app 签名** | `data.build` / `data.curr_version` |
+| c | `POST https://api.live.bilibili.com/room/v1/Room/startLive` | **整个参数集做 app 签名**后作为 form body：`room_id` / `platform=pc_link` / `area_v2=<当前分区 id>` / `backup_stream=0` / `csrf_token` / `csrf` / `build` / `version` / `ts` | `data.rtmp` = `{addr, code}`；`data.protocols[]` 里另有 `{protocol: "rtmp" \| "srt", addr, code}` |
+
+- **分区沿用该直播间当前值，但界面提供两级分区选择**：`area_v2` 缺省取第 1 步 `get_info` 给的 `data.area_id`（即上次开播沿用分区）；用户在 `anchor_area_list` 选了子分区时，以其 `id` 作为 `area_v2` 覆盖（用户口径：之前在 web 端用的配置要能沿用，但允许改）。**上游没给分区（`area_id <= 0`）且无 `area_v2` 时根本不发开播请求**，报 `UPSTREAM_ERROR`（`anchor.rs:342`）——自造一个默认分区会把直播推到错误的分区（`AGENT.md` §8.7）。
+- `backup_stream=0`：不要备用推流地址那一档。
+- 两段签名参数**放哪里**在两份社区实现里不一致（一个放 query、一个放 form）。本仓：b 段放 **query**、c 段放 **form**（跟实现一致）。
+- 端点全集与常量见 `anchor.rs:49-66`；三段顺序与失败点见 `anchor.rs:342-397`。
+
+### 18.3 app 签名算法
+
+参数加 `appkey` → 按 key **升序**排序 → `urlencode` → `sign = md5(query + appsec)` → 把 `sign` 并进参数（`anchor.rs:72` 的 `app_sign`）。
+
+| 项 | 口径 |
+|---|---|
+| `appkey` / `appsec` | `aae92bc66f3edfab` / `af125a0d5279fd576c1b4418a3e8276d`（`anchor.rs:61` / `:63`）。这是**直播姬的公开客户端标识**（两份社区实现逐字一致），**不是账号凭据** |
+| 排序 | 在算签名**之前**按 key 的字典序排；`sign` 追加在**末尾**，不参与排序与摘要 |
+| `urlencode` | 与 query / form 编码同一套（`form_urlencoded`，空格编成 `+`） |
+| 摘要输入 | `md5(<排序编码后的 query><appsec>)`，`sign` 取小写十六进制 |
+| 谁被算进去 | c 段的 `csrf` / `csrf_token` / `build` / `version` / `ts` **全都在签名参数集里**（照实现，别漏） |
+| 纯函数 | `app_sign` 不联网、结果完全确定（`anchor.rs:72`），因此用固定向量断言 |
+
+### 18.4 未实测范围（口径）
+
+端点、字段与签名口径来自两份社区实现（`ChaceQC/bilibili_live_stream_code`、`Zeppelinpp/bilibili-streamer`）。**本仓的实测状态逐条登记在附录 A66**：
+**已实测（2026-09-19，真实登录态，目标为该账号自己的直播间）** —— `room_id_by_uid`、`get_info`（含分区字段形态）、`click/now`、`getHomePageLiveVersion`（**app 签名被上游接受**）、`Room/update` 改标题（成功，写回原值标题不变）；`startLive` 的**请求形状被接受**（上游返回业务码 `60043`「需要人脸认证」，非参数 / 签名错误）。
+**仍未实测** —— `startLive` 的**成功**分支（`data.rtmp` / `data.protocols[]`）、`stopLive`、`60024` 与 `data.qr`、「该账号没有开通直播间」的响应形态。核对方法：完成一次人脸认证后重跑同一探针（取状态 → 改标题回原值 → 开播 → 复查 → 下播，失败即停）。
+
+### 18.5 身份校验引导（`60043` / `60024`）
+
+需求溯源：`REQUIREMENTS.md` §2.14；产出 `AnchorGate`（`contract.md` §5），由 `anchor_live_set` 带出（`contract.md` §7）。口径参照 `Zeppelinpp/bilibili-streamer`（用户 2026-09-22 指定）。
+
+| 上游 `code` | 上游在响应里给了什么 | 本仓的引导 | 实测状态 |
+|---|---|---|---|
+| `60043` | `msg` =「本次开播需要身份验证，请在关播时点击开播唤起人脸认证」（2026-09-19 实测原话）；**没有**可用的 `data.qr` | `FaceAuth`：把认证页地址交给界面，由界面用 `open_url` 打开系统浏览器（`https://www.bilibili.com/blackboard/live/face-auth-middle.html?source_event=400&mid=<本人 uid>`） | `code` 与 `msg` **已实测**；认证页地址来自社区实现，**未实测** |
+| `60024` | `data.qr`（二维码内容） | `QrConfirm`：把 `data.qr` 交给界面，**离线**编码成图（与扫码登录同一条口径，不联网生成） | **未实测**（A66） |
+
+- **只认这两个码**：没有在响应里明说「该怎么继续」的非 0 code 一律不进这一型，仍按 §18 的纪律原样带回（`AGENT.md` §8 第 7 条：不得给未实测的码猜含义）。
+- **不代替原话**：`AnchorGate.code` / `AnchorGate.message` 是上游原值，界面与引导一起呈现。
+- **不轮询、不自动重试**：本仓没有「认证已完成」这条推送面，也没有可查认证状态的只读端点 —— 认证结束后**由用户自己再点一次开播**（写操作「失败即停」的口径不变）。
+- **上游隔离**：认证页的拼装与 `data.qr` 的读取都只在 `crates/danmubox-bili/src/anchor.rs`；`core` 只见 `AnchorGate` 那两个字符串（`contract.md` §5）。
+
+---
+
 ## 附录 A：字段索引待实测校准表
 
 附录 A 是**唯一**允许承载「未实测事实」的位置。表中条目在核对完成前，实现中不得硬编码依赖具体下标 / 枚举值的解析路径。采集一律以 `DANMUBOX_LOG=debug` 运行并抓取 debug 日志（方法见附录 B）。
@@ -1064,6 +1135,8 @@ stateDiagram-v2
 | A64 | 举报：是否必需 WBI 签名 | 不带 `w_rid` 的请求是否被拒 | 不带 `w_rid` 发一次举报，记录响应 | **仍未实测**：实现照 `send.rs` 对表单签名（含 `wts` / `w_rid`，`report.rs:147-152`）；参考实现未签名 | 举报请求形态 |
 | A65 | 电池余额：其它上游码语义 | 非 0 `code` 的取值集合 | 复现非 0 code 时记录数值与原始 message | **未实测**：实现只判 `code == 0`，其余报 `UPSTREAM_ERROR` 并保留原始 code（`crates/danmubox-bili/src/wallet.rs:34-40`） | 钱包余额读取 |
 
+| A66 实测进展（2026-09-19） | 主播侧写链路在真实登录态下的实测 | 七个端点是否可通；app 签名是否被接受；`area_v2` 是否就是 `get_info` 的 `data.area_id` | 真实登录态下对自己的直播间跑一遍探针（取状态 → 改标题回原值 → 开播 → 复查 → 下播），**失败即停** | **实测（2026-09-19，真实登录态；目标 = 该账号**自己的**直播间，由 `AnchorRoom::own()` 现取）**：① `room/v2/Room/room_id_by_uid` → `code=0`、`data.room_id` 有值 ✓；② `room/v1/Room/get_info` → `live_status` / `area_id` / `parent_area_name` + `area_name` 齐备 ✓（同一次实测里 `area_v2_id` 为 `null` ✓，故分区只认 `area_id`，与 §18.1 一致）；③ `x/report/click/now` 与 `xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion`（**带 app 签名**）均 `code=0` 并给出 `data.now` / `data.build` / `data.curr_version` ✓ → **app 签名被上游接受** ✓；④ `room/v1/Room/update`（改标题：**不签名**、`csrf` == `csrf_token` == `bili_jct`）实测**成功**：读出原值再写回，标题逐字未变 ✓；⑤ `room/v1/Room/startLive`（三段式的第三段、app 签名、`platform=pc_link`、`area_v2` 取 `get_info` 的 `data.area_id`）**请求被上游接受**（返回的是业务码，不是参数 / 签名错误），结果为 **`60043`**，`msg` =「本次开播需要身份验证，请在关播时点击开播唤起人脸认证」。本仓按纪律**原样带回 `code` 与 `msg`、不赋语义**，且**失败即停、未重试、未换参数** —— 这条实测同时印证了「非 0 code 只透传」的行为 | 开播 / 改标题链路 |
+| A66 未实测（2026-09-19） | 上述链路仍缺的实测面 | — | 完成一次人脸认证后重跑同一探针 | **仍未实测**：① `startLive` 的**成功分支**（`data.rtmp` / `data.protocols[]` 的实际形状）—— 被上游人脸认证挡住，该账号未完成本次开播的身份验证；② `room/v1/Room/stopLive` —— 未曾进入直播态，没走到；③ 人脸认证的另一个码 `60024` 与 `data.qr` 的实际形态；④ 「该账号**没有**开通直播间」时 `room_id_by_uid` 的响应形态（本账号已开通，走的是 `code=0` + `room_id` 有值那一支）；⑤ `60043` 引导用的**认证页地址**（§18.5，取自社区实现 `Zeppelinpp/bilibili-streamer`）——它**不在**本仓实测到的那份响应里，只是需求指定的引导口径，待完成一次真实人脸认证时顺带核对能否唤起。**边界确认**：本次实测未让直播间真的开播（上游拒绝在前），事后只读复查 `live_status` 仍为 `0` | 开播 / 下播链路 |
 > A49–A65 由 `docs/auth.md` 原有的待实测表移交（该表已删，`AGENT.md` §6.5.2 第 6 条要求「待实测校准」只在本附录维护）；条目状态照原表记录、未做升级，核对面分别是扫码 / `nav` / WBI / `getDanmuInfo` / 表情包库 / 举报 / 钱包。
 > 其中两项已有实测结论、不另立条目：举报理由清单端点登录态返回 7 条 `{id, reason}`（`crates/danmubox-bili/src/report.rs:32-59`）；举报表单里 `csrf` 与 `csrf_token` 同值、放 query 一律禁止（`report.rs:80-81`）。A16 / A17 / A26 / A28 / A29 / A34 六条与本批移交内容重合，已合并进各自原行。
 

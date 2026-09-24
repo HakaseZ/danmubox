@@ -19,8 +19,9 @@ pub use bus::{
 pub use config::{account_name_from, validate_account_name, AppConfig, ConfigStore, Profile};
 pub use error::{Error, Result};
 pub use model::{
-    sort_followed, BlacklistedUser, Emote, EmotePackage, EmoteRef, FollowedRoom, Message,
-    MessageKind, ReportReason, Room, RoomSession, SendOutcome, SilentUser,
+    sort_followed, AnchorArea, AnchorGate, AnchorGateKind, BlacklistedUser, Emote, EmotePackage,
+    EmoteRef, FollowedRoom, Message, MessageKind, OwnRoom, ReportReason, Room, RoomSession,
+    SendOutcome, SilentUser, StreamEndpoint, StreamEndpoints,
 };
 pub use paths::{config_path, data_dir, prefs_path};
 pub use prefs::Prefs;

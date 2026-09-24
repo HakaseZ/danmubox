@@ -515,6 +515,93 @@ export interface FollowedRoom {
   online?: number;
 }
 
+/**
+ * 我自己的直播间（主播视角，契约 §5）。与 `Room` 是两回事——后者是「我要看的房间」。
+ *
+ * 下播 / 准备中时 `title` 与 `area_*` 保留**上次开播**的数据，界面默认沿用、不必重填。
+ */
+export interface OwnRoom {
+  room_id: number;
+  /** 直播间标题（上游 `data.title`），可改。 */
+  title: string;
+  /** 0 未开播 / 1 直播中 / 2 轮播。 */
+  live_status: number;
+  /** 当前分区 id；开播缺省沿用这一份，界面可用 `area_v2` 覆盖。 */
+  area_id: number;
+  /** 分区名，形如「娱乐 · 视频唱见」；上游没给为空串。 */
+  area_name: string;
+}
+
+/** 单个推流端点（契约 §5）。 */
+export interface StreamEndpoint {
+  addr: string;
+  /** 推流码：**账号级凭据**，只进界面内存，不落盘、不进日志。 */
+  code: string;
+}
+
+/**
+ * 开播成功时上游下发的推流端点集合（契约 §5）。
+ *
+ * 与 `AnchorGate` **互斥**：一次 `anchor_live_set` 只给其中一个。
+ */
+export interface StreamEndpoints {
+  rtmp?: StreamEndpoint | null;
+  rtmp_backup?: StreamEndpoint | null;
+  srt?: StreamEndpoint | null;
+}
+
+/** 身份校验引导的种类（契约 §5）。 */
+export type AnchorGateKind = "faceauth" | "qrconfirm";
+
+/**
+ * 开播被上游身份校验挡住时的引导产出（契约 §5）。
+ *
+ * **引导不代替上游原话**：`code` / `message` 一起呈现。已实测 `60043`，
+ * 社区实现另观察到 `60024`（`protocol.md` §18.5）。
+ */
+export interface AnchorGate {
+  code: number;
+  message: string;
+  kind: AnchorGateKind;
+  /** `FaceAuth` 的认证页地址；其余为空串。 */
+  url: string;
+  /** `QrConfirm` 的二维码内容（界面**离线**编码）；其余为空串。 */
+  qr: string;
+}
+
+/** 开播分区树（两级，契约 §5）：父 → 子，`children` 末端的 `id` 即 `area_v2`。 */
+export interface AnchorArea {
+  id: number;
+  name: string;
+  children?: AnchorArea[];
+}
+
+/**
+ * 命令层在 `AnchorGate` 上多给的一张**离线编码**的二维码 SVG（与扫码登录同一条口径：
+ * Rust `qrcode` crate 就地编码，不联网生成、不交给第三方服务）。
+ *
+ * 它**不属**契约 §5 的 `AnchorGate` 字段——只在 `anchor_live_set` 的返回里出现，
+ * `QrConfirm` 且上游给了 `qr` 时才有值。
+ */
+export interface AnchorGateView extends AnchorGate {
+  qr_svg?: string | null;
+}
+
+/**
+ * `anchor_live_set` 开播的返回：推流端点 与 身份校验引导 **二选一**（契约 §7）。
+ *
+ * 后端是 `untagged` 枚举，所以载荷**就是**两者之一本身、不带壳；
+ * `code` 字段是区分点（`StreamEndpoints` 顶层没有它）。
+ */
+export type AnchorLiveResult = StreamEndpoints | AnchorGateView;
+
+/** 把开播返回判成「成功 / 被挡住」。推流码不进任何日志。 */
+export function isAnchorGate(
+  result: AnchorLiveResult | null | undefined,
+): result is AnchorGate {
+  return typeof (result as AnchorGate | null)?.code === "number";
+}
+
 export const EMOTE_PACKAGE_LABEL: Record<EmotePackage, string> = {
   common: "通用",
   owned: "我的表情",

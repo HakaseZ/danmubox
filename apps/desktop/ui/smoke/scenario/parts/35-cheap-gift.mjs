@@ -290,15 +290,26 @@
         window.__prefs["ui.gift_collapse_cheap"] === true;
       await cheapSetPane(true);
       var ssChatBucketRows = ssChatRowsWith("投喂 铅笔");
-      var ssChatBucketCount = ssChatBucketRows.length === 1
-        ? ssChatBucketRows[0].querySelector('[data-testid="db-msg-count"]') : null;
+      // ⚠ 桶行的 ×N 在**身份位**（`db-msg-spam`，写「低价礼物 ×N」），**不在**正文那格
+      //   `db-msg-count`：2026-09-22 第 3 条把低价礼物桶改成与刷屏聚合**同一套形态**
+      //   （`MessageRow`：`aggregated` 时身份位印数量，正文里那格行内 ×N **不画**——
+      //   同一个数不在一行里出现两次）。旧断言查 `db-msg-count`，在这条改动之后恒红：
+      //   **是这一句落后于实现，不是实现的 bug**（ui.md §5.3 / §8.4、MessageRow 两处对得上）。
+      var ssChatBucketSpam = ssChatBucketRows.length === 1
+        ? ssChatBucketRows[0].querySelector('[data-testid="db-msg-spam"]') : null;
       out.switchScopeChatPaneFolds = ssChatBucketRows.length === 1 &&
         ssChatRowsWith("投喂 铅笔屑").length === 0 &&
-        !!ssChatBucketCount && ssChatBucketCount.innerText.indexOf("×2") >= 0;
+        !!ssChatBucketSpam && ssChatBucketSpam.innerText.indexOf("低价礼物 ×2") >= 0;
+      // 同一个数只出现一次：聚合行正文里那格 `db-msg-count` 确实没画（0.11 元那条不是聚合行，
+      // 它照旧有 ×1 那一格，所以判据只在**桶行**上取）。
+      out.switchScopeBucketNoInlineCount = ssChatBucketRows.length === 1 &&
+        ssChatBucketRows[0].querySelector('[data-testid="db-msg-count"]') === null;
       out.switchScopeGiftRowsAfterFold = cheapRowCount();
+      var ssGiftBucketSpam = allByTestId("db-gift-spam")[0];
       out.switchScopeGiftPaneFolds = out.switchScopeGiftRowsAfterFold === 2 &&
         cheapPaneText().indexOf("投喂 铅笔屑") < 0 &&
-        cheapPaneText().indexOf("0.19 元") >= 0;
+        cheapPaneText().indexOf("0.19 元") >= 0 &&
+        !!ssGiftBucketSpam && ssGiftBucketSpam.innerText.indexOf("低价礼物 ×2") >= 0;
       out.switchScopeBothPanesFold = out.switchScopeChatPaneFolds && out.switchScopeGiftPaneFolds;
       // 折叠只管形状：统计逐字不动（含头部那个 N）。
       out.switchScopeFoldKeepsStats = cheapSummary() === out.switchScopeSummaryBefore;

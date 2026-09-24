@@ -362,6 +362,85 @@ pub struct FollowedRoom {
     pub online: i64,
 }
 
+/// 我自己的直播间（主播视角，规范性，`docs/contract.md` §5）。
+///
+/// 与 `Room` 是两回事——后者是「我要看的房间」（只读、游客也有）。
+/// 取数来自 `AnchorRoom::own()`（`docs/contract.md` §3）；`None` 表示该账号没开通直播间。
+/// 下播 / 准备中时 `title` 与 `area_*` 仍保留**上次开播**的数据，界面默认沿用、不必重填。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnRoom {
+    pub room_id: i64,
+    /// 直播间标题（上游 `room/v1/Room/get_info` 的 `data.title`）。可改：`anchor_title_set` 作用的就是它。
+    pub title: String,
+    /// 0 未开播 / 1 直播中 / 2 轮播。
+    pub live_status: i32,
+    /// 当前分区 id（上游 `data.area_id`）。开播缺省沿用这一份；界面做两级分区选择（`area_v2` 覆盖）。
+    pub area_id: i64,
+    /// 分区名，形如「娱乐 · 视频唱见」（上游 `parent_area_name` + `area_name` 拼「父 · 子」）；上游没给为空串。
+    pub area_name: String,
+}
+
+/// 单个推流端点（开播成功时上游下发，`docs/contract.md` §5）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreamEndpoint {
+    /// 推流地址。
+    pub addr: String,
+    /// 推流码（账号级凭据，见 `StreamEndpoints`）。
+    pub code: String,
+}
+
+/// 开播成功时上游下发的推流端点集合（`docs/contract.md` §5）。
+///
+/// **推流码是账号级凭据**：只随这一次返回值进界面内存，
+/// 不进日志、不落盘、不进 `prefs.json` / `config.toml`（`docs/contract.md` §4.1 安全红线）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreamEndpoints {
+    /// 主推流地址；给哪几组就带哪几组，缺的为 `null`。
+    #[serde(default)]
+    pub rtmp: Option<StreamEndpoint>,
+    #[serde(default)]
+    pub rtmp_backup: Option<StreamEndpoint>,
+    #[serde(default)]
+    pub srt: Option<StreamEndpoint>,
+}
+
+/// 身份校验引导的种类（`docs/contract.md` §5）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnchorGateKind {
+    /// 打开认证页（界面用 `open_url`）。
+    FaceAuth,
+    /// 就地画二维码（界面离线编码 `qr`）。
+    QrConfirm,
+}
+
+/// 开播被上游身份校验挡住时的引导产出（`docs/contract.md` §5，与 `StreamEndpoints` 互斥）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnchorGate {
+    /// 上游原始业务码（已实测 `60043`；社区实现另观察到 `60024`）。
+    pub code: i64,
+    /// 上游原始 `msg`；引导不代替它。
+    pub message: String,
+    /// 引导种类。
+    pub kind: AnchorGateKind,
+    /// `FaceAuth` 时的认证页地址；其余为空串。
+    pub url: String,
+    /// `QrConfirm` 时的二维码内容（界面离线编码）；其余为空串。
+    pub qr: String,
+}
+
+/// 开播分区树（两级，`docs/contract.md` §5），来自 `anchor_area_list`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnchorArea {
+    /// 分区 id（父 / 子都带）；即 `go_live` 的 `area_v2` 取值。
+    pub id: i64,
+    /// 分区名。
+    pub name: String,
+    /// 子分区；父分区有、叶子为空。
+    #[serde(default)]
+    pub children: Vec<AnchorArea>,
+}
+
 /// 被禁言的观众（房管面板的只读列表项）。字段对应上游列表里的
 /// `tuid` / `tname` / `face`（`docs/protocol.md` 附录 A36）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

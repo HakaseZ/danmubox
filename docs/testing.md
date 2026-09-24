@@ -38,7 +38,7 @@ graph TD
 | `crates/danmubox-bili/src/`（17 个 `.rs` 中的 16 个） | `admin.rs`、`asset.rs`、`auth.rs`、`cmd.rs`、`emote.rs`、`follow.rs`、`history.rs`、`http.rs`、`pb.rs`、`proto.rs`、`redact.rs`、`report.rs`、`send.rs`、`wallet.rs`、`wbi.rs`、`ws.rs` |
 | `apps/desktop/src-tauri/src/`（2 个 `.rs` 中的 1 个） | `lib.rs` |
 | `apps/desktop/ui/src/` | `aggregate.test.ts`、`filtering.test.ts`、`session-messages.test.ts` |
-| `apps/desktop/ui/smoke/` | `run-headless.mjs`、`room-page.mjs`、`wkwebview-host.swift`、`scenario/fixtures.mjs`、`scenario/parts/*.mjs`（20 份：`00-mock` / `10-harness` / `20…36` / `90-epilogue`）、`fixtures/*.json`（10 份） |
+| `apps/desktop/ui/smoke/` | `run-headless.mjs`、`room-page.mjs`、`wkwebview-host.swift`、`scenario/fixtures.mjs`、`scenario/parts/*.mjs`（21 份：`00-mock` / `10-harness` / `20…37` / `90-epilogue`）、`fixtures/*.json`（10 份） |
 
 无测试的文件：`crates/danmubox-core/src/{lib,ports,error}.rs`、`crates/danmubox-bili/src/lib.rs`、`crates/danmubox-cli/src/main.rs`、`apps/desktop/src-tauri/src/main.rs`。端到端验证落在 `apps/desktop/ui/smoke/`（目录结构与夹具出处见 §9.1，引擎门槛见 `AGENT.md` §9）。
 
@@ -251,7 +251,7 @@ node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑�
 | F-07 | 徽标渲染 | 渲染主播 / 房管 / 大航海样本 | 主播由 `uid == Room.anchor_uid` 派生、房管取 `is_admin`、大航海按 `guard_level` 展示 |
 | F-08 | 礼物类消息的去向 | 切换 `ui.gift_in_danmaku` / `ui.gift_panel` 两枚开关的四种组合 | `ui.gift_in_danmaku` 开时礼物 / SC / 大航海混在弹幕流里；`ui.gift_panel` 开时这三类另进**与弹幕区上下分区**的独立礼物栏（一条一行、金额各组带单位，`ui.md` §5.4）；两枚都开是默认形态（同一批消息两处都渲染，`ui.md` §5） |
 | F-08.1 | 上下分区的比例与顺序 | 拖动分割条、长按换位、改 `ui.gift_pane_ratio` / `ui.gift_pane_on_top` | 拖动实时改两栏高度（拖动中不写 store，松手写一次）、长按 0.5s 换位、两枚键持久化并在重启后读回；最小高度双向生效（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头）；`ui.gift_panel` 关掉时退化为弹幕区全高、分割条消失（`ui.md` §5.4；无头冒烟同款断言见 `smoke/scenario/parts/34-split-panes.mjs` 的 `splitter*` / `swap*`） |
-| F-08.2 | 低价礼物（≤ 0.1 元）的折叠与统计剔除 | 勾上「辅助功能」里的「折叠低价礼物」/「剔除低价礼物统计」，**弹幕区与礼物栏两处**都放 0.09 / 0.10 / 0.11 元与没给价（`amount = 0`）四条礼物 | **两个区域**（弹幕区 + 礼物栏）各量一次：折叠让**两处**的低价礼物合成一条（`×N` 与金额是整桶合计，弹幕区那一处不画金额格），折叠头的统计逐字不变；剔除只改**折叠头**的「礼物 / SC（N）」与三组明细（统计面只有这一处），**两处的行都不动**；边界：0.09 / 0.10 算低价、0.11 与 0 不算；SC 与大航海不受两枚开关影响；两枚默认都关且持久化（`ui.md` §5.3、`contract.md` §8；无头冒烟同款断言见 `smoke/scenario/parts/35-cheap-gift.mjs` 的 `cheapGift*` 与 `switchScope*`，单测见 `src/filtering.test.ts`） |
+| F-08.2 | 低价礼物（≤ 0.1 元）的折叠与统计剔除 | 勾上「辅助功能」里的「折叠低价礼物」/「剔除低价礼物统计」，**弹幕区与礼物栏两处**都放 0.09 / 0.10 / 0.11 元与没给价（`amount = 0`）四条礼物 | **两个区域**（弹幕区 + 礼物栏）各量一次：折叠让**两处**的低价礼物合成一条（`×N` 与金额是整桶合计，弹幕区那一处不画金额格），折叠头的统计逐字不变；剔除只改**折叠头**的「礼物 / SC（N）」与三组明细（统计面只有这一处），**两处的行都不动**；边界：0.09 / 0.10 算低价、0.11 与 0 不算；SC 与大航海不受两枚开关影响；两枚默认都关且持久化（`ui.md` §5.3、`contract.md` §8；无头冒烟同款断言见 `smoke/scenario/parts/35-cheap-gift.mjs` 的 `cheapGift*` 与 `switchScope*`，单测见 `src/filtering.test.ts`；**桶行的 ×N 在身份位**（`db-msg-spam` / `db-gift-spam`，写「低价礼物 ×N」），正文那格 `db-msg-count` **不画**（与刷屏聚合同一套形态，见 `switchScopeBucketNoInlineCount`） |
 | F-08.3 | **剔除 / 折叠 / 隐藏 / 自动消失都不丢内容、开关关掉即复原**（issue 2609171849 第 5 条） | ① 折叠开着时关掉它：**两个区域**各自逐条回来；② 剔除开着时关掉它：统计串逐字回来；③ 关掉 `ui.interact_auto_hide`：早先「消失」的互动行原样回来，再打开又不见；④ 关掉 `ui.gift_panel` / `ui.gift_in_danmaku`：被藏起来的那一批整批回来 | 这四种机制**都只是显示层的派生**——原始消息始终留在会话缓冲里（只受契约 §4.3 的上限约束），不得因它们提前消失。关掉后顺序、数量、金额与统计串逐项与开之前相同（`ui.md` §5.3「不丢内容 / 可逆」与 §4.8；单测 `src/filtering.test.ts` 第 2/3/5 条，冒烟 `switchScope*`） |
 | F-08.4 | **刷屏弹幕聚合**（不同观众在同一窗口里发同一条弹幕折成一行） | 五档：同文本 + 3 位不同观众、不同文本、同文本但第一条落在窗口外、三位观众里有一位没头像、关掉 `ui.danmaku_aggregate` 再点回来 | ① 同文本 + 3 位观众：折成**一行**，身份位印「刷屏 ×3」（`db-msg-spam`）、头像列（`db-msg-avatar-col`）里画 `db-msg-avatar-stack` 的 3 张堆叠头像（沿 X 每张错开 30% 头像宽、后一张压在前一张上、**最左那张 z-index 最高**），身份位**不画**用户名（`db-msg-name`）与徽标（`db-msg-badges`）、行内**不画** `×N`（`db-msg-count` 只属于礼物连击与低价礼物桶）；② 不同文本：两行（只认同一个聚合键）；③ 第一条落在窗口外：三行（锚点是本行第一条，**非滑动**）；④ 一位观众没头像：头像列只画两张、只错开一次（空 `face` 的那位不画，错位按实画张数算，头像列本身照留宽）；⑤ 关掉开关：同样三条**逐条**显示（无「刷屏 ×N」、无堆叠层），点回来当场又折成一行。单测见 `src/aggregate.test.ts`（9 条）；无头冒烟同款断言见 `smoke/scenario/parts/25-aggregate-jump.mjs` 的 `aggregateBlockRan` / `aggregate*` 一组（`ui.md` §8.4 第二条、`contract.md` §8） |
 | F-09 | 刷新按钮 | 在房间内点击「刷新」 | 发出 `rooms_reconnect`；已渲染的当前会话消息不被清空 |
@@ -315,6 +315,7 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `34-split-panes.mjs` | `splitter` 分割条与长按换位 |
 | `35-cheap-gift.mjs` | `cheapgift` / `switchscope` 两枚低价礼物开关 |
 | `36-status-poll.mjs` | 开播 / 下播状态自动更新（实时事件 + 列表页周期） |
+| `37-anchor-room.mjs` | 「我的直播间」：账号行按钮展开管理区（标题 / 两级联动分区 / 开播·下播）、开播被身份校验挡住弹提示框（`anchorGate*`）、开播成功后推流参数（`anchorConfig*`）、读失败与没开通直播间（`anchorNoRoom*`） |
 
 | 夹具 | 出处 | 覆盖什么 |
 |---|---|---|
@@ -367,7 +368,7 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 
 | 类型 | 命名 / 路径 | 说明 |
 |---|---|---|
-| 前端冒烟截图 | `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，文件 `danmubox-ui[-narrow]-<theme>-<场景>.png` | **主题后缀必须有**：同目录被两次运行共用时深浅两遍会互相覆盖。默认写 `$TMPDIR`；场景名：`-follow` / `-rooms` / `-short-content` / `-room` / `-admin` / `-admin-confirm` / `-account-area` / `-account` / `-account-qr` / `-toast` / `-optimistic` / `-final` |
+| 前端冒烟截图 | `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，文件 `danmubox-ui[-narrow]-<theme>-<场景>.png` | **主题后缀必须有**：同目录被两次运行共用时深浅两遍会互相覆盖。默认写 `$TMPDIR`；场景名：`-follow` / `-rooms` / `-short-content` / `-room` / `-admin` / `-admin-confirm` / `-account-area` / `-account` / `-account-qr` / `-anchor` / `-anchor-gate` / `-toast` / `-optimistic` / `-final` |
 | 前端冒烟日志 | `.android-env/verify/<票名>-<engine>.log` | 已用实例：`splitter-chromium.log` / `splitter-webkit.log`、`tabstrip-webkit-light.log`、`filtergrid-chromium.log` |
 | Android 探针 | `.android-env/verify/<票名>-*.png` / `*.txt` / `*.log` | 已用实例：保活 `ka-*`、返回手势 `back-*`、脱敏对照 `redact-*.log`（出处 `operations.md` §5.3） |
 | Rust 新增用例自证 | `cargo test -- --list \| grep <新用例名>` | 证明用例真的会被跑到（而不是被 `cfg` 掉或写错名字） |
@@ -425,8 +426,8 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 | C-13 | 退出应用后重新进入同一房间 | 进程退出无残留；重进为全新会话，不显示上一会话的弹幕 |
 | C-14 | 共享分区：拖分割条、长按换位、关掉礼物栏 | 拖动两栏之间的分割条：高度**实时**跟着走，松手后比例留在 `prefs.json`（`ui.gift_pane_ratio`），重开应用仍是这个比例；拖到极限时弹幕区不短于 3 行、礼物栏不短于它的折叠头（不压到 0、不溢出）；长按任一栏 0.5s 后拖到另一栏松手：两栏上下互换且 `ui.gift_pane_on_top` 落盘（拖回本栏或按 ESC 取消）；在筛选面板关掉「独立礼物栏」：礼物栏与分割条一起消失、弹幕区占满整块（`ui.md` §5.4）。鼠标与触摸各做一遍 |
 | C-15 | 低价礼物两枚开关与互动自动消失：两个区域都生效、关掉即复原 | 在一个礼物不多的房间里先看基线：弹幕区与礼物栏各自把每条礼物画成一行。① 勾上「折叠低价礼物」：**两个区域**里低价礼物（≤ 0.1 元）各合并成一条（`×N` 与金额是整桶合计，弹幕区的合并行不画金额），0.11 元那条与 SC / 大航海两处都照旧一行；② 取消勾选：两处**逐条回来**，顺序、条数、每行金额与折叠头的统计都与基线一字不差；③ 勾上「剔除低价礼物统计」：统计（「礼物 / SC（N）」与分组明细）里不再有低价礼物，而**两个区域的行一条都不少**；取消后统计逐字回到基线；④ 互动消息满 8 秒从弹幕区消失后，取消勾选「互动消息自动消失」：**先前消失的那些行原样回来**（再勾上又不见）—— 消失只是不画，不是丢内容（`ui.md` §5.3、§4.8） |
-
-| C-16 | 刷屏弹幕聚合开关（筛选面板「辅助功能」块的「刷屏弹幕聚合」，`ui.danmaku_aggregate`，默认勾上）：先取消勾选、再勾回来 | 勾上时：同文本的几条在窗口内折成**一行** —— 身份位印「刷屏 ×N」、头像列画出最多 3 张堆叠头像（每张沿 X 错开、左压右），行内**不**画 `×N`，不同文本仍是两行；取消勾选：同一批弹幕**逐条**显示（无「刷屏 ×N」、无堆叠层）；再勾回来：当场又折成一行。折叠只是显示层的派生，会话缓冲里仍是逐条（`ui.md` §8.4 第二条；无头冒烟同款断言见 `smoke/scenario/parts/25-aggregate-jump.mjs` 的 `aggregateBlockRan` / `aggregate*`） |
+| C-16 | 「我的直播间」（账号对话框里**按账号展开**）：**未开通不显示**、**未展开不发请求**、**下播后推流信息不入 DOM**（2026-09-24 按 `ui.md` §2.2.2 改口径） | ① 账号对话框里**每个账号行的删除按钮右侧**有一枚「我的直播间」按钮（`db-anchor-toggle`）；**不点它时不渲染 `db-anchor-panel`、也不发 `anchor_room`**；② 用**没开通直播间**的账号（或**非当前 / 未登录**的那一行）点它：展开区里只有错误行（或不渲染），同样**不发请求**——后端读的永远是**当前账号**自己的直播间；③ 用**已开通**的**当前**账号点它：出现标题输入框（`db-anchor-title`，初值 = 该直播间当前标题，与远端一字不差时「保存」禁用）、**两级联动分区选择**（`db-anchor-area-select`，父→子；选父落到它第一个子分区）、状态文本（`db-anchor-status`：`直播中` / `轮播` / `未开播`）与开播 / 下播按钮（`db-anchor-live`，文案随状态切）；④ **开播成功后**下方**直接渲染** `db-anchor-config`：分区、推流地址（`db-anchor-rtmp-addr`）、推流码（`db-anchor-rtmp-code`），**长按该值即复制（不显示复制键）**；**下播 / 收起 / 关对话框**后这两行连同推流码一起**从 DOM 消失**（不是「看不见」）；⑤ 开播被**身份校验**挡住（`60043` / `60024`）时**弹出提示框** `db-anchor-gate-modal`（`FaceAuth` 给一枚「去完成人脸认证」入口走 `open_url`、`QrConfirm` 就地画离线二维码 `db-anchor-gate-qr`），提示「完成认证后再点一次开播」，且**上游原话（code + msg）照旧留在错误行**——引导不代替原话；**不轮询、不自动重试**（等几秒 `anchor_live_set` 不会自己再发一次）；Esc 只关提示框、**不**连带关账号对话框；⑥ 读失败（凭据失效 / 风控）时只渲染错误行、**不静默**（`db-anchor-error` 是后端原话）。**开播 / 下播是写操作**：只允许在**你自己当前账号的直播间**上点（`AGENT.md` §8 第 14–16 条 —— 失败即停、不重试）。无头冒烟同款断言见 `smoke/scenario/parts/37-anchor-room.mjs` 的 `anchorBlockRan` / `anchor*` |
+| C-17 | 刷屏弹幕聚合开关（筛选面板「辅助功能」块的「刷屏弹幕聚合」，`ui.danmaku_aggregate`，默认勾上）：先取消勾选、再勾回来 | 勾上时：同文本的几条在窗口内折成**一行** —— 身份位印「刷屏 ×N」、头像列画出最多 3 张堆叠头像（每张沿 X 错开、左压右），行内**不**画 `×N`，不同文本仍是两行；取消勾选：同一批弹幕**逐条**显示（无「刷屏 ×N」、无堆叠层）；再勾回来：当场又折成一行。折叠只是显示层的派生，会话缓冲里仍是逐条（`ui.md` §8.4 第二条；无头冒烟同款断言见 `smoke/scenario/parts/25-aggregate-jump.mjs` 的 `aggregateBlockRan` / `aggregate*`） |
 
 ### 10.2 macOS 专属
 
@@ -534,5 +535,5 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 |---|---|
 | 凭证 / 日志断言 | 与 §1「凭证零泄漏」同一条：测试与 fixture 中不得出现真实 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`；自动化测试不注入真实凭证；断言日志不含凭证时用关键词检索而非打印凭证本身 |
 | fixture 脱敏与提交前检查 | 与 §8.3 同一条：回放 fixture 按 §8.3 处理（同一用户在多条样本中保持同一映射）；提交前对新增 fixture 与快照做一次敏感关键词检索，命中即修复 |
-| 写操作边界 | 只允许公开测试房间 `1`（5440）或当次明确指定的房间，一经指定不得更换，失败即停不重试；见 [`../AGENT.md`](../AGENT.md) §8 第 14–16 条 |
+| 写操作边界 | 只允许公开测试房间 `1`（5440）或当次明确指定的房间，一经指定不得更换，失败即停不重试；见 [`../AGENT.md`](../AGENT.md) §8 第 14–16 条。<br>**「我的直播间」（改标题 / 开播 / 下播，需求 §2.14）另有更窄的一条**：这类写操作**只对当前登录账号自己的直播间**生效 —— 目标房间由 `AnchorRoom::own()` 现取（`contract.md` §3），**上层不传房间号**，因此不存在「写到别人房间」的路径；失败即停，**不换房间 / 不换账号 / 不换参数重试**；上游非 0 code **原样带回、不赋语义**（`protocol.md` §18、附录 A66）；**唯一例外**是身份校验那两个码转成引导产出 `AnchorGate`（`protocol.md` §18.5）——引导**不触发任何自动重试**，认证完成后由用户自己再点一次开播 |
 | 文档同步 | `docs/testing.md` 的作用 / 读者 / 更新时机登记在 [`../AGENT.md`](../AGENT.md) §6.5.1；阶段的验收标准与历史记录见 [`../CHANGELOG.md`](../CHANGELOG.md) |

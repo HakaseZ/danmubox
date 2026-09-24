@@ -504,6 +504,8 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height, them
   let accountAreaShot = false;
   let accountShot = false;
   let accountQrShot = false;
+  let anchorShot = false;
+  let anchorGateShot = false;
   let followShot = false;
   let toastShot = false;
   let optimisticShot = false;
@@ -568,6 +570,15 @@ async function runViewport({ viewPage, shoot, shotDir, name, width, height, them
       if (!accountQrShot && snapshot.accountQrImgShown) {
         accountQrShot = true;
         await shoot(join(shotDir, `${prefix}-account-qr.png`));
+      }
+      // 「我的直播间」两张：管理区（含开播成功后的推流参数）与身份校验提示框
+      if (!anchorShot && snapshot.anchorConfigShownAfterLive) {
+        anchorShot = true;
+        await shoot(join(shotDir, `${prefix}-anchor.png`));
+      }
+      if (!anchorGateShot && snapshot.anchorGateModalShown) {
+        anchorGateShot = true;
+        await shoot(join(shotDir, `${prefix}-anchor-gate.png`));
       }
       if (snapshot.done) break;
     }

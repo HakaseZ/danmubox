@@ -128,6 +128,64 @@
 | 退出登录 | `account_logout(name)` | **必须确认**，文案说明「清掉该账号凭据、界面回到游客态；账号条目保留，可随时重新扫码」。登出的是**当前账号**时与切号同款清掉上一个身份的界面状态；登出别的账号不动当前界面 |
 | 删除 | `account_remove(name)` | **必须确认**，文案说明「条目与凭据一并删除、不可恢复」；删的是当前账号时补一句「会自动切到另一个账号」，并同样清掉上一个身份的界面状态。**只剩一个账号时按钮置灰**并给出 `title`（后端也会拒） |
 
+账号对话框里，**每个账号行的删除按钮右侧**有一枚「我的直播间」按钮（`db-anchor-toggle`）；点击**展开**该账号的直播间管理区（需求 §2.14）。渲染条件、管理区布局、人脸认证二维码提示框与 `db-anchor-*` 钩子见 §2.2.2。
+
+### 2.2.2 「我的直播间」按钮与展开区（`anchor_*`，需求 §2.14）
+
+账号对话框里，**每个账号行的删除按钮右侧**有一枚「我的直播间」按钮（`db-anchor-toggle`）；点击**展开**该账号的直播间管理区（与账号行同款深色卡片，位于账号行之下、`＋ 添加账号` / 二维码面板之上）。**不采用常驻面板**：没开通直播间 / 读失败时仍可按按钮，展开后只渲染错误行。开播沿用 web 端已有配置：**标题与分区默认取该直播间当前值（即上次开播 / 下播保留的数据），用户不改即可直接沿用开播、不必重填**。
+
+**展开区渲染条件**
+
+| 情况 | 表现 |
+|---|---|
+| 当前账号**已登录**，且 `anchor_room` 给出了直播间 | 正常渲染：标题行 + 分区选择 + 状态行 |
+| 该账号**没有开通直播间**（后端 `anchor_room` 返回 `null`） | 仍可按按钮，展开后**只渲染错误行**（`db-anchor-error`）——不编一行假状态 |
+| **游客态**（未登录） | 按钮仍显示，展开后渲染错误行（不发请求） |
+| **读失败**（凭据失效 `-101`、风控 `-352` …） | `anchorRoom` 为 `null`，但**错误行必须留痕**（后端原话），**失败不许静默消失** |
+| 展开的是**非当前账号**的那一行 | 同上：只渲染错误行，**不发请求**。后端读的永远是**当前账号**自己的直播间（契约 §7），对着别的账号行发请求会拿回另一个人的房间——先切到该账号再看 |
+
+取数时机：展开时拉 `anchor_room` 与 `anchor_area_list`（`loadAnchorRoom` / `loadAnchorAreas` 依赖 `loggedIn` 与 `active_profile`）；切号 / 登出由 `store.resetIdentityState` 清掉这几份状态。**读的永远是当前账号自己的直播间。**
+
+**管理区布局**
+
+| 行 / 块 | 内容与规则 |
+|---|---|
+| 标题行（`db-anchor-title-row`） | 直播间标题输入框（`db-anchor-title`）+ 「保存」（`db-anchor-title-save`）。**草稿初值 = `OwnRoom.title`（上次开播保留的标题）**，远端变了以远端为准；与远端一字不差时保存键禁用。保存成功**就地重读** |
+| 分区选择（`db-anchor-area-select`） | 两级联动父→子下拉，数据来自 `anchor_area_list`（`AnchorArea` 树）；**默认选中 = `OwnRoom.area_id`（上次开播沿用分区）**；取不到列表时降级为只读显示 `area_name`。开播时把所选子分区 `id` 作为 `area_v2` 发给 `anchor_live_set` |
+| 状态 / 动作行（`db-anchor-status-row`） | 状态文本（`db-anchor-status`）+ 开播 / 下播按钮（`db-anchor-live`）。文案只从 `OwnRoom.live_status` 派生：`1` → `直播中`、`2` → `轮播`、其余 `未开播`；按钮文案随之在 `开播` / `下播` 之间切，`title` 写明「沿用所选分区」。忙态只禁本钮 |
+
+- 两个按钮的忙态**各管各的**（组件本地瞬态）：保存中只禁「保存」、开播 / 下播请求中只禁那一枚按钮 —— 改标题与开播 / 下播是两条独立命令，谁也不必等谁。
+- 写操作口径（`contract.md` §3 `AnchorRoom`）：**只作用在当前账号自己的直播间**，**失败即停**、不自动重试；上游非 0 code **原样带回、不赋语义**（原话进错误行 `db-anchor-error`）。**唯一例外是身份校验那两个码**：开播返回 `AnchorGate`（`contract.md` §5）时，**弹出二维码提示框**（`db-anchor-gate-modal`），见下。
+
+**开播被身份校验挡住时（`AnchorGate`，需求 §2.14 / `protocol.md` §18.5）—— 弹出二维码提示框**
+
+错误行照旧显示上游原话（`code` + `msg`），并**弹出 modal**（`db-anchor-gate-modal`：`role="dialog"` + 遮罩，点遮罩 / Esc 关闭，关闭即清引导态）。按 `AnchorGate.kind` 二选一：
+
+| `kind` | 呈现 | 规则 |
+|---|---|---|
+| `FaceAuth` | 一枚入口按钮 `db-anchor-gate-open`（文案「去完成人脸认证」） | 点击走 `open_url`（`contract.md` §7）在系统浏览器打开 `AnchorGate.url`；**不内嵌网页、不做 webview 跳转** |
+| `QrConfirm` | 就地画二维码 `db-anchor-gate-qr` | 内容是 `AnchorGate.qr`，**离线**编码（与扫码登录同一条口径，不联网生成、不交给第三方服务）。编码发生在**命令层**（`anchor_live_set` 附带的 `qr_svg`，`contract.md` §5），界面直接渲染那张 SVG；`qr` 为空时提示「上游未给出二维码内容」 |
+
+- 两种 `kind` 都带一行提示 `db-anchor-gate-hint`：**「完成认证后再点一次开播」** —— 本仓没有「认证已完成」这条推送面，**不轮询、不自动重试**。
+- 提示框随下一次开播 / 下播请求**重新求值**：成功开播后它连同错误行一起消失（那次返回的是 `StreamEndpoints`）。
+- 换号 / 关掉对话框即清（与 `anchorRoom` / `anchorEndpoints` 一起走 `resetIdentityState`）。
+
+**开播成功后的推流参数（`db-anchor-config`，条件渲染）**
+
+开播成功（`anchor_live_set` 返回 `StreamEndpoints`）后，在管理区**下方直接渲染**参数块（**不必双击、不必展开**）：
+
+| 行（`db-anchor-config`） | 取值与规则 |
+|---|---|
+| 分区 | `db-anchor-area` = `OwnRoom.area_name`（或所选分区名）；空串写「上游未给出分区」 |
+| 推流地址 | `db-anchor-rtmp-addr`：**长按该值即复制**（不显示复制键），等宽体 + `word-break: break-all` |
+| 推流码 | `db-anchor-rtmp-code`：同上，**长按复制**；**下播即从 DOM 消失** |
+
+**推流码是账号级凭据**：只进界面内存（store 的 `anchorEndpoints`），**不写 `prefs.json`、不落盘、不打日志**；`anchor_live_set(false)` 返回 `null` 即清空，换人由 `resetIdentityState` 一并清。长按复制失败**静默**（拿不到剪贴板不是这一块要报的错）。
+
+**窄屏（≤ 520px）**：与宽屏**共用同一套规则**——卡片纵向 flex、输入框与状态行 `flex: 1; min-width: 0`、推流地址 / 码等宽体 + `word-break: break-all`，360 宽不横向溢出。
+
+**稳定钩子**：这一块的前缀是 `db-anchor-*`（`db-anchor-toggle` / `db-anchor-panel` / `db-anchor-title-row` / `db-anchor-title` / `db-anchor-title-save` / `db-anchor-area-select` / `db-anchor-status-row` / `db-anchor-status` / `db-anchor-live` / `db-anchor-error` / `db-anchor-gate-modal` / `db-anchor-gate-open` / `db-anchor-gate-qr` / `db-anchor-gate-hint` / `db-anchor-config` / `db-anchor-area` / `db-anchor-rtmp-addr` / `db-anchor-rtmp-code`），与账号块既有钩子（`db-account-*`）并列。
+
 ### 2.3 房间页与多标签
 
 房间页只有**一条纵向生长轴**。各区域职责固定：

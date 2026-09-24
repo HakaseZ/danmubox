@@ -181,7 +181,24 @@
 | 手填 Cookie | 现在的登录方式（游客 / 扫码）很合理，不做导入入口（已删除，见 CHANGELOG）— `contract.md` §4.1 |
 | 短语里的内置颜文字 | 短语只留用户自建的条目（已删除，见 CHANGELOG）— `contract.md` §8 `composer.phrases` |
 | 文本框上方的「将发送 xxx」预览 | 没有这个需求（已删除，见 CHANGELOG）— `apps/desktop/ui/src/components/Composer.tsx` |
+
 | 一键诊断导出 | 采出来的数据意义不大，既有链路的事实靠日志已经够用（已删除，见 CHANGELOG）— `docs/contract.md` §4 / §7 与 `docs/operations.md` 里该功能的落点已删除 |
+
+### 2.14 我的直播间
+
+用户原话（2026-09-19，初版）：「帮我在账号管理的界面，删除下边在加一个小区域，检测到已开通直播间时，显示自己直播间的直播间标题（可修改）、开播状态，并且在其中集成一个开播/下播按钮。」「应该和 web 端开播是一致的，确保之前在 web 端用的配置可以沿用就行……」；开播被身份校验挡住时的引导口径参考社区项目 `Zeppelinpp/bilibili-streamer`（用户 2026-09-22 追加）。
+
+**2026-09-24 修订（当前口径）**：入口形态、分区选择、人脸认证交互、推流参数复制方式均按用户最新要求调整（逻辑 / 布局可参照 `https://github.com/Zeppelinpp/bilibili-streamer`，UI 风格保持本项目）。
+
+- 账号管理界面里，**每个账号的删除按钮右侧新增一枚「我的直播间」按钮**（`db-anchor-toggle`）；点击**展开**该账号的直播间管理区（不是常驻面板）。没开通直播间 / 读失败时仍可按，展开后只渲染错误行 — 落点 `contract.md` §3 `AnchorRoom`、§5 `OwnRoom`、§7 `anchor_room`、`ui.md` §2.2.2
+- 管理区里有三样：**直播间标题（可改）**、**分区选择（两级联动父→子）**、**开播状态 + 开播 / 下播按钮** — 落点 `contract.md` §7 `anchor_title_set` / `anchor_live_set` / `anchor_area_list`、`ui.md` §2.2.2
+- **默认值 = 上次开播（下播 / 准备中）保留的数据**：标题与分区直接取 `OwnRoom.title` / `area_id` / `area_name`，**用户不改即可直接沿用开播、不必重填**；仅想换时才编辑 — 落点 `contract.md` §5 `OwnRoom`、`protocol.md` §18
+- **分区选择**：新增两级联动分区选择器，数据来自 `anchor_area_list`（父分区 → 子分区）；默认选中 = `OwnRoom.area_id`（上次开播分区），取不到列表时降级为只读显示 `area_name`；`anchor_live_set` 接受可选 `area_v2` 覆盖（缺省沿用当前分区） — 落点 `contract.md` §5 `AnchorArea`、§7 `anchor_area_list`、`protocol.md` §18.1
+- **开播成功后在管理区下方直接渲染推流参数**（当前分区 + 推流地址 + 推流码），**长按该值即复制、不显示复制键**，复制失败静默，下播即消失 — 落点 `contract.md` §5 `StreamEndpoints`、`ui.md` §2.2.2
+- 开播被上游**身份校验**挡住时，**弹出二维码提示框（modal）** 引导官方 App 扫码认证：实测 `60043` 给「去官方页认证」入口（`open_url` 打开认证页）；社区实现观察到的 `60024` 在 `data.qr` 给了二维码内容时就地**离线编码**成图 — 落点 `contract.md` §3 `AnchorRoom` / §5 `AnchorGate` / §7 `anchor_live_set`、`protocol.md` §18.5、附录 A66、`ui.md` §2.2.2
+- **引导不代替原话**：上游原始 `code` 与 `msg` 与引导**一起呈现**
+- **认证完成后由用户自己再点一次开播**：不轮询认证状态、不自动重试开播
+- **只认这两个码**：`60043` / `60024` 之外的一切非 0 code 仍**原样带回、不赋语义**——不得给没实测过的码猜含义、配引导（`AGENT.md` §8 第 7 条）
 
 ## 3. 架构约束
 

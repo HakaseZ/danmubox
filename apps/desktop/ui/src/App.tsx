@@ -382,6 +382,7 @@ export function App() {
   const report = useApp((state) => state.report);
   const loadFollowed = useApp((state) => state.loadFollowed);
   const startListStatusPolling = useApp((state) => state.startListStatusPolling);
+  const startAnchorPolling = useApp((state) => state.startAnchorPolling);
   const updatePrefs = useApp((state) => state.updatePrefs);
   const dismissError = useApp((state) => state.dismissError);
   const setNotice = useApp((state) => state.setNotice);
@@ -427,6 +428,17 @@ export function App() {
     if (!listPolling) return;
     return startListStatusPolling();
   }, [listPolling, startListStatusPolling]);
+
+  /**
+   * 「我的直播间」展开区的静默轮询（issue202609242158 第 7 条）：面板展开期间每 30 秒重拉
+   * 一次 `anchor_room`，收起 / 关对话框（`anchorFor` 变 `null`、或关掉对话框走
+   * `closeAnchorPanel`）由 effect 清理停掉。展开时 `toggleAnchorPanel` 已同步拉过一次，
+   * 因此首拍按周期排。换号后旧回包由身份世代复核挡下。
+   */
+  useEffect(() => {
+    if (anchorFor === null) return;
+    return startAnchorPolling(anchorFor);
+  }, [anchorFor, startAnchorPolling]);
 
   // 提示 3 秒后自动消失。
   useEffect(() => {

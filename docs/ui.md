@@ -128,11 +128,11 @@
 | 退出登录 | `account_logout(name)` | **必须确认**，文案说明「清掉该账号凭据、界面回到游客态；账号条目保留，可随时重新扫码」。登出的是**当前账号**时与切号同款清掉上一个身份的界面状态；登出别的账号不动当前界面 |
 | 删除 | `account_remove(name)` | **必须确认**，文案说明「条目与凭据一并删除、不可恢复」；删的是当前账号时补一句「会自动切到另一个账号」，并同样清掉上一个身份的界面状态。**只剩一个账号时按钮置灰**并给出 `title`（后端也会拒） |
 
-账号对话框里，**每个账号行的最右端、与账号管理按钮组隔离开**有一枚「我的直播间」按钮（`db-anchor-toggle`，包在 `db-anchor-entry` 里）；点击**展开**该账号的直播间管理区（需求 §2.14，issue202609241553 第 1 / 2 条）。渲染条件、管理区布局、人脸认证二维码提示框与 `db-anchor-*` 钩子见 §2.2.2。
+账号对话框里，**每个账号行的最右端**（与账号管理按钮**同一排、同一组**）有一枚「我的直播间」按钮（`db-anchor-toggle`）；点击**展开**该账号的直播间管理区（需求 §2.14，issue202609242158 第 1 / 2 条）。渲染条件、管理区布局、人脸认证二维码提示框与 `db-anchor-*` 钩子见 §2.2.2。
 
 ### 2.2.2 「我的直播间」按钮与展开区（`anchor_*`，需求 §2.14）
 
-账号对话框里，**每个账号行的最右端、与账号管理按钮组（重新登录 / 退出登录 / 删除）隔离开**有一枚「我的直播间」按钮（`db-anchor-toggle`，包在 `db-anchor-entry` 里、`margin-left:auto` 推到行末）：这是与账号管理**不同级**的功能，用一道间距与竖分隔读开（issue202609241553 第 1 条）。**只渲染在「已登录且 `anchor_room` 给出直播间」的行**——没开通 / 未登录的行**不出现这枚按钮**（第 2 条，按钮显隐由打开对话框时预取的 `anchorRooms` 映射决定）。点击**展开**该账号的直播间管理区（与账号行同款深色卡片，位于账号行之下、`＋ 添加账号` / 二维码面板之上）。**点这枚按钮不切号**：`db-anchor-entry` 与 `.accountActions` 同款 `stopPropagation`（点它是「看 / 管**这个账号**的直播间」，不是「切到那个账号」——切号会把刚展开的管理区与按账号映射一并清掉）。开播沿用 web 端已有配置：**标题与分区默认取该直播间当前值（即上次开播 / 下播保留的数据），用户不改即可直接沿用开播、不必重填**。
+账号对话框里，**每个账号行的最右端**有一枚「我的直播间」按钮（`db-anchor-toggle`）：它与账号管理按钮（重新登录 / 退出登录 / 删除）**同一排、同一组**，整组靠 `.accountWho { flex: 1 }` + `.accountActions { margin-left: auto }` 贴行右端，**不再单独成组、不再加竖线分隔**（issue202609242158 第 1 条改回 issue202609241553 的「隔离」设计）。**只渲染在「已登录且 `anchor_room` 给出直播间」的行**——没开通 / 未登录的行**不出现这枚按钮**（第 2 条，按钮显隐由打开对话框时预取的 `anchorRooms` 映射决定）。点击**展开**该账号的直播间管理区（与账号行同款深色卡片，位于账号行之下、`＋ 添加账号` / 二维码面板之上）。**点这枚按钮不切号**：按钮就在 `.accountActions` 里、同款 `stopPropagation`（点它是「看 / 管**这个账号**的直播间」，不是「切到那个账号」——切号会把刚展开的管理区与按账号映射一并清掉）。开播沿用 web 端已有配置：**标题与分区默认取该直播间当前值（即上次开播 / 下播保留的数据），用户不改即可直接沿用开播、不必重填**。
 
 **按钮显隐（issue202609241553 第 2 条）**：打开账号对话框时 `loadAnchorRooms` 并发预取所有**已登录**账号的 `anchor_room`，落到 `anchorRooms` / `anchorRoomErrors`。某行**当且仅当** `anchorRooms[name]` 非 `null` 且无错误时才渲染按钮；`null`（没开通）/ 有错误 / 未登录（不在映射里）一律不渲染——不编一行假状态、也不给入口。
 
@@ -146,26 +146,28 @@
 | **读失败**（凭据失效 `-101`、风控 `-352` …） | `anchorRoomErrors[name]` 有值 → **按钮同样不显示**（失败不静默，原因留痕于映射；不渲染但可追溯），展开态不会发生 |
 | **跨账号管理**（issue202609241553 第 3 条） | **不必切到该账号**——按钮直接按 `name` 展开那个账号的直播间管理区，命令带 `account` 参数走那份凭据。后端读的是 `account` 指定账号自己的直播间（契约 §7） |
 
-取数时机：打开账号对话框时 `loadAnchorRooms` 并发预取所有已登录账号的 `anchor_room`（按钮显隐靠这份映射）；展开某行时再拉 `anchor_room`（填充展开面板的 `anchorRoom`）与 `anchor_area_list`。切号 / 登出由 `store.resetIdentityState` 清掉这些状态（含按账号映射）。**读的是 `account` 指定账号自己的直播间，不必切号。**
+取数时机：打开账号对话框时 `loadAnchorRooms` 并发预取所有已登录账号的 `anchor_room`（按钮显隐靠这份映射）；展开某行时再拉 `anchor_room`（填充展开面板的 `anchorRoom`）与 `anchor_area_list`。**展开期间静默轮询 `anchor_room`**（周期 30 秒，收起 / 关对话框即停）：与列表页那一拍同一套纪律 —— 链条式调度（下一拍只在上一拍落地后才排，不重叠）、`document.visibilityState` 不是 `visible` 就整拍跳过、失败按 30 → 60 → 120 → 240 秒封顶退避、成功即复位；落地前复核身份世代（换号后旧回包不落地），并带并发护栏（展开首拉 / 轮询读与标题 / 分区写共用一个发起序号，晚到的旧回包不覆盖先落地的新值）。`anchorAreas` 是静态公开数据，只在展开时拉一次，不进轮询。切号 / 登出由 `store.resetIdentityState` 清掉这些状态（含按账号映射）并停掉轮询。**读的是 `account` 指定账号自己的直播间，不必切号。**
 
 **管理区布局（issue202609241553 第 5 条）**
 
 | 行 / 块 | 内容与规则 |
 |---|---|
-| 状态 + 标题行（`db-anchor-title-row`） | **直播间状态（`db-anchor-status`，在输入框左边）** + 标题输入框（`db-anchor-title`）+ 「保存」（`db-anchor-title-save`）。状态移到标题左边：一眼先看到「在不在播」，再看标题。草稿初值 = `OwnRoom.title`（上次开播保留的标题），远端变了以远端为准；与远端一字不差时保存键禁用。保存成功**就地重读** |
+| 状态 + 标题行（`db-anchor-title-row`） | **直播间状态（`db-anchor-status`，在输入框左边）** + 标题输入框（`db-anchor-title`）+ 「保存」（`db-anchor-title-save`）。状态移到标题左边：一眼先看到「在不在播」，再看标题。状态**按派生 `onAir` 着红绿语义色**：在播（`live_status` 1 / 2）用 `--live-on`、未开播用 `--live-off`（与房间头状态点同一套令牌，issue202609242158 第 4 条）。草稿初值 = `OwnRoom.title`（上次开播保留的标题），远端变了以远端为准；与远端一字不差时保存键禁用。**保存成功落 `anchor_title_set` 的返回值**（后端已把请求标题并进重读结果、以请求值为准）并清草稿 → 输入框显示新标题；并发保存按发起序号护栏（后到的旧响应不得覆盖先到的新响应），成功后的短窗口内一次 `anchor_room` 重读若仍读到旧标题也不回退它（写穿窗口，见第 3.1 条） |
 | 分区选择（`db-anchor-area-select`） | 两级联动父→子下拉，数据来自 `anchor_area_list`（`AnchorArea` 树）；**默认选中 = `OwnRoom.area_id`（上次开播沿用分区）**；取不到列表时降级为只读显示 `area_name`。**改动即发一次 `anchor_area_set` 写（`saveAnchorArea`），与标题的「改完点保存」分开提交**（issue202609241553 第 4 条：改分区是**独立写入口**，不必等到开播）。开播时仍把所选子分区 `id` 作为 `area_v2` 发给 `anchor_live_set` |
 | 开播 / 下播行（`db-anchor-live-row`，**独占一行**） | 开播 / 下播按钮（`db-anchor-live`）独占一行（不与标题 / 分区挤在一起，点击区域更大）。文案只从 `OwnRoom.live_status` 派生：`1` → `直播中`、`2` → `轮播`、其余 `未开播`；按钮文案随之在 `开播` / `下播` 之间切，`title` 写明「沿用所选分区」。忙态只禁本钮 |
 
 - 两个按钮的忙态**各管各的**（组件本地瞬态）：保存中只禁「保存」、开播 / 下播请求中只禁那一枚按钮 —— 改标题与开播 / 下播是两条独立命令，谁也不必等谁。
+- 开播 / 下播成功后**乐观落 `live_status`**（开播 → 在播、下播 → 未开播），不等 `anchor_room` 重读的缓存追上；展开期的静默轮询随后以上游为准校正（issue202609242158 第 3.2 条）。
+- 标题输入框与两个分区选择框**同高**（issue202609242158 第 5 条）：三者共用一个显式盒模型（`box-sizing: border-box` + 固定 `height` + 统一 `padding` / `line-height` / 字号），`select` 另关掉 macOS WebKit 的原生外观、自绘下箭头（箭头色 `--fg-dim`，深浅两套主题都对得上）——因此 macOS / Windows / Android 走同一条规则，不再随系统外观漂移。
 - 写操作口径（`contract.md` §3 `AnchorRoom`）：**只作用在 `account` 指定账号自己的直播间**，**失败即停**、不自动重试；上游非 0 code **原样带回、不赋语义**（原话进错误行 `db-anchor-error`）。**唯一例外是身份校验那两个码**：开播返回 `AnchorGate`（`contract.md` §5）时，**弹出二维码提示框**（`db-anchor-gate-modal`），见下。
 
 **开播被身份校验挡住时（`AnchorGate`，需求 §2.14 / `protocol.md` §18.5）—— 弹出二维码提示框**
 
-错误行照旧显示上游原话（`code` + `msg`），并**弹出 modal**（`db-anchor-gate-modal`：`role="dialog"` + 遮罩，点遮罩 / Esc 关闭，关闭即清引导态）。按 `AnchorGate.kind` 二选一：
+`QrConfirm` 的上游原话（`code` + `msg`）照旧留在错误行（它是「下一步怎么做」的一部分）；`FaceAuth` 的上游原话（「客户端老了 / 请升级客户端」）是**无效提示**，已有浏览器认证入口，**不留红字**（issue202609242158 第 6 条）。两种情况都**弹出 modal**（`db-anchor-gate-modal`：`role="dialog"` + 遮罩，点遮罩 / Esc 关闭，关闭即清引导态）。按 `AnchorGate.kind` 二选一：
 
 | `kind` | 呈现 | 规则 |
 |---|---|---|
-| `FaceAuth` | 一枚入口按钮 `db-anchor-gate-open`（文案「去完成人脸认证」） | 点击走 `open_url`（`contract.md` §7）在系统浏览器打开 `AnchorGate.url`；**不内嵌网页、不做 webview 跳转** |
+| `FaceAuth` | 一枚入口按钮 `db-anchor-gate-open`（文案「去完成人脸认证」） | 点击走 `open_url`（`contract.md` §7）在系统浏览器打开 `AnchorGate.url`；**不内嵌网页、不做 webview 跳转**。上游原话（「客户端老了」）是无效提示，**不显示**（issue202609242158 第 6 条） |
 | `QrConfirm` | 就地画二维码 `db-anchor-gate-qr` | 内容是 `AnchorGate.qr`，**离线**编码（与扫码登录同一条口径，不联网生成、不交给第三方服务）。编码发生在**命令层**（`anchor_live_set` 附带的 `qr_svg`，`contract.md` §5），界面直接渲染那张 SVG；`qr` 为空时提示「上游未给出二维码内容」 |
 
 - 两种 `kind` 都带一行提示 `db-anchor-gate-hint`：**「完成认证后再点一次开播」** —— 本仓没有「认证已完成」这条推送面，**不轮询、不自动重试**。
@@ -188,7 +190,7 @@
 
 **窄屏（≤ 520px）**：与宽屏**共用同一套规则**——卡片纵向 flex、输入框与状态行 `flex: 1; min-width: 0`、推流地址 / 码等宽体 + `word-break: break-all`，360 宽不横向溢出。
 
-**稳定钩子**：这一块的前缀是 `db-anchor-*`（`db-anchor-entry` / `db-anchor-toggle` / `db-anchor-panel` / `db-anchor-title-row` / `db-anchor-title` / `db-anchor-title-save` / `db-anchor-area-select` / `db-anchor-status` / `db-anchor-live-row` / `db-anchor-live` / `db-anchor-error` / `db-anchor-gate-modal` / `db-anchor-gate-open` / `db-anchor-gate-qr` / `db-anchor-gate-hint` / `db-anchor-config` / `db-anchor-area` / `db-anchor-rtmp-addr` / `db-anchor-rtmp-code`），与账号块既有钩子（`db-account-*`）并列。
+**稳定钩子**：这一块的前缀是 `db-anchor-*`（`db-anchor-toggle` / `db-anchor-panel` / `db-anchor-title-row` / `db-anchor-title` / `db-anchor-title-save` / `db-anchor-area-select` / `db-anchor-status` / `db-anchor-live-row` / `db-anchor-live` / `db-anchor-error` / `db-anchor-gate-modal` / `db-anchor-gate-open` / `db-anchor-gate-qr` / `db-anchor-gate-hint` / `db-anchor-config` / `db-anchor-area` / `db-anchor-rtmp-addr` / `db-anchor-rtmp-code`），与账号块既有钩子（`db-account-*`）并列。
 
 ### 2.3 房间页与多标签
 
@@ -709,7 +711,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 - **三个 tab**：`role=tablist` + 三个 `role=tab` + `role=tabpanel`，与表情分组**同一套 WAI-ARIA tabs 口径**（`aria-selected` / `aria-controls` / roving tabindex；←→ 换 tab、Home / End 跳首尾，焦点跟着选中项走；选中态挂在 `aria-selected` 上，另有 `:focus-visible`）。tab 文案**就是名单名**（「禁言」/「黑名单」/「屏蔽词」），**不带计数**——条数由名单自己的芯片数给出，不在 tab 上另算一份。**一次只渲染当前 tab 的那一块**（第 1 排 + 第 2 排 + 错误条 + 列表），所以任一时刻面板里最多只有一条错误条。
 - **单点动作在右键菜单里**：名单行内不再挂动作按钮（与消息行同一条口径），右键名单行弹出该 tab 对应的那一个动作（`db-context-menu`）。
 - **批量**：**第 1 排末尾**的批量图标钮（`data-testid="db-admin-batch"`，`aria-pressed`，打开时从透明底换成强调色填充；图标是「清单 + 勾」——两行「勾 + 名字」，正是打开批量后名单的样子，规范同 §3.1）打开后，每行前出现勾选框（`aria-label` 带名字 / 词，外面包一层 `label` 承担窄屏 40px 热区，点名字也能勾），第 1 排**正下方**升起第 2 排（`data-testid="db-admin-batch-bar"`）：该 tab 的「全选」/「取消全选」（`db-admin-select-all`）、「已选 N 项」、该 tab 的批量动作（`db-admin-batch-action`）。批量只作用当前 tab，**换 tab / 关批量即清空勾选**；勾选数按**当前列表**算——写成功后重读三块，已经不在名单里的勾选自动落下去，「已选 N 项」与按下的对象因此永远一致。
-- **数据预载**：**连上有房管权限的房间就把三块加载好**（`RoomView` 里依赖 `[isAdmin, room.room_id]` 的 effect——身份是异步到的，`isAdmin` 必须在依赖里，否则进房那一帧按无权限渲染、这一批数据永远不拉），打开面板时再**静默重拉一次**（无 spinner、无按钮）保证新鲜。写操作成功后自动重读三块（以远端为准，不在本地猜上游怎么变）。
+- **数据预载**：**连上有房管权限的房间就把三块加载好**（`RoomView` 里依赖 `[isAdmin, room.room_id]` 的 effect——身份是异步到的，`isAdmin` 必须在依赖里，否则进房那一帧按无权限渲染、这一批数据永远不拉），打开面板时再**静默重拉一次**（无 spinner、无按钮）保证新鲜。**面板展开期间按 60 秒周期静默轮询三块**（issue202609242158 第 8 条 A2）：链条式调度（不重叠）、不可见整拍跳过、失败按 60 → 120 → 240 → 480 秒封顶退避、成功复位，收起面板即停，落地前复核 `activeRoomId` 仍是它（防串房）。写操作成功后自动重读三块（以远端为准，不在本地猜上游怎么变）。
 - **面板内的三块列表照常请求上游，拒绝原因原样展示**：上游的拒绝原样展示为 `code` + `message`（不翻译、不猜语义），三块的错误各自独立显示、不互相清空（各自挂在所属 tab 内）。由于入口本身只对房管出现（上一节），这一档只覆盖「面板打开期间身份被撤销 / 重取不到」：那时面板随之收起。
 - 纯文本的输入沿用输入区已有的组件风格（input + 按钮，回车提交）。
 
@@ -980,7 +982,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 项 | 规则 |
 |---|---|
 | 打开 | 工具行「表情」按钮；再点关闭；打开时保持输入框焦点与草稿（面板在输入框**上方**向上展开） |
-| 加载时机 | ①进房间且会话就绪后拉一次 `emotes_owned`（与房间无关，成功一次即不再请求）；②面板打开时若**上次失败**再试一次，并在面板里给「我的表情加载失败：<原样 code + message>」+「重试」（`data-testid="db-owned-error"`）。**失败绝不阻塞输入框**，已加载的分组照常可用。`locked` 是**按调用者身份当场算**的（同一房间换账号会变），所以换房间 / 换账号后要重新拉一次 `emotes_list`，否则会沿用旧身份算出来的灰 |
+| 加载时机 | ①进房间且会话就绪后拉一次 `emotes_owned`（与房间无关，成功一次即不再请求）；②面板打开时**按时间节流重拉**：距上次**成功**超过 10 分钟、或**上次失败**时才打接口（issue202609242158 第 8 条 A4），并在面板里给「我的表情加载失败：<原样 code + message>」+「重试」（`data-testid="db-owned-error"`）。**失败绝不阻塞输入框**，已加载的分组照常可用。`locked` 是**按调用者身份当场算**的（同一房间换账号会变），所以换房间 / 换账号后要重新拉一次 `emotes_list`，否则会沿用旧身份算出来的灰 |
 | 分组 tab | 列出接口给了的组（顺序固定：通用 → 我的表情 → 本房间 → 粉丝牌 → 大航海），tab 上带该组的条数；身份变化（进不同房间）时重建并回到「通用」。冒烟按 `panelEmoteRailStacked` / `panelEmoteRailLeftOfGrid` / `panelEmoteTabIsRealTab` / `panelEmoteTabSelectedStyleDistinct` / `panelEmoteTabArrowKeys` / `panelEmoteTabArrowUpReturns` 断言 |
 | 网格 | 等宽格子 `repeat(auto-fill, minmax(4.5em, 1fr))`（列宽下限按通用表情 200×60 的长宽比定：3em 时 `contain` 后图只剩 7px 高，认不出是哪个），一行放几个由列宽定；格子里的图居中。**表情格与左侧轨道各滚各的**；网格区高度 = **三行大表情格**（`--emote-grid-h`，与当前哪一组无关，见上），因此面板整体高度就是「三行大表情格 + 上下内边距」这**一个定值**（三个面板共用，见 §6.1）。窄屏 360 下面板 / 轨道 / 网格三块都**不许出现横向溢出**（冒烟 `panelNoHorizontalOverflow`；通用组内容超长时只走网格内部滚动：`narrow_panelEmoteGridOverflows`）。长列表虚拟化或分页加载 |
 | 表情图 | `<img>` 的**宽高一律由 CSS 显式给出**（`width: 100%` + `height: var(--emote-size)`）并配 `object-fit: contain`，图因此**完整落在自己的格子里**（冒烟 `panelEmoteFitsCell` / `panelEmoteImgExplicitBox`，溢出量由 `panelEmoteOverflowPx` 记账）。**不许让 `<img>` 按原图尺寸渲染**：上游表情是原图直出（实测通用表情 200×60、粉丝牌 / 本房间 162×162、主站「我的表情」162×162），只写 `height` 时宽度按原图比例算——200×60 的 `1.5em` 高会得到 **5em** 宽，撑出 3em 的格子。这与「512×512 头像撑爆主页」「弹幕行里的表情」是同一个错误：共用组件的尺寸不许依赖原图尺寸。图片加载失败时回退显示 `Emote.text` 文本（该格与相邻格等高，行高同样跟 `--emote-size`），不阻断点选 |
@@ -1000,7 +1002,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 位置 | **输入区工具行、发送按钮左侧**（顶栏那个位置留给「当前在线 / 看过」两个数值）。形态是**圆角矩形**（`--r-2`：图标 + 数值的一枚控件），**不是圆形**（顶栏的返回与 `⋯` 才是 `--r-full` 正圆）。它与发送按钮同在一个不可换行的「发送簇」（`.sendCluster`）里：窄屏工具行换行时两者不会被拆到两排 |
 | 图标 | **竖着的电池**：SVG 里机身是 `10 × 16` 的竖矩形 + 顶上一小截极柱（`viewBox 0 0 24 24`）。图标盒 `.batteryIcon` = 1.1em（实测 13.2 × 13.2px）。冒烟按 `batteryIconShape`（矩形的 `height > width`）断言 |
 | 形状的判据 | 圆角**不等于**半短边（正圆与胶囊都等于半短边，都算「圆」）。冒烟按 `batteryNotRound`（圆角 < 半短边 − 1px）、`batteryLeftOfSend`（x 坐标在发送按钮左侧）、`batteryInComposer`、`batteryText` 断言 |
-| 刷新时机 | 进入房间时、每次送礼成功后、点击数值手动刷新；**换人**（切号 / 登出 / 删号 / 扫码确认）后作废，不留上一个账号的数值（`ipc.md` §8） |
+| 刷新时机 | 进入房间时、每次送礼成功后、**每次发送弹幕 / 表情成功后**（issue202609242158 第 8 条 A3，不为它另起定时器）、点击数值手动刷新；**换人**（切号 / 登出 / 删号 / 扫码确认）后作废，不留上一个账号的数值（`ipc.md` §8） |
 | 未登录 | 显示「—」，`title`「登录后可见」 |
 | 失败 | 显示「—」并保留上一次成功值 5 秒后回退，不弹窗 |
 | 单位 | 数值直接展示，单位与换算见 `protocol.md` 附录 A |

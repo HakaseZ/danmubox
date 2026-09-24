@@ -86,6 +86,12 @@
 
 ### Fixed
 
+- **「我的直播间」三处后端修复（issue202609242158 第 2 / 3.1 / 3.2 条，2026-09-24）**，落点 `crates/danmubox-bili/src/anchor.rs`：
+  ① **切换分区报「分区已下线」**（第 2 条）：先核实改分区的**字段名口径** —— `Zeppelinpp/bilibili-streamer`（`src-tauri/src/services/bili_api.rs::update_area`）、`ChaceQC/bilibili_live_stream_code`（`backend/bilibili_api.py::update_area`）与 `bilibili-API-collect`（`docs/live/manage.md`「更新直播间信息」）**一致为 `area_id`**（子分区 id），`area_v2` 只属于 `startLive`；故**字段名保持 `area_id` 不动**（改发 `area_v2` 会被上游当未知字段忽略、分区静默不生效）。真正的修在**取值来源**：`Area/getList` 的子分区 `id` 在权威文档里类型是 **`str`**、参照实现 `refresh_partitions` 亦为「先 `as_u64()` 再字符串 `parse()`」两段式，而本仓 `map_areas` 只认 JSON 数字 ⇒ 上游返字符串时子分区被整段丢掉、界面回落到**父分区 id**、上游按子分区表校验即回 `60009 分区已下线`。现按两段式收（`int_like`）+ 回归用例 `area_list_parses_string_child_ids`；请求体抽成纯函数 `update_params` + 用例 `update_params_pin_field_names_for_title_and_area` 钉住字段名。**上游子分区 id 的实际类型仍未真机回填**（`docs/protocol.md` 附录 A66-1 第 ③ 项）。
+  ② **改标题后预览跳回原标题 /「有时改不上去」**（第 3.1 条）：`Room/update` 回 `code==0` 即写成功（权威），而 `get_info` 有服务端缓存，紧接着重读可能仍是旧标题 —— 现把重读结果与本次请求合并（`with_requested_title`：`title` 以本次请求值 trim 后为准、其余字段以重读为准），界面不再跳回原标题；同时 `upstream_err` 把上游回复里的顶层 `message` / `msg` 与 `data.msg` / `data.message` 一并透出（同值只留一次），让「改不上去」有 response 可查。**不为未知 code 赋语义**。
+  ③ **开播状态同步慢**（第 3.2 条）：核对 `go_live` 路径后**未改代码** —— 开播成功只返回 `StreamEndpoints`，IPC 命令签名与返回结构按任务约束不动（避免与前端分支、契约文档冲突），`live_status` 新鲜度由前端乐观状态负责；本仓无额外低风险可改进点。
+  规格：`docs/protocol.md` §18.1（改分区行 + 分区列表解析）与附录 A66-1。
+
 - **冒烟场景 `switchScopeChatPaneFolds` / `switchScopeBothPanesFold` 恒红（2026-09-24）**：这两条是**场景落后于实现**，不是界面 bug —— 2026-09-22 第 3 条把低价礼物桶改成与刷屏聚合**同一套形态**后，桶行的 ×N 从正文那格 `db-msg-count` 移到**身份位** `db-msg-spam`（写「低价礼物 ×N」），聚合行正文里那格 ×N **不再画**（`MessageRow`：`aggregated` 时不渲染 `db-msg-count`，同一个数不在一行里出现两次）；而 `smoke/scenario/parts/35-cheap-gift.mjs` 仍在查 `db-msg-count`，于是恒红（`switchScopeGiftPaneFolds` 只查行数与金额，所以它一直是绿的）。现按实现改正：弹幕区判 `db-msg-spam` 含「低价礼物 ×2」、并新增 `switchScopeBucketNoInlineCount` 钉住「桶行正文里没有 ×N」；礼物栏同款补一条 `db-gift-spam`（两处同一个形状，`docs/ui.md` §5.3）。**冒烟已跑**：Chromium 与 WebKit 两个引擎 × 深浅两档 × 宽窄两档**全绿**（各 4236 项快照 / 56 张截图，零失败）。
 
 ## [0.2.0] - 2026-09-17

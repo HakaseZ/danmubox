@@ -86,11 +86,23 @@
 
 ### Fixed
 
-- **「我的直播间」三处后端修复（issue202609242158 第 2 / 3.1 / 3.2 条，2026-09-24）**，落点 `crates/danmubox-bili/src/anchor.rs`：
+- **「我的直播间」修复与交互即时化（issue202609242158，2026-09-24）**，后端落点 `crates/danmubox-bili/src/anchor.rs`、前端落点 `apps/desktop/ui/src/store.ts` / `components/AccountManager.tsx` / `components/Composer.tsx` / `app.module.css` / `App.tsx` / `RoomView.tsx`：
+  **后端（第 2 / 3.1 / 3.2 条）**：
   ① **切换分区报「分区已下线」**（第 2 条）：先核实改分区的**字段名口径** —— `Zeppelinpp/bilibili-streamer`（`src-tauri/src/services/bili_api.rs::update_area`）、`ChaceQC/bilibili_live_stream_code`（`backend/bilibili_api.py::update_area`）与 `bilibili-API-collect`（`docs/live/manage.md`「更新直播间信息」）**一致为 `area_id`**（子分区 id），`area_v2` 只属于 `startLive`；故**字段名保持 `area_id` 不动**（改发 `area_v2` 会被上游当未知字段忽略、分区静默不生效）。真正的修在**取值来源**：`Area/getList` 的子分区 `id` 在权威文档里类型是 **`str`**、参照实现 `refresh_partitions` 亦为「先 `as_u64()` 再字符串 `parse()`」两段式，而本仓 `map_areas` 只认 JSON 数字 ⇒ 上游返字符串时子分区被整段丢掉、界面回落到**父分区 id**、上游按子分区表校验即回 `60009 分区已下线`。现按两段式收（`int_like`）+ 回归用例 `area_list_parses_string_child_ids`；请求体抽成纯函数 `update_params` + 用例 `update_params_pin_field_names_for_title_and_area` 钉住字段名。**上游子分区 id 的实际类型仍未真机回填**（`docs/protocol.md` 附录 A66-1 第 ③ 项）。
-  ② **改标题后预览跳回原标题 /「有时改不上去」**（第 3.1 条）：`Room/update` 回 `code==0` 即写成功（权威），而 `get_info` 有服务端缓存，紧接着重读可能仍是旧标题 —— 现把重读结果与本次请求合并（`with_requested_title`：`title` 以本次请求值 trim 后为准、其余字段以重读为准），界面不再跳回原标题；同时 `upstream_err` 把上游回复里的顶层 `message` / `msg` 与 `data.msg` / `data.message` 一并透出（同值只留一次），让「改不上去」有 response 可查。**不为未知 code 赋语义**。
-  ③ **开播状态同步慢**（第 3.2 条）：核对 `go_live` 路径后**未改代码** —— 开播成功只返回 `StreamEndpoints`，IPC 命令签名与返回结构按任务约束不动（避免与前端分支、契约文档冲突），`live_status` 新鲜度由前端乐观状态负责；本仓无额外低风险可改进点。
-  规格：`docs/protocol.md` §18.1（改分区行 + 分区列表解析）与附录 A66-1。
+  ② **改标题后预览跳回原标题 /「有时改不上去」**（第 3.1 条）：`Room/update` 回 `code==0` 即写成功（权威），而 `get_info` 有服务端缓存，紧接着重读可能仍是旧标题 —— 现把重读结果与本次请求合并（`with_requested_title`：`title` 以本次请求值 trim 后为准、其余字段以重读为准），`anchor_title_set` 因此返回合并后的 `OwnRoom`（不再是 `void`，见 `docs/ipc.md` §3），界面不再跳回原标题；同时 `upstream_err` 把上游回复里的顶层 `message` / `msg` 与 `data.msg` / `data.message` 一并透出（同值只留一次），让「改不上去」有 response 可查。**不为未知 code 赋语义**。
+  ③ **开播状态同步慢**（第 3.2 条）：核对 `go_live` 路径后**后端未改代码** —— 开播成功只返回 `StreamEndpoints`，IPC 命令签名与返回结构不动，`live_status` 新鲜度由前端乐观状态负责。
+  **前端（第 1 / 3.1 / 3.2 / 4–8 条）**：
+  ① **按钮改回与账号管理同排、同一组**（第 1 条）：`db-anchor-toggle` 与重新登录 / 退出登录 / 删除同在 `.accountActions`，整组 `margin-left: auto` 贴行右端；**去竖线分隔**，靠组内间距读开；`stopPropagation` 由该容器统一承担（点它不切号）。
+  ② **标题写入即时**（第 3.1 条）：`saveAnchorTitle` 落**后端返回值**并清草稿（后端已按请求值合并），不再回跳；并发读写共用发起序号 `anchorRoomSeq` / `anchorRoomAppliedSeq`，晚到的旧回包不覆盖先落地的新值；另有 **15 秒写穿窗口**（`anchorTitleSaved` / `mergeSavedTitle`），保存成功后一次 `anchor_room` 重读若仍读到上游缓存里的旧标题，只对 `title` 一个字段回退到刚保存值，其余字段照常以远端为准。
+  ③ **开播 / 下播即时**（第 3.2 条）：成功后 `applyAnchorLive` **乐观落 `live_status`**（开播 → 1、下播 → 0），不等重读的缓存追上，展开期静默轮询随后以上游为准校正。
+  ④ **红绿状态**（第 4 条）：`db-anchor-status` 按派生 `onAir`（`live_status` 1 / 2）挂 `anchorStatusLive` / `anchorStatusOffline` 语义色，复用房间头同一套 `--live-on` / `--live-off` 令牌。
+  ⑤ **选择框等高**（第 5 条）：标题输入框与两个分区 `select` 共用显式盒模型（`box-sizing` + 固定 `height` + 统一 `padding` / `line-height` / 字号），`select` 关 macOS WebKit 原生外观、自绘下箭头 —— 三端同一条规则。
+  ⑥ **FaceAuth 去红字**（第 6 条）：只在 `QrConfirm` 时把上游原话（含 code）挂错误行，`FaceAuth` 不再落红字（已有「去完成人脸认证」入口，那句「客户端老了」是无效提示）；两种情况都弹 modal。
+  ⑦ **展开期静默刷新**（第 7 条）：`startAnchorPolling` / `runAnchorPoll` / `stopAnchorPolling` —— 「我的直播间」展开期 30 秒链条式静默重拉 `anchor_room`，复用可见性门（不可见整拍跳过）+ 失败退避（30 → 60 → 120 → 240 秒封顶）、成功复位，收起 / 关对话框 / 换号即停。
+  ⑧ **全系统静默刷新审计**（第 8 条）：除第 7 条外，新增房管面板展开期 60 秒（`startAdminPolling`；`loadAdmin` 返回 `boolean` 供退避）、「我的表情」面板打开按 10 分钟节流重拉（`loadOwnedEmotes(ifStale)` / `OWNED_EMOTES_STALE_MS`）、发送弹幕 / 表情成功后刷电池余额（改在 `Composer.tsx` 调 `onRefreshBalance()`，不为它另起定时器）；列表页 30 秒那一拍既有、不动。审计判定**不必修**的几处：房内弹幕 / 连接态 / 房内身份 / 房间元信息由 WS 推送事件（`danmubox://message` / `status` / `room` / `session`）实时更新；关注列表随列表页同一拍刷新；扫码登录已有 2 秒轮询；`anchor_area_list` 是静态公开数据、只在展开时拉一次。
+  **关键决策（`AGENT.md` §6.5.4）**：① **改分区字段名不动** —— 为什么：三处来源逐字一致是 `area_id`，`area_v2` 只属 `startLive`；否决：改发 `area_v2`（上游当未知字段忽略、分区静默不生效）；代价：真因落到「子分区 id 可能是数字字符串」，需靠 `int_like` 兼容并留一条真机回填项。② **静默刷新只落在「展开期」** —— 为什么：有面板在眼前才需要新鲜，收起即停、不制造后台常驻定时器；否决：全局常驻轮询、保留手动刷新按钮；代价：未展开期间数据仍可能过期，靠打开时那次拉取兜底。③ **按钮改回同排同组** —— 为什么：用户判定它与其他账号操作本就是同一处，隔离成两组反而别扭；否决：issue202609241553 的「独立成组 + 竖分隔」（本轮按用户最新要求撤销）；代价：`.anchorEntry` 与独立分隔样式一并删除，`db-anchor-entry` 测试钩子不再存在。
+  规格：后端见 `docs/protocol.md` §18.1 与附录 A66-1；前端见 `docs/ui.md` §2.2.1 / §2.2.2 / §4.9 / §6.3 / §6.4、`docs/ipc.md` §3 / §3.1 / §8.1、`docs/contract.md` §7、`docs/testing.md` C-16、`REQUIREMENTS.md` §2.14。
+  **未验证（照实记）**：**本轮未跑无头冒烟**（用户明确要求本 fix 不跑）；按钮同排、红绿状态、FaceAuth 无红字、展开期静默轮询等新行为**暂无无头断言覆盖**，`smoke/scenario/parts/37-anchor-room.mjs` 本轮未改（经静态核对，现有断言在新布局下仍成立）。三端真机（macOS / Windows / Android）核验未做。
 
 - **冒烟场景 `switchScopeChatPaneFolds` / `switchScopeBothPanesFold` 恒红（2026-09-24）**：这两条是**场景落后于实现**，不是界面 bug —— 2026-09-22 第 3 条把低价礼物桶改成与刷屏聚合**同一套形态**后，桶行的 ×N 从正文那格 `db-msg-count` 移到**身份位** `db-msg-spam`（写「低价礼物 ×N」），聚合行正文里那格 ×N **不再画**（`MessageRow`：`aggregated` 时不渲染 `db-msg-count`，同一个数不在一行里出现两次）；而 `smoke/scenario/parts/35-cheap-gift.mjs` 仍在查 `db-msg-count`，于是恒红（`switchScopeGiftPaneFolds` 只查行数与金额，所以它一直是绿的）。现按实现改正：弹幕区判 `db-msg-spam` 含「低价礼物 ×2」、并新增 `switchScopeBucketNoInlineCount` 钉住「桶行正文里没有 ×N」；礼物栏同款补一条 `db-gift-spam`（两处同一个形状，`docs/ui.md` §5.3）。**冒烟已跑**：Chromium 与 WebKit 两个引擎 × 深浅两档 × 宽窄两档**全绿**（各 4236 项快照 / 56 张截图，零失败）。
 

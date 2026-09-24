@@ -414,7 +414,7 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `account_qr_start` | 扫码第一步：取二维码内容并在**本地离线**编成 SVG。不带 `target` = **新增账号**（扫完按昵称命名、重名加后缀，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面须二次确认） |
 | `account_qr_poll` | 扫码轮询：状态 + **确认时**已落盘并设为当前（`active=true`）的那个账号；确认后各房间以新凭据重连 |
 | `anchor_room` | **取某账号自己的直播间**（§5 `OwnRoom`）。`account` 缺省 = 当前账号，**指定即管理那个账号**——不必先切号（issue202609241553 第 3 条）。**该账号没有开通直播间 → `null`**（不是错误；界面据此**不渲染**那行的「我的直播间」按钮，第 2 条）。登录才成立，游客 → `NOT_LOGGED_IN` |
-| `anchor_title_set` | 改**某账号自己直播间**的标题（`title`；`account?`，缺省当前）。写操作：**只作用于 `account` 指定账号自己的直播间**；失败即停、不重试 |
+| `anchor_title_set` | 改**某账号自己直播间**的标题（`title`；`account?`，缺省当前）。**成功返回 §5 `OwnRoom`**：`title` 以**本次请求值**（trim 后）为准——`get_info` 有服务端缓存，紧接着的重读可能仍是旧标题，其余字段取重读。写操作：**只作用于 `account` 指定账号自己的直播间**；失败即停、不重试 |
 | `anchor_area_list` | 取开播分区树（§5 `AnchorArea[]`，两级）；`account?`（只决定走哪份凭据，分区本身是公开数据，不登录也可）。用于界面分区选择；其余上游非 0 code 原样带回、不赋语义 |
 | `anchor_area_set` | 改**某账号自己直播间**的分区（`area_v2: i64`；`account?`，缺省当前）。**独立写入口**（issue202609241553 第 4 条）：不必等到开播就能改；`area_v2` 是**子分区 id**（`<= 0` 由实现侧拒 `BAD_REQUEST`），与 `anchor_live_set` 的 `area_v2` 同口径；成功返回 §5 `OwnRoom`（界面就地换分区名，不猜上游怎么改的）。写操作：**只作用于 `account` 指定账号自己的直播间**；失败即停、不重试 |
 | `anchor_live_set` | 开播 / 下播（`live: bool`，`area_v2: Option<i64>`；`account?`，缺省当前）。开播成功返回 §5 `StreamEndpoints`（含**推流码**）；**被上游身份校验挡住**时返回 §5 `AnchorGate`（引导 + 原始 `code` / `msg`，命令层另附离线编码的 `qr_svg`，见 §5）；下播返回 `null`。`area_v2` 缺省沿用直播间当前 `area_id`（即上次开播分区），`Some` 则为界面所选子分区；上游没给分区（`area_id <= 0` 且无 `area_v2`）就不发开播请求（`UPSTREAM_ERROR`）。其余上游非 0 code **原样带回、不赋语义**。**认证完成后由用户再点一次开播**：不轮询、不自动重试（写操作「失败即停」） |

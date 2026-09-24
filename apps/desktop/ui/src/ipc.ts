@@ -9,6 +9,8 @@ import type {
   AccountQr,
   AccountQrPoll,
   AdminUser,
+  AnchorArea,
+  AnchorGateView,
   ApiError,
   AppInfo,
   ChatSendResult,
@@ -16,6 +18,7 @@ import type {
   EmoteToken,
   FollowedRoom,
   Message,
+  OwnRoom,
   RoomStatsEvent,
   ReportReason,
   ReplyTarget,
@@ -26,6 +29,7 @@ import type {
   SendOutcome,
   SessionState,
   StatusEvent,
+  StreamEndpoints,
 } from "./types";
 
 function isApiError(error: unknown): error is ApiError {
@@ -155,6 +159,21 @@ export const api = {
     invoke<void>("admin_keywords_del", { roomId, word }),
   followList: () => call<FollowedRoom[]>("follow_list"),
   walletBalance: () => call<number>("wallet_balance"),
+
+  // 我的直播间（契约 §7）：房间号一律由后端按当前账号现取，本层不接受房间号参数。
+  /** 取当前账号自己的直播间；`null` = 该账号没开通直播间（**不是错误**）。 */
+  anchorRoom: () => call<OwnRoom | null>("anchor_room"),
+  /** 改自己直播间标题。空标题由后端拒（`BAD_REQUEST`）。 */
+  anchorTitleSet: (title: string) => call<OwnRoom>("anchor_title_set", { title }),
+  /** 开播分区树（两级）。上游分区是公开数据，不登录也可。 */
+  anchorAreaList: () => call<AnchorArea[]>("anchor_area_list"),
+  /**
+   * 开播 / 下播。`live=false` 下播返回 `null`；开播成功返回 `StreamEndpoints`
+   * （含推流码）、被身份校验挡住返回 `AnchorGate`。
+   * `areaV2` 缺省沿用直播间当前分区（上次开播分区）。
+   */
+  anchorLiveSet: (live: boolean, areaV2?: number) =>
+    call<StreamEndpoints | AnchorGateView | null>("anchor_live_set", { live, areaV2 }),
 
   prefsGet: () => call<Prefs>("prefs_get"),
   prefsSet: (patch: Partial<Prefs>) => call<Prefs>("prefs_set", { patch }),

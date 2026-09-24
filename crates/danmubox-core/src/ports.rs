@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::bus::{Cancel, MessageSink};
 use crate::error::Result;
 use crate::model::{
-    BlacklistedUser, Emote, FollowedRoom, Message, ReportReason, Room, RoomSession, SendOutcome,
-    SilentUser,
+    AnchorArea, AnchorGate, BlacklistedUser, Emote, FollowedRoom, Message, OwnRoom, ReportReason,
+    Room, RoomSession, SendOutcome, SilentUser, StreamEndpoints,
 };
 
 /// 登录态。**不含**任何 Cookie 值（`docs/contract.md` §7）。
@@ -294,4 +294,41 @@ pub trait RoomCatalog: Send + Sync {
 pub trait WalletProvider: Send + Sync {
     /// 电池余额。
     async fn balance(&self) -> Result<i64>;
+}
+
+/// 我自己的直播间（主播视角，`docs/contract.md` §3）。
+///
+/// 与 `LiveSource` 的分工：后者是「看别人的房间」（只读，游客也可用），
+/// 这里是「管自己的房间」——三件写操作 + 取分区全落在这里。
+///
+/// 写操作纪律（`docs/contract.md` §3 / `AGENT.md` §8.14–16）：只作用于当前账号自己的直播间，
+/// 失败即停、不换房间 / 账号 / 参数重试；上游非 0 code 原样带回、不赋语义。
+/// 唯一的例外是 `AnchorGate`：开播被身份校验挡住时产出引导而不是判定。
+#[async_trait]
+pub trait AnchorRoom: Send + Sync {
+    /// 取当前账号自己的直播间。**没开通返回 `Ok(None)`，不是错误**——界面据此整块不渲染。
+    async fn own(&self) -> Result<Option<OwnRoom>>;
+
+    /// 改自己直播间标题。空标题由调用方前置拒绝（见 `anchor_title_set`）。成功返回重读后的 `OwnRoom`。
+    async fn set_title(&self, title: &str) -> Result<OwnRoom>;
+
+    /// 开播。`area_v2` 缺省沿用直播间当前 `area_id`（上次开播分区）；`Some(v)` 为界面所选子分区覆盖。
+    ///
+    /// 成功返回 `Opened(StreamEndpoints)`；被上游身份校验挡住返回 `Blocked(AnchorGate)`；
+    /// 其余非 0 code 仍按纪律原样带回（`Err`）。
+    async fn go_live(&self, area_v2: Option<i64>) -> Result<AnchorLiveOutcome>;
+
+    /// 下播。成功返回 `Ok(())`。
+    async fn end_live(&self) -> Result<()>;
+
+    /// 开播分区树（两级）。用于界面分区选择；上游分区为公开数据，不登录也可。
+    async fn area_list(&self) -> Result<Vec<AnchorArea>>;
+}
+
+/// `go_live` 的两种结果，互斥（`docs/contract.md` §3 / §7）。
+pub enum AnchorLiveOutcome {
+    /// 开播成功，给出推流端点。
+    Opened(StreamEndpoints),
+    /// 被上游身份校验挡住，给出引导。
+    Blocked(AnchorGate),
 }

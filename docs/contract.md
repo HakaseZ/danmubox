@@ -62,7 +62,7 @@ danmubox/
 | `RoomCatalog` | 关注列表（`followed()`；定义见 `ports.rs:288-291`） |
 | `WalletProvider` | 电池余额（`ports.rs:294-296`） |
 | `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查（`ports.rs:257-285`）。仅房管可用；上游非 0 code 原样带回、不赋语义 |
-| `AnchorRoom` | **我自己的直播间**（主播视角）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此整块不渲染）、`set_title()` 改标题、`go_live()` 开播（成功返回 §5 `StreamEndpoints`；**被上游身份校验挡住**时返回 §5 `AnchorGate`）、`end_live()` 下播（`ports.rs:307-323`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只允许发生在当前账号自己的直播间**，**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义**。**唯一的例外是 `AnchorGate`**：它承载的是「上游在响应里明说了该怎么继续」的那两个码（实测 `60043`、社区实现观察到的 `60024`，见 `protocol.md` §18.5），产出的是**引导**而不是判定——原 `code` / `msg` 一个字不改地一起带回，其余非 0 code 仍然不赋语义 |
+| `AnchorRoom` | **我自己的直播间**（主播视角）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此整块不渲染）、`set_title()` 改标题、`go_live(area_v2)` 开播（`area_v2: Option<i64>`：缺省沿用直播间当前 `area_id`；`Some(<=0)` 判 `BAD_REQUEST`；否则作为开播分区覆盖；成功返回 §5 `StreamEndpoints`；**被上游身份校验挡住**时返回 §5 `AnchorGate`）、`end_live()` 下播、`area_list()` 取两级分区树（§5 `AnchorArea`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作 + 取分区全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只允许发生在当前账号自己的直播间**，**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义**。**唯一的例外是 `AnchorGate`**：它承载的是「上游在响应里明说了该怎么继续」的那两个码（实测 `60043`、社区实现观察到的 `60024`，见 `protocol.md` §18.5），产出的是**引导**而不是判定——原 `code` / `msg` 一个字不改地一起带回，其余非 0 code 仍然不赋语义 |
 
 **架构约束**：`core` 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层。本期不定义任何 MCP 工具、协议或端点。
 
@@ -327,7 +327,7 @@ sessdata = ""
 | `room_id` | i64 | 真实房间号（`room_id_by_uid` 给的那个） |
 | `title` | String | **直播间标题**（上游 `room/v1/Room/get_info` 的 `data.title`）。可改：`anchor_title_set` 作用的就是它 |
 | `live_status` | i32 | 0 未开播 / 1 直播中 / 2 轮播（与 `Room.live_status` 同义；上游 `data.live_status`，实测为 int） |
-| `area_id` | i64 | **当前分区 id**（上游 `data.area_id`）。开播沿用这一份，**界面不做分区选择**。**`0` = 上游没给**——此时**不发开播请求**、报 `UPSTREAM_ERROR`，**不许**拿一个自造的默认分区顶替（`AGENT.md` §8.7） |
+| `area_id` | i64 | **当前分区 id**（上游 `data.area_id`）。开播缺省沿用这一份；界面做**两级分区选择**（`anchor_area_list` + `area_v2` 覆盖），默认选中即此值。**`0` = 上游没给**——此时**不发开播请求**、报 `UPSTREAM_ERROR`，**不许**拿一个自造的默认分区顶替（`AGENT.md` §8.7） |
 | `area_name` | String | 分区名，形如「娱乐 · 视频唱见」（上游 `parent_area_name` + `area_name` 拼「父 · 子」）；上游没给为空串 |
 
 `StreamEndpoint` / `StreamEndpoints`（**开播成功时**上游下发的推流端点，规范性，`model.rs:300` / `model.rs:307`）：
@@ -352,6 +352,17 @@ sessdata = ""
 
 - **上游隔离（规范性）**：认证页地址与二维码内容**由 `danmubox-bili` 产出**，`core` 只承载这两个字符串、**不拼装、不解析**（`AGENT.md` §8 第 3 条）；`kind` 的判定也只发生在 `danmubox-bili`。
 - **不是凭据**：`url` / `qr` 与推流码不同级——它们可以进日志与界面文本，但**二维码图片一律本地离线编码**（不把内容交给第三方服务生成）。
+- **命令层附一张 `qr_svg`**（规范性）：`anchor_live_set` 返回引导时，由 Tauri 层用 `qrcode` crate 把 `qr` **就地离线编码**成 SVG 一并带出（`QrConfirm` 且 `qr` 非空时有值），与扫码登录那条完全同一口径。**它不属 `AnchorGate` 的字段**——`core` 只见二维码内容那个字符串，编码发生在命令层、不进 `core`（同上那条隔离口径）。
+
+`AnchorArea`（开播分区树，规范性，两级；`model.rs`）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | i64 | 分区 id（父 / 子都带）；即 `go_live` 的 `area_v2` 取值 |
+| `name` | String | 分区名 |
+| `children` | `Vec<AnchorArea>` | 子分区；父分区有、叶子为空 |
+
+- 来自 `anchor_area_list`（上游 `room/v1/Area/getList` 类，见 `protocol.md` §18.1）；界面做父→子两级联动选择。
 
 `FollowedRoom`（关注列表，规范性，`model.rs:395`）：`room_id` / `uname` / `face` / `title` / `live_status`（0 未开播 / 1 直播中 / 2 轮播）/ `group_name` / `live_start_at` / `online`。
 
@@ -404,7 +415,8 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `account_qr_poll` | 扫码轮询：状态 + **确认时**已落盘并设为当前（`active=true`）的那个账号；确认后各房间以新凭据重连 |
 | `anchor_room` | **取当前账号自己的直播间**（§5 `OwnRoom`）。**该账号没有开通直播间 → `null`**（不是错误；界面据此整块不渲染）。登录才成立，游客 → `NOT_LOGGED_IN` |
 | `anchor_title_set` | 改**自己直播间**的标题（`title`）。写操作：**只作用在自己的直播间**；失败即停、不重试 |
-| `anchor_live_set` | 开播 / 下播（`live: bool`）。开播成功返回 §5 `StreamEndpoints`（含**推流码**）；**被上游身份校验挡住**时返回 §5 `AnchorGate`（引导 + 原始 `code` / `msg`）；下播返回 `null`。分区沿用直播间当前值（**界面不做分区选择**）；其余上游非 0 code **原样带回、不赋语义**。**认证完成后由用户再点一次开播**：不轮询、不自动重试（写操作「失败即停」） |
+| `anchor_area_list` | 取开播分区树（§5 `AnchorArea[]`，两级）；用于界面分区选择。**不登录也可**（上游分区为公开数据）；其余上游非 0 code 原样带回、不赋语义 |
+| `anchor_live_set` | 开播 / 下播（`live: bool`，`area_v2: Option<i64>`）。开播成功返回 §5 `StreamEndpoints`（含**推流码**）；**被上游身份校验挡住**时返回 §5 `AnchorGate`（引导 + 原始 `code` / `msg`，命令层另附离线编码的 `qr_svg`，见 §5）；下播返回 `null`。`area_v2` 缺省沿用直播间当前 `area_id`（即上次开播分区），`Some` 则为界面所选子分区；上游没给分区（`area_id <= 0` 且无 `area_v2`）就不发开播请求（`UPSTREAM_ERROR`）。其余上游非 0 code **原样带回、不赋语义**。**认证完成后由用户再点一次开播**：不轮询、不自动重试（写操作「失败即停」） |
 | `rooms_list` | 已登记房间：`RoomView`（= §5 `Room` + 连接态 + 当前会话缓冲条数） |
 | `rooms_refresh_status` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，§4）：按真实 `room_id` 逐个只读上游一次，把最新的 `live_status` 落到登记表并返回最新的 `RoomView` 列表。**只动 `live_status`**（标题 / 昵称另有来源）；单个房间失败只跳过它，**全部失败才报错**（前端据此退避）（`lib.rs:238-289`） |
 | `rooms_add` | 解析房间号 / 短号 / URL 并登记；**不建立连接** |
@@ -523,7 +535,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | §2.11 界面与布局 | 契约内只承载共享约定：§8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`（共享分区、分割条、长按换位）、§5 `Room.anchor_uname`（不露房间号）；其余在 `ui.md` 与组件层 |
 | §2.12 连接与保活 | §2（Android 保活例外）、§4 `DANMUBOX_LOG`、§6（心跳、重连退避与认证失败口径） |
 | §2.13 已删除 | §8 键表不含透明度键与 `filter.keywords*`；§4.1 无「手填 Cookie」导入入口；§4.3 无「最近发送记录」；`composer.phrases` 只承载用户自建短语 |
-| §2.14 我的直播间 | §3 `AnchorRoom`（与 `LiveSource` 的分工 + 写操作纪律 + `AnchorGate` 例外）、§5 `OwnRoom` / `StreamEndpoint` / `StreamEndpoints` / `AnchorGate`、§7 `anchor_room` / `anchor_title_set` / `anchor_live_set`（**事件清单不变**）；上游端点、三段式开播与身份校验引导见 `protocol.md` §18 / §18.5，未实测登记见其附录 A66；界面落点 [`ui.md`](ui.md) §2.2.2 |
+| §2.14 我的直播间 | §3 `AnchorRoom`（`own` / `set_title` / `go_live(area_v2)` / `end_live` / `area_list`，与 `LiveSource` 的分工 + 写操作纪律 + `AnchorGate` 例外）、§5 `OwnRoom` / `StreamEndpoint` / `StreamEndpoints` / `AnchorGate` / `AnchorArea`、§7 `anchor_room` / `anchor_title_set` / `anchor_area_list` / `anchor_live_set`（**事件清单不变**）；上游端点、三段式开播、分区列表与身份校验引导见 `protocol.md` §18 / §18.1 / §18.5，未实测登记见其附录 A66；界面落点 [`ui.md`](ui.md) §2.2.2 |
 | §3 架构约束 | §3 依赖方向、上游隔离、端口表 |
 | §4 非目标 | §2 本期范围、§4.3（不建库 / 不回看 / 不导出）、§3（MCP 架构兼容约束） |
 | §5 参考与外部输入 | §1（bundle id） |

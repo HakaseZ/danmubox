@@ -51,7 +51,8 @@
 | `account_qr_poll` | `key: String` | `QrPoll` | `NOT_FOUND` `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`（`QrState`）；确认那一次凭据已落盘、账号已存在，`account` 非空；未确认时 `account` 为 `null`。确认（或当前账号已变）时各房间以新凭据重连（`lib.rs:832-840`） |
 | `anchor_room` | 无 | `OwnRoom \| null` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | **当前账号自己的直播间**（`contract.md` §5 `OwnRoom`）：标题、开播状态、当前分区。**没有开通直播间 → `null`**（不是错误）——界面据此**整块不渲染**「我的直播间」。判据**只有一条**：`code == 0` 且 `data.room_id` 缺失 / ≤ 0 → `null`；**非 0 `code` 一律是上游错误**（原样带回、不赋语义），不拿它推「没开通」。游客 → `NOT_LOGGED_IN`（`crates/danmubox-bili/src/anchor.rs:132`） |
 | `anchor_title_set` | `title: String` | `void` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 改**自己直播间**的标题（上游 `room/v1/Room/update`，`platform=pc_link`）。空标题不发请求、直接 `BAD_REQUEST`（`anchor.rs:321`）。写操作纪律：**只作用在当前账号自己的直播间**，**失败即停不重试**（`AGENT.md` §8.14–16） |
-| `anchor_live_set` | `live: bool` | `StreamEndpoints \| AnchorGate \| null` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | `live=true` 开播（三段式，见 `protocol.md` §18）：成功返回上游下发的推流端点（含**推流码**）；**被上游身份校验挡住**返回 `AnchorGate`（引导 + 原始 `code` / `msg`，见 `protocol.md` §18.5）；`live=false` 下播，返回 `null`。分区**沿用该直播间当前值**，上游没给分区就不发开播请求（`UPSTREAM_ERROR`）。其余上游非 0 code **原样带回、不赋语义**；`AnchorGate` 这一种**不自动重试**，认证完成后由用户再点一次开播（`anchor.rs:342` / `anchor.rs:399`） |
+| `anchor_area_list` | 无 | `AnchorArea[]` | `UPSTREAM_ERROR` `INTERNAL` | 开播分区树（§5 `AnchorArea`，两级：父 → 子），用于界面分区选择；上游分区为公开数据，**不登录也可**。其余上游非 0 code 原样带回、不赋语义 |
+| `anchor_live_set` | `live: bool`、`area_v2: Option<i64>`（可选，缺省沿用当前分区） | `StreamEndpoints \| AnchorGateView \| null` | `NOT_LOGGED_IN` `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `live=true` 开播（三段式，见 `protocol.md` §18）：成功返回上游下发的推流端点（含**推流码**）；**被上游身份校验挡住**返回 `AnchorGateView`（= `AnchorGate` 的引导 + 原始 `code` / `msg`，**命令层另附**离线编码的 `qr_svg`，见 `protocol.md` §18.5 / `contract.md` §5）；`live=false` 下播，返回 `null`。`area_v2` 缺省 = 直播间当前 `area_id`（上次开播分区），`Some(v)` = 界面所选子分区；上游没给分区（`area_id<=0` 且无 `area_v2`）就不发开播请求（`UPSTREAM_ERROR`）。其余上游非 0 code **原样带回、不赋语义**；`AnchorGate` 这一种**不自动重试**，认证完成后由用户再点一次开播（`anchor.rs:342` / `anchor.rs:399`） |
 | `account_switch` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 切换当前账号并以新凭据重建各房间连接 |
 | `account_logout` | `name: Option<String>` | `SessionState` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省 = 当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
 | `account_remove` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
@@ -127,6 +128,8 @@
 | `OwnRoom` | `contract.md` §5（`crates/danmubox-core/src/model.rs:275`） | `anchor_room` 返回；`null` = 该账号**没有开通直播间**（不是错误，界面整块不渲染） |
 | `StreamEndpoints` / `StreamEndpoint` | `contract.md` §5（`model.rs:307` / `model.rs:300`） | `anchor_live_set` 开播**成功**时的返回（下播为 `null`）。**含推流码**：只随这一次返回值进界面内存，**不进日志、不落盘、不进 `prefs.json` / `config.toml`** |
 | `AnchorGate` | `contract.md` §5 | `anchor_live_set` 开播**被上游身份校验挡住**时的返回（与 `StreamEndpoints` 互斥）。含原始 `code` / `msg` 与引导（`url` / `qr`）；**不自动重试** |
+| `AnchorGateView` | `contract.md` §5 | 命令层的 `AnchorGate` 视图：多一个 `qr_svg`（`qrcode` crate 就地**离线**编码的二维码 SVG，与扫码登录同一条口径），`QrConfirm` 且 `qr` 非空时才有值。**不进 `core`** |
+| `AnchorArea` | `contract.md` §5 | `anchor_area_list` 返回，两级（`children` 嵌套）；界面做父→子联动选择，`children` 末端的 `id` 即 `anchor_live_set` 的 `area_v2` |
 | `Account` | `contract.md` §5（`ports.rs:63`） | `accounts_list` 返回、`QrPoll.account` |
 | `Emote` / `EmotePackage` | `contract.md` §5（`model.rs:313` / `model.rs:299`） | `emotes_list` / `emotes_owned` 返回 |
 | `FollowedRoom` | `contract.md` §5（`model.rs:345`） | `follow_list` 返回 |

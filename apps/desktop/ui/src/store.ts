@@ -11,12 +11,19 @@ import {
   insertIncoming,
   refreshMode,
 } from "./session-messages";
-import { adminDoneText, INTERACT_AUTO_HIDE_MS, SEND_CONFIRM_TIMEOUT_MS, SEND_MATCH_WINDOW_MS } from "./types";
+import {
+  adminDoneText,
+  INTERACT_AUTO_HIDE_MS,
+  SEND_CONFIRM_TIMEOUT_MS,
+  SEND_MATCH_WINDOW_MS,
+} from "./types";
 import type {
   Account,
   AccountQr,
   AdminAction,
   AdminUser,
+  AnchorArea,
+  AnchorGateView,
   AppInfo,
   ChatSendResult,
   EmoteToken,
@@ -26,15 +33,17 @@ import type {
   Emote,
   FollowedRoom,
   Message,
+  OwnRoom,
   Prefs,
   RoomSession,
   RoomView,
   SendOutcome,
   QrState,
   SessionState,
+  StreamEndpoints,
 } from "./types";
 // 值导入（上面那一组是 `import type`）：发送结果那句话在这里拼，行尾标记与浮片共用同一句。
-import { sendOutcomeText } from "./types";
+import { isAnchorGate, sendOutcomeText } from "./types";
 
 /** 前端日志只保留的行数（`docs/ipc.md` §8）；消息按 `kind` 分档的显示上限 `KIND_CAPS` 在 `session-messages.ts`。 */
 const LOG_CAP = 200;
@@ -92,6 +101,34 @@ interface AppStore {
   adminErrors: { silent?: string; blacklist?: string; keywords?: string };
   /** 房管写操作进行中（按钮禁用，避免并发重复提交）。 */
   adminBusy: boolean;
+
+  /**
+   * 「我的直播间」（`docs/ui.md` §2.2.2）：账号行上的按钮**展开了哪个账号**的管理区
+   * （`null` = 都收着）。按账号名存而不是一个布尔：按钮在每一行都有，
+   * 但后端读的永远是当前账号自己的直播间，展开态必须跟着行走。
+   */
+  anchorPanelFor: string | null;
+  /** 当前账号自己的直播间（`anchor_room`）；`null` = 没开通 / 还没读到。 */
+  anchorRoom: OwnRoom | null;
+  /** 开播分区树（`anchor_area_list`，两级）。 */
+  anchorAreas: AnchorArea[];
+  /** 分区列表取不到的原因；界面据此降级为只读分区名（`title` 里也带一句）。 */
+  anchorAreaError?: string;
+  /** 标题输入框的草稿；`undefined` = 跟随远端（`anchorRoom.title`，成功保存后清回）。 */
+  anchorTitleDraft?: string;
+  /** 界面所选子分区 id；`undefined` = 沿用直播间当前分区（上次开播分区）。 */
+  anchorAreaId?: number;
+  /**
+   * 开播成功后的推流端点，**含推流码**（契约 §5）。
+   *
+   * 推流码是账号级凭据：只在这一份内存里，**不进 `prefs.json`、不落盘、不打日志**；
+   * 下播 / 换人 / 关对话框即清（`resetIdentityState`）。
+   */
+  anchorEndpoints: StreamEndpoints | null;
+  /** 开播被上游身份校验挡住时的引导（`AnchorGateView`）；非空即弹提示框。 */
+  anchorGate: AnchorGateView | null;
+  /** 这一块读 / 写失败的原因：**后端原话**，失败不静默。 */
+  anchorError?: string;
 
   bootstrap: () => Promise<void>;
   addRoom: (input: string) => Promise<void>;
@@ -173,6 +210,27 @@ interface AppStore {
   loadAdmin: (roomId: number) => Promise<void>;
   /** 执行一次房管写操作；调用方负责二次确认。成功返回 true。 */
   runAdmin: (roomId: number, action: AdminAction) => Promise<boolean>;
+  /**
+   * 展开 / 收起某个账号行的「我的直播间」管理区（再点一次收起）。
+   * 展开时才拉 `anchor_room` 与 `anchor_area_list`；**游客态与非当前账号不发请求**。
+   */
+  toggleAnchorPanel: (name: string) => Promise<void>;
+  closeAnchorPanel: () => void;
+  loadAnchorRoom: () => Promise<void>;
+  /** 拉开播分区树。取不到只降级为只读分区名，不当作这一块的致命错误。 */
+  loadAnchorAreas: () => Promise<void>;
+  /** 标题草稿；传空串等于「清空」。 */
+  setAnchorTitleDraft: (value: string) => void;
+  /** 选中的子分区（`undefined` = 沿用直播间当前分区）。 */
+  setAnchorAreaId: (id?: number) => void;
+  /** 保存标题；成功返回 true（成功后远端为准，就地重读）。 */
+  saveAnchorTitle: () => Promise<boolean>;
+  /** 开播 / 下播。开播成功落推流端点、被身份校验挡住落引导。 */
+  setAnchorLive: (live: boolean) => Promise<void>;
+  /** 关掉人脸认证提示框（引导态清掉，错误行的上游原话留着）。 */
+  closeAnchorGate: () => void;
+  /** `FaceAuth` 的「去完成人脸认证」：用系统浏览器打开认证页（`open_url`，不内嵌网页）。 */
+  openAnchorGateUrl: () => Promise<void>;
   updatePrefs: (patch: Partial<Prefs>) => Promise<void>;
   /**
    * 切沉浸模式：`true` 进、`false` 出（返回手势与切房间清理都复用同一个动作，
@@ -649,6 +707,18 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
     balance: undefined,
     seeding: false,
     lastSend: undefined,
+    // 「我的直播间」整块跟着身份走：房间、分区、推流码（**账号级凭据**）、人脸认证
+    // 引导、展开态与草稿一并清 —— 留下任何一块都是把上一个人的直播间摆在新账号面前
+    // （`docs/ui.md` §2.2.2：换号 / 登出即清）。
+    anchorPanelFor: null,
+    anchorRoom: null,
+    anchorAreas: [],
+    anchorAreaError: undefined,
+    anchorTitleDraft: undefined,
+    anchorAreaId: undefined,
+    anchorEndpoints: null,
+    anchorGate: null,
+    anchorError: undefined,
   });
 }
 
@@ -758,6 +828,11 @@ export const useApp = create<AppStore>((set, get, store) => ({
   adminKeywords: [],
   adminErrors: {},
   adminBusy: false,
+  anchorPanelFor: null,
+  anchorRoom: null,
+  anchorAreas: [],
+  anchorEndpoints: null,
+  anchorGate: null,
 
   async bootstrap() {
     try {
@@ -1411,6 +1486,147 @@ export const useApp = create<AppStore>((set, get, store) => ({
     } finally {
       set({ adminBusy: false });
     }
+  },
+
+  async toggleAnchorPanel(name) {
+    if (get().anchorPanelFor === name) {
+      set({ anchorPanelFor: null, anchorGate: null });
+      return;
+    }
+    // 换一行展开：上一行的推流码（账号级凭据）与引导态不留在新面板里。
+    set({
+      anchorPanelFor: name,
+      anchorRoom: null,
+      anchorEndpoints: null,
+      anchorGate: null,
+      anchorError: undefined,
+      anchorTitleDraft: undefined,
+      anchorAreaId: undefined,
+    });
+    // 只有**当前且已登录**的账号才有「自己的直播间」可读：后端按当前凭据取，
+    // 对着别的账号行发请求会拿回另一个人的房间（docs/ui.md §2.2.2）。
+    const account = get().accounts.find((item) => item.name === name);
+    if (!account?.logged_in) {
+      set({ anchorError: "该账号未登录，扫码登录后才能管理直播间" });
+      return;
+    }
+    if (!account.active) {
+      set({ anchorError: "先切到该账号，再管理它的直播间" });
+      return;
+    }
+    await get().loadAnchorRoom();
+    await get().loadAnchorAreas();
+  },
+
+  closeAnchorPanel() {
+    // 收起即清：推流码（**账号级凭据**）不留在界面内存里，展开态与引导态也一并复位
+    // （`docs/ui.md` §2.2.2：关掉对话框 / 收起 → 推流参数与提示框都不在）。
+    // 分区列表留着：它是公开数据，下次展开不必再问一次上游。
+    set({
+      anchorPanelFor: null,
+      anchorRoom: null,
+      anchorEndpoints: null,
+      anchorGate: null,
+      anchorError: undefined,
+      anchorTitleDraft: undefined,
+      anchorAreaId: undefined,
+    });
+  },
+
+  async loadAnchorRoom() {
+    const epoch = identityEpoch;
+    try {
+      const room = await api.anchorRoom();
+      if (epoch !== identityEpoch) return;
+      // 远端为准：重读后草稿回到跟随远端，界面不拿旧草稿盖住上游改过的标题。
+      set({ anchorRoom: room, anchorTitleDraft: undefined, anchorError: undefined });
+    } catch (error) {
+      if (epoch !== identityEpoch) return;
+      // 读失败也要留痕（凭据失效 / 风控…）：只渲染错误行，不编一行假状态。
+      set({ anchorRoom: null, anchorError: describeError(error) });
+    }
+  },
+
+  async loadAnchorAreas() {
+    const epoch = identityEpoch;
+    try {
+      const areas = await api.anchorAreaList();
+      if (epoch !== identityEpoch) return;
+      set({ anchorAreas: areas, anchorAreaError: undefined });
+    } catch (error) {
+      if (epoch !== identityEpoch) return;
+      // 分区列表取不到**只降级**（界面改为只读显示 `area_name`），但原因要留下来：
+      // 失败不静默（`AGENT.md` §8.7），理由挂在分区行的 `title` 上。
+      set({ anchorAreas: [], anchorAreaError: describeError(error) });
+    }
+  },
+
+  setAnchorTitleDraft(value) {
+    set({ anchorTitleDraft: value });
+  },
+
+  setAnchorAreaId(id) {
+    set({ anchorAreaId: id });
+  },
+
+  async saveAnchorTitle() {
+    const title = (get().anchorTitleDraft ?? get().anchorRoom?.title ?? "").trim();
+    // 空标题界面已禁用保存键，后端也会拒（BAD_REQUEST）；这里不再发一次无效请求。
+    if (title.length === 0) return false;
+    const epoch = identityEpoch;
+    try {
+      const room = await api.anchorTitleSet(title);
+      if (epoch !== identityEpoch) return false;
+      // 保存成功就地重读：不猜上游怎么改的，以远端为准。
+      set({ anchorRoom: room, anchorTitleDraft: undefined, anchorError: undefined });
+      return true;
+    } catch (error) {
+      if (epoch !== identityEpoch) return false;
+      set({ anchorError: describeError(error) });
+      return false;
+    }
+  },
+
+  async setAnchorLive(live) {
+    const epoch = identityEpoch;
+    try {
+      // `areaV2` 缺省 = 沿用直播间当前分区（上次开播分区）；界面选了才覆盖。
+      const result = await api.anchorLiveSet(live, get().anchorAreaId);
+      if (epoch !== identityEpoch) return;
+      if (!live) {
+        // 下播：推流码**立刻**从内存里消失，不留残留。
+        set({ anchorEndpoints: null, anchorGate: null, anchorError: undefined });
+      } else if (isAnchorGate(result)) {
+        // 被身份校验挡住：弹出提示框引导，**不轮询、不自动重试**——
+        // 错误行照旧显示上游原话（code + msg），引导只说「下一步怎么做」。
+        set({
+          anchorGate: result,
+          anchorEndpoints: null,
+          anchorError: `${result.message}（code ${result.code}）`,
+        });
+      } else {
+        set({ anchorEndpoints: result ?? null, anchorGate: null, anchorError: undefined });
+      }
+      // 不论成败都重读一次：开播状态由上游说了算，界面不自己推。
+      await get().loadAnchorRoom();
+    } catch (error) {
+      if (epoch !== identityEpoch) return;
+      set({ anchorError: describeError(error), anchorGate: null });
+    }
+  },
+
+  async openAnchorGateUrl() {
+    const gate = get().anchorGate;
+    if (!gate || gate.url.length === 0) return;
+    try {
+      await api.openUrl(gate.url);
+    } catch (error) {
+      set({ anchorError: describeError(error) });
+    }
+  },
+
+  closeAnchorGate() {
+    set({ anchorGate: null });
   },
 
   dismissError() {

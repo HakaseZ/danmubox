@@ -8,16 +8,19 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use danmubox_bili::{
-    BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender, BiliWallet,
+    BiliAdmin, BiliAnchor, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender,
+    BiliWallet,
 };
 use danmubox_core::ports::{
-    Account, AuthProvider, DanmakuReporter, DanmakuSender, EmoteProvider, LiveSource, QrPoll,
-    QrState, RoomAdmin, RoomCatalog, SessionState, WalletProvider,
+    Account, AnchorLiveOutcome, AnchorRoom, AuthProvider, DanmakuReporter, DanmakuSender,
+    EmoteProvider, LiveSource, QrPoll, QrState, RoomAdmin, RoomCatalog, SessionState,
+    WalletProvider,
 };
 use danmubox_core::{
-    config_path, data_dir, prefs_path, BlacklistedUser, BufferCaps, ConfigStore, Counters, Emote,
-    Event, EventBus, FollowedRoom, HistoryQuery, Message, MessageKind, Prefs, ReportReason, Room,
-    RoomRuntime, RoomSession, SendOutcome, SilentUser,
+    config_path, data_dir, prefs_path, AnchorArea, AnchorGate, AnchorGateKind, BlacklistedUser,
+    BufferCaps, ConfigStore, Counters, Emote, Event, EventBus, FollowedRoom, HistoryQuery, Message,
+    MessageKind, OwnRoom, Prefs, ReportReason, Room, RoomRuntime, RoomSession, SendOutcome,
+    SilentUser, StreamEndpoints,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
@@ -115,6 +118,59 @@ pub struct ChatSendResult {
     /// 界面据此回答「为什么失败」（`REQUIREMENTS.md` §2.3）；**不做码表翻译**。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+/// `anchor_live_set` 开播的返回：二选一、互斥（`docs/contract.md` §7）。
+///
+/// `untagged` 是为了让载荷**就是** `StreamEndpoints` / `AnchorGate` 本身，
+/// 而不是 `{"Opened": …}` 这种带壳的形状——界面按 `code` 字段有无区分两者。
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum AnchorLiveView {
+    Opened(StreamEndpoints),
+    Blocked(AnchorGateView),
+}
+
+/// 契约 §5 `AnchorGate` 的**命令层视图**：多带一个离线编码的二维码 SVG。
+///
+/// `qr_svg` 只在 `QrConfirm` 且上游给了 `qr` 时有值——**就地用 `qrcode` 编码**，
+/// 与扫码登录那条口径完全相同（不联网生成、不交给第三方服务）。它**不进**契约 §5 的
+/// `AnchorGate`（`core` 只承载二维码内容那个字符串）。
+#[derive(Serialize)]
+pub struct AnchorGateView {
+    pub code: i64,
+    pub message: String,
+    pub kind: AnchorGateKind,
+    pub url: String,
+    pub qr: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qr_svg: Option<String>,
+}
+
+impl AnchorGateView {
+    fn new(gate: AnchorGate) -> Self {
+        let qr_svg = render_qr_svg(&gate.qr);
+        Self {
+            code: gate.code,
+            message: gate.message,
+            kind: gate.kind,
+            url: gate.url,
+            qr: gate.qr,
+            qr_svg,
+        }
+    }
+}
+
+/// 二维码内容 → SVG（**离线**，与扫码登录同一个 crate/尺寸口径）。空内容不给图。
+fn render_qr_svg(content: &str) -> Option<String> {
+    if content.is_empty() {
+        return None;
+    }
+    qrcode::QrCode::new(content.as_bytes()).ok().map(|code| {
+        code.render::<qrcode::render::svg::Color>()
+            .min_dimensions(200, 200)
+            .build()
+    })
 }
 
 /// 把上游原始答复拼成给界面看的一行。
@@ -705,6 +761,54 @@ async fn admin_keywords_del(
         .map_err(ApiError::from)
 }
 
+/// 取**当前账号自己的**直播间（契约 §7）。
+///
+/// 该账号**没开通直播间返回 `null`**，不是错误——界面据此只留错误行。
+/// 房间号由实现侧现取，命令**不接受**房间号参数：写操作只作用在自己房间。
+#[tauri::command]
+async fn anchor_room(state: State<'_, AppState>) -> ApiResult<Option<OwnRoom>> {
+    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    anchor.own().await.map_err(ApiError::from)
+}
+
+/// 改**自己直播间**的标题（契约 §7）。空标题由实现侧拒（`BAD_REQUEST`）。
+#[tauri::command]
+async fn anchor_title_set(state: State<'_, AppState>, title: String) -> ApiResult<OwnRoom> {
+    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    anchor.set_title(&title).await.map_err(ApiError::from)
+}
+
+/// 开播分区树（契约 §7）：两级，供界面做父→子联动选择。上游分区是公开数据，**不登录也可**。
+#[tauri::command]
+async fn anchor_area_list(state: State<'_, AppState>) -> ApiResult<Vec<AnchorArea>> {
+    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    anchor.area_list().await.map_err(ApiError::from)
+}
+
+/// 开播 / 下播（契约 §7）。
+///
+/// 开播成功给 `StreamEndpoints`（**含推流码**：只随这一次返回值进界面内存，
+/// 本层不打日志、不落盘）；被身份校验挡住给 `AnchorGate`（引导 + 上游原话）；下播给 `null`。
+/// `area_v2` 缺省沿用直播间当前分区，`Some` 为界面所选子分区。
+#[tauri::command]
+async fn anchor_live_set(
+    state: State<'_, AppState>,
+    live: bool,
+    area_v2: Option<i64>,
+) -> ApiResult<Option<AnchorLiveView>> {
+    let anchor = BiliAnchor::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    if !live {
+        anchor.end_live().await.map_err(ApiError::from)?;
+        return Ok(None);
+    }
+    match anchor.go_live(area_v2).await.map_err(ApiError::from)? {
+        AnchorLiveOutcome::Opened(endpoints) => Ok(Some(AnchorLiveView::Opened(endpoints))),
+        AnchorLiveOutcome::Blocked(gate) => {
+            Ok(Some(AnchorLiveView::Blocked(AnchorGateView::new(gate))))
+        }
+    }
+}
+
 #[tauri::command]
 async fn chat_report(
     state: State<'_, AppState>,
@@ -1178,6 +1282,10 @@ pub fn run() {
             admin_keywords_list,
             admin_keywords_add,
             admin_keywords_del,
+            anchor_room,
+            anchor_title_set,
+            anchor_area_list,
+            anchor_live_set,
             follow_list,
             wallet_balance,
             open_url,

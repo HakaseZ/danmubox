@@ -962,6 +962,7 @@ stateDiagram-v2
 | 房间信息 | `GET https://api.live.bilibili.com/room/v1/Room/get_info` | query `room_id` | `data.title` / `data.live_status` / `data.area_id` / `data.area_name`（+ `data.parent_area_name` 拼「父 · 子」） |
 | 改标题 | `POST https://api.live.bilibili.com/room/v1/Room/update` | form：`room_id` / `platform=pc_link` / `title` / `csrf_token` / `csrf` | `code`（0 = 成功） |
 | 下播 | `POST https://api.live.bilibili.com/room/v1/Room/stopLive` | form：`room_id` / `platform=pc_link` / `csrf_token` / `csrf` | `code` |
+| 开播分区列表 | `GET https://api.live.bilibili.com/room/v1/Area/getList` | query：`platform=pc_link` | `data.list[]`：父分区（`id` / `name` / `list[]` 子分区 `{id, name}`） |
 | 开播 | 三段式，见 §18.2 | — | `data.rtmp`（+ `data.protocols[]`） |
 
 - **`csrf` 与 `csrf_token` 同值，都是凭据文件里的 `bili_jct`**（`anchor.rs:261` 的 `csrf()`；缺它或凭据不完整 → `NOT_LOGGED_IN`）。这条与房管写操作（§A36）同一口径。
@@ -978,7 +979,7 @@ stateDiagram-v2
 | b | `GET https://api.live.bilibili.com/xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion` | query：`system_version=2` / `ts=<a 的 data.now>`，**并做 app 签名** | `data.build` / `data.curr_version` |
 | c | `POST https://api.live.bilibili.com/room/v1/Room/startLive` | **整个参数集做 app 签名**后作为 form body：`room_id` / `platform=pc_link` / `area_v2=<当前分区 id>` / `backup_stream=0` / `csrf_token` / `csrf` / `build` / `version` / `ts` | `data.rtmp` = `{addr, code}`；`data.protocols[]` 里另有 `{protocol: "rtmp" \| "srt", addr, code}` |
 
-- **分区沿用该直播间当前值**：`area_v2` 取第 1 步 `get_info` 给的 `data.area_id`，**界面不做分区选择**（用户口径：之前在 web 端用的配置要能沿用）。**上游没给分区（`area_id <= 0`）时根本不发开播请求**，报 `UPSTREAM_ERROR`（`anchor.rs:342`）——自造一个默认分区会把直播推到错误的分区（`AGENT.md` §8.7）。
+- **分区沿用该直播间当前值，但界面提供两级分区选择**：`area_v2` 缺省取第 1 步 `get_info` 给的 `data.area_id`（即上次开播沿用分区）；用户在 `anchor_area_list` 选了子分区时，以其 `id` 作为 `area_v2` 覆盖（用户口径：之前在 web 端用的配置要能沿用，但允许改）。**上游没给分区（`area_id <= 0`）且无 `area_v2` 时根本不发开播请求**，报 `UPSTREAM_ERROR`（`anchor.rs:342`）——自造一个默认分区会把直播推到错误的分区（`AGENT.md` §8.7）。
 - `backup_stream=0`：不要备用推流地址那一档。
 - 两段签名参数**放哪里**在两份社区实现里不一致（一个放 query、一个放 form）。本仓：b 段放 **query**、c 段放 **form**（跟实现一致）。
 - 端点全集与常量见 `anchor.rs:49-66`；三段顺序与失败点见 `anchor.rs:342-397`。

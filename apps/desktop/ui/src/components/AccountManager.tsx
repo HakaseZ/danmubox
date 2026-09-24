@@ -1,8 +1,71 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import { Avatar } from "./Avatar";
-import type { Account, AccountQr, QrState, SessionState } from "../types";
+import type {
+  Account,
+  AccountQr,
+  AnchorArea,
+  AnchorGateView,
+  OwnRoom,
+  QrState,
+  SessionState,
+  StreamEndpoints,
+} from "../types";
 import styles from "../app.module.css";
+
+/** 长按多久算「复制」（推流地址 / 推流码没有复制键，靠长按）。 */
+const LONG_PRESS_MS = 500;
+
+/**
+ * 长按复制：拿不到剪贴板**静默**（这不是「我的直播间」要报的错）。
+ *
+ * 为什么不做复制键：分区 / 地址 / 码三行都塞一枚按钮会把窄屏挤爆，
+ * 而这三行的值本身就是要被整段取走的长串（等宽体 + 长按 是同一件事的两种表达）。
+ */
+function useLongPressCopy(value: string) {
+  const timer = useRef<number | undefined>(undefined);
+  const clear = () => window.clearTimeout(timer.current);
+  useEffect(() => clear, []);
+  return {
+    onPointerDown: () => {
+      clear();
+      timer.current = window.setTimeout(() => {
+        // 推流码是账号级凭据：只在这一次复制里出现，不进任何日志。
+        void navigator.clipboard?.writeText(value).catch(() => undefined);
+      }, LONG_PRESS_MS);
+    },
+    onPointerUp: clear,
+    onPointerLeave: clear,
+    onPointerCancel: clear,
+  };
+}
+
+/** 开播状态的界面文案：只由 `live_status` 派生，不猜上游的其它值。 */
+function liveStatusText(liveStatus: number): string {
+  if (liveStatus === 1) return "直播中";
+  if (liveStatus === 2) return "轮播";
+  return "未开播";
+}
+
+/**
+ * 分区树里找「这一级」：子分区命中它的父、父分区命中它自己。
+ *
+ * 选中的可能正是父分区本身（上游给的 `area_id` 是父级时），这时子分区列表是它自己的
+ * `children` —— 不这么兜一层，选择器会整个空掉、用户看着像「分区没加载出来」。
+ */
+function parentOf(areas: AnchorArea[], id: number): AnchorArea | undefined {
+  return (
+    areas.find((parent) => (parent.children ?? []).some((child) => child.id === id)) ??
+    areas.find((parent) => parent.id === id) ??
+    areas[0]
+  );
+}
 
 interface Props {
   /** 全部账号（`accounts_list`）：每个条目自带登录状态与身份。 */
@@ -12,6 +75,21 @@ interface Props {
   qr: AccountQr | null;
   qrState: QrState | null;
   qrError: string | null;
+  /** 「我的直播间」：展开的是哪个账号（`null` = 都收着）。 */
+  anchorFor: string | null;
+  /** 当前账号自己的直播间；`null` = 没开通 / 还没读到 / 读失败。 */
+  anchorRoom: OwnRoom | null;
+  /** 开播分区树（两级）；取不到时为空，界面降级为只读分区名。 */
+  anchorAreas: AnchorArea[];
+  anchorAreaError?: string;
+  anchorTitleDraft?: string;
+  /** 界面所选子分区；`undefined` = 沿用直播间当前分区。 */
+  anchorAreaId?: number;
+  /** 开播成功后的推流端点（含推流码，账号级凭据）。 */
+  anchorEndpoints: StreamEndpoints | null;
+  /** 开播被身份校验挡住时的引导；非空即弹提示框。 */
+  anchorGate: AnchorGateView | null;
+  anchorError?: string;
   onClose: () => void;
   onSwitch: (name: string) => void;
   /** 清掉该账号凭据（= 退回游客态）。 */
@@ -21,6 +99,15 @@ interface Props {
   onStartQr: (target?: string) => void;
   onCancelQr: () => void;
   onPollQr: () => void;
+  onToggleAnchor: (name: string) => void;
+  onAnchorTitleDraft: (value: string) => void;
+  onAnchorArea: (id?: number) => void;
+  /** 保存标题；成功返回 true（界面据此只清忙态，文案由后端原话说）。 */
+  onAnchorSaveTitle: () => Promise<boolean>;
+  onAnchorLive: (live: boolean) => Promise<void>;
+  /** `FaceAuth`：用系统浏览器打开认证页。 */
+  onAnchorOpenGateUrl: () => void;
+  onAnchorCloseGate: () => void;
 }
 
 /** 整行可点时的 DOM 属性（当前账号行返回 `undefined`）。 */
@@ -103,6 +190,15 @@ export function AccountManager({
   qr,
   qrState,
   qrError,
+  anchorFor,
+  anchorRoom,
+  anchorAreas,
+  anchorAreaError,
+  anchorTitleDraft,
+  anchorAreaId,
+  anchorEndpoints,
+  anchorGate,
+  anchorError,
   onClose,
   onSwitch,
   onLogout,
@@ -110,8 +206,18 @@ export function AccountManager({
   onStartQr,
   onCancelQr,
   onPollQr,
+  onToggleAnchor,
+  onAnchorTitleDraft,
+  onAnchorArea,
+  onAnchorSaveTitle,
+  onAnchorLive,
+  onAnchorOpenGateUrl,
+  onAnchorCloseGate,
 }: Props) {
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  // 两个写按钮的忙态**各管各的**：保存中只禁「保存」、开播 / 下播中只禁那一枚
+  // —— 改标题与开播 / 下播是两条独立命令，谁也不必等谁。
+  const [busy, setBusy] = useState<"title" | "live" | null>(null);
 
   // 每 2 秒问一次扫码状态（契约 §7）；过期与出错都停下来，交给「重新获取」重来。
   // 轮询回调存 ref：它在父组件里是内联箭头，若进依赖表，任何一次 store 更新都会重开定时器。
@@ -128,11 +234,17 @@ export function AccountManager({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      // 人脸认证提示框在最上层：Esc 先关它，再一次 Esc 才关对话框（一次只关一层）。
+      if (anchorGate) {
+        onAnchorCloseGate();
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, anchorGate, onAnchorCloseGate]);
 
   const confirmed = ((): { text: string; label: string; run: () => void } | null => {
     if (!confirm) return null;
@@ -164,6 +276,25 @@ export function AccountManager({
   const target = qr?.target ?? null;
   const targetAccount = target ? accounts.find((item) => item.name === target) : undefined;
 
+  // ---- 「我的直播间」派生：全靠 store 里那几份状态，组件不自己存一份
+  const title = anchorTitleDraft ?? anchorRoom?.title ?? "";
+  const dirty = title.trim() !== (anchorRoom?.title ?? "");
+  // 在播（`1` 直播中 / `2` 轮播）→ 按钮给「下播」；未开播 → 给「开播」。
+  const onAir = (anchorRoom?.live_status ?? 0) !== 0;
+  // 分区：界面所选优先，否则沿用直播间当前分区（= 上次开播分区，用户不改即可直接开播）。
+  const areaId = anchorAreaId ?? anchorRoom?.area_id ?? 0;
+  const parent = parentOf(anchorAreas, areaId);
+  const children = parent?.children ?? [];
+  const areaName =
+    anchorAreas.length > 0
+      ? children.find((child) => child.id === areaId)?.name ?? parent?.name ?? ""
+      : // 列表取不到就降级：只读显示上游给的分区名（不是错误，是这一档的兜底呈现）
+        anchorRoom?.area_name ?? "";
+  // 推流参数：主 rtmp 优先，没有就退 srt（都缺就不渲染这一块）
+  const stream = anchorEndpoints?.rtmp ?? anchorEndpoints?.srt ?? null;
+  const addrHooks = useLongPressCopy(stream?.addr ?? "");
+  const codeHooks = useLongPressCopy(stream?.code ?? "");
+
   return (
     <div
       className={styles.dialogBackdrop}
@@ -193,8 +324,9 @@ export function AccountManager({
             </div>
           ) : (
             accounts.map((account) => (
+              // 一行 = 账号行 +（展开了才有的）直播间管理区，两者并列在同一个纵向列表里。
+              <Fragment key={account.name}>
               <div
-                key={account.name}
                 className={`${styles.accountItem} ${
                   account.active ? styles.accountItemActive : styles.accountItemSwitchable
                 }`}
@@ -252,8 +384,149 @@ export function AccountManager({
                   >
                     删除
                   </button>
+                  {/* 「我的直播间」在删除按钮**右侧**：点开才拉数据、才展开管理区
+                      （docs/ui.md §2.2.2）。没开通 / 读失败也按得出，展开后只给错误行。 */}
+                  <button
+                    data-testid="db-anchor-toggle"
+                    title={`查看 / 管理「${who(account)}」自己的直播间`}
+                    onClick={() => onToggleAnchor(account.name)}
+                  >
+                    我的直播间
+                  </button>
                 </div>
               </div>
+
+              {anchorFor === account.name && (
+                <div className={styles.anchorPanel} data-testid="db-anchor-panel">
+                  {anchorRoom && (
+                    <>
+                      <div className={styles.anchorRow} data-testid="db-anchor-title-row">
+                        <input
+                          className={styles.anchorTitle}
+                          data-testid="db-anchor-title"
+                          value={title}
+                          placeholder="直播间标题"
+                          onChange={(event) => onAnchorTitleDraft(event.target.value)}
+                        />
+                        <button
+                          data-testid="db-anchor-title-save"
+                          // 与远端一字不差 / 空标题都不必发：前者是没改，后者后端也会拒。
+                          disabled={!dirty || title.trim().length === 0 || busy === "title"}
+                          onClick={() => {
+                            setBusy("title");
+                            void onAnchorSaveTitle().finally(() => setBusy(null));
+                          }}
+                        >
+                          保存
+                        </button>
+                      </div>
+
+                      <div className={styles.anchorRow}>
+                        {anchorAreas.length > 0 ? (
+                          <>
+                            <select
+                              className={styles.anchorSelect}
+                              aria-label="父分区"
+                              value={parent?.id ?? ""}
+                              onChange={(event) => {
+                                const next = anchorAreas.find(
+                                  (item) => item.id === Number(event.target.value),
+                                );
+                                // 换了父分区就落到它的第一个子分区：开播要的 `area_v2` 是子分区 id。
+                                onAnchorArea(next?.children?.[0]?.id ?? next?.id);
+                              }}
+                            >
+                              {anchorAreas.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.name}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              className={styles.anchorSelect}
+                              data-testid="db-anchor-area-select"
+                              aria-label="子分区"
+                              value={areaId}
+                              onChange={(event) => onAnchorArea(Number(event.target.value))}
+                            >
+                              {children.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.name}
+                                </option>
+                              ))}
+                            </select>
+                          </>
+                        ) : (
+                          // 分区列表取不到的降级：只读显示上游给的分区名（不是错误，是这一档的呈现）
+                          <span
+                            className={styles.anchorStatus}
+                            data-testid="db-anchor-area-select"
+                            title={anchorAreaError ?? "分区列表未取到，沿用直播间当前分区"}
+                          >
+                            {areaName.length > 0 ? areaName : "上游未给出分区"}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className={styles.anchorRow} data-testid="db-anchor-status-row">
+                        <span className={styles.anchorStatus} data-testid="db-anchor-status">
+                          {liveStatusText(anchorRoom.live_status)}
+                        </span>
+                        <button
+                          data-testid="db-anchor-live"
+                          disabled={busy === "live"}
+                          title={onAir ? "下播" : "开播（沿用所选分区）"}
+                          onClick={() => {
+                            setBusy("live");
+                            void onAnchorLive(!onAir).finally(() => setBusy(null));
+                          }}
+                        >
+                          {onAir ? "下播" : "开播"}
+                        </button>
+                      </div>
+
+                      {/* 开播成功后**直接渲染**推流参数（不必双击、不必展开）；下播即消失 */}
+                      {stream && (
+                        <div className={styles.anchorConfig} data-testid="db-anchor-config">
+                          <div className={styles.anchorConfigRow}>
+                            <span className={styles.anchorLabel}>分区</span>
+                            <span data-testid="db-anchor-area">
+                              {areaName.length > 0 ? areaName : "上游未给出分区"}
+                            </span>
+                          </div>
+                          <div className={styles.anchorConfigRow}>
+                            <span className={styles.anchorLabel}>推流地址（长按复制）</span>
+                            <span
+                              className={styles.anchorValue}
+                              data-testid="db-anchor-rtmp-addr"
+                              {...addrHooks}
+                            >
+                              {stream.addr}
+                            </span>
+                          </div>
+                          <div className={styles.anchorConfigRow}>
+                            <span className={styles.anchorLabel}>推流码（长按复制）</span>
+                            <span
+                              className={styles.anchorValue}
+                              data-testid="db-anchor-rtmp-code"
+                              {...codeHooks}
+                            >
+                              {stream.code}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {anchorError && (
+                    <div className={styles.anchorError} data-testid="db-anchor-error">
+                      {anchorError}
+                    </div>
+                  )}
+                </div>
+              )}
+              </Fragment>
             ))
           )}
         </div>
@@ -331,6 +604,50 @@ export function AccountManager({
               <button data-testid="db-account-qr-cancel" onClick={onCancelQr}>
                 关闭二维码
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* 开播被身份校验挡住：弹出提示框引导（docs/ui.md §2.2.2）。
+            上游原话照旧留在展开区的错误行里 —— 引导不代替原话。 */}
+        {anchorGate && (
+          <div
+            className={styles.anchorModalBackdrop}
+            data-testid="db-anchor-gate-modal"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) onAnchorCloseGate();
+            }}
+          >
+            <div
+              className={styles.anchorModal}
+              role="dialog"
+              aria-modal="true"
+              aria-label="开播身份校验"
+            >
+              <span className={styles.anchorModalTitle}>本次开播需要身份校验</span>
+              {anchorGate.kind === "qrconfirm" ? (
+                anchorGate.qr_svg ? (
+                  // SVG 是纯 ASCII，btoa 直接可用；二维码由 Rust 侧离线编码，不经过任何在线服务
+                  <img
+                    data-testid="db-anchor-gate-qr"
+                    alt="身份校验二维码"
+                    src={`data:image/svg+xml;base64,${btoa(anchorGate.qr_svg)}`}
+                  />
+                ) : (
+                  <span className={styles.anchorModalHint} data-testid="db-anchor-gate-qr">
+                    上游未给出二维码内容
+                  </span>
+                )
+              ) : (
+                // `FaceAuth`：用系统浏览器打开认证页，不内嵌网页
+                <button data-testid="db-anchor-gate-open" onClick={onAnchorOpenGateUrl}>
+                  去完成人脸认证
+                </button>
+              )}
+              <span className={styles.anchorModalHint} data-testid="db-anchor-gate-hint">
+                完成认证后再点一次开播
+              </span>
+              <button onClick={onAnchorCloseGate}>关闭</button>
             </div>
           </div>
         )}

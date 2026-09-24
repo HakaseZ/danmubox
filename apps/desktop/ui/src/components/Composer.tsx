@@ -523,6 +523,8 @@ export function Composer({
     setSendSeq((value) => value + 1);
     // 被这一条消耗掉的回复目标就清掉；没发出去就留着（与文字发送同一口径：留着能重试）
     if (replyTo && outcome === "ok") setReplyTo(null);
+    // 发送成功即刷一次电池余额（issue202609242158 第 8 条 A3）：不为它另起定时器。
+    if (outcome === "ok") onRefreshBalance();
   };
 
   const submit = async () => {
@@ -546,6 +548,8 @@ export function Composer({
       setReplyTo(null);
       setMention(null);
       onPanel(null);
+      // 发送成功即刷一次电池余额（issue202609242158 第 8 条 A3）：不为它另起定时器。
+      onRefreshBalance();
     }
   };
 

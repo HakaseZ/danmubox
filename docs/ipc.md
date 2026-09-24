@@ -291,6 +291,7 @@ type AppStore = {
   emotes: Emote[];
   ownedEmotes: Emote[];            // 主站「我的表情」
   ownedLoaded: boolean;
+  ownedLoadedAt?: number;          // 上一次**成功**拉取时刻（Date.now()）；面板打开按它判是否重拉（`ui.md` §6.3）
   ownedError?: string;
   followed: FollowedRoom[];
   balance?: number;                // 电池余额（整数；`wallet_balance` 的返回）；换人即作废（§8）
@@ -337,12 +338,14 @@ type SendState = "unconfirmed" | "rejected";   // Message.send_state（另有 Me
 | `send(roomId, content, emote?, reply?)` | `chat_send` | 乐观渲染 + 回执校验，见 §7；结果只登记在当前房间（§8） |
 | `report(message, reason)` | `chat_report` | 与命令同参：整条 `Message` + `ReportReason` |
 | `loadReportReasons()` | `report_reasons` | 首次拉取后缓存；失败不覆盖已有清单 |
-| `loadEmotes(roomId)` / `loadOwnedEmotes(retryFailedOnly?)` | `emotes_list` / `emotes_owned` | 由 `RoomView` 的 effect 在登录态就绪时触发；主站表情成功一次后不再重复拉。房间表情落地前复核 `activeRoomId`（§8） |
+| `loadEmotes(roomId)` / `loadOwnedEmotes(ifStale?)` | `emotes_list` / `emotes_owned` | 由 `RoomView` 的 effect 在登录态就绪时触发；主站表情成功一次后不再重复拉，`ifStale`（面板打开时）只在距上次成功超过 10 分钟或上次失败时才重拉（`ui.md` §6.3）。房间表情落地前复核 `activeRoomId`（§8） |
 | `loadFollowed()` | `follow_list` | 会话就绪后与登录/换号后各自动调用一次；返回后按 `ui.md` §2.2 的排序链渲染。**返回是否成功**（`boolean`）供列表页轮询判退避；失败仍进全局错误条，不静默 |
 | `startListStatusPolling()` | `rooms_refresh_status`（+ 登录时的 `follow_list`） | 列表页的开播状态轮询（`contract.md` §4）：返回**停止函数**，进房间页或卸载即停。进入列表页立即一拍，之后每 30 秒一拍（`store.ts:528-531`）；`document.visibilityState` 不是 `visible` 就整拍跳过（不发请求）；下一拍只在上一拍落地后才排（**不重叠**）；失败按 30 → 60 → 120 → 240 秒封顶退避、成功复位。落 `rooms` 走与 `rooms_list` 同一个**快照序号护栏**（§8） |
+| `startAnchorPolling(account)` | `anchor_room` | 「我的直播间」展开区的静默轮询（`ui.md` §2.2.2）：返回停止函数，面板收起 / 关对话框 / 换号即停。展开时已同步拉过一次，首拍按周期排；之后每 30 秒一拍、`document.visibilityState` 不是 `visible` 就整拍跳过、失败按 30 → 60 → 120 → 240 秒封顶退避；落地前复核身份世代，并与标题 / 分区写共用发起序号护栏（§8.1） |
+| `startAdminPolling(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 房管面板展开期的静默轮询（`ui.md` §4.9）：返回停止函数，收起即停；每 60 秒一拍、不可见整拍跳过、失败退避、落地复核 `activeRoomId`（§8） |
 | `loadBalance()` | `wallet_balance` | 状态栏展示；进入房间时刷新；换人即作废（§8） |
 | `loadRoomIdentity(roomId)` | `room_session` | 进房取一次快照；之后靠 `danmubox://session` 更新。落地前复核身份世代（§8） |
-| `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块；落地前复核 `activeRoomId` 仍是它（§8） |
+| `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块；落地前复核 `activeRoomId` 仍是它（§8）。**返回三块是否全成**（`boolean`，供静默轮询判退避） |
 | `runAdmin(roomId, action)` | `admin_mute` / `admin_unmute` / `admin_blacklist_add` / `admin_blacklist_del` / `admin_keywords_add` / `admin_keywords_del` | 一次一个写操作；成功后就地重读三块，`adminBusy` 期间禁用按钮 |
 | `updatePrefs(patch)` | `prefs_set` | 用返回的全量生效值覆盖 `prefs` |
 | `openProfile(uid)` | `open_url` | 点昵称跳用户主页 |
@@ -429,9 +432,10 @@ sequenceDiagram
 | 换人链路（`switchAccount` / `removeAccount` / `logoutAccount` / `pollAccountQr`）与 `refreshIdentity` / `applySession` | **身份世代**（`store.ts:466-472`）：换人时递增；取号在**命令之前**（按点击顺序，不按回包顺序） | 并发切号以后到的响应为准，账号列表的「当前」不是最后点击的那个 |
 | `loadRoomIdentity` 的 `room_session` 结果 | 身份世代 | 晚到的旧凭据身份写进 `roomIdentities`，房管入口按上一个账号放行 |
 | `loadEmotes` / `loadAdmin` 的结果 | `activeRoomId === roomId` | `emotes` 与房管三块是全局单份，写进去就是拿 A 的身份与名单渲染 B |
+| 「我的直播间」读（`loadAnchorRoom`）/ 写（`anchor_title_set` / `anchor_area_set`）的落地 | 身份世代 + **读写共用的发起序号**（`anchorRoomSeq` / `anchorRoomAppliedSeq`）：发起时取号，落地时丢掉已被更新值越过的那些（失败不占号） | 展开期静默轮询的重读与并发保存交错时，晚到的旧回包把刚保存的新标题 / 新分区名盖回旧值。标题另有短窗口写穿护栏：保存成功后短时间内一次 `anchor_room` 重读若仍读到旧标题，不回退它（`ui.md` §2.2.2） |
 | `send` 的返回值与 `danmubox://send` 事件 | `ChatSendResult.room_id === activeRoomId` | B 的输入区弹 A 那条的失败浮片；`lastSend` 因此只在发出它的房间还在前台时才登记，切房即清 |
 
-世代号与快照序号都是 `store.ts` 的**模块级计数器**（`identityEpoch` / `roomsSeq`）：不进 store 形状、不影响渲染，只在落地那一刻做一次比较。身份快照（`roomIdentities`）的生命周期因此是「一次房内会话」：**切房保留**（房间没断，切回来还是同一次会话），关标签 / 移除房间 / 断开连接 / 换人各自删它，换人另由世代号挡住旧凭据的回包。
+世代号与快照序号都是 `store.ts` 的**模块级计数器**（`identityEpoch` / `roomsSeq` / `anchorRoomSeq`）：不进 store 形状、不影响渲染，只在落地那一刻做一次比较。身份快照（`roomIdentities`）的生命周期因此是「一次房内会话」：**切房保留**（房间没断，切回来还是同一次会话），关标签 / 移除房间 / 断开连接 / 换人各自删它，换人另由世代号挡住旧凭据的回包。
 
 内存边界：
 

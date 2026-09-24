@@ -208,6 +208,7 @@ export function RoomView({
   const loadRoomIdentity = useApp((store) => store.loadRoomIdentity);
   const loadAdmin = useApp((store) => store.loadAdmin);
   const runAdmin = useApp((store) => store.runAdmin);
+  const startAdminPolling = useApp((store) => store.startAdminPolling);
   const loggedIn = session?.logged_in ?? false;
 
   /**
@@ -221,7 +222,8 @@ export function RoomView({
    */
   const onPanel = useCallback(
     (next: PanelKind | null) => {
-      // 打开表情面板就顺手刷新（身份可能变过）：「我的表情」只在上次失败时重试。
+      // 打开表情面板就顺手刷新（身份可能变过）：「我的表情」按时间节流重拉 ——
+      // 距上次成功超过阈值或上次失败才打接口（issue202609242158 第 8 条 A4）。
       if (next === "emotes") {
         void loadEmotes(room.room_id);
         void loadOwnedEmotes(true);
@@ -445,6 +447,14 @@ export function RoomView({
     setAdminOpen(false);
     setAdminConfirm(null);
   }, [isAdmin]);
+
+  // 房管面板展开期间的静默轮询（issue202609242158 第 8 条 A2）：面板开着才跑、收起即停
+  // （卸载 / 切房由 effect 清理停掉）。打开面板时 `toggleAdminPanel` 已同步重拉过一次，
+  // 因此首拍按周期排。
+  useEffect(() => {
+    if (!adminOpen) return;
+    return startAdminPolling(room.room_id);
+  }, [adminOpen, room.room_id, startAdminPolling]);
 
   useEffect(() => {
     if (loggedIn) void loadBalance();

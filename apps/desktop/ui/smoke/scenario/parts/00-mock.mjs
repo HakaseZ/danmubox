@@ -188,6 +188,21 @@
   window.__qrTarget = null;
   // 轮询失败开关：验证「失败要能重试」（面板留在原地 + 重新获取按钮）
   window.__qrFail = false;
+  // ---- 「我的直播间」（契约 §7 anchor_*）的替身状态与开关
+  //   __anchor        = null 时表示「该账号没开通直播间」（**不是错误**，界面据此整块不渲染）
+  //   __anchorGate    = 开播被身份校验挡住（默认关）；__anchorGateKind 切 `qrconfirm` / `faceauth`
+  //   __anchorFail    = 读取失败（验证「失败不静默」，只渲染错误行）
+  //   __anchorAreas   = 两级分区树；`children` 末端的 id 即 anchor_live_set 的 area_v2
+  window.__anchor = {
+    room_id: 515151, title: "冒烟直播间", live_status: 0, area_id: 371, area_name: "虚拟主播",
+  };
+  window.__anchorGate = false;
+  window.__anchorGateKind = "qrconfirm";
+  window.__anchorFail = false;
+  window.__anchorAreas = [
+    { id: 9, name: "虚拟主播", children: [{ id: 371, name: "虚拟主播" }, { id: 372, name: "电台" }] },
+    { id: 1, name: "娱乐", children: [{ id: 21, name: "生活" }, { id: 22, name: "美食" }] },
+  ];
   window.__mk = msg;
   /**
    * 夹具里的一条礼物 / SC / 大航海 → Message 并广播（**归一化层**：夹具给的已经是 Message
@@ -355,6 +370,53 @@
         case "admin_keywords_add":
         case "admin_keywords_del": return Promise.resolve(null);
         case "wallet_balance": return Promise.resolve(150);
+        // ---- 「我的直播间」（契约 §7）：房间号一律后端现取，这四条命令都**不接受房间号参数**
+        case "anchor_room": {
+          if (window.__anchorFail) {
+            return Promise.reject({ code: "UPSTREAM_ERROR", message: "读取直播间失败（冒烟替身）" });
+          }
+          return Promise.resolve(window.__anchor ? Object.assign({}, window.__anchor) : null);
+        }
+        case "anchor_title_set": {
+          // 空标题由后端拒（`BAD_REQUEST`）；界面侧那枚「保存」键同时也该是禁用的
+          if (String(args.title || "").trim().length === 0) {
+            return Promise.reject({ code: "BAD_REQUEST", message: "直播间标题不能为空" });
+          }
+          window.__anchor.title = args.title;
+          return Promise.resolve(Object.assign({}, window.__anchor));
+        }
+        case "anchor_area_list": {
+          return Promise.resolve(window.__anchorAreas.map(function (a) {
+            return { id: a.id, name: a.name, children: (a.children || []).map(function (c) {
+              return { id: c.id, name: c.name, children: [] };
+            }) };
+          }));
+        }
+        case "anchor_live_set": {
+          if (!args.live) {
+            window.__anchor.live_status = 0;
+            return Promise.resolve(null);
+          }
+          if (window.__anchorGate) {
+            return Promise.resolve(window.__anchorGateKind === "faceauth"
+              ? {
+                  code: 60043, message: "本次开播需要身份验证", kind: "faceauth",
+                  url: "https://example.invalid/face-auth", qr: "", qr_svg: null,
+                }
+              : {
+                  code: 60024, message: "本次开播需要身份验证", kind: "qrconfirm",
+                  url: "", qr: "https://example.invalid/face-qr", qr_svg: qrSvg,
+                });
+          }
+          // 成功：area_v2 缺省沿用直播间当前分区，Some 则按界面所选覆盖（并记进房间状态）
+          if (args.area_v2 !== undefined) window.__anchor.area_id = args.area_v2;
+          window.__anchor.live_status = 1;
+          return Promise.resolve({
+            rtmp: { addr: "rtmp://live-push.example/live", code: "smoke-stream-key-0001" },
+            rtmp_backup: null,
+            srt: null,
+          });
+        }
         case "rooms_connect": return Promise.resolve(null);
         // 「刷新连接」：替身按后端语义回一条状态流（connecting → connected），并记下
         // 「有没有真的发这条命令」——断连之后菜单里那颗键必须是活的（见下面的断言）。

@@ -1589,6 +1589,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   async setAnchorLive(live) {
     const epoch = identityEpoch;
+    // 被挡住时上游原话要**留过**下面那次重读：重读成功会清 `anchorError`，
+    // 而「引导不代替上游原话」——认证码与 msg 必须一直挂在错误行上（`ui.md` §2.2.2）。
+    let blockedReason: string | undefined;
     try {
       // `areaV2` 缺省 = 沿用直播间当前分区（上次开播分区）；界面选了才覆盖。
       const result = await api.anchorLiveSet(live, get().anchorAreaId);
@@ -1599,16 +1602,14 @@ export const useApp = create<AppStore>((set, get, store) => ({
       } else if (isAnchorGate(result)) {
         // 被身份校验挡住：弹出提示框引导，**不轮询、不自动重试**——
         // 错误行照旧显示上游原话（code + msg），引导只说「下一步怎么做」。
-        set({
-          anchorGate: result,
-          anchorEndpoints: null,
-          anchorError: `${result.message}（code ${result.code}）`,
-        });
+        blockedReason = `${result.message}（code ${result.code}）`;
+        set({ anchorGate: result, anchorEndpoints: null, anchorError: blockedReason });
       } else {
         set({ anchorEndpoints: result ?? null, anchorGate: null, anchorError: undefined });
       }
       // 不论成败都重读一次：开播状态由上游说了算，界面不自己推。
       await get().loadAnchorRoom();
+      if (blockedReason !== undefined) set({ anchorError: blockedReason });
     } catch (error) {
       if (epoch !== identityEpoch) return;
       set({ anchorError: describeError(error), anchorGate: null });

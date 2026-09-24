@@ -38,7 +38,7 @@ graph TD
 | `crates/danmubox-bili/src/`（17 个 `.rs` 中的 16 个） | `admin.rs`、`asset.rs`、`auth.rs`、`cmd.rs`、`emote.rs`、`follow.rs`、`history.rs`、`http.rs`、`pb.rs`、`proto.rs`、`redact.rs`、`report.rs`、`send.rs`、`wallet.rs`、`wbi.rs`、`ws.rs` |
 | `apps/desktop/src-tauri/src/`（2 个 `.rs` 中的 1 个） | `lib.rs` |
 | `apps/desktop/ui/src/` | `aggregate.test.ts`、`filtering.test.ts`、`session-messages.test.ts` |
-| `apps/desktop/ui/smoke/` | `run-headless.mjs`、`room-page.mjs`、`wkwebview-host.swift`、`scenario/fixtures.mjs`、`scenario/parts/*.mjs`（20 份：`00-mock` / `10-harness` / `20…36` / `90-epilogue`）、`fixtures/*.json`（10 份） |
+| `apps/desktop/ui/smoke/` | `run-headless.mjs`、`room-page.mjs`、`wkwebview-host.swift`、`scenario/fixtures.mjs`、`scenario/parts/*.mjs`（21 份：`00-mock` / `10-harness` / `20…37` / `90-epilogue`）、`fixtures/*.json`（10 份） |
 
 无测试的文件：`crates/danmubox-core/src/{lib,ports,error}.rs`、`crates/danmubox-bili/src/lib.rs`、`crates/danmubox-cli/src/main.rs`、`apps/desktop/src-tauri/src/main.rs`。端到端验证落在 `apps/desktop/ui/smoke/`（目录结构与夹具出处见 §9.1，引擎门槛见 `AGENT.md` §9）。
 
@@ -315,6 +315,7 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `34-split-panes.mjs` | `splitter` 分割条与长按换位 |
 | `35-cheap-gift.mjs` | `cheapgift` / `switchscope` 两枚低价礼物开关 |
 | `36-status-poll.mjs` | 开播 / 下播状态自动更新（实时事件 + 列表页周期） |
+| `37-anchor-room.mjs` | 「我的直播间」：账号行按钮展开管理区（标题 / 两级联动分区 / 开播·下播）、开播被身份校验挡住弹提示框（`anchorGate*`）、开播成功后推流参数（`anchorConfig*`）、读失败与没开通直播间（`anchorNoRoom*`） |
 
 | 夹具 | 出处 | 覆盖什么 |
 |---|---|---|
@@ -367,7 +368,7 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 
 | 类型 | 命名 / 路径 | 说明 |
 |---|---|---|
-| 前端冒烟截图 | `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，文件 `danmubox-ui[-narrow]-<theme>-<场景>.png` | **主题后缀必须有**：同目录被两次运行共用时深浅两遍会互相覆盖。默认写 `$TMPDIR`；场景名：`-follow` / `-rooms` / `-short-content` / `-room` / `-admin` / `-admin-confirm` / `-account-area` / `-account` / `-account-qr` / `-toast` / `-optimistic` / `-final` |
+| 前端冒烟截图 | `SMOKE_SHOT_DIR=/tmp/<票名>-shots`，文件 `danmubox-ui[-narrow]-<theme>-<场景>.png` | **主题后缀必须有**：同目录被两次运行共用时深浅两遍会互相覆盖。默认写 `$TMPDIR`；场景名：`-follow` / `-rooms` / `-short-content` / `-room` / `-admin` / `-admin-confirm` / `-account-area` / `-account` / `-account-qr` / `-anchor` / `-anchor-gate` / `-toast` / `-optimistic` / `-final` |
 | 前端冒烟日志 | `.android-env/verify/<票名>-<engine>.log` | 已用实例：`splitter-chromium.log` / `splitter-webkit.log`、`tabstrip-webkit-light.log`、`filtergrid-chromium.log` |
 | Android 探针 | `.android-env/verify/<票名>-*.png` / `*.txt` / `*.log` | 已用实例：保活 `ka-*`、返回手势 `back-*`、脱敏对照 `redact-*.log`（出处 `operations.md` §5.3） |
 | Rust 新增用例自证 | `cargo test -- --list \| grep <新用例名>` | 证明用例真的会被跑到（而不是被 `cfg` 掉或写错名字） |
@@ -425,7 +426,7 @@ node smoke/run-headless.mjs --from-snapshot "$TMPDIR/wk-host/snapshot.json"
 | C-13 | 退出应用后重新进入同一房间 | 进程退出无残留；重进为全新会话，不显示上一会话的弹幕 |
 | C-14 | 共享分区：拖分割条、长按换位、关掉礼物栏 | 拖动两栏之间的分割条：高度**实时**跟着走，松手后比例留在 `prefs.json`（`ui.gift_pane_ratio`），重开应用仍是这个比例；拖到极限时弹幕区不短于 3 行、礼物栏不短于它的折叠头（不压到 0、不溢出）；长按任一栏 0.5s 后拖到另一栏松手：两栏上下互换且 `ui.gift_pane_on_top` 落盘（拖回本栏或按 ESC 取消）；在筛选面板关掉「独立礼物栏」：礼物栏与分割条一起消失、弹幕区占满整块（`ui.md` §5.4）。鼠标与触摸各做一遍 |
 | C-15 | 低价礼物两枚开关与互动自动消失：两个区域都生效、关掉即复原 | 在一个礼物不多的房间里先看基线：弹幕区与礼物栏各自把每条礼物画成一行。① 勾上「折叠低价礼物」：**两个区域**里低价礼物（≤ 0.1 元）各合并成一条（`×N` 与金额是整桶合计，弹幕区的合并行不画金额），0.11 元那条与 SC / 大航海两处都照旧一行；② 取消勾选：两处**逐条回来**，顺序、条数、每行金额与折叠头的统计都与基线一字不差；③ 勾上「剔除低价礼物统计」：统计（「礼物 / SC（N）」与分组明细）里不再有低价礼物，而**两个区域的行一条都不少**；取消后统计逐字回到基线；④ 互动消息满 8 秒从弹幕区消失后，取消勾选「互动消息自动消失」：**先前消失的那些行原样回来**（再勾上又不见）—— 消失只是不画，不是丢内容（`ui.md` §5.3、§4.8） |
-| C-16 | 「我的直播间」区域（账号对话框底部）：**未开通不显示**、**双击前推流信息不入 DOM** | ① 用**没开通直播间**的账号（或游客态）打开账号对话框：`db-anchor-panel` **不在 DOM 里**（不是渲染成空块、也不报错；口径 `ui.md` §2.2.2）；② 用**已开通直播间**的账号打开：出现标题输入框（`db-anchor-title`）、状态文本（`db-anchor-status`）与开播 / 下播按钮（`db-anchor-live`），标题初值 = 该直播间当前标题，状态文案是 `直播中` / `轮播` / `未开播` 三选一；③ **不双击**状态文本时，`db-anchor-config`、推流地址与推流码**一个字都不在 DOM 里**（用元素检查或 `document.querySelector('[data-testid="db-anchor-config"]')` 确认，不是「看不见」）；④ 双击状态文本才展开 `db-anchor-config`，其中**当前分区**要与 web 端开播页看到的分区一致（**界面不提供分区选择**）；再双击收起，收起后推流信息又从 DOM 消失。**开播 / 下播是写操作**：只允许在**当次指定的、你自己当前账号的直播间**上点（`AGENT.md` §8 第 14–16 条 —— 失败即停、不重试）；开播成功后配置项里出现推流地址 / 推流码，下播后这两行连同推流码一起从 DOM 消失。上游非 0 code **原样显示在错误行**、不赋语义；**人脸认证那两个码（`60043` / `60024`）是唯一例外**：错误行下面出现引导块 `db-anchor-gate`（`FaceAuth` 给一枚「去完成人脸认证」入口、`QrConfirm` 就地画二维码），并提示「完成认证后再点一次开播」——**不弹窗、不轮询、不自动重试**（`ui.md` §2.2.2、`protocol.md` §18.5） |
+| C-16 | 「我的直播间」（账号对话框里**按账号展开**）：**未开通不显示**、**未展开不发请求**、**下播后推流信息不入 DOM**（2026-09-24 按 `ui.md` §2.2.2 改口径） | ① 账号对话框里**每个账号行的删除按钮右侧**有一枚「我的直播间」按钮（`db-anchor-toggle`）；**不点它时不渲染 `db-anchor-panel`、也不发 `anchor_room`**；② 用**没开通直播间**的账号（或**非当前 / 未登录**的那一行）点它：展开区里只有错误行（或不渲染），同样**不发请求**——后端读的永远是**当前账号**自己的直播间；③ 用**已开通**的**当前**账号点它：出现标题输入框（`db-anchor-title`，初值 = 该直播间当前标题，与远端一字不差时「保存」禁用）、**两级联动分区选择**（`db-anchor-area-select`，父→子；选父落到它第一个子分区）、状态文本（`db-anchor-status`：`直播中` / `轮播` / `未开播`）与开播 / 下播按钮（`db-anchor-live`，文案随状态切）；④ **开播成功后**下方**直接渲染** `db-anchor-config`：分区、推流地址（`db-anchor-rtmp-addr`）、推流码（`db-anchor-rtmp-code`），**长按该值即复制（不显示复制键）**；**下播 / 收起 / 关对话框**后这两行连同推流码一起**从 DOM 消失**（不是「看不见」）；⑤ 开播被**身份校验**挡住（`60043` / `60024`）时**弹出提示框** `db-anchor-gate-modal`（`FaceAuth` 给一枚「去完成人脸认证」入口走 `open_url`、`QrConfirm` 就地画离线二维码 `db-anchor-gate-qr`），提示「完成认证后再点一次开播」，且**上游原话（code + msg）照旧留在错误行**——引导不代替原话；**不轮询、不自动重试**（等几秒 `anchor_live_set` 不会自己再发一次）；Esc 只关提示框、**不**连带关账号对话框；⑥ 读失败（凭据失效 / 风控）时只渲染错误行、**不静默**（`db-anchor-error` 是后端原话）。**开播 / 下播是写操作**：只允许在**你自己当前账号的直播间**上点（`AGENT.md` §8 第 14–16 条 —— 失败即停、不重试）。无头冒烟同款断言见 `smoke/scenario/parts/37-anchor-room.mjs` 的 `anchorBlockRan` / `anchor*` |
 | C-17 | 刷屏弹幕聚合开关（筛选面板「辅助功能」块的「刷屏弹幕聚合」，`ui.danmaku_aggregate`，默认勾上）：先取消勾选、再勾回来 | 勾上时：同文本的几条在窗口内折成**一行** —— 身份位印「刷屏 ×N」、头像列画出最多 3 张堆叠头像（每张沿 X 错开、左压右），行内**不**画 `×N`，不同文本仍是两行；取消勾选：同一批弹幕**逐条**显示（无「刷屏 ×N」、无堆叠层）；再勾回来：当场又折成一行。折叠只是显示层的派生，会话缓冲里仍是逐条（`ui.md` §8.4 第二条；无头冒烟同款断言见 `smoke/scenario/parts/25-aggregate-jump.mjs` 的 `aggregateBlockRan` / `aggregate*`） |
 
 ### 10.2 macOS 专属

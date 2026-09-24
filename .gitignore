@@ -27,6 +27,7 @@ apps/desktop/src-tauri/gen/schemas/
 .DS_Store
 .idea/
 .vscode/
+.codebuddy/
 
 # 归档：不进 git（见 docs/contract.md §11）
 docs/.archive/

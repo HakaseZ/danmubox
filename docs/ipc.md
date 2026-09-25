@@ -50,7 +50,7 @@
 | `account_qr_start` | `target: Option<String>` | `QrStart` | `BAD_REQUEST` `INTERNAL` | 不带 `target` = **新增账号**（确认后按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并写明覆盖哪个账号）。后端校验 `target` 并把它与 `key` 一起记住，确认时据此决定覆盖对象（`crates/danmubox-bili/src/auth.rs:298-331`）；`target` 不出现在 `QrStart` 返回里，界面另行补记用于展示。二维码由后端离线渲染成 SVG（`lib.rs:816-819`） |
 | `account_qr_poll` | `key: String` | `QrPoll` | `NOT_FOUND` `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`（`QrState`）；确认那一次凭据已落盘、账号已存在，`account` 非空；未确认时 `account` 为 `null`。确认（或当前账号已变）时各房间以新凭据重连（`lib.rs:832-840`） |
 | `anchor_room` | `account?: String` | `OwnRoom \| null` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | **某账号自己的直播间**（`contract.md` §5 `OwnRoom`）：`account` 缺省 = 当前账号，**指定即管理那个账号**（issue202609241553 第 3 条）。标题、开播状态、当前分区。**没有开通直播间 → `null`**（不是错误）——界面据此**不渲染那行的「我的直播间」按钮**（第 2 条）。判据**只有一条**：`code == 0` 且 `data.room_id` 缺失 / ≤ 0 → `null`；**非 0 `code` 一律是上游错误**（原样带回、不赋语义），不拿它推「没开通」。游客 → `NOT_LOGGED_IN`（`crates/danmubox-bili/src/anchor.rs:132`） |
-| `anchor_title_set` | `account?: String`、`title: String` | `void` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 改**某账号自己直播间**的标题（上游 `room/v1/Room/update`，`platform=pc_link`）。空标题不发请求、直接 `BAD_REQUEST`。写操作纪律：**只作用在 `account` 指定账号自己的直播间**，**失败即停不重试**（`AGENT.md` §8.14–16） |
+| `anchor_title_set` | `account?: String`、`title: String` | `OwnRoom` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 改**某账号自己直播间**的标题（上游 `room/v1/Room/update`，`platform=pc_link`）。空标题不发请求、直接 `BAD_REQUEST`。**成功返回 §5 `OwnRoom`**：`title` 以**本次请求值**（trim 后）为准 —— `get_info` 有服务端缓存、紧接着的重读可能仍是旧标题；其余字段取重读（`contract.md` §7）。写操作纪律：**只作用在 `account` 指定账号自己的直播间**，**失败即停不重试**（`AGENT.md` §8.14–16） |
 | `anchor_area_list` | `account?: String` | `AnchorArea[]` | `UPSTREAM_ERROR` `INTERNAL` | 开播分区树（§5 `AnchorArea`，两级：父 → 子），用于界面分区选择；`account` 只决定走哪份凭据，分区本身为公开数据，**不登录也可**。其余上游非 0 code 原样带回、不赋语义 |
 | `anchor_area_set` | `account?: String`、`area_v2: i64` | `OwnRoom` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 改**某账号自己直播间**的分区（issue202609241553 第 4 条）：**独立写入口**，不必等到开播。`area_v2` 是**子分区 id**（`<= 0` 直接 `BAD_REQUEST`，与 `anchor_live_set` 同口径）；成功返回 §5 `OwnRoom`（界面就地换分区名，不猜上游怎么改的）。写操作纪律：**只作用在 `account` 指定账号自己的直播间**，**失败即停不重试** |
 | `anchor_live_set` | `account?: String`、`live: bool`、`area_v2: Option<i64>`（可选，缺省沿用当前分区） | `StreamEndpoints \| AnchorGateView \| null` | `NOT_LOGGED_IN` `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `live=true` 开播（三段式，见 `protocol.md` §18）：成功返回上游下发的推流端点（含**推流码**）；**被上游身份校验挡住**返回 `AnchorGateView`（= `AnchorGate` 的引导 + 原始 `code` / `msg`，**命令层另附**离线编码的 `qr_svg`，见 `protocol.md` §18.5 / `contract.md` §5）；`live=false` 下播，返回 `null`。`area_v2` 缺省 = 直播间当前 `area_id`（上次开播分区），`Some(v)` = 界面所选子分区；上游没给分区（`area_id<=0` 且无 `area_v2`）就不发开播请求（`UPSTREAM_ERROR`）。其余上游非 0 code **原样带回、不赋语义**；`AnchorGate` 这一种**不自动重试**，认证完成后由用户再点一次开播 |
@@ -291,6 +291,7 @@ type AppStore = {
   emotes: Emote[];
   ownedEmotes: Emote[];            // 主站「我的表情」
   ownedLoaded: boolean;
+  ownedLoadedAt?: number;          // 上一次**成功**拉取时刻（Date.now()）；面板打开按它判是否重拉（`ui.md` §6.3）
   ownedError?: string;
   followed: FollowedRoom[];
   balance?: number;                // 电池余额（整数；`wallet_balance` 的返回）；换人即作废（§8）
@@ -337,12 +338,14 @@ type SendState = "unconfirmed" | "rejected";   // Message.send_state（另有 Me
 | `send(roomId, content, emote?, reply?)` | `chat_send` | 乐观渲染 + 回执校验，见 §7；结果只登记在当前房间（§8） |
 | `report(message, reason)` | `chat_report` | 与命令同参：整条 `Message` + `ReportReason` |
 | `loadReportReasons()` | `report_reasons` | 首次拉取后缓存；失败不覆盖已有清单 |
-| `loadEmotes(roomId)` / `loadOwnedEmotes(retryFailedOnly?)` | `emotes_list` / `emotes_owned` | 由 `RoomView` 的 effect 在登录态就绪时触发；主站表情成功一次后不再重复拉。房间表情落地前复核 `activeRoomId`（§8） |
+| `loadEmotes(roomId)` / `loadOwnedEmotes(ifStale?)` | `emotes_list` / `emotes_owned` | 由 `RoomView` 的 effect 在登录态就绪时触发；主站表情成功一次后不再重复拉，`ifStale`（面板打开时）只在距上次成功超过 10 分钟或上次失败时才重拉（`ui.md` §6.3）。房间表情落地前复核 `activeRoomId`（§8） |
 | `loadFollowed()` | `follow_list` | 会话就绪后与登录/换号后各自动调用一次；返回后按 `ui.md` §2.2 的排序链渲染。**返回是否成功**（`boolean`）供列表页轮询判退避；失败仍进全局错误条，不静默 |
 | `startListStatusPolling()` | `rooms_refresh_status`（+ 登录时的 `follow_list`） | 列表页的开播状态轮询（`contract.md` §4）：返回**停止函数**，进房间页或卸载即停。进入列表页立即一拍，之后每 30 秒一拍（`store.ts:528-531`）；`document.visibilityState` 不是 `visible` 就整拍跳过（不发请求）；下一拍只在上一拍落地后才排（**不重叠**）；失败按 30 → 60 → 120 → 240 秒封顶退避、成功复位。落 `rooms` 走与 `rooms_list` 同一个**快照序号护栏**（§8） |
+| `startAnchorPolling(account)` | `anchor_room` | 「我的直播间」展开区的静默轮询（`ui.md` §2.2.2）：返回停止函数，面板收起 / 关对话框 / 换号即停。展开时已同步拉过一次，首拍按周期排；之后每 30 秒一拍、`document.visibilityState` 不是 `visible` 就整拍跳过、失败按 30 → 60 → 120 → 240 秒封顶退避；落地前复核身份世代，并与标题 / 分区写共用发起序号护栏（§8.1） |
+| `startAdminPolling(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 房管面板展开期的静默轮询（`ui.md` §4.9）：返回停止函数，收起即停；每 60 秒一拍、不可见整拍跳过、失败退避、落地复核 `activeRoomId`（§8） |
 | `loadBalance()` | `wallet_balance` | 状态栏展示；进入房间时刷新；换人即作废（§8） |
 | `loadRoomIdentity(roomId)` | `room_session` | 进房取一次快照；之后靠 `danmubox://session` 更新。落地前复核身份世代（§8） |
-| `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块；落地前复核 `activeRoomId` 仍是它（§8） |
+| `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块；落地前复核 `activeRoomId` 仍是它（§8）。**返回三块是否全成**（`boolean`，供静默轮询判退避） |
 | `runAdmin(roomId, action)` | `admin_mute` / `admin_unmute` / `admin_blacklist_add` / `admin_blacklist_del` / `admin_keywords_add` / `admin_keywords_del` | 一次一个写操作；成功后就地重读三块，`adminBusy` 期间禁用按钮 |
 | `updatePrefs(patch)` | `prefs_set` | 用返回的全量生效值覆盖 `prefs` |
 | `openProfile(uid)` | `open_url` | 点昵称跳用户主页 |
@@ -429,9 +432,11 @@ sequenceDiagram
 | 换人链路（`switchAccount` / `removeAccount` / `logoutAccount` / `pollAccountQr`）与 `refreshIdentity` / `applySession` | **身份世代**（`store.ts:466-472`）：换人时递增；取号在**命令之前**（按点击顺序，不按回包顺序） | 并发切号以后到的响应为准，账号列表的「当前」不是最后点击的那个 |
 | `loadRoomIdentity` 的 `room_session` 结果 | 身份世代 | 晚到的旧凭据身份写进 `roomIdentities`，房管入口按上一个账号放行 |
 | `loadEmotes` / `loadAdmin` 的结果 | `activeRoomId === roomId` | `emotes` 与房管三块是全局单份，写进去就是拿 A 的身份与名单渲染 B |
+| 「我的直播间」读（`loadAnchorRoom`）/ 写（`anchor_title_set` / `anchor_area_set`）的落地 | 身份世代 + **发起序号 `anchorRoomSeq`，读 / 写分开判落地**（`anchorReadAppliedSeq` / `anchorWriteAppliedSeq`，PR #30 评审修正）：写响应是权威、**永远落地**，只在**更晚发起的写已落地之后**才让位（`anchorWriteAppliedSeq` 落地时才推进 —— 更晚的写仅在途或失败，不影响早写响应落地），且一落地就让所有更早发起（含在途）的读作废；读响应让位给更晚的读与已落地的写（被越过不算失败、不进退避） | 若读写共用一个落地号，「写之后发起、却先落地」的一拍轮询读会按号把写响应整份吞掉 —— 写明明成功、标题草稿却没清、写穿窗口也没开。另：改分区写落地时**标题字段同样过写穿窗口**（改分区后的重读也会撞 `get_info` 缓存，不得盖掉刚保存的标题；窗口只由标题写开启）。标题写穿护栏本身见 `ui.md` §2.2.2 |
+| 「我的直播间」/ 房管面板展开期轮询的启停 | **世代号**（`anchorPollGen` / `adminPollGen`，PR #30 评审修正）：`stop` / 重新 `start` 自增；在途旧拍落地后按号自查，已被新一轮取代就什么都不动（含 effect 清理返回的停止函数） | 没有，「收起 A、马上展开 B」时 A 的在途拍会调到全局 `stop`，把 B 刚排上的定时器清掉，B 的轮询静默死掉 |
 | `send` 的返回值与 `danmubox://send` 事件 | `ChatSendResult.room_id === activeRoomId` | B 的输入区弹 A 那条的失败浮片；`lastSend` 因此只在发出它的房间还在前台时才登记，切房即清 |
 
-世代号与快照序号都是 `store.ts` 的**模块级计数器**（`identityEpoch` / `roomsSeq`）：不进 store 形状、不影响渲染，只在落地那一刻做一次比较。身份快照（`roomIdentities`）的生命周期因此是「一次房内会话」：**切房保留**（房间没断，切回来还是同一次会话），关标签 / 移除房间 / 断开连接 / 换人各自删它，换人另由世代号挡住旧凭据的回包。
+世代号与快照序号都是 `store.ts` 的**模块级计数器**（`identityEpoch` / `roomsSeq` / `anchorRoomSeq` / 轮询世代号 `anchorPollGen` / `adminPollGen`）：不进 store 形状、不影响渲染，只在落地那一刻做一次比较。身份快照（`roomIdentities`）的生命周期因此是「一次房内会话」：**切房保留**（房间没断，切回来还是同一次会话），关标签 / 移除房间 / 断开连接 / 换人各自删它，换人另由世代号挡住旧凭据的回包。
 
 内存边界：
 

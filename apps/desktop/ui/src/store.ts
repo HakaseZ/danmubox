@@ -86,6 +86,12 @@ interface AppStore {
   ownedEmotes: Emote[];
   /** 「我的表情」是否已尝试拉取过（成功后不再打扰上游）。 */
   ownedLoaded: boolean;
+  /**
+   * 「我的表情」**上一次成功拉取**的时刻（`Date.now()`）；失败不更新。
+   * 面板打开时按它判「距上次成功是否已超过 {@link OWNED_EMOTES_STALE_MS}」——过期才重拉，
+   * 避免每开一次面板都打一次上游（issue202609242158 第 8 条 A4）。
+   */
+  ownedLoadedAt?: number;
   /** 「我的表情」上一次拉取失败的原因；成功后清空（面板里给可重试提示）。 */
   ownedError?: string;
   followed: FollowedRoom[];
@@ -201,10 +207,11 @@ interface AppStore {
   openProfile: (uid: number) => Promise<void>;
   loadEmotes: (roomId: number) => Promise<void>;
   /**
-   * 拉主站「我的表情」。`retryFailedOnly` 为 true 时只在**上次失败**后才重试
-   * （表情面板打开时用），避免每次开面板都打一次上游。
+   * 拉主站「我的表情」。`ifStale` 为 true（表情面板打开时用）时**只在数据过期或上次失败**
+   * 后才重拉 —— 过期阈值见 {@link OWNED_EMOTES_STALE_MS}，避免每开一次面板都打一次上游
+   * （issue202609242158 第 8 条 A4）。缺省 false = 只在从未成功加载过时加载一次。
    */
-  loadOwnedEmotes: (retryFailedOnly?: boolean) => Promise<void>;
+  loadOwnedEmotes: (ifStale?: boolean) => Promise<void>;
   /** 重拉关注列表；返回这一份有没有拿到（列表页轮询按它判退避，契约 §4）。 */
   loadFollowed: () => Promise<boolean>;
   loadBalance: () => Promise<void>;
@@ -217,10 +224,19 @@ interface AppStore {
   startListStatusPolling: () => () => void;
   /** 读该房间的本人身份（进房时一次；之后靠事件更新）。 */
   loadRoomIdentity: (roomId: number) => Promise<void>;
-  /** 读房管三块列表：只读，无权限也放行，错误原样展示。 */
-  loadAdmin: (roomId: number) => Promise<void>;
+  /**
+   * 读房管三块列表：只读，无权限也放行，错误原样展示。返回**这一批有没有拿到**
+   * （三块全成 = true；各自失败各自留痕）—— 面板展开期的静默轮询按它判退避（第 8 条 A2）。
+   */
+  loadAdmin: (roomId: number) => Promise<boolean>;
   /** 执行一次房管写操作；调用方负责二次确认。成功返回 true。 */
   runAdmin: (roomId: number, action: AdminAction) => Promise<boolean>;
+  /**
+   * 房管面板的**静默轮询**（issue202609242158 第 8 条 A2）：面板展开期间按周期重拉三块列表，
+   * 收起即停。返回停止函数；与列表页轮询同款链条式调度（不重叠、不可见整拍跳过、失败退避），
+   * 落地前复核 `activeRoomId` 仍是它。
+   */
+  startAdminPolling: (roomId: number) => () => void;
   /**
    * 展开 / 收起某个账号行的「我的直播间」管理区（再点一次收起）。**不必切到该账号**
    * （issue202609241553 第 3 条）：展开即按 `name` 拉那个账号的房间与分区。
@@ -232,8 +248,18 @@ interface AppStore {
    * 落到 `anchorRooms` / `anchorRoomErrors`，供按钮显隐判断（第 2 条）。已在的条目会被刷新。
    */
   loadAnchorRooms: () => Promise<void>;
-  /** 拉（或重拉）某个账号的直播间；不传 `name` = 当前展开的那个。同时回填 `anchorRoom`。 */
-  loadAnchorRoom: (name?: string) => Promise<void>;
+  /**
+   * 拉（或重拉）某个账号的直播间；不传 `name` = 当前展开的那个。同时回填 `anchorRoom`。
+   * `silent`（展开期静默轮询用）= 不打断正在编辑的标题草稿，且窗口内不让重读盖回刚保存的
+   * 标题；返回**这一份有没有落地**（被更新的响应越过、或换号作废时为 false）供轮询判退避。
+   */
+  loadAnchorRoom: (name?: string, opts?: { silent?: boolean }) => Promise<boolean>;
+  /**
+   * 「我的直播间」展开区的**静默轮询**（issue202609242158 第 7 条）：面板展开期间按周期
+   * 重拉 `anchor_room(account)`，收起 / 关对话框即停。返回停止函数（与列表页轮询同一套
+   * 链条式调度：不重叠、不可见整拍跳过、失败退避；落地前复核身份世代）。
+   */
+  startAnchorPolling: (account: string) => () => void;
   /** 拉开播分区树。取不到只降级为只读分区名，不当作这一块的致命错误。 */
   loadAnchorAreas: () => Promise<void>;
   /** 标题草稿；传空串等于「清空」。 */
@@ -700,6 +726,206 @@ async function refreshRoomStatuses(store: StoreApi<AppStore>): Promise<boolean> 
 }
 
 /**
+ * 「我的表情」的**新鲜度阈值**（issue202609242158 第 8 条 A4）：表情面板打开时，距上次
+ * **成功**拉取超过它才重拉一次。10 分钟是个折中 —— 表情变动很慢，而每开一次面板都打接口太吵。
+ */
+const OWNED_EMOTES_STALE_MS = 10 * 60_000;
+
+/**
+ * 「我的直播间」展开区的**静默刷新周期**（issue202609242158 第 7 条）。
+ *
+ * 与列表页那一拍同一节奏（30 秒）、同一套纪律：链条式调度（下一拍只在上一拍落地后才排）、
+ * 不可见整拍跳过、失败退避（30 → 60 → 120 → 240 秒封顶）、成功复位。面板收起 / 关对话框即停。
+ */
+const ANCHOR_REFRESH_MS = 30_000;
+
+/** 退避封顶（再久就等于这块不再刷新了）。 */
+const ANCHOR_REFRESH_MAX_MS = ANCHOR_REFRESH_MS * 8;
+
+/** 在跑的那一拍（`undefined` = 没在跑）。 */
+let anchorPollTimer: number | undefined;
+/** 连续失败次数：只用来算退避，成功即复位。 */
+let anchorPollFailures = 0;
+/**
+ * 轮询**世代号**（PR #30 评审修正）：`stop` / 重新 `start` 都会自增它。在途的旧一拍
+ * 落地后按号自查 —— 已被新一轮取代就**什么都不动**。没有它，「收起 A、马上展开 B」时
+ * A 的在途拍会调到全局 `stop`，把 B 刚排上的定时器清掉，B 的轮询就此静默死掉
+ * （要再收起重开一次才活）。
+ */
+let anchorPollGen = 0;
+
+/** 停掉「我的直播间」展开区轮询（收起 / 关对话框 / 换号 / 重新 start 时都走它）。幂等。 */
+function stopAnchorPolling() {
+  anchorPollGen += 1;
+  if (anchorPollTimer !== undefined) window.clearTimeout(anchorPollTimer);
+  anchorPollTimer = undefined;
+  anchorPollFailures = 0;
+}
+
+/** 排下一拍。链条式：下一拍只在上一拍落地后才有，结构上不重叠（理由同列表页）。 */
+function scheduleAnchorPoll(
+  store: StoreApi<AppStore>,
+  account: string,
+  delayMs: number,
+  gen: number,
+) {
+  anchorPollTimer = window.setTimeout(() => {
+    anchorPollTimer = undefined;
+    void runAnchorPoll(store, account, gen);
+  }, delayMs);
+}
+
+/**
+ * 一拍：面板已收起 / 换到别的账号就停下，应用不可见就整拍跳过，可见则重拉一次
+ * `anchor_room(account)`，最后按成败排下一拍。**只重拉直播间** —— `anchorAreas` 是静态
+ * 公开数据，展开时拉一次即可，不进轮询。
+ */
+async function runAnchorPoll(store: StoreApi<AppStore>, account: string, gen: number) {
+  // 已被新一轮（重新 start / 停表后重启）取代：这一拍作废，别碰新一轮的定时器。
+  if (gen !== anchorPollGen) return;
+  if (store.getState().anchorPanelFor !== account) {
+    stopAnchorPolling();
+    return;
+  }
+  if (document.visibilityState !== "visible") {
+    scheduleAnchorPoll(store, account, ANCHOR_REFRESH_MS, gen);
+    return;
+  }
+  const ok = await store.getState().loadAnchorRoom(account, { silent: true });
+  // `await` 期间可能已被新一轮取代（换行展开 / 收起重开）：同样别碰新定时器。
+  if (gen !== anchorPollGen) return;
+  if (store.getState().anchorPanelFor !== account) {
+    stopAnchorPolling();
+    return;
+  }
+  anchorPollFailures = ok ? 0 : anchorPollFailures + 1;
+  const delay = Math.min(ANCHOR_REFRESH_MS * 2 ** anchorPollFailures, ANCHOR_REFRESH_MAX_MS);
+  scheduleAnchorPoll(store, account, delay, gen);
+}
+
+/**
+ * 房管三块列表的**静默刷新周期**（issue202609242158 第 8 条 A2）。名单变化比开播状态慢，
+ * 周期放宽到 60 秒；纪律与上面两块完全一致。
+ */
+const ADMIN_REFRESH_MS = 60_000;
+const ADMIN_REFRESH_MAX_MS = ADMIN_REFRESH_MS * 8;
+
+let adminPollTimer: number | undefined;
+let adminPollFailures = 0;
+/** 轮询世代号：口径与「我的直播间」那套完全一致（PR #30 评审修正，防换房时旧拍误停新表）。 */
+let adminPollGen = 0;
+
+/** 停掉房管面板轮询（收起面板 / 换房 / 卸载 / 重新 start 时都走它）。幂等。 */
+function stopAdminPolling() {
+  adminPollGen += 1;
+  if (adminPollTimer !== undefined) window.clearTimeout(adminPollTimer);
+  adminPollTimer = undefined;
+  adminPollFailures = 0;
+}
+
+function scheduleAdminPoll(
+  store: StoreApi<AppStore>,
+  roomId: number,
+  delayMs: number,
+  gen: number,
+) {
+  adminPollTimer = window.setTimeout(() => {
+    adminPollTimer = undefined;
+    void runAdminPoll(store, roomId, gen);
+  }, delayMs);
+}
+
+/**
+ * 一拍：房间已切走就停；不可见整拍跳过；否则重拉三块。落地复核在 `loadAdmin` 里
+ * （`activeRoomId !== roomId` 时那一批不落地，返回值算「这一拍没成」、进退避）。
+ */
+async function runAdminPoll(store: StoreApi<AppStore>, roomId: number, gen: number) {
+  // 已被新一轮取代：这一拍作废，别碰新一轮的定时器（同「我的直播间」那套世代号）。
+  if (gen !== adminPollGen) return;
+  if (store.getState().activeRoomId !== roomId) {
+    stopAdminPolling();
+    return;
+  }
+  if (document.visibilityState !== "visible") {
+    scheduleAdminPoll(store, roomId, ADMIN_REFRESH_MS, gen);
+    return;
+  }
+  const ok = await store.getState().loadAdmin(roomId);
+  if (gen !== adminPollGen) return;
+  if (store.getState().activeRoomId !== roomId) {
+    stopAdminPolling();
+    return;
+  }
+  adminPollFailures = ok ? 0 : adminPollFailures + 1;
+  const delay = Math.min(ADMIN_REFRESH_MS * 2 ** adminPollFailures, ADMIN_REFRESH_MAX_MS);
+  scheduleAdminPoll(store, roomId, delay, gen);
+}
+
+/**
+ * 「我的直播间」读写的**发起序号**（护栏口径同 `roomsSeq`）：`anchor_room`（展开首拉与
+ * 展开期静默轮询）与 `anchor_title_set` / `anchor_area_set` 都会写 `anchorRoom`，并发时
+ * 晚到的旧响应不许把先落地的新值盖回去（issue202609242158 第 3.1 条）。号是**发起顺序**，
+ * 失败或被越过的那一份不占落地号。
+ *
+ * **读与写分开判**（PR #30 评审修正）：写响应是权威（上游 `code==0` 即已落库），
+ * **永远落地**、只让位给**更晚发起的写**；读响应既让位给更晚的读、也让位给**已落地的写**。
+ * 若共用一个落地号，一拍在写之后发起、却先返回的轮询读会以号大把写响应整份吞掉 ——
+ * 写明明成功、草稿却没清、写穿窗口也没开，第 3.1 条就换了个形式复发。
+ */
+let anchorRoomSeq = 0;
+/** 读已落地的最大发起号：只管读与读之间的乱序。 */
+let anchorReadAppliedSeq = 0;
+/** 写已落地的最大发起号：写一落地，所有更早发起（含在途）的读全部作废。 */
+let anchorWriteAppliedSeq = 0;
+
+/**
+ * 标题「写穿窗口」：`anchor_title_set` 成功后，后端返回的已是以请求值为准的合并结果，
+ * 但紧接着的一次 `anchor_room` 重读（展开首拉 / 静默轮询）仍可能读到上游尚未刷新的旧标题
+ * —— 在这段时间里以刚保存的本地标题为准，避免输入框「保存后又跳回原标题」（第 3.1 条）。
+ * **只保标题一个字段**，其余字段照常以远端为准；窗口很短，上游刷新后自然收敛。
+ */
+const ANCHOR_TITLE_SETTLE_MS = 15_000;
+let anchorTitleSaved: { account: string; title: string; at: number } | undefined;
+
+/**
+ * 把远端读到的房间与「窗口内刚保存过的本地标题」合并（窗口外 / 非同一账号 / 该账号没开通
+ * 直播间则原样返回）。`room` 可为 `null`（没开通）：那种情况下没有标题要保。
+ */
+function mergeSavedTitle(account: string, room: OwnRoom | null): OwnRoom | null {
+  if (
+    room !== null &&
+    anchorTitleSaved !== undefined &&
+    anchorTitleSaved.account === account &&
+    room.title !== anchorTitleSaved.title &&
+    Date.now() - anchorTitleSaved.at < ANCHOR_TITLE_SETTLE_MS
+  ) {
+    return { ...room, title: anchorTitleSaved.title };
+  }
+  return room;
+}
+
+/**
+ * 开播 / 下播成功后的**乐观落地**：只改 `live_status`（开播 → 1、下播 → 0），不重读、
+ * 不等上游的 `anchor_room` 追上来；随后由展开期的静默轮询校正（第 3.2 条）。
+ */
+function applyAnchorLive(
+  state: AppStore,
+  account: string,
+  liveStatus: number,
+): { anchorRooms: AppStore["anchorRooms"]; anchorRoom: AppStore["anchorRoom"] } {
+  const mapped = state.anchorRooms[account];
+  return {
+    anchorRooms: mapped
+      ? { ...state.anchorRooms, [account]: { ...mapped, live_status: liveStatus } }
+      : state.anchorRooms,
+    anchorRoom:
+      state.anchorPanelFor === account && state.anchorRoom
+        ? { ...state.anchorRoom, live_status: liveStatus }
+        : state.anchorRoom,
+  };
+}
+
+/**
  * 丢掉上一个身份留下的界面状态（用户 2026-09-13：「切换用户也要做隔离」）。
  *
  * 为什么连房间列表、表情库、房管三块也一起丢：它们全按凭据算出来——房间的连接态属于旧凭据，
@@ -710,6 +936,10 @@ async function refreshRoomStatuses(store: StoreApi<AppStore>): Promise<boolean> 
 function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
   // 定时器先停：残留的超时回调会对着另一个身份/房间的同号消息继续动。
   clearRoomTimers();
+  // 「我的直播间」与房管面板的轮询一并停：换号后旧回包不得再落地；标题写穿窗口清空。
+  stopAnchorPolling();
+  stopAdminPolling();
+  anchorTitleSaved = undefined;
   set({
     rooms: [],
     activeRoomId: undefined,
@@ -723,6 +953,7 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
     emotes: [],
     ownedEmotes: [],
     ownedLoaded: false,
+    ownedLoadedAt: undefined,
     ownedError: undefined,
     // 余额是**账号级**数字（`wallet_balance`）：留着它，新账号进房时状态栏会先把上一个
     // 账号的电池数摆出来，直到重拉落地（审计 P72）。
@@ -971,6 +1202,15 @@ export const useApp = create<AppStore>((set, get, store) => ({
               room.title !== undefined &&
               state.anchorRoom.room_id === room.room_id
             ) {
+              // 外部改标题（`ROOM_CHANGE`）与刚保存的本地标题对不上 = 真的是别人改的：
+              // 清掉写穿窗口，让随后的重读以上游为准（issue202609242158 第 3.1 条）。
+              if (
+                anchorTitleSaved !== undefined &&
+                state.anchorPanelFor === anchorTitleSaved.account &&
+                room.title !== anchorTitleSaved.title
+              ) {
+                anchorTitleSaved = undefined;
+              }
               anchorRoom = { ...state.anchorRoom, title: room.title };
               if (state.anchorPanelFor) {
                 anchorRooms = {
@@ -1413,18 +1653,29 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
-  async loadOwnedEmotes(retryFailedOnly = false) {
-    // 主站「我的表情」与房间无关（`room_id=0`），一次成功之后不再打扰上游；
-    // 面板打开时传 true，只在**上次失败**后重试一次。失败只记在 `ownedError`，
+  async loadOwnedEmotes(ifStale = false) {
+    // 主站「我的表情」与房间无关（`room_id=0`）：进房那次只在从未成功加载过时拉。
+    // 面板打开时传 true —— 只在**上次失败**或**距上次成功已超过阈值**时重拉，别每开一次
+    // 面板都打一次上游（issue202609242158 第 8 条 A4）。失败只记在 `ownedError`，
     // 由面板显示并提供重试，绝不阻塞输入框（docs/ui.md §6.3）。
-    if (get().ownedLoaded && !(retryFailedOnly && get().ownedError !== undefined)) return;
+    if (get().ownedLoaded) {
+      if (!ifStale) return;
+      const loadedAt = get().ownedLoadedAt;
+      const fresh =
+        get().ownedError === undefined &&
+        loadedAt !== undefined &&
+        Date.now() - loadedAt < OWNED_EMOTES_STALE_MS;
+      if (fresh) return;
+    }
     try {
       set({
         ownedEmotes: await api.emotesOwned(),
         ownedLoaded: true,
+        ownedLoadedAt: Date.now(),
         ownedError: undefined,
       });
     } catch (error) {
+      // 失败也记 `ownedLoaded`（= 尝试过），但**不更新成功时刻** → 下次开面板仍会重试。
       set({ ownedLoaded: true, ownedError: describeError(error) });
     }
   },
@@ -1495,14 +1746,16 @@ export const useApp = create<AppStore>((set, get, store) => ({
       }),
     ]);
     // 落地复核（审计 P69）：三块是「当前房间」的会话级单例，await 期间切了房间就丢弃这一批
-    // —— A 打开面板后立刻切 B，B 的面板不该显示 A 的名单。
-    if (get().activeRoomId !== roomId) return;
+    // —— A 打开面板后立刻切 B，B 的面板不该显示 A 的名单。丢弃不算失败，交回 true。
+    if (get().activeRoomId !== roomId) return true;
+    const ok = Object.keys(errors).length === 0;
     set((state) => ({
       adminSilent: silent ?? state.adminSilent,
       adminBlacklist: blacklist ?? state.adminBlacklist,
       adminKeywords: keywords ?? state.adminKeywords,
       adminErrors: errors,
     }));
+    return ok;
   },
 
   async runAdmin(roomId, action) {
@@ -1534,8 +1787,22 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
+  startAdminPolling(roomId) {
+    // 幂等：重复 start 先停上一轮（面板重开 / 换房 / React 严格模式 effect 跑两遍都走这里）。
+    stopAdminPolling();
+    const gen = adminPollGen;
+    // 打开面板时 `toggleAdminPanel` 已同步拉过一次，首拍因此按周期排，不再重复一次首拉。
+    scheduleAdminPoll(store, roomId, ADMIN_REFRESH_MS, gen);
+    // 停止函数带世代自查（口径同 `startAnchorPolling`）。
+    return () => {
+      if (adminPollGen === gen) stopAdminPolling();
+    };
+  },
+
   async toggleAnchorPanel(name) {
     if (get().anchorPanelFor === name) {
+      // 收起即停轮询（App 侧的 effect 清理也会停一次；这里再停一道，保证幂等）。
+      stopAnchorPolling();
       set({ anchorPanelFor: null, anchorGate: null });
       return;
     }
@@ -1561,6 +1828,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   closeAnchorPanel() {
+    // 收起即停：展开期的静默轮询到此为止（关对话框也走这里）。
+    stopAnchorPolling();
     // 收起即清：推流码（**账号级凭据**）不留在界面内存里，展开态与引导态也一并复位
     // （`docs/ui.md` §2.2.2：关掉对话框 / 收起 → 推流参数与提示框都不在）。
     // 分区列表留着：它是公开数据，下次展开不必再问一次上游。
@@ -1601,24 +1870,38 @@ export const useApp = create<AppStore>((set, get, store) => ({
     });
   },
 
-  async loadAnchorRoom(name) {
+  async loadAnchorRoom(name, opts) {
     const account = name ?? get().anchorPanelFor;
-    if (!account) return;
+    if (!account) return false;
     const epoch = identityEpoch;
+    const silent = opts?.silent === true;
+    anchorRoomSeq += 1;
+    const seq = anchorRoomSeq;
     try {
       const room = await api.anchorRoom(account);
-      if (epoch !== identityEpoch) return;
-      // 远端为准：重读后草稿回到跟随远端，界面不拿旧草稿盖住上游改过的标题。
-      // 同时回填按账号的映射（按钮显隐靠它）；若是当前展开面板，另镜像到 `anchorRoom`。
-      set((state) => ({
-        anchorRooms: { ...state.anchorRooms, [account]: room },
-        anchorRoomErrors: { ...state.anchorRoomErrors, [account]: "" },
-        anchorRoom: state.anchorPanelFor === account ? room : state.anchorRoom,
-        anchorTitleDraft: state.anchorPanelFor === account ? undefined : state.anchorTitleDraft,
-        anchorError: state.anchorPanelFor === account ? undefined : state.anchorError,
-      }));
+      // 换号：这一份属于上一个身份，丢弃（算「没落地」）。
+      if (epoch !== identityEpoch) return false;
+      // 已被更晚的读或任何一次已落地的写越过：丢弃，但这不是失败（不进退避）。
+      if (seq < anchorReadAppliedSeq || seq < anchorWriteAppliedSeq) return true;
+      anchorReadAppliedSeq = seq;
+      // 远端为准；静默拍不打断正在编辑的标题草稿，并用写穿窗口挡住「保存后又跳回旧标题」。
+      const merged = mergeSavedTitle(account, room);
+      set((state) => {
+        const onPanel = state.anchorPanelFor === account;
+        return {
+          anchorRooms: { ...state.anchorRooms, [account]: merged },
+          anchorRoomErrors: { ...state.anchorRoomErrors, [account]: "" },
+          anchorRoom: onPanel ? merged : state.anchorRoom,
+          anchorTitleDraft: onPanel && !silent ? undefined : state.anchorTitleDraft,
+          // 读成功即无这一档的错：清掉旧读错。**引导框开着时不清** —— 上游原话要一直挂着。
+          anchorError: onPanel && !state.anchorGate ? undefined : state.anchorError,
+        };
+      });
+      return true;
     } catch (error) {
-      if (epoch !== identityEpoch) return;
+      if (epoch !== identityEpoch) return false;
+      // 同款越过判据：这一拍是旧读，它的失败也不许盖掉新值（错误行会被下一次成功读清掉）。
+      if (seq < anchorReadAppliedSeq || seq < anchorWriteAppliedSeq) return true;
       // 读失败也要留痕（凭据失效 / 风控…）：只渲染错误行，不编一行假状态。
       const reason = describeError(error);
       set((state) => ({
@@ -1627,6 +1910,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
         anchorRoom: state.anchorPanelFor === account ? null : state.anchorRoom,
         anchorError: state.anchorPanelFor === account ? reason : state.anchorError,
       }));
+      return false;
     }
   },
 
@@ -1660,15 +1944,23 @@ export const useApp = create<AppStore>((set, get, store) => ({
     // 空标题界面已禁用保存键，后端也会拒（BAD_REQUEST）；这里不再发一次无效请求。
     if (title.length === 0) return false;
     const epoch = identityEpoch;
+    anchorRoomSeq += 1;
+    const seq = anchorRoomSeq;
     try {
       const room = await api.anchorTitleSet(account, title);
       if (epoch !== identityEpoch) return false;
-      // 保存成功就地重读：不猜上游怎么改的，以远端为准。
+      // 写响应是权威、**永远落地**，只让位给更晚发起的写（PR #30 评审修正）：
+      // 不能被「写之后发起、却先落地」的轮询读按号吞掉。
+      if (seq < anchorWriteAppliedSeq) return true;
+      anchorWriteAppliedSeq = seq;
+      // 记下写穿窗口：后端已按请求值合并；随后的一次 `anchor_room` 重读若仍读到旧标题，不回退它。
+      anchorTitleSaved = { account, title: room.title, at: Date.now() };
+      // 保存成功就地落**返回值**（后端已把请求标题并进去），并清草稿 → 输入框显示新标题。
       set((state) => ({
-        anchorRoom: room,
         anchorRooms: { ...state.anchorRooms, [account]: room },
-        anchorTitleDraft: undefined,
-        anchorError: undefined,
+        anchorRoom: state.anchorPanelFor === account ? room : state.anchorRoom,
+        anchorTitleDraft: state.anchorPanelFor === account ? undefined : state.anchorTitleDraft,
+        anchorError: state.anchorPanelFor === account ? undefined : state.anchorError,
       }));
       return true;
     } catch (error) {
@@ -1685,14 +1977,22 @@ export const useApp = create<AppStore>((set, get, store) => ({
     // 选中即写（issue202609241553 第 4 条）：先记下选择（供开播覆盖与显示），
     // 再发一次 `anchor_area_set`；失败回退选择并留原话。
     set({ anchorAreaId: id });
+    anchorRoomSeq += 1;
+    const seq = anchorRoomSeq;
     try {
       const room = await api.anchorAreaSet(account, id);
       if (epoch !== identityEpoch) return;
-      // 写成功就地换分区名：不猜上游怎么改的，以远端为准。
+      // 写响应是权威、**永远落地**，只让位给更晚发起的写（同 `saveAnchorTitle` 的评审修正）。
+      if (seq < anchorWriteAppliedSeq) return;
+      anchorWriteAppliedSeq = seq;
+      // 写成功就地换分区名：不猜上游怎么改的，以远端为准；但**标题字段过写穿窗口** ——
+      // 改分区后的重读同样可能撞上 `get_info` 缓存里的旧标题，不能盖掉刚保存的标题
+      // （`anchorTitleSaved` 只由标题写开启，改分区不开新窗口）。
+      const merged = mergeSavedTitle(account, room);
       set((state) => ({
-        anchorRoom: room,
-        anchorRooms: { ...state.anchorRooms, [account]: room },
-        anchorError: undefined,
+        anchorRooms: { ...state.anchorRooms, [account]: merged },
+        anchorRoom: state.anchorPanelFor === account ? merged : state.anchorRoom,
+        anchorError: state.anchorPanelFor === account ? undefined : state.anchorError,
       }));
     } catch (error) {
       if (epoch !== identityEpoch) return;
@@ -1704,13 +2004,23 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
+  startAnchorPolling(account) {
+    // 幂等：重复 start 先停上一轮（换行展开 / React 严格模式 effect 跑两遍都走这里）。
+    // `stop` 自增世代号，上一轮的在途拍从此碰不到这一轮的定时器。
+    stopAnchorPolling();
+    const gen = anchorPollGen;
+    // 展开时 `toggleAnchorPanel` 已同步拉过一次，首拍因此按周期排，不再重复一次首拉。
+    scheduleAnchorPoll(store, account, ANCHOR_REFRESH_MS, gen);
+    // 返回的停止函数带世代自查：effect 清理时若已被新一轮取代，就不动新一轮的定时器。
+    return () => {
+      if (anchorPollGen === gen) stopAnchorPolling();
+    };
+  },
+
   async setAnchorLive(live) {
     const account = get().anchorPanelFor;
     if (!account) return;
     const epoch = identityEpoch;
-    // 被挡住时上游原话要**留过**下面那次重读：重读成功会清 `anchorError`，
-    // 而「引导不代替上游原话」——认证码与 msg 必须一直挂在错误行上（`ui.md` §2.2.2）。
-    let blockedReason: string | undefined;
     try {
       // `areaV2` 缺省 = 沿用直播间当前分区（上次开播分区）；界面选了才覆盖。
       const result = await api.anchorLiveSet(account, live, get().anchorAreaId);
@@ -1719,16 +2029,23 @@ export const useApp = create<AppStore>((set, get, store) => ({
         // 下播：推流码**立刻**从内存里消失，不留残留。
         set({ anchorEndpoints: null, anchorGate: null, anchorError: undefined });
       } else if (isAnchorGate(result)) {
-        // 被身份校验挡住：弹出提示框引导，**不轮询、不自动重试**——
-        // 错误行照旧显示上游原话（code + msg），引导只说「下一步怎么做」。
-        blockedReason = `${result.message}（code ${result.code}）`;
-        set({ anchorGate: result, anchorEndpoints: null, anchorError: blockedReason });
+        // 被身份校验挡住：弹出提示框引导，**不轮询、不自动重试**。
+        // `QrConfirm` 的上游原话（码 + msg）是有用的下一步，挂在错误行上；
+        // `FaceAuth` 的上游原话（「客户端老了 / 请升级客户端」）是无效提示 —— 已有浏览器
+        // 认证入口，不留红字（issue202609242158 第 6 条）。
+        set({
+          anchorGate: result,
+          anchorEndpoints: null,
+          anchorError:
+            result.kind === "qrconfirm" ? `${result.message}（code ${result.code}）` : undefined,
+        });
+        return;
       } else {
         set({ anchorEndpoints: result ?? null, anchorGate: null, anchorError: undefined });
       }
-      // 不论成败都重读一次：开播状态由上游说了算，界面不自己推。
-      await get().loadAnchorRoom(account);
-      if (blockedReason !== undefined) set({ anchorError: blockedReason });
+      // 乐观落状态：开播 → 在播、下播 → 未开播，不等 `anchor_room` 重读的缓存追上
+      // （issue202609242158 第 3.2 条）；展开期的静默轮询随后以上游为准校正。
+      set((state) => applyAnchorLive(state, account, live ? 1 : 0));
     } catch (error) {
       if (epoch !== identityEpoch) return;
       set({ anchorError: describeError(error), anchorGate: null });

@@ -554,18 +554,9 @@
   display: flex;
   gap: var(--sp-1);
   flex-wrap: wrap;
-}
-
-/* 「我的直播间」入口：与账号管理按钮组（重新登录 / 退出登录 / 删除）分开成组，
-   贴账号行最右端（issue202609241553 第 1 条）。`margin-left: auto` 把它推到行末，
-   左侧留一道间距与竖分隔，两类不同级的功能一眼读开。 */
-.anchorEntry {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
+  /* 整组（账号管理三钮 + 「我的直播间」）贴行右端（issue202609242158 第 1 条）：
+     账号信息列 `flex: 1` 已把它顶到右边，这里再显式兜一道，窄屏换行时同样贴右。 */
   margin-left: auto;
-  padding-left: var(--sp-3);
-  border-left: 1px solid var(--border);
 }
 
 /* 「＋ 添加账号」：**在对话框内容宽里居中**（用户 2026-09-13 #3「添加账号按钮居中」）。
@@ -596,27 +587,42 @@
   gap: var(--sp-2);
 }
 
-/* 输入框与状态行都吃满剩余宽度、且允许被压缩（长标题 / 长状态不把按钮挤出去） */
-.anchorTitle {
+/* 标题输入框与分区选择框**同高**（issue202609242158 第 5 条）：两者显式共用同一套盒模型。
+   macOS WebKit 的原生 `<select>` 自带上下留白、盒模型与同样 `padding` 的 `<input>` 对不齐，
+   因此这里定死 `height` + `box-sizing: border-box` + `line-height`，并给 `select` 关掉原生
+   外观、自绘箭头 —— 三端（macOS / Windows / Android）走同一条规则，不再随系统外观漂移。
+   两枚都吃满剩余宽度、且允许被压缩（长标题 / 长分区名不把按钮挤出去）。 */
+.anchorTitle,
+.anchorSelect {
+  box-sizing: border-box;
   flex: 1;
   min-width: 0;
-  font: inherit;
+  height: 2.1em;
+  padding: 0 var(--sp-2);
+  font-family: inherit;
+  font-size: var(--fs-4);
+  line-height: 1.4;
   color: var(--fg);
-  background: var(--bg-elevated);
+  background-color: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--r-2);
-  padding: var(--sp-1) var(--sp-2);
 }
 
+/* macOS 原生 select 的箭头样式随系统变、且比 input 高一截：关掉原生外观 + 自绘下箭头
+   （两段 `linear-gradient` 拼出的 V），箭头色取 `--fg-dim`、深浅两套主题都对得上；
+   `padding-right` 给箭头留位，`background-position` 贴右端。 */
 .anchorSelect {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-2);
-  color: var(--fg);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--r-2);
-  padding: var(--sp-1);
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: var(--sp-4);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%),
+    linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 9px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
 }
 
 .anchorStatus {
@@ -637,6 +643,17 @@
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-2);
   background: var(--hover-wash);
+}
+
+/* 直播间状态的语义色（issue202609242158 第 4 条）：直接复用状态点那套令牌 ——
+   与房间头 / 房间标签页的红绿是同一个判据、同一组取值，浅色主题自动跟着换。
+   写在 `.anchorStatusInline` 之后，同特异性下这两条覆盖它的默认灰。 */
+.anchorStatusLive {
+  color: var(--live-on);
+}
+
+.anchorStatusOffline {
+  color: var(--live-off);
 }
 
 /* 开播 / 下播独占一行（issue202609241553 第 5 条）：按钮拉满整行，点击区域大、

@@ -393,21 +393,16 @@ export function AccountManager({
                   >
                     删除
                   </button>
-                </div>
-                {/* 「我的直播间」单独成组、贴账号行**最右端**（issue202609241553 第 1 条）：
-                    它和上面的「账号管理按钮组」是两类不同级的功能，用一道间距与分隔把它们读开。
-                    第 2 条：没开通直播间（`anchorRooms[name]` 为 `null`）/ 未登录 / 读失败都不渲染
-                    这枚按钮 —— 不渲染的账号自然没有入口，失败原因只在 `anchorRoomErrors` 里留痕。 */}
-                {account.logged_in &&
-                  anchorRooms[account.name] != null &&
-                  !anchorRoomErrors[account.name] && (
-                    <div
-                      className={styles.anchorEntry}
-                      // 与 `.accountActions` 同款：行内动作一律不冒泡到行 —— 点「我的直播间」
-                      // 是**看 / 管这个账号的直播间**，不是切到那个账号（切号会清掉刚展开的管理区）。
-                      onClick={(event) => event.stopPropagation()}
-                      onKeyDown={(event) => event.stopPropagation()}
-                    >
+                  {/* 「我的直播间」与账号管理按钮**同一排、同一组**、整组贴行右端
+                      （issue202609242158 第 1 条）：不再单独成组、不再加竖线分隔 ——
+                      `.accountActions` 的 `margin-left: auto` 把它们一起推到行末，靠组内间距读开。
+                      第 2 条：没开通直播间（`anchorRooms[name]` 为 `null`）/ 未登录 / 读失败都
+                      **不渲染**这枚按钮 —— 不渲染的账号自然没有入口，失败原因只在
+                      `anchorRoomErrors` 里留痕。`stopPropagation` 由 `.accountActions` 统一承担：
+                      点它是**看 / 管这个账号的直播间**，不是切到那个账号（切号会清掉刚展开的管理区）。 */}
+                  {account.logged_in &&
+                    anchorRooms[account.name] != null &&
+                    !anchorRoomErrors[account.name] && (
                       <button
                         data-testid="db-anchor-toggle"
                         title={`查看 / 管理「${who(account)}」自己的直播间`}
@@ -415,8 +410,8 @@ export function AccountManager({
                       >
                         我的直播间
                       </button>
-                    </div>
-                  )}
+                    )}
+                </div>
               </div>
 
               {anchorFor === account.name && (
@@ -427,7 +422,11 @@ export function AccountManager({
                         {/* 直播间状态移到标题**左边**（issue202609241553 第 5 条）：
                             一眼先看到「在不在播」，再看标题。 */}
                         <span
-                          className={styles.anchorStatusInline}
+                          // 红绿按派生 `onAir` 分语义色（issue202609242158 第 4 条）：
+                          // 令牌与房间头状态点同一套（`--live-on` / `--live-off`），语义一致。
+                          className={`${styles.anchorStatusInline} ${
+                            onAir ? styles.anchorStatusLive : styles.anchorStatusOffline
+                          }`}
                           data-testid="db-anchor-status"
                         >
                           {liveStatusText(anchorRoom.live_status)}
@@ -643,7 +642,9 @@ export function AccountManager({
         )}
 
         {/* 开播被身份校验挡住：弹出提示框引导（docs/ui.md §2.2.2）。
-            上游原话照旧留在展开区的错误行里 —— 引导不代替原话。 */}
+            `QrConfirm` 的上游原话留在展开区错误行（是有用的下一步）；`FaceAuth` 的上游原话
+            （「客户端老了 / 请升级客户端」）是无效提示、已有浏览器认证入口，不留红字
+            （issue202609242158 第 6 条）。 */}
         {anchorGate && (
           <div
             className={styles.anchorModalBackdrop}

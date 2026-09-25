@@ -13,6 +13,9 @@
 //! `live_service.rs::refresh_partitions`），**未经本仓实测**：`data` 直接是数组、父名在
 //! `data[].name`、子分区在 `data[].list[]`、子 id 在 `data[].list[].id`；父 id 参照实现压根没读。
 //! 详见 `map_areas` 的注释与附录 A66 —— 不得读成已实测（issue202609241553 第 4 条按此落地）。
+//! 子 `id` 还可能是**数字字符串**（权威文档记其类型为 `str`，参照实现亦做字符串兜底），解析按
+//! `int_like` 两种都收 —— 只认数字会让界面回落到父分区 id、上游回 `60009 分区已下线`
+//! （issue202609242158 第 2 条）。
 //!
 //! # 上游隔离
 //!
@@ -209,18 +212,18 @@ impl AnchorRoom for BiliAnchor {
             .post(
                 EP_UPDATE,
                 &csrf,
-                vec![
-                    ("room_id", room_id.to_string()),
-                    ("platform", "pc_link".to_string()),
-                    ("title", title.to_string()),
-                ],
+                update_params(room_id, "title", title.to_string()),
             )
             .await?;
         ensure_ok(&value, "Room/update")?;
-        // 保存成功就地重读。
-        self.own()
+        // 保存成功就地重读：其余字段以远端为准，**标题以本次请求为权威**
+        //（`code==0` 即写成功；`get_info` 有服务端缓存，紧接着重读可能仍是旧标题
+        // —— issue202609242158 第 3.1 条的「改完预览会跳回原标题」）。
+        let room = self
+            .own()
             .await?
-            .ok_or_else(|| Error::Upstream("改标题后读不到直播间".into()))
+            .ok_or_else(|| Error::Upstream("改标题后读不到直播间".into()))?;
+        Ok(with_requested_title(room, title))
     }
 
     async fn set_area(&self, area_v2: i64) -> Result<OwnRoom> {
@@ -235,16 +238,12 @@ impl AnchorRoom for BiliAnchor {
         };
         let csrf = self.csrf()?;
         // 改分区是**独立入口**：不必等到开播，`Room/update` 带 `area_id` 就能改
-        // （参照实现的 `update_area` 就是这么做的）。
+        //（两份参照实现的 `update_area` 都是这么做的，字段名与取值口径见 `update_params`）。
         let value = self
             .post(
                 EP_UPDATE,
                 &csrf,
-                vec![
-                    ("room_id", room_id.to_string()),
-                    ("platform", "pc_link".to_string()),
-                    ("area_id", area_v2.to_string()),
-                ],
+                update_params(room_id, "area_id", area_v2.to_string()),
             )
             .await?;
         ensure_ok(&value, "Room/update")?;
@@ -351,6 +350,58 @@ impl AnchorRoom for BiliAnchor {
     }
 }
 
+/// `Room/update` 的业务参数（不含 `csrf` / `csrf_token`，那两个由 [`BiliAnchor::post`] 补）。
+///
+/// **纯函数**，因此「改标题 / 改分区到底发什么字段」可以用固定向量钉住（见 `tests`）。
+/// 字段名与取值口径 2026-09-24 逐字核实过三处来源：
+/// - `Zeppelinpp/bilibili-streamer`（`src-tauri/src/services/bili_api.rs`）：`update_area` 发
+///   `room_id` / `area_id` / `platform=pc_link`；**只有** `start_live` 才用 `area_v2`；
+/// - `ChaceQC/bilibili_live_stream_code`（`backend/bilibili_api.py`）：`update_area` 同为 `area_id`；
+/// - `bilibili-API-collect`（`docs/live/manage.md`「更新直播间信息」）：`area_id` = **子分区 id**，
+///   该端点的 `60009` 即「分区已下线」。
+///
+/// 因此改分区**必须**走 `area_id`：把 `startLive` 的 `area_v2` 字段名发到这条端点会被上游当
+/// 未知字段忽略，`code==0` 但分区其实没改。两个字段的**值**是同一个子分区 id（同口径同值）。
+fn update_params(room_id: i64, field: &'static str, value: String) -> Vec<(&'static str, String)> {
+    vec![
+        ("room_id", room_id.to_string()),
+        ("platform", "pc_link".to_string()),
+        (field, value),
+    ]
+}
+
+/// 重读结果与本次请求标题合并：`title` 与本次请求（trim 后）不一致时取**本次请求值**，
+/// 其余字段一律以重读为准。
+///
+/// 为什么标题以请求值收口：`Room/update` 返回 `code==0` 就是写成功（权威），而 `get_info`
+/// 有服务端缓存，写成功之后立刻重读仍可能拿到旧标题 —— 那会让界面把预览跳回原标题
+/// （issue202609242158 第 3.1 条）。不整份用请求值、也不整份用重读值。
+fn with_requested_title(mut room: OwnRoom, requested: &str) -> OwnRoom {
+    let requested = requested.trim();
+    if room.title != requested {
+        room.title = requested.to_string();
+    }
+    room
+}
+
+/// 取「JSON 数字**或**数字字符串」的整数字段（子分区 `id` 专用）。
+///
+/// 权威文档 `bilibili-API-collect`（`docs/live/live_area.md`）记 `Area/getList` 的**子分区
+/// `id` 类型是 `str`**（示例 `"86"` / `"252"`）；参照实现
+/// `Zeppelinpp/bilibili-streamer::refresh_partitions` 也是「先 `as_u64()`、再字符串 `parse()`」
+/// 两段式。只认 JSON 数字会把整份子分区丢掉，界面随即回落到**父分区 id**，
+/// 上游按子分区表校验便回 `60009 分区已下线`（issue202609242158 第 2 条）。
+/// 上游返回的到底是数字还是字符串**未真机回填**（`docs/protocol.md` 附录 A66），两种都收。
+fn int_like(value: &Value, keys: &[&str]) -> i64 {
+    pointer(keys)
+        .and_then(|path| value.pointer(&path))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
+        .unwrap_or(0)
+}
+
 /// 定开播分区（`docs/contract.md` §3 / §7）：
 /// - `Some(v>0)` = 界面所选子分区，覆盖；
 /// - `None` = 沿用直播间当前 `area_id`（上次开播分区）；
@@ -443,7 +494,9 @@ fn map_areas(value: &Value) -> Vec<AnchorArea> {
                 .map(|list| {
                     list.iter()
                         .filter_map(|child| {
-                            let cid = int(child, &["id"]);
+                            // 子分区 `id` 上游可能是**数字字符串**（见 `int_like`），只认数字会把
+                            // 整份子分区丢掉，界面回落到父分区 id → 上游回 `60009 分区已下线`。
+                            let cid = int_like(child, &["id"]);
                             let cname = text(child, &["name"]);
                             // 子分区 id 才是开播 / 改分区要用的值，取不到就不能进桶。
                             (cid > 0).then_some(AnchorArea {
@@ -479,12 +532,28 @@ fn ensure_ok(value: &Value, what: &str) -> Result<()> {
     }
 }
 
+/// 非 0 code → `UPSTREAM_ERROR`：`code` + 上游回复里**所有**可读的错误文案。
+///
+/// 改前只带顶层 `message`，而「改不上去」时上游常把原因放在 `data.msg`（或顶层 `msg`）上，
+/// 错误行因此没有可查的 response（issue202609242158 第 3.1 条）。这里把顶层 `message` /
+/// `msg` 与 `data.msg` / `data.message` 一并透出，同值的只留一次；**不为 code 赋语义**。
+/// 推流码等凭据在响应里时同样过 [`redact`]。
 fn upstream_err(what: &str, value: &Value) -> Error {
-    Error::Upstream(redact(&format!(
-        "{what} code={:?} message={}",
-        value.get("code"),
-        value.get("message").and_then(Value::as_str).unwrap_or("")
-    )))
+    let mut detail = format!("{what} code={:?}", value.get("code"));
+    let mut seen: Vec<String> = Vec::new();
+    for (label, keys) in [
+        ("message", &["message"][..]),
+        ("msg", &["msg"][..]),
+        ("data.msg", &["data", "msg"][..]),
+        ("data.message", &["data", "message"][..]),
+    ] {
+        let text = text(value, keys);
+        if !text.is_empty() && !seen.contains(&text) {
+            detail.push_str(&format!(" {label}={text}"));
+            seen.push(text);
+        }
+    }
+    Error::Upstream(redact(&detail))
 }
 
 /// 取嵌套整数字段（`["data", "room_id"]` → `data.room_id`），缺失 / 非数为 0。
@@ -671,6 +740,86 @@ mod tests {
         let areas = map_areas(&value);
         assert_eq!(areas[0].children.len(), 1);
         assert_eq!(areas[0].children[0].id, 12);
+    }
+
+    /// 改分区 / 改标题的字段名口径（issue202609242158 第 2 条）：`Room/update` 改分区是
+    /// `area_id`（子分区 id），**不是** `startLive` 的 `area_v2`；改标题是 `title`。
+    /// 三处来源逐字一致（见 `update_params` 注释）：两份参照实现 + `bilibili-API-collect`。
+    #[test]
+    fn update_params_pin_field_names_for_title_and_area() {
+        let area = update_params(777, "area_id", "40".to_string());
+        assert_eq!(
+            area,
+            vec![
+                ("room_id", "777".to_string()),
+                ("platform", "pc_link".to_string()),
+                ("area_id", "40".to_string()),
+            ]
+        );
+        assert!(
+            area.iter().all(|(k, _)| *k != "area_v2"),
+            "改分区不许发 `area_v2`（那是 `startLive` 的字段名，发到这里会被当未知字段忽略）"
+        );
+
+        let title = update_params(777, "title", "新标题".to_string());
+        assert!(title.contains(&("title", "新标题".to_string())));
+        assert!(title.iter().all(|(k, _)| *k != "area_id"));
+    }
+
+    /// 改标题后重读撞上服务端缓存时，`title` 以**本次请求值**（trim 后）为准，其余字段以重读为准
+    /// （issue202609242158 第 3.1 条）。
+    #[test]
+    fn with_requested_title_wins_over_stale_reread() {
+        let stale = OwnRoom {
+            room_id: 777,
+            title: "旧标题".into(),
+            live_status: 1,
+            area_id: 40,
+            area_name: "娱乐 · 视频唱见".into(),
+        };
+        let merged = with_requested_title(stale, "  新标题 ");
+        assert_eq!(merged.title, "新标题", "标题取本次请求（trim 后）");
+        assert_eq!(merged.room_id, 777, "其余字段仍以重读为准");
+        assert_eq!(merged.live_status, 1);
+        assert_eq!(merged.area_id, 40);
+        assert_eq!(merged.area_name, "娱乐 · 视频唱见");
+    }
+
+    /// 子分区 `id` 是**数字字符串**时也必须收下：权威文档记其类型为 `str`，参照实现
+    /// `refresh_partitions` 也做了字符串兜底。丢掉子分区会让界面回落到父分区 id，
+    /// 上游随后回 `60009 分区已下线`（issue202609242158 第 2 条）。
+    #[test]
+    fn area_list_parses_string_child_ids() {
+        let value = json!({
+            "code": 0,
+            "data": [{"id": 1, "name": "娱乐", "list": [{"id": "86", "name": "视频唱见"}]}]
+        });
+        let areas = map_areas(&value);
+        assert_eq!(areas[0].children.len(), 1, "字符串子分区 id 不许被丢掉");
+        assert_eq!(areas[0].children[0].id, 86);
+    }
+
+    /// 错误文案要带上上游回复里的附加信息（顶层 `message` / `msg`、`data.msg`），
+    /// 让「改不上去」有 response 可查；同值只留一次（issue202609242158 第 3.1 条）。
+    #[test]
+    fn upstream_err_surfaces_upstream_detail_and_dedupes() {
+        let err = upstream_err(
+            "Room/update",
+            &json!({
+                "code": 60009,
+                "msg": "分区已下线",
+                "message": "分区已下线",
+                "data": {"msg": "换一个分区"}
+            }),
+        );
+        let text = err.to_string();
+        assert!(text.contains("60009"), "{text}");
+        assert!(text.contains("换一个分区"), "`data.msg` 也要透出：{text}");
+        assert_eq!(
+            text.matches("分区已下线").count(),
+            1,
+            "同值只留一次：{text}"
+        );
     }
 
     #[test]

@@ -432,7 +432,7 @@ sequenceDiagram
 | 换人链路（`switchAccount` / `removeAccount` / `logoutAccount` / `pollAccountQr`）与 `refreshIdentity` / `applySession` | **身份世代**（`store.ts:466-472`）：换人时递增；取号在**命令之前**（按点击顺序，不按回包顺序） | 并发切号以后到的响应为准，账号列表的「当前」不是最后点击的那个 |
 | `loadRoomIdentity` 的 `room_session` 结果 | 身份世代 | 晚到的旧凭据身份写进 `roomIdentities`，房管入口按上一个账号放行 |
 | `loadEmotes` / `loadAdmin` 的结果 | `activeRoomId === roomId` | `emotes` 与房管三块是全局单份，写进去就是拿 A 的身份与名单渲染 B |
-| 「我的直播间」读（`loadAnchorRoom`）/ 写（`anchor_title_set` / `anchor_area_set`）的落地 | 身份世代 + **发起序号 `anchorRoomSeq`，读 / 写分开判落地**（`anchorReadAppliedSeq` / `anchorWriteAppliedSeq`，PR #30 评审修正）：写响应是权威、**永远落地**、只让位给更晚发起的写，且一落地就让所有更早发起（含在途）的读作废；读响应让位给更晚的读与已落地的写（被越过不算失败、不进退避） | 若读写共用一个落地号，「写之后发起、却先落地」的一拍轮询读会按号把写响应整份吞掉 —— 写明明成功、标题草稿却没清、写穿窗口也没开。另：改分区写落地时**标题字段同样过写穿窗口**（改分区后的重读也会撞 `get_info` 缓存，不得盖掉刚保存的标题；窗口只由标题写开启）。标题写穿护栏本身见 `ui.md` §2.2.2 |
+| 「我的直播间」读（`loadAnchorRoom`）/ 写（`anchor_title_set` / `anchor_area_set`）的落地 | 身份世代 + **发起序号 `anchorRoomSeq`，读 / 写分开判落地**（`anchorReadAppliedSeq` / `anchorWriteAppliedSeq`，PR #30 评审修正）：写响应是权威、**永远落地**，只在**更晚发起的写已落地之后**才让位（`anchorWriteAppliedSeq` 落地时才推进 —— 更晚的写仅在途或失败，不影响早写响应落地），且一落地就让所有更早发起（含在途）的读作废；读响应让位给更晚的读与已落地的写（被越过不算失败、不进退避） | 若读写共用一个落地号，「写之后发起、却先落地」的一拍轮询读会按号把写响应整份吞掉 —— 写明明成功、标题草稿却没清、写穿窗口也没开。另：改分区写落地时**标题字段同样过写穿窗口**（改分区后的重读也会撞 `get_info` 缓存，不得盖掉刚保存的标题；窗口只由标题写开启）。标题写穿护栏本身见 `ui.md` §2.2.2 |
 | 「我的直播间」/ 房管面板展开期轮询的启停 | **世代号**（`anchorPollGen` / `adminPollGen`，PR #30 评审修正）：`stop` / 重新 `start` 自增；在途旧拍落地后按号自查，已被新一轮取代就什么都不动（含 effect 清理返回的停止函数） | 没有，「收起 A、马上展开 B」时 A 的在途拍会调到全局 `stop`，把 B 刚排上的定时器清掉，B 的轮询静默死掉 |
 | `send` 的返回值与 `danmubox://send` 事件 | `ChatSendResult.room_id === activeRoomId` | B 的输入区弹 A 那条的失败浮片；`lastSend` 因此只在发出它的房间还在前台时才登记，切房即清 |
 

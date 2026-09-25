@@ -746,19 +746,32 @@ const ANCHOR_REFRESH_MAX_MS = ANCHOR_REFRESH_MS * 8;
 let anchorPollTimer: number | undefined;
 /** 连续失败次数：只用来算退避，成功即复位。 */
 let anchorPollFailures = 0;
+/**
+ * 轮询**世代号**（PR #30 评审修正）：`stop` / 重新 `start` 都会自增它。在途的旧一拍
+ * 落地后按号自查 —— 已被新一轮取代就**什么都不动**。没有它，「收起 A、马上展开 B」时
+ * A 的在途拍会调到全局 `stop`，把 B 刚排上的定时器清掉，B 的轮询就此静默死掉
+ * （要再收起重开一次才活）。
+ */
+let anchorPollGen = 0;
 
 /** 停掉「我的直播间」展开区轮询（收起 / 关对话框 / 换号 / 重新 start 时都走它）。幂等。 */
 function stopAnchorPolling() {
+  anchorPollGen += 1;
   if (anchorPollTimer !== undefined) window.clearTimeout(anchorPollTimer);
   anchorPollTimer = undefined;
   anchorPollFailures = 0;
 }
 
 /** 排下一拍。链条式：下一拍只在上一拍落地后才有，结构上不重叠（理由同列表页）。 */
-function scheduleAnchorPoll(store: StoreApi<AppStore>, account: string, delayMs: number) {
+function scheduleAnchorPoll(
+  store: StoreApi<AppStore>,
+  account: string,
+  delayMs: number,
+  gen: number,
+) {
   anchorPollTimer = window.setTimeout(() => {
     anchorPollTimer = undefined;
-    void runAnchorPoll(store, account);
+    void runAnchorPoll(store, account, gen);
   }, delayMs);
 }
 
@@ -767,23 +780,27 @@ function scheduleAnchorPoll(store: StoreApi<AppStore>, account: string, delayMs:
  * `anchor_room(account)`，最后按成败排下一拍。**只重拉直播间** —— `anchorAreas` 是静态
  * 公开数据，展开时拉一次即可，不进轮询。
  */
-async function runAnchorPoll(store: StoreApi<AppStore>, account: string) {
+async function runAnchorPoll(store: StoreApi<AppStore>, account: string, gen: number) {
+  // 已被新一轮（重新 start / 停表后重启）取代：这一拍作废，别碰新一轮的定时器。
+  if (gen !== anchorPollGen) return;
   if (store.getState().anchorPanelFor !== account) {
     stopAnchorPolling();
     return;
   }
   if (document.visibilityState !== "visible") {
-    scheduleAnchorPoll(store, account, ANCHOR_REFRESH_MS);
+    scheduleAnchorPoll(store, account, ANCHOR_REFRESH_MS, gen);
     return;
   }
   const ok = await store.getState().loadAnchorRoom(account, { silent: true });
+  // `await` 期间可能已被新一轮取代（换行展开 / 收起重开）：同样别碰新定时器。
+  if (gen !== anchorPollGen) return;
   if (store.getState().anchorPanelFor !== account) {
     stopAnchorPolling();
     return;
   }
   anchorPollFailures = ok ? 0 : anchorPollFailures + 1;
   const delay = Math.min(ANCHOR_REFRESH_MS * 2 ** anchorPollFailures, ANCHOR_REFRESH_MAX_MS);
-  scheduleAnchorPoll(store, account, delay);
+  scheduleAnchorPoll(store, account, delay, gen);
 }
 
 /**
@@ -795,18 +812,26 @@ const ADMIN_REFRESH_MAX_MS = ADMIN_REFRESH_MS * 8;
 
 let adminPollTimer: number | undefined;
 let adminPollFailures = 0;
+/** 轮询世代号：口径与「我的直播间」那套完全一致（PR #30 评审修正，防换房时旧拍误停新表）。 */
+let adminPollGen = 0;
 
 /** 停掉房管面板轮询（收起面板 / 换房 / 卸载 / 重新 start 时都走它）。幂等。 */
 function stopAdminPolling() {
+  adminPollGen += 1;
   if (adminPollTimer !== undefined) window.clearTimeout(adminPollTimer);
   adminPollTimer = undefined;
   adminPollFailures = 0;
 }
 
-function scheduleAdminPoll(store: StoreApi<AppStore>, roomId: number, delayMs: number) {
+function scheduleAdminPoll(
+  store: StoreApi<AppStore>,
+  roomId: number,
+  delayMs: number,
+  gen: number,
+) {
   adminPollTimer = window.setTimeout(() => {
     adminPollTimer = undefined;
-    void runAdminPoll(store, roomId);
+    void runAdminPoll(store, roomId, gen);
   }, delayMs);
 }
 
@@ -814,34 +839,44 @@ function scheduleAdminPoll(store: StoreApi<AppStore>, roomId: number, delayMs: n
  * 一拍：房间已切走就停；不可见整拍跳过；否则重拉三块。落地复核在 `loadAdmin` 里
  * （`activeRoomId !== roomId` 时那一批不落地，返回值算「这一拍没成」、进退避）。
  */
-async function runAdminPoll(store: StoreApi<AppStore>, roomId: number) {
+async function runAdminPoll(store: StoreApi<AppStore>, roomId: number, gen: number) {
+  // 已被新一轮取代：这一拍作废，别碰新一轮的定时器（同「我的直播间」那套世代号）。
+  if (gen !== adminPollGen) return;
   if (store.getState().activeRoomId !== roomId) {
     stopAdminPolling();
     return;
   }
   if (document.visibilityState !== "visible") {
-    scheduleAdminPoll(store, roomId, ADMIN_REFRESH_MS);
+    scheduleAdminPoll(store, roomId, ADMIN_REFRESH_MS, gen);
     return;
   }
   const ok = await store.getState().loadAdmin(roomId);
+  if (gen !== adminPollGen) return;
   if (store.getState().activeRoomId !== roomId) {
     stopAdminPolling();
     return;
   }
   adminPollFailures = ok ? 0 : adminPollFailures + 1;
   const delay = Math.min(ADMIN_REFRESH_MS * 2 ** adminPollFailures, ADMIN_REFRESH_MAX_MS);
-  scheduleAdminPoll(store, roomId, delay);
+  scheduleAdminPoll(store, roomId, delay, gen);
 }
 
 /**
  * 「我的直播间」读写的**发起序号**（护栏口径同 `roomsSeq`）：`anchor_room`（展开首拉与
  * 展开期静默轮询）与 `anchor_title_set` / `anchor_area_set` 都会写 `anchorRoom`，并发时
- * 晚到的旧响应不许把先落地的新值盖回去（issue202609242158 第 3.1 条：后到的旧响应不得
- * 覆盖先到的新响应）。号是**发起顺序**，响应必然是发起那一刻的状态，因此号大的不比号小的旧；
- * 失败或被越过的那一份不占号。
+ * 晚到的旧响应不许把先落地的新值盖回去（issue202609242158 第 3.1 条）。号是**发起顺序**，
+ * 失败或被越过的那一份不占落地号。
+ *
+ * **读与写分开判**（PR #30 评审修正）：写响应是权威（上游 `code==0` 即已落库），
+ * **永远落地**、只让位给**更晚发起的写**；读响应既让位给更晚的读、也让位给**已落地的写**。
+ * 若共用一个落地号，一拍在写之后发起、却先返回的轮询读会以号大把写响应整份吞掉 ——
+ * 写明明成功、草稿却没清、写穿窗口也没开，第 3.1 条就换了个形式复发。
  */
 let anchorRoomSeq = 0;
-let anchorRoomAppliedSeq = 0;
+/** 读已落地的最大发起号：只管读与读之间的乱序。 */
+let anchorReadAppliedSeq = 0;
+/** 写已落地的最大发起号：写一落地，所有更早发起（含在途）的读全部作废。 */
+let anchorWriteAppliedSeq = 0;
 
 /**
  * 标题「写穿窗口」：`anchor_title_set` 成功后，后端返回的已是以请求值为准的合并结果，
@@ -1755,9 +1790,13 @@ export const useApp = create<AppStore>((set, get, store) => ({
   startAdminPolling(roomId) {
     // 幂等：重复 start 先停上一轮（面板重开 / 换房 / React 严格模式 effect 跑两遍都走这里）。
     stopAdminPolling();
+    const gen = adminPollGen;
     // 打开面板时 `toggleAdminPanel` 已同步拉过一次，首拍因此按周期排，不再重复一次首拉。
-    scheduleAdminPoll(store, roomId, ADMIN_REFRESH_MS);
-    return stopAdminPolling;
+    scheduleAdminPoll(store, roomId, ADMIN_REFRESH_MS, gen);
+    // 停止函数带世代自查（口径同 `startAnchorPolling`）。
+    return () => {
+      if (adminPollGen === gen) stopAdminPolling();
+    };
   },
 
   async toggleAnchorPanel(name) {
@@ -1842,9 +1881,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
       const room = await api.anchorRoom(account);
       // 换号：这一份属于上一个身份，丢弃（算「没落地」）。
       if (epoch !== identityEpoch) return false;
-      // 已被更新的那一份越过：丢弃，但这不是失败（不进退避）。
-      if (seq < anchorRoomAppliedSeq) return true;
-      anchorRoomAppliedSeq = seq;
+      // 已被更晚的读或任何一次已落地的写越过：丢弃，但这不是失败（不进退避）。
+      if (seq < anchorReadAppliedSeq || seq < anchorWriteAppliedSeq) return true;
+      anchorReadAppliedSeq = seq;
       // 远端为准；静默拍不打断正在编辑的标题草稿，并用写穿窗口挡住「保存后又跳回旧标题」。
       const merged = mergeSavedTitle(account, room);
       set((state) => {
@@ -1861,7 +1900,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
       return true;
     } catch (error) {
       if (epoch !== identityEpoch) return false;
-      if (seq < anchorRoomAppliedSeq) return true;
+      // 同款越过判据：这一拍是旧读，它的失败也不许盖掉新值（错误行会被下一次成功读清掉）。
+      if (seq < anchorReadAppliedSeq || seq < anchorWriteAppliedSeq) return true;
       // 读失败也要留痕（凭据失效 / 风控…）：只渲染错误行，不编一行假状态。
       const reason = describeError(error);
       set((state) => ({
@@ -1909,9 +1949,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
     try {
       const room = await api.anchorTitleSet(account, title);
       if (epoch !== identityEpoch) return false;
-      // 并发保存的乱序落盘：后到的旧响应不许覆盖先到的新响应（第 3.1 条）。
-      if (seq < anchorRoomAppliedSeq) return false;
-      anchorRoomAppliedSeq = seq;
+      // 写响应是权威、**永远落地**，只让位给更晚发起的写（PR #30 评审修正）：
+      // 不能被「写之后发起、却先落地」的轮询读按号吞掉。
+      if (seq < anchorWriteAppliedSeq) return true;
+      anchorWriteAppliedSeq = seq;
       // 记下写穿窗口：后端已按请求值合并；随后的一次 `anchor_room` 重读若仍读到旧标题，不回退它。
       anchorTitleSaved = { account, title: room.title, at: Date.now() };
       // 保存成功就地落**返回值**（后端已把请求标题并进去），并清草稿 → 输入框显示新标题。
@@ -1941,13 +1982,16 @@ export const useApp = create<AppStore>((set, get, store) => ({
     try {
       const room = await api.anchorAreaSet(account, id);
       if (epoch !== identityEpoch) return;
-      // 乱序护栏：晚到的旧写回不许把更新的那份房间盖回去（第 3.1 条同一口径）。
-      if (seq < anchorRoomAppliedSeq) return;
-      anchorRoomAppliedSeq = seq;
-      // 写成功就地换分区名：不猜上游怎么改的，以远端为准。
+      // 写响应是权威、**永远落地**，只让位给更晚发起的写（同 `saveAnchorTitle` 的评审修正）。
+      if (seq < anchorWriteAppliedSeq) return;
+      anchorWriteAppliedSeq = seq;
+      // 写成功就地换分区名：不猜上游怎么改的，以远端为准；但**标题字段过写穿窗口** ——
+      // 改分区后的重读同样可能撞上 `get_info` 缓存里的旧标题，不能盖掉刚保存的标题
+      // （`anchorTitleSaved` 只由标题写开启，改分区不开新窗口）。
+      const merged = mergeSavedTitle(account, room);
       set((state) => ({
-        anchorRooms: { ...state.anchorRooms, [account]: room },
-        anchorRoom: state.anchorPanelFor === account ? room : state.anchorRoom,
+        anchorRooms: { ...state.anchorRooms, [account]: merged },
+        anchorRoom: state.anchorPanelFor === account ? merged : state.anchorRoom,
         anchorError: state.anchorPanelFor === account ? undefined : state.anchorError,
       }));
     } catch (error) {
@@ -1962,10 +2006,15 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   startAnchorPolling(account) {
     // 幂等：重复 start 先停上一轮（换行展开 / React 严格模式 effect 跑两遍都走这里）。
+    // `stop` 自增世代号，上一轮的在途拍从此碰不到这一轮的定时器。
     stopAnchorPolling();
+    const gen = anchorPollGen;
     // 展开时 `toggleAnchorPanel` 已同步拉过一次，首拍因此按周期排，不再重复一次首拉。
-    scheduleAnchorPoll(store, account, ANCHOR_REFRESH_MS);
-    return stopAnchorPolling;
+    scheduleAnchorPoll(store, account, ANCHOR_REFRESH_MS, gen);
+    // 返回的停止函数带世代自查：effect 清理时若已被新一轮取代，就不动新一轮的定时器。
+    return () => {
+      if (anchorPollGen === gen) stopAnchorPolling();
+    };
   },
 
   async setAnchorLive(live) {

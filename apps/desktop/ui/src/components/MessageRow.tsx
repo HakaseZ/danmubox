@@ -70,8 +70,15 @@ const testIdFor = (scope: "msg" | "gift") => (part: string) => `db-${scope}-${pa
  * 聚合行头像列里，后一张头像相对前一张**向右错开**多少（头像宽的倍数）：0.3 ⇒ 每人只露 70%，
  * 3 张一共占 1.6 个头像宽（issue 202609211940 第 3 条：「错位30%堆叠」）。
  * 只有它一个数字，宽度与每一张的 `left` 都从它现算（见下面的 `avatarCol`）。
+ *
+ * 两族聚合行**复用**这枚常量（刷屏 `aggregate.ts` 与低价礼物桶 `filtering.collapseCheapGiftRows`），
+ * 但 issue 260926 第 6 条要求刷屏头像重叠别太高 —— 刷屏那几位只露 **2/3（66%）**，即偏移 0.34；
+ * 低价礼物桶保持 0.3 不变。因此按行类型分两枚：`AVATAR_STACK_OFFSET` 给礼物桶，
+ * 刷屏用 `AVATAR_STACK_OFFSET_FLOOD`（见 `avatarStackOffset` 的取法）。
  */
 const AVATAR_STACK_OFFSET = 0.3;
+/** 刷屏聚合行头像错开量：0.34 ⇒ 每人露 2/3（issue 260926 第 6 条）。 */
+const AVATAR_STACK_OFFSET_FLOOD = 0.34;
 
 /* ------------------------------------------------------------------ 选中态 */
 
@@ -151,6 +158,9 @@ export function MessageRow({
   // （与单张头像同一条口径：不画假图），错位因此按**实际画出来的张数**算，而不是按 `senders`
   // 的长度（3 位里有 1 位没头像时，两张头像仍只错开一次 30%）。非聚合行是空数组。
   const stackedFaces = row.senders?.filter((sender) => sender.face.length > 0) ?? [];
+  // 聚合行头像错开量：刷屏（kind = "danmaku"）露 2/3（偏移 0.34）；低价礼物桶（kind = "gift"）保持 0.3。
+  const avatarStackOffset =
+    message.kind === "gift" ? AVATAR_STACK_OFFSET : AVATAR_STACK_OFFSET_FLOOD;
   const badges = badgesFor(message, anchorUid);
   const medal = medalColors(message);
   // 正文统一用主题前景色：上游允许发送者自定义弹幕颜色（舰长/老爷常见金黄），
@@ -309,7 +319,8 @@ export function MessageRow({
         // 否则这一行的身份簇 / 正文会整体左移，逐行对不齐（issue #8）。
         // 它钉在**首行盒**上（高度 = 行盒高、内部居中），不随折行掉到行的中间。
         // **聚合行**（issue 202609211940 第 3 条）在这里画 `senders` 那几张头像：
-        // 沿 X 轴依次向右错开 `AVATAR_STACK_OFFSET`（头像宽的 30%）、后一张压在前一张上，
+        // 沿 X 轴依次向右错开 `avatarStackOffset`（刷屏露 2/3 ⇒ 偏移 0.34；礼物桶露 70% ⇒ 0.3）、
+        // 后一张压在前一张上，
         // 最左那张在最上层（`z-index` 递减）；列宽随之变宽（`.avatarColStack`），
         // 宽 = 头像宽 + (张数 - 1) × 30%、高 = 头像宽，两张与每一张的 `left` 都从实际张数现算。
         <span
@@ -322,7 +333,7 @@ export function MessageRow({
               data-testid={t("avatar-stack")}
               style={{
                 width: `calc(var(--avatar) * ${(
-                  1 + AVATAR_STACK_OFFSET * (stackedFaces.length - 1)
+                  1 + avatarStackOffset * (stackedFaces.length - 1)
                 ).toFixed(2)})`,
               }}
             >
@@ -331,7 +342,7 @@ export function MessageRow({
                   key={sender.uid}
                   className={styles.avatarStackItem}
                   style={{
-                    left: `calc(var(--avatar) * ${(AVATAR_STACK_OFFSET * index).toFixed(2)})`,
+                    left: `calc(var(--avatar) * ${(avatarStackOffset * index).toFixed(2)})`,
                     zIndex: stackedFaces.length - index,
                   }}
                 >

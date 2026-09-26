@@ -1882,6 +1882,12 @@
   white-space: nowrap;
 }
 
+/* 本场还没有该族数据时整格灰显（`present` 为假，issue 260926 第 3 条）：
+   格子仍常驻、可点击，只是提示「尚无数据」，不再决定是否渲染。 */
+.giftPaneChipEmpty {
+  opacity: 0.5;
+}
+
 /* 选中的那一格：与房管面板「批量」那枚同一套**模式态**语言（强调色填充）。
    带上 `:hover` 是因为通用 `button:hover` 的优先级会把填充洗掉。 */
 .giftPaneChip[aria-pressed="true"],
@@ -2185,9 +2191,14 @@
   background: var(--accent);
 }
 
-/* 批量模式的**第 2 排**：全选 / 已选 N 项 / 批量动作。它紧贴第 1 排下方（issue #5 的「两排都贴顶」），
-   也是横向一排 —— 行内三样都不换行，360px 下按内容算得下（§9.1）。 */
+/* 批量操作条（issue #5 / 260926 第 5 条）：只在批量模式下渲染，作为面板**最后一行**
+   `position: sticky; bottom: 0` 钉在可见底部，从下方滑入（不再插在表单与列表之间，
+   避免高度突变与焦点丢失；按钮功能不变）。`animation` 在挂载时播放一次上滑，
+   `prefers-reduced-motion` 下不播。行内三样都不换行，360px 下按内容算得下（§9.1）。 */
 .adminBatchBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -2197,6 +2208,23 @@
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--r-2);
+  animation: adminBatchSlideIn 160ms ease;
+}
+
+/* 从面板底部下方滑入：初始整体下移自身高度（被 `overflow-y: auto` 裁掉），归零即到位。 */
+@keyframes adminBatchSlideIn {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adminBatchBar {
+    animation: none;
+  }
 }
 
 /* 名字格：放不下时默认**可横滑**（触屏 / 滚轮都能推，滚动条隐藏），
@@ -2275,6 +2303,12 @@
   margin: var(--sp-2) 0 var(--sp-1);
   max-height: 240px;
   overflow-y: auto;
+}
+
+/* 批量条钉在面板底部（`position: sticky; bottom: 0`）时会盖住名单最底一行，
+   开启批量时给名单补一段底部留白，让最后一条始终露在条上方（issue 260926 第 5 条）。 */
+.adminPanel[data-batch="true"] .adminList {
+  padding-bottom: calc(var(--tap-min) + var(--sp-3) + var(--sp-2));
 }
 
 .adminItem {

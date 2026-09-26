@@ -594,12 +594,13 @@ export function RoomView({
         (sum, row) => sum + amountYuan(row.message.amount, row.message.kind),
         0,
       ),
-      // 这一格**出不出**看本场有没有这一族（`panelAllRows`），**不看统计数**：
-      // `ui.gift_exclude_cheap_stats` 会把某一族的统计剔成 0，格子若跟着消失，
-      // 用户就点不掉已经选中的那一族筛选（筛选条上连入口都没了）。
+      // 这一格**永远渲染**（进房即存在，不再等本场收到某族才出现 —— issue 260926 第 3 条）：
+      // 之前用 `.filter(group => group.present)` 把「本场还没有的族」整格删掉，导致没收到
+      // 礼物 / 舰长 / SC 时三格根本不显示。现在三格常驻，`present` 只用于无数据时的灰显
+      // （见下面 chip 的 `data-present`），不再决定是否渲染该格。
       present: panelAllRows.some((row) => row.message.kind === kind),
     };
-  }).filter((group) => group.present);
+  });
 
   /** 三族合计（**总计条**）。筛后口径 —— 统计链是「先筛选、后汇总」。 */
   const giftTotalCount = giftStat.reduce((sum, row) => sum + row.count, 0);
@@ -1021,9 +1022,12 @@ export function RoomView({
                       <button
                         key={group.kind}
                         type="button"
-                        className={styles.giftPaneChip}
+                        className={`${styles.giftPaneChip}${
+                          group.present ? "" : ` ${styles.giftPaneChipEmpty}`
+                        }`}
                         data-testid="db-gift-chip"
                         data-kind={group.kind}
+                        data-present={group.present ? "true" : "false"}
                         aria-pressed={on}
                         title={`${group.label} ${group.count} 条${
                           group.yuan > 0 ? ` · ${yuanText(group.yuan)}` : ""

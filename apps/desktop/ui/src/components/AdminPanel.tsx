@@ -406,7 +406,7 @@ export function AdminPanel({
   /**
    * 第 1 排末尾的**批量图标钮**（issue #5：文字开关从 tab 行挪下来、换成图标，tab 行于是只留关闭）。
    * `aria-pressed` 说明它是**模式**不是一次性动作，打开态换成强调色填充；图标没有文字可读，
-   * 因此 `aria-label` / `title` 都要写全。打开后第 2 排出现在**本排正下方**。
+   * 因此 `aria-label` / `title` 都要写全。打开后批量操作条从面板**底部**滑入（issue 260926 第 5 条）。
    */
   const batchToggle = (
     <button
@@ -440,9 +440,11 @@ export function AdminPanel({
   );
 
   /**
-   * 第 2 排（**只在批量模式下**、紧贴第 1 排下方，横向一排不竖排）：全选 / 已选 N 项 / 批量动作。
+   * 批量操作条（**只在批量模式下**渲染）：全选 / 已选 N 项 / 批量动作。
    * 这一排把原来分居两处的「名单上方的全选头」与「表单下方的动作条」合到了一起（issue #5），
-   * testid 一个没动。全选与勾选都只作用**当前 tab**，动作条只提交当前 tab 的成员。
+   * testid 一个没动。它作为面板**最后一行** `position: sticky; bottom: 0` 钉在可见底部、
+   * 从下方滑入（issue 260926 第 5 条），不再插在表单与列表之间以免高度突变与焦点丢失。
+   * 全选与勾选都只作用**当前 tab**，动作条只提交当前 tab 的成员。
    */
   const batchBar = batch ? (
     <div className={styles.adminBatchBar} data-testid="db-admin-batch-bar">
@@ -469,7 +471,11 @@ export function AdminPanel({
   ) : null;
 
   return (
-    <div className={styles.adminPanel} data-testid="db-admin-panel">
+    <div
+      className={styles.adminPanel}
+      data-testid="db-admin-panel"
+      data-batch={batch ? "true" : undefined}
+    >
       <div className={styles.panelHead}>
         <div
           className={styles.adminRail}
@@ -544,7 +550,6 @@ export function AdminPanel({
               {actionButton}
               {batchToggle}
             </div>
-            {batchBar}
             {errorRow(errors.silent)}
             <div className={styles.adminList} onScroll={onListScroll}>
               {silent.length === 0 ? (
@@ -581,7 +586,6 @@ export function AdminPanel({
               {actionButton}
               {batchToggle}
             </div>
-            {batchBar}
             {errorRow(errors.blacklist)}
             <div className={styles.adminList} onScroll={onListScroll}>
               {blacklist.length === 0 ? (
@@ -626,7 +630,6 @@ export function AdminPanel({
               {actionButton}
               {batchToggle}
             </div>
-            {batchBar}
             {errorRow(errors.keywords)}
             <div className={styles.adminList} onScroll={onListScroll}>
               {keywords.length === 0 ? (
@@ -647,6 +650,11 @@ export function AdminPanel({
           </>
         )}
       </div>
+
+      {/* 批量操作条：开启批量时才渲染，作为面板**最后一行** `position: sticky; bottom: 0`
+          钉在可见底部、从下方滑入（issue 260926 第 5 条）—— 不再插在表单与列表之间，
+          避免高度突变与焦点丢失；按钮功能（全选 / 已选计数 / 批量动作）不变。 */}
+      {batchBar}
 
       {menu && (
         <ContextMenu

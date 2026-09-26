@@ -1,4 +1,10 @@
-import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import type { AdminAction, AdminUser } from "../types";
@@ -33,6 +39,21 @@ const BATCH_LABEL: Record<AdminTab, string> = {
   silent: "批量解除禁言",
   blacklist: "批量移出黑名单",
   keywords: "批量删除屏蔽词",
+};
+
+/**
+ * 输入框那一枚按钮的**两种动作**：对象**不在**名单里 = 加进去、**在**名单里 = 拿掉。
+ * 三态的宽度按这两组里最长的那一档（「添加 / 删除屏蔽词」）定死，见 `.adminAction`。
+ */
+const ACTION_ON: Record<AdminTab, string> = {
+  silent: "禁言",
+  blacklist: "拉黑",
+  keywords: "添加屏蔽词",
+};
+const ACTION_OFF: Record<AdminTab, string> = {
+  silent: "解除禁言",
+  blacklist: "移出黑名单",
+  keywords: "删除屏蔽词",
 };
 
 /** tabpanel 的 id：tab 的 `aria-controls` 与它的 `aria-labelledby` 靠它对上。 */
@@ -89,6 +110,8 @@ export function AdminPanel({
   const [blackUid, setBlackUid] = useState("");
   const [word, setWord] = useState("");
   const railRef = useRef<HTMLDivElement>(null);
+  /** 输入框那一枚按钮的三态（需求 2026-09-26）。 */
+  const [check, setCheck] = useState<CheckState>({ phase: "idle" });
 
   // tab 文案**不再带计数**（issue #3：「禁言 3」→「禁言」）：条数就是三块列表自己的长度
   // （`silent` / `blacklist` / `keywords`），屏幕上由 `.adminList` 里的芯片数直接给出，
@@ -216,6 +239,113 @@ export function AdminPanel({
         </span>
       </span>
     </div>
+  );
+
+  /** 按钮三态（需求 2026-09-26）：`idle` 禁用灰 → `checking` 转圈 → `done` 给出**实际**动作。 */
+  type CheckState =
+    | { phase: "idle" }
+    | { phase: "checking" }
+    | { phase: "done"; inList: boolean };
+
+  /** 输入框解析出的目标（`undefined` = 这一档按钮保持禁用灰）。 */
+  const target: string | number | undefined =
+    tab === "keywords"
+      ? word.trim().length > 0
+        ? word.trim()
+        : undefined
+      : parseUid(tab === "silent" ? muteUid : blackUid);
+
+  /**
+   * 这个目标在不在名单里 —— 按钮三态的依据。
+   *
+   * **现版本只查已加载的那一批**（同步即可）；返回 `Promise` 是为了让三态里「检查中」
+   * 那一档真的可见，接上全量读取时只是把这里换成一次 `await` 上游读取。
+   * 屏蔽词按**纯文本、完全匹配、无正则** —— 上游**实际**怎么匹配由服务端决定，
+   * 界面不对它做任何承诺文案。
+   */
+  const checkTarget = useCallback(
+    (value: string | number): Promise<boolean> => {
+      const inList =
+        tab === "keywords"
+          ? keywords.includes(String(value))
+          : (tab === "silent" ? silent : blacklist).some((user) => user.uid === value);
+      return Promise.resolve(inList);
+    },
+    [tab, keywords, silent, blacklist],
+  );
+
+  useEffect(() => {
+    if (target === undefined) {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setCheck({ phase: "idle" });
+      return;
+    }
+    let alive = true;
+    // oxlint-disable-next-line react/set-state-in-effect
+    setCheck({ phase: "checking" });
+    void checkTarget(target).then((inList) => {
+      if (alive) setCheck({ phase: "done", inList });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [target, checkTarget]);
+
+  /** 按下：按检查结果决定「加进去」还是「拿掉」。写操作一律先交上层出二次确认。 */
+  const applyAction = () => {
+    if (target === undefined || check.phase !== "done") return;
+    if (tab === "keywords") {
+      const value = String(target);
+      onConfirm(
+        check.inList
+          ? { kind: "keyword_del", word: value }
+          : { kind: "keyword_add", word: value },
+      );
+      setWord("");
+      return;
+    }
+    const uid = Number(target);
+    if (tab === "silent") {
+      onConfirm(
+        check.inList
+          ? { kind: "unmute", uid, uname: "" }
+          : { kind: "mute", uid, uname: "", hour: 0 },
+      );
+      return;
+    }
+    onConfirm(
+      check.inList
+        ? { kind: "blacklist_del", uid, uname: "" }
+        : { kind: "blacklist_add", uid, uname: "" },
+    );
+  };
+
+  /**
+   * 三态按钮（需求 2026-09-26）：`禁言（禁用灰）` → `转圈（检查中）` → `禁言` / `解除禁言`。
+   * **宽度由 CSS 定死**，态与态之间**不跳位** —— 这正是用户否掉「按钮文案自动切换」的原因。
+   */
+  const actionButton = (
+    <button
+      type="button"
+      className={styles.adminAction}
+      data-testid="db-admin-action"
+      data-state={check.phase}
+      disabled={busy || target === undefined || check.phase !== "done"}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={applyAction}
+    >
+      {check.phase === "checking" ? (
+        <span
+          className={styles.adminSpinner}
+          data-testid="db-admin-action-spinner"
+          aria-hidden="true"
+        />
+      ) : check.phase === "done" && check.inList ? (
+        ACTION_OFF[tab]
+      ) : (
+        ACTION_ON[tab]
+      )}
+    </button>
   );
 
   /**
@@ -392,19 +522,7 @@ export function AdminPanel({
                 placeholder="观众 uid"
                 onChange={(event) => setMuteUid(event.target.value)}
               />
-              <button
-                type="button"
-                disabled={busy || parseUid(muteUid) === undefined}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const uid = parseUid(muteUid);
-                  if (uid !== undefined) {
-                    onConfirm({ kind: "mute", uid, uname: "", hour: 0 });
-                  }
-                }}
-              >
-                禁言
-              </button>
+              {actionButton}
               {batchToggle}
             </div>
             {batchBar}
@@ -441,19 +559,7 @@ export function AdminPanel({
                 placeholder="观众 uid"
                 onChange={(event) => setBlackUid(event.target.value)}
               />
-              <button
-                type="button"
-                disabled={busy || parseUid(blackUid) === undefined}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const uid = parseUid(blackUid);
-                  if (uid !== undefined) {
-                    onConfirm({ kind: "blacklist_add", uid, uname: "" });
-                  }
-                }}
-              >
-                拉黑
-              </button>
+              {actionButton}
               {batchToggle}
             </div>
             {batchBar}
@@ -498,19 +604,7 @@ export function AdminPanel({
                   setWord("");
                 }}
               />
-              <button
-                type="button"
-                disabled={busy || word.trim().length === 0}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const value = word.trim();
-                  if (value.length === 0) return;
-                  onConfirm({ kind: "keyword_add", word: value });
-                  setWord("");
-                }}
-              >
-                添加屏蔽词
-              </button>
+              {actionButton}
               {batchToggle}
             </div>
             {batchBar}

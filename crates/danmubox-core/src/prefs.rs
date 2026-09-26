@@ -148,7 +148,7 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec(
             "ui.gift_pane_ratio",
             Ty::Num,
-            json!(0.35),
+            json!(0.25),
             Some(0.10),
             Some(0.90),
             None,
@@ -686,7 +686,7 @@ mod tests {
             json!(false),
             "默认礼物在下、弹幕在上（与改前一致，契约 §8）"
         );
-        assert_eq!(prefs.get("ui.gift_pane_ratio").unwrap(), json!(0.35));
+        assert_eq!(prefs.get("ui.gift_pane_ratio").unwrap(), json!(0.25));
         assert_eq!(
             prefs.get("ui.gift_collapse_cheap").unwrap(),
             json!(false),
@@ -848,7 +848,7 @@ mod tests {
         );
         assert_eq!(
             loaded.get("ui.gift_pane_ratio").unwrap(),
-            json!(0.35),
+            json!(0.25),
             "越界的份额回落默认值"
         );
         assert!(

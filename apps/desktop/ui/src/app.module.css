@@ -1637,46 +1637,97 @@
 }
 
 /* 礼物 / SC 栏：**与弹幕区上下分区的一栏**（issue #8），高度由份额驱动（不再按内容、也不再固定）。
-   栏内**没有自己的行样式**了（用户 2026-09-16 第 2 条）：行就是弹幕行（`MessageRow`，
+   栏内**没有自己的行样式**（用户 2026-09-16 第 2 条）：行就是弹幕行（`MessageRow`，
    scope="gift"），列表就是 `MessageList`（`.chatArea` / `.scroller` / `.msgList`）——
-   布局、底色、自动滚动全部与弹幕区同一套代码；两条 CSS 规则因此只剩折叠头与汇总。 */
-.giftDockHead {
+   布局、底色、自动滚动全部与弹幕区同一套代码；这里的规则因此只剩**两条统计条**。
+
+   三段 = 总计条 / 列表 / 筛选条，**总计条永远贴屏幕中心（贴分割条）**、筛选条永远在外侧**
+   （需求 2026-09-26）。顺序由 `data-on-top` 翻 `flex-direction`，**不搬节点** ——
+   列表的滚动位置与虚拟列表状态不受礼物栏在上在下影响。
+   ⚠ 不能指望外层 `.panes` 的 `column-reverse`：它只翻两栏，栏内不受影响。 */
+.giftPane {
   display: flex;
-  flex: none; /* 折叠头永远按自己的高度占位，不被展开区挤压 */
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.giftPane[data-on-top="true"] {
+  flex-direction: column-reverse;
+}
+
+/* 总计条：`礼物 12条 ¥1,168.7` + 右端展开 / 收起图标。
+   **它就是拖动热区**（`cursor: row-resize` 与那条热区由 SplitPanes 负责，这里只管排版）。
+   折叠态它是唯一一条，因此它也是这一栏的最小高度（带 `data-pane-head`，实测进 `--gift-min-h`）。 */
+.giftPaneTotal {
+  display: flex;
+  flex: none; /* 永远按自己的高度占位，不被展开区挤压 */
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
   padding: var(--sp-1) var(--sp-3);
-  border: none;
-  border-radius: 0;
-  background: transparent;
   font-size: var(--fs-2);
   color: var(--fg-dim);
-  text-align: left;
 }
 
-.giftDockHead:hover {
-  border: none;
-  background: var(--hover-wash);
-}
-
-.giftDockTitle {
-  color: var(--fg);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.giftDockSummary {
+.giftPaneTotalText {
   flex: 1;
   min-width: 0;
+  color: var(--fg);
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.giftDockToggle {
+/* 筛选条：三格分类金额（`icon + ¥金额`），点击切换筛选（多选并集）。
+   放在**远离**热区的外侧 —— 热区会吞掉它覆盖的那 8px 点击，三格密集点击不能让给它。 */
+.giftPaneFilter {
+  display: flex;
   flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+}
+
+.giftPaneChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2);
   color: var(--fg-dim);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* 选中的那一格：与房管面板「批量」那枚同一套**模式态**语言（强调色填充）。
+   带上 `:hover` 是因为通用 `button:hover` 的优先级会把填充洗掉。 */
+.giftPaneChip[aria-pressed="true"],
+.giftPaneChip[aria-pressed="true"]:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.giftPaneIcon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+/* 「返回」箭头旋转 90° 充当展开 / 收起：**展开态朝上**（点它收起）、**收起态朝下**（点它展开）。
+   原图标指向左，`rotate(90deg)` 顺时针 → 朝上，`rotate(-90deg)` → 朝下。 */
+.ctlIcon[data-dir="up"] {
+  transform: rotate(90deg);
+}
+
+.ctlIcon[data-dir="down"] {
+  transform: rotate(-90deg);
 }
 
 /* 「回到最新」（用户 2026-09-13 #2：「指这整个按钮删掉，用一个返回按钮旋转 90° 来代替」）：
@@ -2795,11 +2846,6 @@
     background: var(--bg-elevated);
     padding-top: var(--sp-2);
     z-index: 1;
-  }
-
-  /* 礼物折叠条只占一行，不把弹幕列表挤掉 */
-  .giftDockHead {
-    flex-wrap: nowrap;
   }
 
   /* 批量模式的勾选行：复选框本体不撑高（撑了会变形），热区交给它外面那层 label

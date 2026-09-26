@@ -45,6 +45,9 @@
     // 替身里必须与 prefs_get 同形（真实命令返回的是**合并过默认值的全集**），否则界面拿到的
     // 是 undefined、断言也就量不到「默认值」这件事。
     "ui.gift_pane_on_top": false, "ui.gift_pane_ratio": 0.35,
+    // 礼物栏内按 kind 筛选（契约 §8）：**默认空数组 = 全显示**，界面只渲染礼物 / SC / 大航海
+    // 三族。替身里必须与 prefs_get 同形，界面才量得到「默认全显示」这件事。
+    "ui.gift_pane_kinds": [],
     // 低价礼物两枚开关（issue 2609162056 第 3 / 4 条，契约 §8）：**默认都是 false**（改前的
     // 形态就是「不折叠、不剔除」）。替身里必须与 prefs_get 同形，界面才量得到「默认关」这件事。
     "ui.gift_collapse_cheap": false, "ui.gift_exclude_cheap_stats": false,

@@ -401,6 +401,15 @@ export interface Prefs {
    */
   "ui.gift_pane_ratio": number;
   /**
+   * **礼物栏内**按 kind 筛选（契约 §8）：空数组 = 全显示；选中 N 项 = 只显示这 N 项的**并集**。
+   *
+   * **只作用于礼物栏** —— 弹幕区有自己的 `filter.kinds`，两枚互不串味：这枚键改的是礼物栏
+   * 的条目与统计，弹幕流那一份一个像素都不动（纯派生，见 `filtering.giftPaneRows`）。
+   * 取值域在界面上就是 `GIFT_KINDS` 那三族（礼物 / SC / 大航海）；后端按 `filter.kinds`
+   * 同一套 `KindArr` 校验（六种 kind 的任意子集），写进别的 kind 是**无效果**而不是非法值。
+   */
+  "ui.gift_pane_kinds": MessageKind[];
+  /**
    * 把单个价值 ≤ 0.1 元的礼物合并成一条（契约 §8，默认 `false` = 一条一行不变）。
    * **两个区域都生效**：弹幕区与礼物栏各折一次（`filtering.splitGiftRows` 对两头各调
    * `collapseCheapGiftRows`），SC / 大航海不在其列。纯派生、不改缓冲 —— 关掉即逐条回来

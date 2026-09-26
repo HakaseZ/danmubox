@@ -96,7 +96,7 @@ graph LR
 | `session` | `RoomRuntime` 会话编排（`session.rs:320`）：身份 / collector / driver 三个受监督任务、`MessageBuffer` 环形缓冲、`HistoryQuery` 只读查询、手动重连信号；`close()` 广播关闭、取消、abort 三个任务并清空缓冲（`session.rs:527`） | 不解析协议（拿到的已是 `Message`）；不落盘 |
 | `paths` | 跨平台数据目录与文件路径：macOS / Windows / 其他三套 `data_dir()`（`paths.rs:8`）、`config_path()` / `prefs_path()`（`:16` / `:21`），`DANMUBOX_HOME` 覆盖 | 不做 IO；不解析文件内容 |
 | `config` | `config.toml` 凭据存储：`Profile` 七字段、`active_profile`、`ConfigStore` 的加载与原子替换写（`config.rs:382`）、手写 `Debug` 遮蔽（`config.rs:423`） | 不发网络请求；不判定凭据是否有效（→ `bili::auth`） |
-| `prefs` | `prefs.json` 偏好白名单：契约 §8 的全部键（24 项 `SPECS`，`prefs.rs:103`–`294`，逐键由 `spec_table_matches_contract_keys` 直接读契约比对，`prefs.rs:610`）、读时与默认值合并、写时未知键 / 非法值报 `BAD_REQUEST`（`prefs.rs:387`） | 不存凭据；不含展示与过滤逻辑 |
+| `prefs` | `prefs.json` 偏好白名单：契约 §8 的全部键（25 项 `SPECS`，`prefs.rs:103`–`301`，逐键由 `spec_table_matches_contract_keys` 直接读契约比对，`prefs.rs:610`）、读时与默认值合并、写时未知键 / 非法值报 `BAD_REQUEST`（`prefs.rs:387`） | 不存凭据；不含展示与过滤逻辑 |
 | `error` | `DanmuboxError` 枚举与 `Result`，进程内错误归一化 | 不定义 IPC 错误码集合（见 `ipc.md` §2） |
 
 ### 2.2 `danmubox-bili` 模块划分

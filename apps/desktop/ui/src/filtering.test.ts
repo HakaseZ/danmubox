@@ -36,6 +36,7 @@ const PREFS_BASE: Prefs = {
   "ui.gift_panel": true,
   "ui.gift_pane_on_top": false,
   "ui.gift_pane_ratio": 0.35,
+  "ui.gift_pane_kinds": [],
   "ui.gift_collapse_cheap": false,
   "ui.gift_exclude_cheap_stats": false,
   "ui.interact_auto_hide": true,

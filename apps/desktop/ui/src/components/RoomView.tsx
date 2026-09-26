@@ -16,11 +16,12 @@ import { BACK_PRIORITY, registerBackHandler } from "../back";
 import { LIVE_DOT_CLASS, LIVE_TEXT, liveKindOf } from "../liveKind";
 import { useApp } from "../store";
 import {
-  amountText,
+  amountYuan,
   formatCount,
   GIFT_KINDS,
   giftStatRows,
   splitGiftRows,
+  yuanText,
   type DisplayRow,
 } from "../filtering";
 import {
@@ -31,6 +32,7 @@ import {
   type AdminAction,
   type Emote,
   type Message,
+  type MessageKind,
   type Prefs,
   type RoomView as RoomViewData,
   type EmoteToken,
@@ -530,6 +532,15 @@ export function RoomView({
   const giftPanel = prefs["ui.gift_panel"];
   // 共享分区的顺序与份额（契约 §8）：两枚都是**持久化**的偏好，重开应用保持。
   const giftPaneOnTop = prefs["ui.gift_pane_on_top"];
+  // 礼物栏内按 kind 筛选（契约 §8）：空数组 = 全显示。
+  const giftPaneKinds = prefs["ui.gift_pane_kinds"];
+  /* 三族图标（`public/icons/`，由 Vite 原样拷到产物根）：礼物是从官方雪碧图里切出来的矢量，
+     SC 与舰长是官方位图。三枚都是**装饰**，`alt=""` —— 可读名由按钮的 `title` / 文本给。 */
+  const GIFT_ICON: Partial<Record<MessageKind, string>> = {
+    gift: "/icons/gift.svg",
+    superchat: "/icons/sc.png",
+    guard: "/icons/guard.png",
+  };
 
   /**
    * 独立礼物栏折叠态的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**。
@@ -548,40 +559,50 @@ export function RoomView({
    * （它数的就是这份汇总的条数，不是礼物栏的行数）。
    */
   const giftStat = giftStatRows(giftRows, prefs);
-  const giftGroups = GIFT_KINDS
-    .map((kind) => {
-      const group = giftStat.filter((row) => row.message.kind === kind);
-      return {
-        kind,
-        label: KIND_LABEL[kind],
-        count: group.reduce((sum, row) => sum + row.count, 0),
-        amount: amountText(
-          group.reduce((sum, row) => sum + row.message.amount, 0),
-          kind,
-        ),
-      };
-    })
-    .filter((group) => group.count > 0);
+  /** 三族各自的条数与金额（**筛选条**那三个格）。空组不出现。 */
+  const giftGroups = GIFT_KINDS.map((kind) => {
+    const group = giftStat.filter((row) => row.message.kind === kind);
+    return {
+      kind,
+      label: KIND_LABEL[kind],
+      count: group.reduce((sum, row) => sum + row.count, 0),
+      // 三族单位已统一为元（`amountYuan`），因此可以跨族相加。
+      yuan: group.reduce(
+        (sum, row) => sum + amountYuan(row.message.amount, row.message.kind),
+        0,
+      ),
+    };
+  }).filter((group) => group.count > 0);
+
+  /** 三族合计（**总计条**）。条数与金额都与筛选条同源 —— 统计链是「先筛选、后汇总」。 */
+  const giftTotalCount = giftGroups.reduce((sum, group) => sum + group.count, 0);
+  const giftTotalYuan = giftGroups.reduce((sum, group) => sum + group.yuan, 0);
+  /** 礼物栏内正在按 kind 筛选（契约 §8 `ui.gift_pane_kinds` 非空）。 */
+  const giftFiltering = giftPaneKinds.length > 0;
 
   /**
-   * 折叠头的汇总文本（docs/ui.md §5.3），三种形态：
-   * - 统计集非空 → 按 kind 分组的「本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 / …」；
-   * - 统计集空、但礼物栏里**还有条目** → 「本场 低价礼物已剔除」：`ui.gift_exclude_cheap_stats`
-   *   把低价礼物整条剔出统计，而它们在展开区里照常可见 —— 这时写「本场暂无礼物」是自相矛盾；
-   * - 统计集空且礼物栏也是空的 → 「本场暂无礼物」（原口径）。
+   * 总计条的文案（需求 2026-09-26）：`礼物 12条 ¥1,168.7`。
+   *
+   * **开启筛选后只给条数、不给金额** —— 金额已按族分列在筛选条上，总计再压成一个总额
+   * 就是同一份数的第二次出现，两个数字各差一次筛选就会互相打架。
+   *
+   * 统计集空的两档沿用改前的口径：礼物栏里还有条目（被 `ui.gift_exclude_cheap_stats` 剔出
+   * 统计的低价礼物）时写「低价礼物已剔除」，而不是「0 条」—— 列表里明明有东西。
    */
-  const giftSummaryText =
+  const giftTotalText =
     giftGroups.length > 0
-      ? `本场 ${giftGroups
-          .map((group) =>
-            group.amount.length > 0
-              ? `${group.label} ${group.count} · ${group.amount}`
-              : `${group.label} ${group.count}`,
-          )
-          .join(" / ")}`
+      ? `礼物 ${giftTotalCount}条${giftFiltering ? "" : ` ${yuanText(giftTotalYuan)}`}`
       : giftRows.length > 0
-        ? "本场 低价礼物已剔除"
-        : "本场暂无礼物";
+        ? "低价礼物已剔除"
+        : "礼物 0条";
+
+  /** 点筛选条上的一格：选中的族取并集，取消最后一个即回到「全显示」（空数组）。 */
+  const toggleGiftKind = (kind: (typeof GIFT_KINDS)[number]) =>
+    onPrefs({
+      "ui.gift_pane_kinds": giftPaneKinds.includes(kind)
+        ? giftPaneKinds.filter((item) => item !== kind)
+        : [...giftPaneKinds, kind],
+    });
 
   const copyText = async (text: string) => {
     try {
@@ -889,24 +910,54 @@ export function RoomView({
            空态文案在 `empty` 上（判据「哪一套行算本场」留在调用方）。 */
         gift={
           giftPanel ? (
-            <>
-              <button
-                className={styles.giftDockHead}
-                data-testid="db-gift-dock"
-                data-pane-head
-                aria-expanded={giftOpen}
-                onClick={toggleGiftDock}
-              >
-                <span className={styles.giftDockTitle}>
-                  礼物 / SC（{giftGroups.reduce((sum, group) => sum + group.count, 0)}）
+            /* 礼物栏内部就这三段：总计条 / 列表 / 筛选条，由 `.giftPane` 一个容器排。
+               **总计条永远贴屏幕中心（贴分割条）**、筛选条永远在外侧，顺序靠
+               `flex-direction` 翻转（`data-on-top`）—— 与 `.panes` 翻两栏同一套口径，
+               不搬节点：列表的滚动位置与虚拟列表状态不受礼物栏在上在下影响。
+               ⚠ 不能指望外层 `.panes` 的 `column-reverse` 把这里也翻过来：它只翻两栏。
+
+               总计条带 `data-pane-head`：折叠态它是唯一一条，也就是这一栏的最小高度
+               （SplitPanes 实测它写进 `--gift-min-h`）。展开态**没有**折叠头 ——
+               「收起」的入口就是总计条右端那枚图标。 */
+            <div
+              className={styles.giftPane}
+              data-testid="db-gift-pane"
+              data-on-top={giftPaneOnTop ? "true" : undefined}
+            >
+              {/* 总计条：贴中心；**它就是拖动热区**（需求 2026-09-26，见 SplitPanes）。
+                  文案 `礼物 12条 ¥1,168.7`；开启筛选后只给条数（金额已在筛选条上分列）。 */}
+              <div className={styles.giftPaneTotal} data-testid="db-gift-total" data-pane-head>
+                <span className={styles.giftPaneTotalText} data-testid="db-gift-total-text">
+                  {giftTotalText}
                 </span>
-                {/* 折叠态汇总**按 kind 分组**：三组单位已统一为元（契约 §5）—— 分组结构保留，是否合并成一条合计待用户拍板（§5.3）。
-                    文本本体在 `giftSummaryText`（本组件上方，与统计集同源）：`ui.gift_exclude_cheap_stats` 剔掉低价后，「本场暂无礼物」不再成立。 */}
-                <span className={styles.giftDockSummary} data-testid="db-gift-summary">
-                  {giftSummaryText}
-                </span>
-                <span className={styles.giftDockToggle}>{giftOpen ? "收起" : "展开"}</span>
-              </button>
+                <button
+                  type="button"
+                  className={styles.ctlRound}
+                  data-testid="db-gift-toggle"
+                  aria-expanded={giftOpen}
+                  aria-label={giftOpen ? "收起礼物栏" : "展开礼物栏"}
+                  title={giftOpen ? "收起礼物栏" : "展开礼物栏"}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={toggleGiftDock}
+                >
+                  {/* 返回箭头旋转 90°（展开态朝上、收起态朝下），图标规范同 §3.1。 */}
+                  <svg
+                    className={styles.ctlIcon}
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    data-dir={giftOpen ? "up" : "down"}
+                  >
+                    <path
+                      d="M19.125 12H4.875M10.875 6 4.875 12l6 6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
               {giftOpen && (
                 <MessageList
                   rows={giftRows}
@@ -917,7 +968,41 @@ export function RoomView({
                   onMenu={(message, at) => setMessageMenu({ at, message })}
                 />
               )}
-            </>
+              {/* 筛选条：**远离**中心的外侧。三格 = 三族的分类金额，点击切换筛选
+                  （不选 = 全显示，选多项 = 并集，契约 §8 `ui.gift_pane_kinds`）。
+                  放在外侧是为了不与热区抢点击 —— 热区会吞掉它覆盖的那 8px。 */}
+              {giftOpen && (
+                <div className={styles.giftPaneFilter} data-testid="db-gift-filter">
+                  {giftGroups.map((group) => {
+                    const on = giftPaneKinds.includes(group.kind);
+                    return (
+                      <button
+                        key={group.kind}
+                        type="button"
+                        className={styles.giftPaneChip}
+                        data-testid="db-gift-chip"
+                        data-kind={group.kind}
+                        aria-pressed={on}
+                        title={`${group.label} ${group.count} 条${
+                          group.yuan > 0 ? ` · ${yuanText(group.yuan)}` : ""
+                        }（点击筛选）`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => toggleGiftKind(group.kind)}
+                      >
+                        <img
+                          className={styles.giftPaneIcon}
+                          src={GIFT_ICON[group.kind]}
+                          alt=""
+                          width={16}
+                          height={16}
+                        />
+                        <span>{group.yuan > 0 ? yuanText(group.yuan) : `${group.count} 条`}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           ) : null
         }
       />

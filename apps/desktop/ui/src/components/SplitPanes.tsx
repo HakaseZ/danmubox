@@ -272,6 +272,8 @@ export function SplitPanes({
     let moved = false;
     /** 这一次拖动里礼物栏的折叠状态（`giftCollapsed` 是按下那一刻的快照，拖动中不跟着变）。 */
     let collapsed = giftCollapsed;
+    /** 按下那一刻它是不是折叠着：ESC / pointercancel 要还原到这一档（见 `abort`）。 */
+    const wasCollapsed = giftCollapsed;
 
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
@@ -296,6 +298,11 @@ export function SplitPanes({
         // （`collapsed` 举起来就不再调），免得指针每动一像素都回写一遍状态。
         collapsed = true;
         handlers.current.onCollapse();
+      } else if (collapsed && !wasCollapsed && raw > PANE_RATIO_MIN) {
+        // 反悔了：刚收起又把指针拖回下限以内 ⇒ 重新展开。只在「按下时本来是展开的」这一档
+        // 成立 —— 按下时就折叠着的（第一下移动已经把它展开），反向拖不该再把它收回去。
+        collapsed = false;
+        handlers.current.onExpand();
       }
       liveRef.current = latest;
       applyShare(latest);
@@ -312,6 +319,13 @@ export function SplitPanes({
     /** ESC / pointercancel：撤销这一次拖动，回到已落盘的那一份（不写偏好）。 */
     const abort = () => {
       releaseRef.current?.();
+      // 开合状态也要还原：拖动途中收起 / 展开过而按下时是另一档的，ESC 之后得回到那一档 ——
+      // 否则「撤销这一次拖动」只撤回了份额，礼物栏却留在被这一拖改过的开合状态上。
+      if (collapsed !== wasCollapsed) {
+        collapsed = wasCollapsed;
+        if (wasCollapsed) handlers.current.onCollapse();
+        else handlers.current.onExpand();
+      }
       if (liveRef.current === null) return;
       liveRef.current = null;
       applyShare(baseGrow);

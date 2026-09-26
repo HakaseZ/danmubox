@@ -9,6 +9,14 @@ const ALL_KINDS: MessageKind[] = [
   "guard",
   "system",
 ];
+/**
+ * 真正走 `filter.kinds` 白名单的那几种。
+ *
+ * `interact` **不在此列**：它的勾选框绑的是 `ui.interact_single_slot`（互动消息一律不进
+ * 弹幕列表，改由底部浮层呈现，见 `docs/ui.md` §4.8）。取消到一项不剩时的兜底因此只恢复
+ * 这五种，不把 `interact` 塞回去。
+ */
+const LIST_KINDS: MessageKind[] = ALL_KINDS.filter((kind) => kind !== "interact");
 
 interface Props {
   prefs: Prefs;
@@ -34,7 +42,10 @@ export function FilterBar({ prefs, onChange }: Props) {
       ? current.filter((item) => item !== kind)
       : [...current, kind];
     // 全选等于不过滤；一个都不选则什么都看不到，因此至少保留一项。
-    onChange({ "filter.kinds": next.length === 0 ? ALL_KINDS : next });
+    // 兜底里**不含 `interact`**：那一枚勾选框绑的是 `ui.interact_single_slot`（见下面
+    // 清单里的分支），不归 `filter.kinds` 管 —— 塞回白名单只会让它躺一个自己控制不了的
+    // kind（存量 `prefs.json` 里 `filter.kinds` 带 `interact` 的那些值仍照原样保留）。
+    onChange({ "filter.kinds": next.length === 0 ? LIST_KINDS : next });
   };
 
   return (

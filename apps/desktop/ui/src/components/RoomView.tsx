@@ -594,8 +594,12 @@ export function RoomView({
         (sum, row) => sum + amountYuan(row.message.amount, row.message.kind),
         0,
       ),
+      // 这一格**出不出**看本场有没有这一族（`panelAllRows`），**不看统计数**：
+      // `ui.gift_exclude_cheap_stats` 会把某一族的统计剔成 0，格子若跟着消失，
+      // 用户就点不掉已经选中的那一族筛选（筛选条上连入口都没了）。
+      present: panelAllRows.some((row) => row.message.kind === kind),
     };
-  }).filter((group) => group.count > 0);
+  }).filter((group) => group.present);
 
   /** 三族合计（**总计条**）。筛后口径 —— 统计链是「先筛选、后汇总」。 */
   const giftTotalCount = giftStat.reduce((sum, row) => sum + row.count, 0);

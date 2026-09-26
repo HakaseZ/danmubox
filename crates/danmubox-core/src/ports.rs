@@ -255,8 +255,20 @@ pub trait EmoteProvider: Send + Sync {
 /// 纪律：任何写操作都**不得以真实观众为目标**做验证（`AGENT.md` §8.15）。
 #[async_trait]
 pub trait RoomAdmin: Send + Sync {
-    /// 当前禁言名单（只读）。
-    async fn silent_list(&self, room_id: i64) -> Result<Vec<SilentUser>>;
+    /// 当前禁言名单的**一段**（只读，**增量加载**用）。
+    ///
+    /// `offset` = 调用方手上已有的条数，`limit` = 这次还要拿几条；返回
+    /// `(本次新增, 上游总数)`。
+    ///
+    /// 为什么要分页：该接口每页固定 10 条，一个真实房间有 481 条 = 49 次 POST；
+    /// 一次调用把整份翻完（改前的做法）会连发几十次，被上游风控挡回 HTTP 412
+    /// 的验证页（`docs/protocol.md` A45）。**翻页与限速由适配器负责**，本层只表达意图。
+    async fn silent_list(
+        &self,
+        room_id: i64,
+        offset: i64,
+        limit: i64,
+    ) -> Result<(Vec<SilentUser>, i64)>;
 
     /// 禁言一名观众。`hour`：`-1` 永久 / `0` 本场直播 / 其余为小时数；
     /// `msg` 是触发禁言的那条弹幕原文（上游可选）。
@@ -265,8 +277,15 @@ pub trait RoomAdmin: Send + Sync {
     /// 解除禁言。
     async fn unmute(&self, room_id: i64, uid: i64) -> Result<()>;
 
-    /// 房间黑名单（只读）。
-    async fn blacklist(&self, room_id: i64) -> Result<Vec<BlacklistedUser>>;
+    /// 房间黑名单的**一段**（只读，增量加载用）。语义与 [`Self::silent_list`] 完全相同：
+    /// `offset` = 已有条数、`limit` = 本次再拿几条，返回 `(本次新增, 上游总数)`。
+    /// 该接口按 `anchor_id` 寻址、每页 30 条。
+    async fn blacklist(
+        &self,
+        room_id: i64,
+        offset: i64,
+        limit: i64,
+    ) -> Result<(Vec<BlacklistedUser>, i64)>;
 
     /// 把一名观众加入黑名单。
     async fn blacklist_add(&self, room_id: i64, uid: i64) -> Result<()>;

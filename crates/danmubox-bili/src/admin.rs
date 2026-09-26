@@ -59,12 +59,20 @@ const EP_KEYWORD_DEL: &str =
 
 /// 黑名单单页条数（官方前端 `ps`；实测该接口接受 30）。
 const BLACK_PAGE_SIZE: i64 = 30;
-/// 翻页上限，防止 `total` / `total_page` 恒真时无限请求（安全阀，非上游约定）。
+/// 禁言名单每页固定 10 条（上游 `ps` 是**页码**不是条数，实测 `ps=1` 取到前 10 条）。
+const SILENT_PAGE_SIZE: i64 = 10;
+/// 翻页之间的间隔。
+///
+/// 一份 481 条的禁言名单 = 49 次 POST；改前一次调用把整份翻完、**连发**几十次，
+/// 被上游风控挡回 HTTP 412 的验证页（`docs/protocol.md` A45，`text/html`）。
+/// 串行 + 间隔是唯一不触发风控的路径 —— 代价是单次全量从「秒级」变成「数秒」，
+/// 这是刻意换来的：房管面板是低频功能，宁慢勿被挡。
+const PAGE_GAP: std::time::Duration = std::time::Duration::from_millis(200);
+/// 单次调用最多翻多少页（安全阀，防 `total` / `total_page` 恒真时无限请求）。
 ///
 /// 取值有实测依据：禁言名单**每页固定 10 条**，一个真实房间实测 481 条 / 49 页——
-/// 上限太小会在真实房间里静默截断（曾用 20，恰好卡在 200 条）。触顶时打 `warn`，
-/// 调用方从日志就能看出结果被截断。
-const MAX_PAGES: i64 = 200;
+/// 上限太小会在真实房间里静默截断。触顶时打 `warn`，调用方从日志就能看出被截断。
+const MAX_PAGES: i64 = 60;
 
 /// 房管操作适配器。凭据由 `BiliHttp` 实时读取当前 profile。
 pub struct BiliAdmin {
@@ -213,10 +221,23 @@ pub fn map_keywords(value: &Value) -> Vec<String> {
 
 #[async_trait]
 impl RoomAdmin for BiliAdmin {
-    async fn silent_list(&self, room_id: i64) -> Result<Vec<SilentUser>> {
+    async fn silent_list(
+        &self,
+        room_id: i64,
+        offset: i64,
+        limit: i64,
+    ) -> Result<(Vec<SilentUser>, i64)> {
+        if limit <= 0 || offset < 0 {
+            return Ok((Vec::new(), 0));
+        }
         let csrf = self.csrf()?;
-        let mut out = Vec::new();
-        let mut page = 1i64;
+        let mut out: Vec<SilentUser> = Vec::new();
+        let mut total: i64;
+        // `ps` 是**页码**、每页固定 10 条，所以 `offset` 要拆成
+        // 「跳到第几页」+「页内再跳几条」。
+        let mut page = offset / SILENT_PAGE_SIZE + 1;
+        let mut skip = (offset % SILENT_PAGE_SIZE) as usize;
+        let mut fetched = 0i64;
         loop {
             let value = self
                 .post(
@@ -226,23 +247,40 @@ impl RoomAdmin for BiliAdmin {
                 )
                 .await?;
             ensure_ok(&value, "GetSilentUserList")?;
-            out.extend(map_silent_users(&value));
-            // `ps` 是**页码**（实测：`ps=1` 取到前 10 条，`total_page=49`），
-            // 每页固定 10 条；因此必须按 `total_page` 翻完，少翻一页就少一整页人。
+            let mut items = map_silent_users(&value);
+            if skip > 0 {
+                items = items.split_off(skip.min(items.len()));
+                skip = 0;
+            }
             let pages = value
                 .pointer("/data/total_page")
                 .and_then(Value::as_i64)
                 .unwrap_or(1);
-            if page >= pages {
+            total = value
+                .pointer("/data/total")
+                .and_then(Value::as_i64)
+                .unwrap_or(pages * SILENT_PAGE_SIZE);
+            out.extend(items);
+            if out.len() as i64 > limit {
+                out.truncate(limit as usize);
+            }
+            fetched += 1;
+            if (out.len() as i64) >= limit || page >= pages {
                 break;
             }
-            if page >= MAX_PAGES {
-                tracing::warn!(room_id, page, pages, "禁言名单达到翻页上限，结果被截断");
+            if fetched >= MAX_PAGES {
+                tracing::warn!(
+                    room_id,
+                    page,
+                    pages,
+                    "禁言名单单次调用达到翻页上限，本次提前收口"
+                );
                 break;
             }
             page += 1;
+            tokio::time::sleep(PAGE_GAP).await;
         }
-        Ok(out)
+        Ok((out, total))
     }
 
     async fn mute(&self, room_id: i64, uid: i64, hour: i64, msg: Option<&str>) -> Result<()> {
@@ -279,10 +317,22 @@ impl RoomAdmin for BiliAdmin {
         ensure_ok(&value, "DelSilentUser")
     }
 
-    async fn blacklist(&self, room_id: i64) -> Result<Vec<BlacklistedUser>> {
+    async fn blacklist(
+        &self,
+        room_id: i64,
+        offset: i64,
+        limit: i64,
+    ) -> Result<(Vec<BlacklistedUser>, i64)> {
+        if limit <= 0 || offset < 0 {
+            return Ok((Vec::new(), 0));
+        }
         let anchor_uid = self.anchor_uid(room_id).await?;
-        let mut out = Vec::new();
-        let mut page = 1i64;
+        let mut out: Vec<BlacklistedUser> = Vec::new();
+        let mut total: i64;
+        // `pn` 是页码、`ps` 是页条数（这里是真的条数，与禁言那个 `ps` 不同名同义）。
+        let mut page = offset / BLACK_PAGE_SIZE + 1;
+        let mut skip = (offset % BLACK_PAGE_SIZE) as usize;
+        let mut fetched = 0i64;
         loop {
             let value = self
                 .get(
@@ -295,21 +345,36 @@ impl RoomAdmin for BiliAdmin {
                 )
                 .await?;
             ensure_ok(&value, "GetBlackList")?;
-            out.extend(map_blacklisted(&value));
-            let total = value
+            let mut items = map_blacklisted(&value);
+            if skip > 0 {
+                items = items.split_off(skip.min(items.len()));
+                skip = 0;
+            }
+            total = value
                 .pointer("/data/total")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            if (out.len() as i64) >= total {
+            out.extend(items);
+            if out.len() as i64 > limit {
+                out.truncate(limit as usize);
+            }
+            fetched += 1;
+            if (out.len() as i64) >= limit || (total > 0 && (out.len() as i64) >= total) {
                 break;
             }
-            if page >= MAX_PAGES {
-                tracing::warn!(room_id, page, total, "黑名单达到翻页上限，结果被截断");
+            if fetched >= MAX_PAGES {
+                tracing::warn!(
+                    room_id,
+                    page,
+                    total,
+                    "黑名单单次调用达到翻页上限，本次提前收口"
+                );
                 break;
             }
             page += 1;
+            tokio::time::sleep(PAGE_GAP).await;
         }
-        Ok(out)
+        Ok((out, total))
     }
 
     async fn blacklist_add(&self, room_id: i64, uid: i64) -> Result<()> {

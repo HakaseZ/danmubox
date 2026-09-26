@@ -1970,12 +1970,71 @@
   border-radius: var(--r-2);
 }
 
-/* 一行里的「勾选框 + 名字」：复选框本体不撑高，热区交给这一层 label（窄屏见文件末尾的 40px 口径） */
+/* 一行的勾选槽：复选框本体不撑高，热区交给这一层 `label`（窄屏见文件末尾的 40px 口径）。
+   **常驻**：非批量时 `data-hidden` 让它 `visibility: hidden` —— 只藏不拆，
+   占的那一格一个像素都不动，这就是「开关批量零跳位」的全部机关。 */
 .adminPick {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
   cursor: pointer;
+}
+
+.adminPick[data-hidden="true"] {
+  visibility: hidden;
+}
+
+/* 名字格：放不下时默认**可横滑**（触屏 / 滚轮都能推，滚动条隐藏），
+   悬停或键盘聚焦且真的放不下（`data-scroll`，由 JS 在被指到时量一次）才跑马灯。
+   完整文本始终在 `title` 上，任何形态下都取得到。 */
+.adminName {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.adminName::-webkit-scrollbar {
+  display: none;
+}
+
+/* 跑马灯态：容器改 `hidden`，否则横滑与位移会互相打架。 */
+.adminName[data-scroll="true"] {
+  overflow: hidden;
+}
+
+/* 轨道 = **两份完全相同**的拷贝首尾相接，动画走 `-50%`（正好一份），
+   循环处因此没有断口；间隙算在每一份自己的右内边距里 —— 与房间头标题逐字同源。 */
+.adminNameTrack {
+  display: flex;
+  width: max-content;
+}
+
+.adminName[data-scroll="true"] .adminNameTrack {
+  animation: adminNameMarquee 8s linear infinite;
+}
+
+.adminNameItem {
+  flex: none;
+  padding-right: var(--sp-5);
+}
+
+@keyframes adminNameMarquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* 跑马灯同样让位给**动效偏好**（口径同房间头标题）。 */
+@media (prefers-reduced-motion: reduce) {
+  .adminName[data-scroll="true"] .adminNameTrack {
+    animation: none;
+  }
 }
 
 /* 批量模式下勾中的行：与勾选框同一个状态（不靠 hover 也一眼看得出选了谁） */
@@ -1984,19 +2043,27 @@
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
 }
 
-/* 名单：芯片流式换行。它在第 1 / 2 排之下（issue #5），与上面那一排之间留一个「分」 */
+/* 名单（需求 2026-09-26）：改前是**芯片流式换行**，勾选框只在批量模式下插入 ——
+   一开批量每个芯片都变宽、换行位置全变，整片名单重排。现在**每行一项**、等列，
+   勾选槽常驻占位（`.adminPick[data-hidden]`），开关批量因此**零跳位**。
+   它**自己滚**（改前滚的是整个面板，头部会被一起滚走）。 */
 .adminList {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--sp-1);
   margin: var(--sp-2) 0 var(--sp-1);
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .adminItem {
-  display: inline-flex;
+  display: flex;
+  flex: none;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-1) var(--sp-2);
+  /* 行高固定（`--tap-min` 的窄屏热区口径）：批量与否都不变。 */
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
   font-size: var(--fs-2);
   background: var(--bg-input);
   border: 1px solid var(--border);

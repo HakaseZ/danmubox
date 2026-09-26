@@ -148,8 +148,33 @@ export function AdminPanel({
   };
 
   /**
-   * 行：批量模式下前面多一个勾选框；单点动作在**右键菜单**里（issue #4）——
-   * 菜单项在**打开那一刻**连同对象一起定下（挂到 state 上），菜单开着时名单被重读也不改它。
+   * 名字格要不要跑马灯：**这一行被指到时才量一次**（`scrollWidth > clientWidth`）。
+   * 不给几百行各挂一个 ResizeObserver —— 只有悬停 / 聚焦的那一行需要这个结论。
+   */
+  const markScroll = (event: { currentTarget: HTMLElement }) => {
+    const name = event.currentTarget.querySelector<HTMLElement>("[data-admin-name]");
+    if (name) name.dataset.scroll = String(name.scrollWidth > name.clientWidth);
+  };
+
+  /** 离开 / 失焦即收起（下次进来重新量）。 */
+  const clearScroll = (event: { currentTarget: HTMLElement }) => {
+    const name = event.currentTarget.querySelector<HTMLElement>("[data-admin-name]");
+    if (name) delete name.dataset.scroll;
+  };
+
+  /**
+   * 行：**每行一项**（需求 2026-09-26）。
+   *
+   * 改前是芯片流式换行，勾选框**只在批量模式下插入** —— 一开批量每个芯片都变宽、换行位置
+   * 全变，整片名单重排。现在行是等列的，勾选槽**常驻**（非批量时 `visibility: hidden`
+   * 但占位），开关批量因此**零跳位**。
+   *
+   * 名字超宽默认可横滑；**只有悬停 / 键盘聚焦的那一行**才跑马灯（需求 2026-09-26）——
+   * 几十行一起滚会很吵，`prefers-reduced-motion` 下也自动停。
+   * 完整文本始终在 `title` 上，任何形态下都取得到。
+   *
+   * 单点动作仍在**右键菜单**里（issue #4）—— 菜单项在**打开那一刻**连同对象一起定下
+   * （挂到 state 上），菜单开着时名单被重读也不改它。
    * 行级 testid 与改前一致（冒烟按它定位），勾选框单独一枚 testid。
    */
   const row = (key: string, testid: string, label: string, items: MenuItem[]) => (
@@ -159,26 +184,37 @@ export function AdminPanel({
       data-testid={testid}
       data-picked={batch && picked.includes(key) ? "true" : undefined}
       title="右键可操作"
+      onMouseEnter={markScroll}
+      onMouseLeave={clearScroll}
+      onFocus={markScroll}
+      onBlur={clearScroll}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenu({ at: { x: event.clientX, y: event.clientY }, items });
       }}
     >
-      {batch && (
-        // 勾选框外面包一层 `label`：**热区由 label 承担**（复选框本体不撑高，见 §9.1 的窄屏热区口径），
-        // 点名字也能勾 —— 触屏上不用去点那 13px 的小方块。
-        <label className={styles.adminPick}>
-          <input
-            type="checkbox"
-            data-testid="db-admin-select"
-            aria-label={`选择 ${label}`}
-            checked={picked.includes(key)}
-            onChange={() => togglePick(key)}
-          />
-          <span>{label}</span>
-        </label>
-      )}
-      {!batch && <span>{label}</span>}
+      {/* 勾选槽**常驻**：`visibility: hidden` 只藏不拆，宽度一个像素都不动 ——
+          这是「开关批量零跳位」的全部机关。热区由这层 `label` 承担（复选框本体不撑高），
+          点它就能勾，触屏上不用去点那 13px 的小方块。 */}
+      <label className={styles.adminPick} data-hidden={batch ? undefined : "true"}>
+        <input
+          type="checkbox"
+          data-testid="db-admin-select"
+          aria-label={`选择 ${label}`}
+          checked={picked.includes(key)}
+          onChange={() => togglePick(key)}
+        />
+      </label>
+      {/* 名字格：不放不下就跑马灯；轨道是**两份完全相同的拷贝**首尾相接，
+          动画走 `-50%`（正好一份），循环处没有断口 —— 口径与房间头标题逐字同源。 */}
+      <span className={styles.adminName} data-admin-name title={label}>
+        <span className={styles.adminNameTrack}>
+          <span className={styles.adminNameItem}>{label}</span>
+          <span className={styles.adminNameItem} aria-hidden="true">
+            {label}
+          </span>
+        </span>
+      </span>
     </div>
   );
 

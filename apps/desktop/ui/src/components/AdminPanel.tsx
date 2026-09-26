@@ -1,4 +1,10 @@
-import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import type { AdminAction, AdminUser } from "../types";
@@ -33,6 +39,21 @@ const BATCH_LABEL: Record<AdminTab, string> = {
   silent: "批量解除禁言",
   blacklist: "批量移出黑名单",
   keywords: "批量删除屏蔽词",
+};
+
+/**
+ * 输入框那一枚按钮的**两种动作**：对象**不在**名单里 = 加进去、**在**名单里 = 拿掉。
+ * 三态的宽度按这两组里最长的那一档（「添加 / 删除屏蔽词」）定死，见 `.adminAction`。
+ */
+const ACTION_ON: Record<AdminTab, string> = {
+  silent: "禁言",
+  blacklist: "拉黑",
+  keywords: "添加屏蔽词",
+};
+const ACTION_OFF: Record<AdminTab, string> = {
+  silent: "解除禁言",
+  blacklist: "移出黑名单",
+  keywords: "删除屏蔽词",
 };
 
 /** tabpanel 的 id：tab 的 `aria-controls` 与它的 `aria-labelledby` 靠它对上。 */
@@ -89,6 +110,8 @@ export function AdminPanel({
   const [blackUid, setBlackUid] = useState("");
   const [word, setWord] = useState("");
   const railRef = useRef<HTMLDivElement>(null);
+  /** 输入框那一枚按钮的三态（需求 2026-09-26）。 */
+  const [check, setCheck] = useState<CheckState>({ phase: "idle" });
 
   // tab 文案**不再带计数**（issue #3：「禁言 3」→「禁言」）：条数就是三块列表自己的长度
   // （`silent` / `blacklist` / `keywords`），屏幕上由 `.adminList` 里的芯片数直接给出，
@@ -148,8 +171,33 @@ export function AdminPanel({
   };
 
   /**
-   * 行：批量模式下前面多一个勾选框；单点动作在**右键菜单**里（issue #4）——
-   * 菜单项在**打开那一刻**连同对象一起定下（挂到 state 上），菜单开着时名单被重读也不改它。
+   * 名字格要不要跑马灯：**这一行被指到时才量一次**（`scrollWidth > clientWidth`）。
+   * 不给几百行各挂一个 ResizeObserver —— 只有悬停 / 聚焦的那一行需要这个结论。
+   */
+  const markScroll = (event: { currentTarget: HTMLElement }) => {
+    const name = event.currentTarget.querySelector<HTMLElement>("[data-admin-name]");
+    if (name) name.dataset.scroll = String(name.scrollWidth > name.clientWidth);
+  };
+
+  /** 离开 / 失焦即收起（下次进来重新量）。 */
+  const clearScroll = (event: { currentTarget: HTMLElement }) => {
+    const name = event.currentTarget.querySelector<HTMLElement>("[data-admin-name]");
+    if (name) delete name.dataset.scroll;
+  };
+
+  /**
+   * 行：**每行一项**（需求 2026-09-26）。
+   *
+   * 改前是芯片流式换行，勾选框**只在批量模式下插入** —— 一开批量每个芯片都变宽、换行位置
+   * 全变，整片名单重排。现在行是等列的，勾选槽**常驻**（非批量时 `visibility: hidden`
+   * 但占位），开关批量因此**零跳位**。
+   *
+   * 名字超宽默认可横滑；**只有悬停 / 键盘聚焦的那一行**才跑马灯（需求 2026-09-26）——
+   * 几十行一起滚会很吵，`prefers-reduced-motion` 下也自动停。
+   * 完整文本始终在 `title` 上，任何形态下都取得到。
+   *
+   * 单点动作仍在**右键菜单**里（issue #4）—— 菜单项在**打开那一刻**连同对象一起定下
+   * （挂到 state 上），菜单开着时名单被重读也不改它。
    * 行级 testid 与改前一致（冒烟按它定位），勾选框单独一枚 testid。
    */
   const row = (key: string, testid: string, label: string, items: MenuItem[]) => (
@@ -159,27 +207,145 @@ export function AdminPanel({
       data-testid={testid}
       data-picked={batch && picked.includes(key) ? "true" : undefined}
       title="右键可操作"
+      onMouseEnter={markScroll}
+      onMouseLeave={clearScroll}
+      onFocus={markScroll}
+      onBlur={clearScroll}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenu({ at: { x: event.clientX, y: event.clientY }, items });
       }}
     >
-      {batch && (
-        // 勾选框外面包一层 `label`：**热区由 label 承担**（复选框本体不撑高，见 §9.1 的窄屏热区口径），
-        // 点名字也能勾 —— 触屏上不用去点那 13px 的小方块。
-        <label className={styles.adminPick}>
-          <input
-            type="checkbox"
-            data-testid="db-admin-select"
-            aria-label={`选择 ${label}`}
-            checked={picked.includes(key)}
-            onChange={() => togglePick(key)}
-          />
-          <span>{label}</span>
-        </label>
-      )}
-      {!batch && <span>{label}</span>}
+      {/* 勾选槽**常驻**：`visibility: hidden` 只藏不拆，宽度一个像素都不动 ——
+          这是「开关批量零跳位」的全部机关。热区由这层 `label` 承担（复选框本体不撑高），
+          点它就能勾，触屏上不用去点那 13px 的小方块。 */}
+      <label className={styles.adminPick} data-hidden={batch ? undefined : "true"}>
+        <input
+          type="checkbox"
+          data-testid="db-admin-select"
+          aria-label={`选择 ${label}`}
+          checked={picked.includes(key)}
+          onChange={() => togglePick(key)}
+        />
+      </label>
+      {/* 名字格：不放不下就跑马灯；轨道是**两份完全相同的拷贝**首尾相接，
+          动画走 `-50%`（正好一份），循环处没有断口 —— 口径与房间头标题逐字同源。 */}
+      <span className={styles.adminName} data-admin-name title={label}>
+        <span className={styles.adminNameTrack}>
+          <span className={styles.adminNameItem}>{label}</span>
+          <span className={styles.adminNameItem} aria-hidden="true">
+            {label}
+          </span>
+        </span>
+      </span>
     </div>
+  );
+
+  /** 按钮三态（需求 2026-09-26）：`idle` 禁用灰 → `checking` 转圈 → `done` 给出**实际**动作。 */
+  type CheckState =
+    | { phase: "idle" }
+    | { phase: "checking" }
+    | { phase: "done"; inList: boolean };
+
+  /** 输入框解析出的目标（`undefined` = 这一档按钮保持禁用灰）。 */
+  const target: string | number | undefined =
+    tab === "keywords"
+      ? word.trim().length > 0
+        ? word.trim()
+        : undefined
+      : parseUid(tab === "silent" ? muteUid : blackUid);
+
+  /**
+   * 这个目标在不在名单里 —— 按钮三态的依据。
+   *
+   * **现版本只查已加载的那一批**（同步即可）；返回 `Promise` 是为了让三态里「检查中」
+   * 那一档真的可见，接上全量读取时只是把这里换成一次 `await` 上游读取。
+   * 屏蔽词按**纯文本、完全匹配、无正则** —— 上游**实际**怎么匹配由服务端决定，
+   * 界面不对它做任何承诺文案。
+   */
+  const checkTarget = useCallback(
+    (value: string | number): Promise<boolean> => {
+      const inList =
+        tab === "keywords"
+          ? keywords.includes(String(value))
+          : (tab === "silent" ? silent : blacklist).some((user) => user.uid === value);
+      return Promise.resolve(inList);
+    },
+    [tab, keywords, silent, blacklist],
+  );
+
+  useEffect(() => {
+    if (target === undefined) {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setCheck({ phase: "idle" });
+      return;
+    }
+    let alive = true;
+    // oxlint-disable-next-line react/set-state-in-effect
+    setCheck({ phase: "checking" });
+    void checkTarget(target).then((inList) => {
+      if (alive) setCheck({ phase: "done", inList });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [target, checkTarget]);
+
+  /** 按下：按检查结果决定「加进去」还是「拿掉」。写操作一律先交上层出二次确认。 */
+  const applyAction = () => {
+    if (target === undefined || check.phase !== "done") return;
+    if (tab === "keywords") {
+      const value = String(target);
+      onConfirm(
+        check.inList
+          ? { kind: "keyword_del", word: value }
+          : { kind: "keyword_add", word: value },
+      );
+      setWord("");
+      return;
+    }
+    const uid = Number(target);
+    if (tab === "silent") {
+      onConfirm(
+        check.inList
+          ? { kind: "unmute", uid, uname: "" }
+          : { kind: "mute", uid, uname: "", hour: 0 },
+      );
+      return;
+    }
+    onConfirm(
+      check.inList
+        ? { kind: "blacklist_del", uid, uname: "" }
+        : { kind: "blacklist_add", uid, uname: "" },
+    );
+  };
+
+  /**
+   * 三态按钮（需求 2026-09-26）：`禁言（禁用灰）` → `转圈（检查中）` → `禁言` / `解除禁言`。
+   * **宽度由 CSS 定死**，态与态之间**不跳位** —— 这正是用户否掉「按钮文案自动切换」的原因。
+   */
+  const actionButton = (
+    <button
+      type="button"
+      className={styles.adminAction}
+      data-testid="db-admin-action"
+      data-state={check.phase}
+      disabled={busy || target === undefined || check.phase !== "done"}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={applyAction}
+    >
+      {check.phase === "checking" ? (
+        <span
+          className={styles.adminSpinner}
+          data-testid="db-admin-action-spinner"
+          aria-hidden="true"
+        />
+      ) : check.phase === "done" && check.inList ? (
+        ACTION_OFF[tab]
+      ) : (
+        ACTION_ON[tab]
+      )}
+    </button>
   );
 
   /**
@@ -356,19 +522,7 @@ export function AdminPanel({
                 placeholder="观众 uid"
                 onChange={(event) => setMuteUid(event.target.value)}
               />
-              <button
-                type="button"
-                disabled={busy || parseUid(muteUid) === undefined}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const uid = parseUid(muteUid);
-                  if (uid !== undefined) {
-                    onConfirm({ kind: "mute", uid, uname: "", hour: 0 });
-                  }
-                }}
-              >
-                禁言
-              </button>
+              {actionButton}
               {batchToggle}
             </div>
             {batchBar}
@@ -405,19 +559,7 @@ export function AdminPanel({
                 placeholder="观众 uid"
                 onChange={(event) => setBlackUid(event.target.value)}
               />
-              <button
-                type="button"
-                disabled={busy || parseUid(blackUid) === undefined}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const uid = parseUid(blackUid);
-                  if (uid !== undefined) {
-                    onConfirm({ kind: "blacklist_add", uid, uname: "" });
-                  }
-                }}
-              >
-                拉黑
-              </button>
+              {actionButton}
               {batchToggle}
             </div>
             {batchBar}
@@ -462,19 +604,7 @@ export function AdminPanel({
                   setWord("");
                 }}
               />
-              <button
-                type="button"
-                disabled={busy || word.trim().length === 0}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  const value = word.trim();
-                  if (value.length === 0) return;
-                  onConfirm({ kind: "keyword_add", word: value });
-                  setWord("");
-                }}
-              >
-                添加屏蔽词
-              </button>
+              {actionButton}
               {batchToggle}
             </div>
             {batchBar}

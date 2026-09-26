@@ -342,6 +342,15 @@ export function RoomView({
   }, []);
 
   /**
+   * 收起礼物栏（**只收、不开**）：点折叠头那条路走 `toggleGiftDock`（它能开），
+   * 这里给拖动分割条用 —— 把份额压到下限就是「把这一栏拖没」（需求 2026-09-26），
+   * 与点「收起」同源；收起改的只是**折叠态**，份额该落盘还是落盘（`SplitPanes` 松手照写）。
+   */
+  const closeGiftDock = useCallback(() => {
+    setGiftOpen(false);
+  }, []);
+
+  /**
    * 系统返回手势第 2 级：在房间页 → 回房间列表。`onBack` 就是房间头那枚圆形返回键
    * （`App.tsx` 传给它的正是 store 的 `closeRoom`），两条入口同源。
    */
@@ -530,7 +539,7 @@ export function RoomView({
     // 但 `measure()` 得有人叫第一声）。
   }, [titleText, fontScale, room.room_id, immersive]);
 
-  const { chatRows, giftRows } = splitGiftRows(rows, prefs);
+  const { chatRows, giftRows, panelAllRows } = splitGiftRows(rows, prefs);
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
   // 见 splitGiftRows）；折叠态是它自己的本地状态，与偏好无关。
   // `ui.gift_collapse_cheap` 在 `splitGiftRows` 里对**两头各折一次**（弹幕区与礼物栏都折，
@@ -563,11 +572,19 @@ export function RoomView({
    * 打开时低价礼物整条桶**不进统计**（issue 2609162056 第 4 条）。这枚键只改这一处的口径 ——
    * 礼物栏的条目由 `giftRows` 渲染，与它无关；「礼物 / SC（N）」那个 N 也跟着这里走
    * （它数的就是这份汇总的条数，不是礼物栏的行数）。
+   *
+   * **两个口径，别混**（需求 2026-09-26）：
+   * - **总计条 = 先筛选后汇总**：`giftStat` 走筛后的 `giftRows`，所以筛选一变它就跟着变；
+   * - **三格 = 未筛选口径常驻展示**：`giftKindStat` 走筛前的 `panelAllRows`，本场该族有数据
+   *   那一格就一直在 —— 否则选中某族之后其余两族条数归零、被 `count > 0` 滤掉而**按钮消失**，
+   *   看着就成了「三选一」的互斥筛选（三族其实是并集，见 `toggleGiftKind`）。
    */
   const giftStat = giftStatRows(giftRows, prefs);
+  /** 筛选条那三格的统计源：**筛前**全集（三族都在，格子因此常驻）。 */
+  const giftKindStat = giftStatRows(panelAllRows, prefs);
   /** 三族各自的条数与金额（**筛选条**那三个格）。空组不出现。 */
   const giftGroups = GIFT_KINDS.map((kind) => {
-    const group = giftStat.filter((row) => row.message.kind === kind);
+    const group = giftKindStat.filter((row) => row.message.kind === kind);
     return {
       kind,
       label: KIND_LABEL[kind],
@@ -580,9 +597,12 @@ export function RoomView({
     };
   }).filter((group) => group.count > 0);
 
-  /** 三族合计（**总计条**）。条数与金额都与筛选条同源 —— 统计链是「先筛选、后汇总」。 */
-  const giftTotalCount = giftGroups.reduce((sum, group) => sum + group.count, 0);
-  const giftTotalYuan = giftGroups.reduce((sum, group) => sum + group.yuan, 0);
+  /** 三族合计（**总计条**）。筛后口径 —— 统计链是「先筛选、后汇总」。 */
+  const giftTotalCount = giftStat.reduce((sum, row) => sum + row.count, 0);
+  const giftTotalYuan = giftStat.reduce(
+    (sum, row) => sum + amountYuan(row.message.amount, row.message.kind),
+    0,
+  );
   /** 礼物栏内正在按 kind 筛选（契约 §8 `ui.gift_pane_kinds` 非空）。 */
   const giftFiltering = giftPaneKinds.length > 0;
 
@@ -594,9 +614,12 @@ export function RoomView({
    *
    * 统计集空的两档沿用改前的口径：礼物栏里还有条目（被 `ui.gift_exclude_cheap_stats` 剔出
    * 统计的低价礼物）时写「低价礼物已剔除」，而不是「0 条」—— 列表里明明有东西。
+   *
+   * 取哪一档看 `giftStat`（**筛后**），不看 `giftGroups`（三格是**未筛选**口径）：
+   * 三格常驻之后它不再等价于「本场筛完了还有没有东西」。
    */
   const giftTotalText =
-    giftGroups.length > 0
+    giftStat.length > 0
       ? `礼物 ${giftTotalCount}条${giftFiltering ? "" : ` ${yuanText(giftTotalYuan)}`}`
       : giftRows.length > 0
         ? "低价礼物已剔除"
@@ -887,6 +910,7 @@ export function RoomView({
         onRatio={(value) => onPrefs({ "ui.gift_pane_ratio": value })}
         onSwap={() => onPrefs({ "ui.gift_pane_on_top": !giftPaneOnTop })}
         onExpand={openGiftDock}
+        onCollapse={closeGiftDock}
         danmaku={
           <div
             className={styles.chatWrap}
@@ -951,7 +975,9 @@ export function RoomView({
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={toggleGiftDock}
                 >
-                  {/* 返回箭头旋转 90°（展开态朝上、收起态朝下），图标规范同 §3.1。 */}
+                  {/* **就是房间头那枚返回键的 `<`**（同一条 path、同一套 24 盒 / 1.75 描边规范，
+                      用户 2026-09-26：「不要用指代方向的三根线的箭头」），只是按 `data-dir`
+                      旋转 90°（展开态朝上 = 收起，收起态朝下 = 展开）。 */}
                   <svg
                     className={styles.ctlIcon}
                     viewBox="0 0 24 24"
@@ -959,7 +985,7 @@ export function RoomView({
                     data-dir={giftOpen ? "up" : "down"}
                   >
                     <path
-                      d="M19.125 12H4.875M10.875 6 4.875 12l6 6"
+                      d="M15 4.875 9 12l6 7.125"
                       fill="none"
                       stroke="currentColor"
                       strokeWidth="1.75"

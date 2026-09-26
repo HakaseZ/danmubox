@@ -1,13 +1,14 @@
 // 场景块：刷屏弹幕聚合、阅读位置、回到最新、我的表情
 //   刷屏弹幕聚合（**3 条以上 + 两位不同观众**才折：身份位印「刷屏 ×N」、头像列错位 30% 堆叠前 3 位、
-//   非滑动窗口、关掉开关逐条显示）
+//   窗口**滑动**（每并入一条刷新一次 5 秒、无条数上限）、关掉开关逐条显示）
 //   面板展开改可视高度时正在看的位置不被弹走；「回到最新」是圆形图标钮（下箭头、与返回键同源几何）
 //   emotes 主站「我的表情」分组可见、能选中、发出去带的是唯一键
 //
 // 页内脚本片段：由 smoke/room-page.mjs **原样拼进** `window.__smoke_run` 的函数体，与相邻块共用同一条
 // 作用域（out / snap / byTestId / sleep / … 都是 10-harness.mjs 里的工具）。准入条件见 docs/testing.md §9.3。
     // ---- 刷屏弹幕聚合（issue 202609211940 第 3 条，docs/ui.md §8.4 第二条、契约 §4 的四条常量）：
-    //      **3 条以上**同键、同 5 秒窗口、参与观众去重后 **≥ 2 位不同 uid** 才折成一行：
+    //      **3 条以上**同键、同一个**滑动**的 5 秒窗口（基准是这一串的**最后一条**，每并入一条
+    //      就把窗口往后刷一次 5 秒，**没有条数上限**）、参与观众去重后 **≥ 2 位不同 uid** 才折成一行：
     //      头像列画前 3 位观众的头像（沿 X 轴依次错开 30% 个头像宽、后一张压在前一张上、
     //      **最左那张在最上层**），身份位改印「刷屏 ×N」且**一个用户名都不出现**
     //      （db-msg-name / db-msg-badges 都不画），行内那一格 db-msg-count 也不再画
@@ -15,7 +16,8 @@
     //      ① 同文本 + 3 位不同观众（窗口内）→ **一行**、「刷屏 ×3」、堆叠 3 张头像（错位 30%、
     //         z-index 递减）、身份位没有用户名 / 徽标、行内没有 ×N；
     //      ② **不同文本** → 两行（聚合只认同一个键），且照旧画昵称（正面对照）；
-    //      ③ 同文本但第一条落在窗口外 → 三行（锚点是这一行的第一条，**非滑动**）；
+    //      ③ 同文本、每 4 秒一条连发三条（首尾跨 8 秒 > 一个窗口）→ **一行**「刷屏 ×3」
+    //         （**滑动**窗口只看与上一条的距离）；再补一条离上一条 6 秒的 → 它自己一行；
     //      ④ 三位观众里有一位**没头像** → 头像列只画两张、错位也只错开一次（空 url 不占位）；
     //      ⑤ **关掉开关**（ui.danmaku_aggregate，点筛选面板里那一枚）→ 同样三条**逐条显示**
     //         （三行、没有「刷屏 ×N」也没有堆叠层、昵称照旧），点回来当场又折成一行；
@@ -121,17 +123,25 @@
         aggCellOf(aggC[0], "db-msg-spam") === null &&
         aggCellOf(aggC[0], "db-msg-name") !== null &&
         aggC[0].querySelector('[data-testid="db-msg-avatar-stack"]') === null;
-      // ③ 同文本、但第一条落在 60 秒前（远在 5 秒窗口之外）：不许折 —— 三条都在，
-      //    锚点是这一行的第一条（非滑动），因此后两条也不因为「彼此相邻」而自成一行聚合。
-      aggPush("聚合样本丁", 71006, "聚合六号", Date.now() - 60000, FACE_512);
-      aggPush("聚合样本丁", 71007, "聚合七号", Date.now(), FACE_512);
-      aggPush("聚合样本丁", 71008, "聚合八号", Date.now() + 50, FACE_512);
+      // ③ 同文本、每 4 秒一条连发三条（首尾跨 8 秒，**超过**一个窗口）：窗口是**滑动**的 ——
+      //    基准是这一串的**最后一条**，每并入一条就把 5 秒往后刷一次，因此三条并成**一行**
+      //    「刷屏 ×3」。非滑动（与第一条比）会在第三条处切成一串两条 + 一条，串串不够门槛
+      //    ⇒ 三行且一行都不折 —— 旧读数量正是那个，按新语义翻过来。
+      //    再补一条离上一条 6 秒的：窗口到此收口，它自己站一行（不够 3 条 ⇒ 不折，昵称照旧）。
+      var aggT1 = Date.now() - 6000;
+      aggPush("聚合样本丁", 71006, "聚合六号", aggT1 - 8000, FACE_512);
+      aggPush("聚合样本丁", 71007, "聚合七号", aggT1 - 4000, FACE_512);
+      aggPush("聚合样本丁", 71008, "聚合八号", aggT1, FACE_512);
+      aggPush("聚合样本丁", 71064, "聚合窗口后", aggT1 + 6000, FACE_512);
       await sleep(450);
       var aggWindowRows = aggRowsOf("聚合样本丁");
-      out.aggregateWindowSeparatesRows = aggWindowRows.length === 3 &&
-        aggWindowRows.every(function (r) {
-          return r.querySelector('[data-testid="db-msg-spam"]') === null;
-        });
+      out.aggregateWindowRows = aggWindowRows.length;
+      out.aggregateWindowFirstSpam = aggCellOf(aggWindowRows[0], "db-msg-spam");
+      out.aggregateWindowSlidesRows = aggWindowRows.length === 2 &&
+        out.aggregateWindowFirstSpam === "刷屏 ×3" &&
+        // 后面那条离上一条 6 秒 ⇒ 另起一串：只有一条、不折（没有「刷屏 ×N」，昵称照旧）
+        aggWindowRows[1].querySelector('[data-testid="db-msg-spam"]') === null &&
+        aggCellOf(aggWindowRows[1], "db-msg-name") !== null;
       // ④ 三位观众里有一位没头像：头像列只画两张（不画假图），错位也只错开一次
       aggPush("聚合样本戊", 71009, "聚合九号", Date.now(), FACE_512);
       aggPush("聚合样本戊", 71010, "聚合十号", Date.now() + 50, "");

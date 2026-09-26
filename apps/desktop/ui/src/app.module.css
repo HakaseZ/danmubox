@@ -2189,20 +2189,6 @@
   border-radius: var(--r-2);
 }
 
-/* 一行的勾选槽：复选框本体不撑高，热区交给这一层 `label`（窄屏见文件末尾的 40px 口径）。
-   **常驻**：非批量时 `data-hidden` 让它 `visibility: hidden` —— 只藏不拆，
-   占的那一格一个像素都不动，这就是「开关批量零跳位」的全部机关。 */
-.adminPick {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  cursor: pointer;
-}
-
-.adminPick[data-hidden="true"] {
-  visibility: hidden;
-}
-
 /* 名字格：放不下时默认**可横滑**（触屏 / 滚轮都能推，滚动条隐藏），
    悬停或键盘聚焦且真的放不下（`data-scroll`，由 JS 在被指到时量一次）才跑马灯。
    完整文本始终在 `title` 上，任何形态下都取得到。 */
@@ -2240,6 +2226,15 @@
   padding-right: var(--sp-5);
 }
 
+/* 短昵称只显示一份；确认溢出、进入跑马灯态后才接上第二份副本。 */
+.adminNameItem + .adminNameItem {
+  display: none;
+}
+
+.adminName[data-scroll="true"] .adminNameItem + .adminNameItem {
+  display: block;
+}
+
 @keyframes adminNameMarquee {
   from {
     transform: translateX(0);
@@ -2256,19 +2251,16 @@
   }
 }
 
-/* 批量模式下勾中的行：与勾选框同一个状态（不靠 hover 也一眼看得出选了谁） */
+/* 批量模式下选中的行：点击整行切换状态，不靠 hover 也一眼看得出选了谁。 */
 .adminItem[data-picked="true"] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
 }
 
-/* 名单（需求 2026-09-26）：改前是**芯片流式换行**，勾选框只在批量模式下插入 ——
-   一开批量每个芯片都变宽、换行位置全变，整片名单重排。现在**每行一项**、等列，
-   勾选槽常驻占位（`.adminPick[data-hidden]`），开关批量因此**零跳位**。
-   它**自己滚**（改前滚的是整个面板，头部会被一起滚走）。 */
+/* 名单使用两列等宽网格，每个条目占一格；名单自己滚，头部不会被一起滚走。 */
 .adminList {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-1);
   margin: var(--sp-2) 0 var(--sp-1);
   max-height: 240px;

@@ -100,7 +100,7 @@ function parseUid(value: string): number | undefined {
  * - 所有写操作（禁言 / 拉黑 / 解除 / 增删词）都只提交给上层，由那里出**二次确认**——
  *   这些动作会不可逆地影响他人。
  * - **单点动作收在行的右键菜单里**，「批量」模式才是行内的多选（用户 2026-09-13 第 4 条）：
- *   打开批量后每行前出现勾选框，全选 / 已选 / 批量动作在第 2 排。
+ *   打开批量后点击整行高亮选中，全选 / 已选 / 批量动作在第 2 排。
  *   批量同样走上层的二次确认（一次确认覆盖整批，文案含数量）。
  * - **排布是两排、都贴顶**（用户 2026-09-14 第 5 条「不要竖着排版」）：
  *   第 1 排 = 输入框（唯一可缩项）+ 该 tab 的主操作 + 批量图标钮；批量模式下第 2 排
@@ -218,19 +218,14 @@ export function AdminPanel({
   };
 
   /**
-   * 行：**每行一项**（需求 2026-09-26）。
-   *
-   * 改前是芯片流式换行，勾选框**只在批量模式下插入** —— 一开批量每个芯片都变宽、换行位置
-   * 全变，整片名单重排。现在行是等列的，勾选槽**常驻**（非批量时 `visibility: hidden`
-   * 但占位），开关批量因此**零跳位**。
+   * 行：每行一项；批量模式下整行都是选中热区，点击或按 Enter / Space 切换高亮。
    *
    * 名字超宽默认可横滑；**只有悬停 / 键盘聚焦的那一行**才跑马灯（需求 2026-09-26）——
    * 几十行一起滚会很吵，`prefers-reduced-motion` 下也自动停。
    * 完整文本始终在 `title` 上，任何形态下都取得到。
    *
    * 单点动作仍在**右键菜单**里（issue #4）—— 菜单项在**打开那一刻**连同对象一起定下
-   * （挂到 state 上），菜单开着时名单被重读也不改它。
-   * 行级 testid 与改前一致（冒烟按它定位），勾选框单独一枚 testid。
+   * （挂到 state 上），菜单开着时名单被重读也不改它。行级 testid 与改前一致。
    */
   const row = (key: string, testid: string, label: string, items: MenuItem[]) => (
     <div
@@ -238,7 +233,20 @@ export function AdminPanel({
       className={styles.adminItem}
       data-testid={testid}
       data-picked={batch && picked.includes(key) ? "true" : undefined}
+      role={batch ? "checkbox" : undefined}
+      aria-checked={batch ? picked.includes(key) : undefined}
+      tabIndex={batch ? 0 : undefined}
       title="右键可操作"
+      onClick={batch ? () => togglePick(key) : undefined}
+      onKeyDown={
+        batch
+          ? (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              togglePick(key);
+            }
+          : undefined
+      }
       onMouseEnter={markScroll}
       onMouseLeave={clearScroll}
       onFocus={markScroll}
@@ -248,18 +256,6 @@ export function AdminPanel({
         setMenu({ at: { x: event.clientX, y: event.clientY }, items });
       }}
     >
-      {/* 勾选槽**常驻**：`visibility: hidden` 只藏不拆，宽度一个像素都不动 ——
-          这是「开关批量零跳位」的全部机关。热区由这层 `label` 承担（复选框本体不撑高），
-          点它就能勾，触屏上不用去点那 13px 的小方块。 */}
-      <label className={styles.adminPick} data-hidden={batch ? undefined : "true"}>
-        <input
-          type="checkbox"
-          data-testid="db-admin-select"
-          aria-label={`选择 ${label}`}
-          checked={picked.includes(key)}
-          onChange={() => togglePick(key)}
-        />
-      </label>
       {/* 名字格：不放不下就跑马灯；轨道是**两份完全相同的拷贝**首尾相接，
           动画走 `-50%`（正好一份），循环处没有断口 —— 口径与房间头标题逐字同源。 */}
       <span className={styles.adminName} data-admin-name title={label}>

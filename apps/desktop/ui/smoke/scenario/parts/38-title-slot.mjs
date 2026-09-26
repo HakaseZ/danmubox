@@ -4,6 +4,8 @@
 //   ② 单槽位：单条互动消息到达时弹幕列表里不出现互动行（ui.interact_single_slot 默认开，
 //      toDisplayRows 已剔除），浮层 db-interact-slot 显示最新一条；连续两条时浮层文案刷新为后到的
 //      那条（快速顶替），且整段里只该有这一个浮层。
+//   ③ 预留高度：浮层浮在弹幕区底部，弹幕区底部为它让出一段（db-chat-wrap 的 padding-bottom），
+//      浮层整条落在这段里 —— 否则它必然压住最新一条弹幕。
 //   准入：本块自带入房间（先回列表页再点开 fixtureRoom 的卡片），不依赖上一块留下的页面状态。
 //
 // 页内脚本片段：由 smoke/room-page.mjs **原样拼进** `window.__smoke_run` 的函数体，与相邻块共用同一条
@@ -56,6 +58,19 @@
         tsScroll.innerText.indexOf("顶替甲") < 0 &&
         tsScroll.innerText.indexOf("顶替乙") < 0;
       out.interactSlotStillSingle = !!tsSlot2 && allByTestId("db-interact-slot").length === 1;
+      // ---- ③ 预留高度：浮层浮在弹幕区底部，弹幕区为它让出一段（`.chatWrap` 的
+      //      padding-bottom），浮层整条落在这段预留区里 —— 否则最新一条弹幕必被它压住。
+      //      量法只看几何：预留 = 容器的下内边距；浮层的顶边不该高于「容器底边 - 预留」。
+      var tsWrap = byTestId("db-chat-wrap");
+      var tsPad = tsWrap ? parseFloat(getComputedStyle(tsWrap).paddingBottom) || 0 : 0;
+      var tsWrapRect = tsWrap ? tsWrap.getBoundingClientRect() : null;
+      var tsSlotRect = tsSlot2 ? tsSlot2.getBoundingClientRect() : null;
+      out.interactSlotSpaceReserved = !!tsWrap && tsPad > 0;
+      out.interactSlotInsideReservedBand = !!tsSlotRect && !!tsWrapRect && tsPad > 0 &&
+        tsSlotRect.top >= tsWrapRect.bottom - tsPad - 1 &&
+        tsSlotRect.bottom <= tsWrapRect.bottom + 1;
+      // 预留的那一段至少放得下浮层自己（槽位高度 + 上下安全间距），不是随便给几像素。
+      out.interactSlotReserveFitsSlot = !!tsSlotRect && tsPad >= tsSlotRect.height;
       titleSlotBlockRan = true;
     } catch (e) {
       out.titleSlotBlockError = String((e && e.stack) || e);

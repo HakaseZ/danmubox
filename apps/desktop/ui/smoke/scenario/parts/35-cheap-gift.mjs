@@ -216,11 +216,11 @@
             ×N 与金额是整桶合计），0.11 元那条与它无关、两处都照旧一行；
          ② 关掉折叠：两处**逐条回来**，顺序（铅笔 → 铅笔屑 → 橡皮）、条目数、各行金额都回到原值；
          ③ 剔除统计（ui.gift_exclude_cheap_stats）：只改**统计**（礼物栏折叠头的「礼物 / SC（N）」
-            与分组明细）—— 两个区域的行**一条都不动**；关掉它统计逐字回到原串；
-         ④ 自动消失（ui.interact_auto_hide）：到点那一行**不再画**，但消息没丢 —— 关掉开关它
-            原样回来，再打开又不见（两个方向都可逆）。
+            与分组明细）—— 两个区域的行**一条都不动**；关掉它统计逐字回到原串。
+       （互动消息那一路「自动消失」已随 ui.interact_auto_hide 删除：互动消息改由单槽位浮层
+        呈现、弹幕列表里一条都不画，「关掉开关回到列表行」这条口径不再存在。）
        ⚠ 准入前提全部在本块内自备（§9.3 ②）：切回**空会话**的第二房间（只有本段推的夹具）、
-          三枚开关各自先拨到既定值、礼物栏展开（行数才等于条目数）。
+          两枚低价礼物开关各自先拨到既定值、礼物栏展开（行数才等于条目数）。
        ⚠ 整块包一层 try/catch + switchScopeBlockRan（§9.3 ①）：出岔子只作废本块、不带走整场。 */
     var switchScopeBlockRan = false;
     try {
@@ -262,10 +262,8 @@
 
       out.switchScopeSwitchesSet = (await ssToggle("折叠低价礼物", false)) &&
         (await ssToggle("剔除低价礼物统计", false)) &&
-        (await ssToggle("互动消息自动消失", true)) &&
         window.__prefs["ui.gift_collapse_cheap"] === false &&
-        window.__prefs["ui.gift_exclude_cheap_stats"] === false &&
-        window.__prefs["ui.interact_auto_hide"] === true;
+        window.__prefs["ui.gift_exclude_cheap_stats"] === false;
 
       // ---- ① 默认（两枚都关）：两个区域都一条一行
       cheapPush("gift", "投喂 铅笔", 90);
@@ -355,27 +353,9 @@
       out.switchScopeExcludeRestoresStats = cheapSummary() === out.switchScopeSummaryBefore &&
         cheapDockText().indexOf("（3）") >= 0;
 
-      // ---- ⑥ 自动消失：到点不画，但**内容没丢** —— 关掉开关原样回来，再打开又不见
-      window.__emit("danmubox://message", window.__mk("interact", "", false, {
-        room_id: ssRoomId, uname: "开关票标记", ts: Date.now() - 9000
-      }));
-      await sleep(600);
-      out.switchScopeAutoHideHidesExpired = text().indexOf("开关票标记") < 0;
-      out.switchScopeAutoHideOff = (await ssToggle("互动消息自动消失", false)) &&
-        window.__prefs["ui.interact_auto_hide"] === false;
-      await sleep(400);
-      out.switchScopeAutoHideRestoresContent = text().indexOf("开关票标记") >= 0;
-      out.switchScopeAutoHideOnAgain = (await ssToggle("互动消息自动消失", true)) &&
-        window.__prefs["ui.interact_auto_hide"] === true;
-      await sleep(400);
-      out.switchScopeAutoHideHidesAgain = text().indexOf("开关票标记") < 0;
-      out.switchScopeAutoHideReversible = out.switchScopeAutoHideHidesExpired &&
-        out.switchScopeAutoHideRestoresContent && out.switchScopeAutoHideHidesAgain;
-
-      // ---- 收尾：三枚开关回到契约 §8 的默认值、回到原来的房间（下一段从房间页开始量）
+      // ---- 收尾：两枚低价礼物开关回到契约 §8 的默认值、回到原来的房间（下一段从房间页开始量）
       out.switchScopeDefaultsRestored = window.__prefs["ui.gift_collapse_cheap"] === false &&
-        window.__prefs["ui.gift_exclude_cheap_stats"] === false &&
-        window.__prefs["ui.interact_auto_hide"] === true;
+        window.__prefs["ui.gift_exclude_cheap_stats"] === false;
       if (cheapHomeId) {
         cheapTabFor(cheapHomeId).click();
         await sleep(800);

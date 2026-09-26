@@ -1,17 +1,10 @@
 // 显示层的纯逻辑：过滤、礼物连击折叠、徽标派生、时间格式化。
 // 这些规则来自 docs/ui.md 与 docs/contract.md §8 的偏好键，放这里便于单测。
 
-// 显式带 `.ts` 后缀 + 混用 `type` 修饰符：这个模块要从 `types.ts` 取**值**
-// （`INTERACT_AUTO_HIDE_MS`），而本文件的单测用 `node --test src/filtering.test.ts` 直接跑
+// 显式带 `.ts` 后缀：本文件的单测用 `node --test src/filtering.test.ts` 直接跑
 // （Node 的类型擦除**只认带后缀的相对说明符**，它不解析 `./types` 那种无后缀写法）。
 // `tsconfig.app.json` 已开 `allowImportingTsExtensions`，vite 与 tsc 都照这个后缀解析。
-import {
-  INTERACT_AUTO_HIDE_MS,
-  type FollowedRoom,
-  type Message,
-  type MessageKind,
-  type Prefs,
-} from "./types.ts";
+import type { FollowedRoom, Message, MessageKind, Prefs } from "./types.ts";
 
 export interface Badges {
   anchor: boolean;
@@ -233,25 +226,6 @@ export function paginate<T>(
 }
 
 /**
- * 这条互动/进场行是不是**已经到点、不该再画**（`ui.interact_auto_hide`，docs/ui.md §4.8）。
- *
- * 判据只有一条：`ts + INTERACT_AUTO_HIDE_MS <= now` —— 与行上那段淡出动画共用同一个常量
- * （`types.ts` 的 `INTERACT_AUTO_HIDE_MS`），两者不会错位。`ui.interact_auto_hide` 关着时
- * **恒假**：关掉开关，早先「消失」的那些行原样回来（顺序、数量都不变）。
- *
- * **它只回答「画不画」，不回答「留不留」**：消息一直在会话缓冲里（调用方给的 `messages`），
- * 「消失」是派生出来的 —— 这正是 issue 2609171849 第 5 条要的那条口径（自动消失不许丢内容）。
- * 时间由调用方给（默认 `Date.now()`），单测因此与挂钟无关。
- */
-export function interactAutoHidden(message: Message, prefs: Prefs, now: number): boolean {
-  return (
-    prefs["ui.interact_auto_hide"] &&
-    message.kind === "interact" &&
-    message.ts + INTERACT_AUTO_HIDE_MS <= now
-  );
-}
-
-/**
  * 互动/进场消息的展示文案（docs/ui.md §4.8）。有 `content` 用 `content`（引擎所给，
  * 如「关注了主播」「分享了直播间」），否则回落到「<昵称> 进入直播间」。
  * 弹幕行（`MessageRow`）与互动槽位（`InteractSlot`）共用，保证同一句话两处一致。
@@ -275,26 +249,19 @@ export function interactText(message: Message): string {
  * （本地行恒为负，见 `store.insertPending`）而不是 `send_state` —— 乐观行插入时**不带**
  * `send_state`（它与已确认行渲染逐项相同），只有这条负数前缀能一直认出它。
  *
- * `now` 只喂给「互动消息自动消失」那一判（见 `interactAutoHidden`）：到点的互动行**不画**，
- * 但它**仍在 `messages` 里**（调用方传进来的数组一个元素都不少）—— 关掉
- * `ui.interact_auto_hide` 后同一份输入立刻把这一行原样还回来（issue 2609171849 第 5 条：
- * 隐藏 / 自动消失只是显示层的事，不许丢内容）。默认 `Date.now()` 只是给调用方便利；
- * 单测一律显式传时刻，判据因此与挂钟无关。
+ * **互动 / 进场消息一律不进列表**（docs/ui.md §4.8）：它们只由弹幕区底部那处单槽位浮层
+ * 呈现（`ui.interact_single_slot`，既是「共用槽位」也是「看不看互动」的总开关）——
+ * 开关开着由浮层呈现（弹幕区为它留一段预留高度），关着则**完全不显示**。
+ * 消息**仍在 `messages` 里**（调用方传进来的数组一个元素都不少）：这是纯派生，
+ * 与「隐藏只是显示层的事、不许丢内容」同一口径（issue 2609171849 第 5 条）。
  */
-export function toDisplayRows(
-  messages: Message[],
-  prefs: Prefs,
-  now: number = Date.now(),
-): DisplayRow[] {
+export function toDisplayRows(messages: Message[], prefs: Prefs): DisplayRow[] {
   const rows: DisplayRow[] = [];
 
   for (const message of messages) {
     if (!passesFilter(message, prefs)) continue;
-    // 互动/进场消息共用单一槽位（ui.interact_single_slot）：开时直接从列表剔除，
-    // 改由 `InteractSlot` 浮层显示（docs/ui.md §4.8）。消息仍在 `messages` 里，
-    // 关掉开关即逐条回到列表（与「自动消失不丢内容」同一口径）。
-    if (prefs["ui.interact_single_slot"] && message.kind === "interact") continue;
-    if (interactAutoHidden(message, prefs, now)) continue;
+    // 互动/进场消息：列表里一个像素都不给，交给 `InteractSlot` 浮层（docs/ui.md §4.8）。
+    if (message.kind === "interact") continue;
 
     const last = rows[rows.length - 1];
     const pending = message.local_id < 0 ||

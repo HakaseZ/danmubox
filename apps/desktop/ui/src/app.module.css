@@ -1163,6 +1163,20 @@
   position: relative;
 }
 
+/* 槽位的**预留高度**：浮层浮在弹幕区底部，若不给它留位置，它必然压住最新一条弹幕
+   （用户 2026-09-26）。这里在 `.chatWrap` 底部让出一段 = 槽位高度（`--avatar + 8px`，
+   与 `.interactSlotRow` 同源）+ 上下各一道安全间距，浮层因此落在预留区里、压不到任何一行。
+   ⚠ 留的是**外层** `.chatWrap` 的下内边距，不是 `.scroller` 的：滚动容器的
+   `scrollHeight` / 贴底判据一个字节都不动（虚拟列表照旧按自己的口径贴底），
+   变的只是它可见的那一段高度。
+   开关（`ui.interact_single_slot`）关掉时浮层不渲染，这段预留随之消失 ——
+   `data-interact-slot` 由 `RoomView` 按开关打在滚动容器那一层；第二选择器是同形态的
+   CSS 兜底（浮层在 DOM 里才生效），两者取值完全一致。 */
+.chatWrap[data-interact-slot="true"],
+.chatWrap:has(> .interactSlot) {
+  padding-bottom: calc(var(--avatar) + 8px + var(--sp-3) * 2);
+}
+
 /* 互动/进场消息共用单槽位（`InteractSlot`，docs/ui.md §4.8）：浮于弹幕区底部偏左、
    轻量非侵入（pointer-events: none 不挡弹幕交互，仿官方网页直播间「互动消息」条的位置）。
    它只是一条浮层，blast radius 小，不影响 `.chatArea` / `.scroller` 的滚动与贴底。 */
@@ -1504,28 +1518,6 @@
   gap: var(--sp-1);
   min-width: 0;
   overflow: hidden;
-}
-
-/* 互动/进场消息：显示一会儿就淡出（`ui.interact_auto_hide` 打开时）。
-   动画时长由行内 `animationDuration` 给（= `INTERACT_AUTO_HIDE_MS` 的同一长度），
-   到点后这一行**不再被画**（`filtering.interactAutoHidden`，判据是同一个常量），
-   空间随之回收 —— 但消息仍在会话缓冲里：关掉开关同一帧就原样回来
-   （issue 2609171849 第 5 条，见 docs/ui.md §4.8）。 */
-.autoHide {
-  animation-name: interactFade;
-  animation-timing-function: ease-out;
-  animation-fill-mode: forwards;
-  pointer-events: none;
-}
-
-@keyframes interactFade {
-  0%,
-  70% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-  }
 }
 
 /* 正文：身份行的**下一行**（块级），左边缘与身份行相同 —— 折行只在它内部发生，

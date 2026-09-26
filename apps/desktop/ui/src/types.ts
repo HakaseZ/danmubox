@@ -439,16 +439,13 @@ export interface Prefs {
    */
   "ui.gift_exclude_cheap_stats": boolean;
   /**
-   * 互动/进场消息显示一会儿后自动消失；关掉则常驻。
-   * 「消失」是**显示层**的（`filtering.interactAutoHidden`，判据 `ts + INTERACT_AUTO_HIDE_MS`）：
-   * 消息一直留在会话缓冲里，关掉这枚开关先前消失的那些行会**原样回来**（docs/ui.md §4.8）。
-   */
-  "ui.interact_auto_hide": boolean;
-  /**
-   * 互动/进场消息共用弹幕区一处固定槽位（仿官方网页直播间，默认 `true`）。
+   * 互动/进场消息共用弹幕区一处固定槽位（仿官方网页直播间，默认 `true`）——
+   * 它同时就是**「要不要看互动消息」那一枚总开关**：
    * 开时互动消息**不进弹幕列表**（不再逐行堆叠、挤占空间），改在弹幕区底部浮层显示
-   * 最新一条，下一条到来时快速顶掉上一条，空闲片刻自动淡出；关时退化为「列表行 +
-   * 自动消失」（`ui.interact_auto_hide`）的旧行为。纯派生、不改缓冲（docs/ui.md §4.8）。
+   * 最新一条，下一条到来时快速顶掉上一条，空闲片刻自动淡出，弹幕区底部为它**留出一段
+   * 预留高度**（浮层因此压不到最新一条弹幕）；关时互动消息**完全不显示** —— 列表不画、
+   * 浮层不画，那段预留高度也一并收回。纯派生、不改缓冲：消息始终留在会话缓冲里
+   * （docs/ui.md §4.8）。
    */
   "ui.interact_single_slot": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */
@@ -673,15 +670,6 @@ export const KIND_LABEL: Record<MessageKind, string> = {
   guard: "大航海",
   system: "系统",
 };
-
-/**
- * 互动/进场消息自动消失前的停留时长（`ui.interact_auto_hide` 打开时）。
- *
- * 行的淡出动画（`.autoHide`）与「到点不再画」这一判据（`filtering.interactAutoHidden`，
- * 取 `ts + INTERACT_AUTO_HIDE_MS`）共用这一个长度，两者不会错位。**到点只是不画**：
- * 消息仍在会话缓冲里，`ui.interact_auto_hide` 关掉就原样回来（docs/ui.md §4.8）。
- */
-export const INTERACT_AUTO_HIDE_MS = 8000;
 
 /**
  * 互动槽位（ui.interact_single_slot）浮层在**没有新互动消息**后多久自动淡出（毫秒）。

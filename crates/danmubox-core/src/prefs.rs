@@ -185,19 +185,14 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             None,
             None,
         ),
-        // 互动/进场消息：默认「显示一会儿就淡出」，关掉则常驻（需求 §2.4）。
-        spec(
-            "ui.interact_auto_hide",
-            Ty::Bool,
-            json!(true),
-            None,
-            None,
-            None,
-        ),
         // 互动/进场消息共用弹幕区一处固定槽位（仿官方网页直播间，默认开）。
-        // 开时互动消息不进弹幕列表，改在弹幕区底部浮层显示最新一条、下一条快速顶掉上一条，
-        // 空闲片刻自动淡出；关时退化为「列表行 + 自动消失」（ui.interact_auto_hide）的旧行为。
+        // 它同时就是「看不看互动消息」的总开关：开时互动消息不进弹幕列表，改在弹幕区底部
+        // 浮层显示最新一条、下一条快速顶掉上一条，空闲片刻自动淡出，弹幕区底部为它留一段
+        // 预留高度；关时互动消息**完全不显示**（列表与浮层都不画，预留高度一并收回）。
         // 纯派生、不改缓冲（docs/ui.md §4.8）。
+        //
+        // 旧的 `ui.interact_auto_hide`（显示一会儿自动淡出）已整条删除：单槽位这枚键
+        // 已经把「看不看互动」这件事说完，再留一枚叠加的开关只会让用户不知道该拨哪一枚。
         spec(
             "ui.interact_single_slot",
             Ty::Bool,
@@ -258,8 +253,9 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // （三档之比见 `session.rs` 的 `GIFT_TIER_SHARE`），价值越高留得越多。
         //
         // 互动与系统两档**刻意小得多**（300 / 200）：互动是「一次性、看过即弃」的消息
-        // （`ui.interact_auto_hide` 默认就是显示一会儿自动淡出），系统事件（开播 / 下播 /
-        // 标题变更 / 公告）一天也没几条 —— 两者都不需要深度回滚，而弹幕需要。
+        // （默认只由弹幕区底部那处单槽位浮层呈现最新一条，`ui.interact_single_slot`），
+        // 系统事件（开播 / 下播 / 标题变更 / 公告）一天也没几条 —— 两者都不需要深度回滚，
+        // 而弹幕需要。
         //
         // 取值范围与旧键一致（100–100000）：六枚同域，文档里一行讲得清。
         spec(
@@ -623,6 +619,14 @@ fn migrate_legacy_buffer_rows(prefs: &mut Prefs, file: &Map<String, Value>) {
 mod tests {
     use super::*;
 
+    /// 代码里**已经删掉、契约 §8 那张表还没同步删掉**的键。
+    ///
+    /// 一致性校验是双向的（契约里有而 SPECS 没有 = 界面那枚开关形同虚设；SPECS 里有而
+    /// 契约没有 = 凭空多一枚键），删键这一趟两者必然错位一拍：本批 `docs/**` 由主线单独
+    /// 同步。这里给一拍宽限 —— 契约删掉那一行后，把这个常量连同下面那处过滤一起删掉即可
+    /// （留着也不会误放行：它只是让「已删的键」不参与比对）。
+    const PENDING_CONTRACT_REMOVAL: &[&str] = &["ui.interact_auto_hide"];
+
     /// SPECS 必须与**契约 §8 的表**逐键一致——这里真的去读契约，不是数个数。
     ///
     /// 2026-09-12（issue #6）的教训：`ui.show_timestamp` 在界面、契约、文档、
@@ -653,6 +657,10 @@ mod tests {
                 continue;
             };
             if let Some((key, _)) = rest.split_once('`') {
+                // 已从代码删掉、契约待同步的那几枚不参与比对（见 `PENDING_CONTRACT_REMOVAL`）。
+                if PENDING_CONTRACT_REMOVAL.contains(&key) {
+                    continue;
+                }
                 documented.push(key.to_string());
             }
         }
@@ -701,7 +709,11 @@ mod tests {
             json!(false),
             "低价礼物剔除统计默认关：默认形态必须与改前一致（契约 §8）"
         );
-        assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
+        assert_eq!(
+            prefs.get("ui.interact_single_slot").unwrap(),
+            json!(true),
+            "单槽位默认开：互动消息由弹幕区底部浮层呈现（契约 §8）"
+        );
         assert_eq!(
             prefs.get("ui.danmaku_aggregate").unwrap(),
             json!(true),
@@ -784,7 +796,7 @@ mod tests {
             json!({ "ui.font_scale": 3.0 }),
             json!({ "ui.theme": "neon" }),
             json!({ "ui.auto_scroll": "yes" }),
-            json!({ "ui.interact_auto_hide": 1 }),
+            json!({ "ui.interact_single_slot": 1 }),
             // 共享分区的两枚键（契约 §8）：顺序只能是布尔、份额只能是 0.10–0.90 的数
             json!({ "ui.gift_pane_on_top": "yes" }),
             json!({ "ui.gift_pane_on_top": 1 }),

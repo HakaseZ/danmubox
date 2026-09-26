@@ -1,15 +1,15 @@
 // 场景块：筛选与显示偏好面板 + step4/5/6
-//   filter 筛选面板的两块表单是两列勾选清单（消息类型 6 项 + 辅助功能 7 枚开关）：列 / 行几何、不许横向滚动、不再是芯片样
-//   七枚辅助开关逐枚点开再点回（偏好与复选框同步翻）、干净环境下画的即契约默认值、两块标题的视觉层级
+//   filter 筛选面板的两块表单是两列勾选清单（消息类型 6 项 + 辅助功能 6 枚开关）：列 / 行几何、不许横向滚动、不再是芯片样
+//   六枚辅助开关逐枚点开再点回（偏好与复选框同步翻）、干净环境下画的即契约默认值、两块标题的视觉层级
 //   字号滑杆只作用弹幕区；房间页这一档的主题对比度；时间戳在最右且逐行等宽
-//   step4 系统类消息的白名单；step5 互动行 8 秒后自动消失；step6 关掉开关后常驻
+//   step4 系统类消息的白名单；step5 互动消息不进弹幕列表（由底部浮层呈现）；step6 拨掉「互动」则完全不显示
 //
 // 页内脚本片段：由 smoke/room-page.mjs **原样拼进** `window.__smoke_run` 的函数体，与相邻块共用同一条
 // 作用域（out / snap / byTestId / sleep / … 都是 10-harness.mjs 里的工具）。准入条件见 docs/testing.md §9.3。
     // ---- 筛选面板重排（item 11 + issue 2609160959 第 3 / 4 条）：两块 ——「消息类型」与
     //      「辅助功能」（关键词那一整块随 item 9 删除，主题下拉随 item 10 搬到列表页页头）。
     //      两块的表单**同一形态**：两列勾选清单（第 3 条要的就是这个，第 4 条把
-    //      时间戳 / 互动消息自动消失 / 弹幕包含礼物 / 独立礼物栏四枚开关并进来）。
+    //      时间戳 / 弹幕包含礼物 / 独立礼物栏这几枚开关并进来）。
     out.filterPanelSections = filterPanel
       ? [].slice.call(filterPanel.querySelectorAll("h3")).map(function (h) { return h.innerText.trim(); })
       : [];
@@ -19,7 +19,7 @@
       !filterPanel.querySelector('[data-testid="db-pref-theme"]');
     // 两块各自按**稳定钩子**定位（不再靠 sections[0] / [1] 的下标）：db-filter-kinds /
     // db-filter-aux 是本次新增的 data-testid（docs/ui.md §8.5）。
-    //      「消息类型」= 6 项（契约 §8 的 kind 全集）；「辅助功能」= 字号滑杆 + **7 枚**复选框。
+    //      「消息类型」= 6 项（契约 §8 的 kind 全集）；「辅助功能」= 字号滑杆 + **6 枚**复选框。
     //      文案由下面的 step4 / step6 / gift / cheapgift / aggregate 几段用 clickLabelIn /
     //      setGiftSwitch 点到（点得到就说明文案在），这里只列文案并数控件，不解析 select 的 innerText。
     var kindsSection = byTestId("db-filter-kinds");
@@ -38,7 +38,8 @@
     // 「辅助功能」块的控件清单：**旧的「礼物栏」下拉已随 issue 2609152029 第 1 条删除**
     // （字符串键 ui.gift_panel_mode 换成两枚布尔键），倒数第三 / 第二枚是低价礼物开关
     // （issue 2609162056 第 3 / 4 条）、末一枚是刷屏弹幕聚合（issue 202609211940 第 3 条），
-    // 所以这里数的是 7 枚复选框，并另外钉住「select 一个都不剩」；字号滑杆仍在
+    // 所以这里数的是 6 枚复选框（「互动消息自动消失」那枚已随 ui.interact_auto_hide 删除），
+    // 并另外钉住「select 一个都不剩」；字号滑杆仍在
     // （它只是排布换成了整行）。
     var auxLabels = labelsOf(auxSection).filter(function (l) {
       return !!l.querySelector('input[type="checkbox"]');
@@ -56,7 +57,7 @@
       out.filterPanelAuxLabels.indexOf("剔除低价礼物统计") >= 0 &&
       out.filterPanelAuxLabels.indexOf("刷屏弹幕聚合") >= 0;
     out.filterPanelAuxComplete = !!out.filterPanelAuxControls.fontScale &&
-      out.filterPanelAuxControls.switches === 7 &&
+      out.filterPanelAuxControls.switches === 6 &&
       out.filterPanelAuxControls.selects === 0 &&
       out.filterPanelAuxSwitchesPresent;
     // 字号滑杆那一行**仍占满整行**（横跨两列，滑杆贴右）：两列清单里唯一的例外，也是
@@ -105,9 +106,8 @@
         geom.perColumn === perColumn && geom.order === order;
     };
     out.filterPanelKindsTwoColumns = twoColumnsEven(out.filterPanelKindGeom, "3/3", 3, "010101");
-    // 辅助功能的 7 枚开关：四行两列（DOM 序 0101010 —— 末一行只有「刷屏弹幕聚合」一格，
-    // 它排在左列，右列那一格空着：奇数项按行铺就是这个形状）
-    out.filterPanelAuxTwoColumns = twoColumnsEven(out.filterPanelAuxGeom, "4/3", 4, "0101010");
+    // 辅助功能的 6 枚开关：三行两列（DOM 序 010101 —— 偶数项按行铺，两列各三枚）
+    out.filterPanelAuxTwoColumns = twoColumnsEven(out.filterPanelAuxGeom, "3/3", 3, "010101");
     out.filterPanelTwoColumnLists = out.filterPanelKindsTwoColumns && out.filterPanelAuxTwoColumns;
     // ---- 「不要使用现在的按钮形式」（第 3 条）：清单里每一项都是**朴素的复选框 + 文字** ——
     //      没有旧芯片那层底色与描边（旧样式给 label 上 --bg-input 底 + 1px 描边 + 胶囊圆角），
@@ -137,20 +137,26 @@
     out.filterPanelNoHorizontalOverflow = !!filterPanel &&
       filterPanel.scrollWidth <= filterPanel.clientWidth + 1;
     // ---- 「默认勾选」（issue 2609160959 第 2 条）：本页跑在**干净环境**里 —— mock 的偏好
-    //      就是契约 §8 的默认值（ui.interact_auto_hide = true、ui.show_timestamp = false），
-    //      没有任何本机覆盖，因此这两枚复选框必须照实画成「互动消息自动消失 = 勾上 /
-    //      时间戳 = 未勾」。它们同时守住「复选框的形态与偏好值一致」这条渲染路径。
+    //      就是契约 §8 的默认值（ui.interact_single_slot = true、ui.show_timestamp = false），
+    //      没有任何本机覆盖，因此这两枚复选框必须照实画成「互动 = 勾上 / 时间戳 = 未勾」。
+    //      ⚠ 「互动」这一项在**消息类型**那一份清单里，且绑的是 ui.interact_single_slot
+    //      （不再读写 filter.kinds）：它同时就是「看不看互动消息」的总开关。
+    //      它们同时守住「复选框的形态与偏好值一致」这条渲染路径。
     var auxBoxOf = function (label) {
       var picked = auxLabels.filter(function (l) { return l.innerText.trim() === label; })[0];
       return picked ? picked.querySelector('input[type="checkbox"]') : null;
     };
-    var autoHideBox = auxBoxOf("互动消息自动消失");
+    var kindBoxOf = function (label) {
+      var picked = kindLabels.filter(function (l) { return l.innerText.trim() === label; })[0];
+      return picked ? picked.querySelector('input[type="checkbox"]') : null;
+    };
+    var interactBox = kindBoxOf("互动");
     var timestampBox = auxBoxOf("时间戳");
-    out.filterPanelAutoHideCheckedByDefault = !!autoHideBox && autoHideBox.checked &&
-      window.__prefs["ui.interact_auto_hide"] === true;
+    out.filterPanelInteractCheckedByDefault = !!interactBox && interactBox.checked &&
+      window.__prefs["ui.interact_single_slot"] === true;
     out.filterPanelTimestampUncheckedByDefault = !!timestampBox && !timestampBox.checked &&
       window.__prefs["ui.show_timestamp"] === false;
-    // ---- 七枚辅助开关**逐枚真的能切**（第 4 条 + issue 2609162056 第 3 / 4 条 +
+    // ---- 六枚辅助开关**逐枚真的能切**（第 4 条 + issue 2609162056 第 3 / 4 条 +
     //      issue 202609211940 第 3 条）：点一下偏好跟着翻、复选框跟着画，再点一下回到原值 ——
     //      因此后面各段（时间戳 / step4 / step5 / step6 / gift 四种组合 / cheapgift / aggregate）
     //      跑在**与改前完全相同的默认形态**上，切完行为不变这件事由那些既有断言继续钉住。
@@ -158,7 +164,6 @@
     //      与行为量值分别在 cheapgift 与 aggregate 那两段。
     var auxSpecs = [
       { label: "时间戳", key: "ui.show_timestamp" },
-      { label: "互动消息自动消失", key: "ui.interact_auto_hide" },
       { label: "弹幕包含礼物", key: "ui.gift_in_danmaku" },
       { label: "独立礼物栏", key: "ui.gift_panel" },
       { label: "折叠低价礼物", key: "ui.gift_collapse_cheap" },
@@ -335,8 +340,8 @@
 
     // ---- step4 系统类白名单（语义不得改）：勾上「消息类型 → 系统」之后**新来**的系统行要出现。
     //      这里点的**不再是**「系统通知」那枚开关（ui.system_notice 已随 item 1 删除，两个门
-    //      盖的消息集合逐字相同）：辅助功能块只剩「时间戳」「互动消息自动消失」，面板里没有第二条
-    //      label 含「系统」二字，因此点到的必然是「消息类型」里那一项「系统」。
+    //      盖的消息集合逐字相同）：辅助功能块里没有含「系统」二字的 label（「互动消息自动消失」
+    //      那枚也已随 ui.interact_auto_hide 删除），因此点到的必然是「消息类型」里那一项「系统」。
     //      这里不拿很早以前那条（它已滚出虚拟列表的渲染范围），改发一条新的，断言更硬。
     out.step4_toggledSystem = clickLabelIn(filterPanel, "系统");
     await sleep(400);
@@ -359,8 +364,9 @@
       Math.abs(rect(sysTime).right - rect(sysBody).right) < 0.6;
     snap();
 
-    // ---- step5 互动行 8 秒后自动消失（语义不得改）。这段等待同时也盖过了前面那条超时兜底
-    //      （发送 → 这里 ≈ 14s > 8s），所以「未确认」在同一格验掉，不额外增加一轮的墙钟时间。
+    // ---- step5 互动消息**不进弹幕列表**（改由弹幕区底部那处浮层呈现，`ui.interact_single_slot`）。
+    //      这段等待同时也盖过了前面那条超时兜底（发送 → 这里 ≈ 14s > 8s），所以「未确认」
+    //      在同一格验掉，不额外增加一轮的墙钟时间。
     await sleep(8600);
     timeoutRow = rowWith(timeoutText);
     var timeoutMark = timeoutRow
@@ -368,15 +374,20 @@
     out.sendTimeoutMarkedUnconfirmed = !!timeoutMark &&
       timeoutMark.getAttribute("data-state") === "unconfirmed" &&
       timeoutMark.innerText.indexOf("未确认") >= 0;
-    out.step5_interactGoneAfter8s = text().indexOf("进入直播间") < 0;
+    out.step5_interactNotInList = text().indexOf("进入直播间") < 0;
     snap();
 
-    // ---- step6 关掉开关则常驻（语义不得改）
-    out.step6_toggledAutoHide = clickLabelIn(filterPanel, "互动消息自动消失");
+    // ---- step6 「消息类型 → 互动」这一项绑的是 ui.interact_single_slot：拨掉它 = 互动消息
+    //      **完全不显示** —— 弹幕列表里没有那一行、底部那处浮层也不渲染（预留高度一并收回）。
+    out.step6_toggledInteractKind = clickLabelIn(filterPanel, "互动");
     await sleep(300);
+    out.step6_interactSlotOff = window.__prefs["ui.interact_single_slot"] === false;
     window.__emit("danmubox://message", window.__mk("interact", ""));
-    await sleep(8600);
-    out.step6_prefAutoHide = window.__prefs["ui.interact_auto_hide"];
-    out.step6_interactPersistsWhenOff = text().indexOf("进入直播间") >= 0;
+    await sleep(600);
+    out.step6_interactHiddenWhenOff = text().indexOf("进入直播间") < 0 &&
+      !byTestId("db-interact-slot");
+    // 拨回契约 §8 的默认值（true）：后面各段仍跑在与改前相同的默认形态上。
+    out.step6_interactToggledBack = clickLabelIn(filterPanel, "互动") &&
+      window.__prefs["ui.interact_single_slot"] === true;
     snap();
 

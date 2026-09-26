@@ -53,6 +53,17 @@
   - **礼物栏收起多了拖动这条路**：拖 / 方向键微调分割线把份额压到下限（`PANE_RATIO_MIN` = 0.1）以下即收起，不必非得点折叠头那枚箭头（`SplitPanes` 新增 `onCollapse`，与既有 `onExpand` 对称）。
   - **互动槽位预留高度**：`ui.interact_single_slot` 打开时弹幕区容器带 `data-interact-slot`，CSS 给它一段下内边距（槽位高度上下各一道安全间距），底部浮层落在预留区里 —— **不再遮住最新一条弹幕**（此前几乎必挡）。留的是**外层容器**的 `padding-bottom`，滚动容器的 `scrollHeight` 与贴底判据未动。
 
+### Fixed
+
+- **issue 2609262335：六项 UI / 适配层修复**（2026-09-27，需求随用户对话）：
+  - **互动槽缩回**（条目 1）：`InteractSlot` 空闲淡出后整块卸载，预留高度由 CSS `:has(> .interactSlot)` 绑在浮层元素存在上——无活跃互动消息时元素不在即预留归零、弹幕自动回填，不再留一段空白。
+  - **礼物栏拖拽收起 + 默认 1/4**（条目 2）：修掉 `SplitPanes` 拖动中途改写 `giftCollapsed` 导致的「拖到一半被识别成已收起、后续拖不动」；改为拖动全程只改可视份额、松手才决定开合（拖动中折叠几何让位实时份额预览）。`ui.gift_pane_ratio` 默认 `0.35 → 0.25`（礼物:弹幕 = 1:3），同步 `docs/contract.md` §8、`prefs.rs`、`PANE_RATIO_FALLBACK`、`docs/ui.md` §5.4。
+  - **筛选默认加载**（条目 3）：礼物栏三族筛选 chip（礼物 / 舰长 / SC）进房即常驻渲染，不再「本场没收该族就不显示」；`present` 只用于无数据灰显。默认仍按 `ui.gift_panel`（true）/ `filter.kinds` 含三者。
+  - **黑名单 GetBlackList 412 风控**（条目 4，`crates/danmubox-bili/src/admin.rs`）：app-ucenter 只读列表遇 HTTP 412（`text/html` 风控页）时，在 admin 层加**有界重试**（最多 2 次、退避 200ms）与**进程级串行护栏**（三列表不再并发拉取），消除「并发突发」触发的风控；`http.rs` 全局「4xx 不重试 / POST 一律不重试」纪律原样保留。退避时长、重试次数、是否需 app 专属头均**未经实测**，登记 `docs/protocol.md` 附录 A45 补充行为「待实测校准」，不编造取值。
+  - **房管批量条底部展开**（条目 5）：批量操作条从「插在表单与列表之间」改为面板**最后一行** `position: sticky; bottom: 0` 从下方滑入（160ms，`prefers-reduced-motion` 下不播），不再造成中间高度突变与焦点丢失。
+  - **刷屏头像 66% 露出**（条目 6）：刷屏聚合行头像错位 `0.30 → 0.34`（每位露 2/3），新增独立常量 `AVATAR_STACK_OFFSET_FLOOD`；低价礼物桶保持 `0.30` 不变。
+  - 文档同步：`docs/contract.md` §8、`docs/ui.md` §5.4、`docs/protocol.md` 附录 A45 补充。
+
 ### Changed
 
 - **issue202609241553：「我的直播间」按六条要求收紧入口形态与交互**（2026-09-24，需求落 `REQUIREMENTS.md` §2.14 二次修订）：在既有「我的直播间」之上改 6 点，落点 `docs/contract.md` §3 / §5 / §7 / §2.14、`docs/ipc.md` §3、`docs/ui.md` §2.2.2、`docs/protocol.md` §10.7 / §18.1 / 附录 A66-1、`docs/testing.md` C-16。要点：① **按钮右端隔离**（第 1 条）：「我的直播间」从账号管理按钮组（重新登录 / 退出登录 / 删除）里**挪出**，单独成组贴账号行最右端（`db-anchor-entry`，`margin-left:auto`），用间距 + 竖分隔读开两类不同级功能；`db-anchor-entry` 与 `.accountActions` 同款 `stopPropagation`——**点它不切号**（点它是「看 / 管这个账号的直播间」，切号会清掉刚展开的管理区与按账号映射）。② **没开通 / 未登录不显示按钮**（第 2 条）：某账号 `anchor_room` 返回 `null` 或未登录的行根本不渲染该按钮；打开账号对话框时对**已登录**账号并发预取 `anchor_room` 落到 `anchorRooms` / `anchorRoomErrors`，按钮显隐由这份映射决定，读失败也不渲染但原因留痕。③ **不必切号即可跨账号管理**（第 3 条）：任一账号行都能直接管理**那个账号**的直播间——四个 `anchor_*` 命令各加 `account?: string` 参数，由 `BiliAnchor::new_for(account)` 走那份凭据（`crates/danmubox-bili/src/anchor.rs` 新增 `new_for`），目标房间仍由 `own()` 现取、上层不传房间号；写操作纪律改为「只作用于 `account` 指定账号自己的直播间（缺省当前）」。④ **分区可改且改动即存**（第 4 条）：大区 + 小区两级都能改，且改分区是**独立写入口** `anchor_area_set`（`ports.rs` 的 `AnchorRoom::set_area` + 命令 `anchor_area_set`，不必等到开播），选中即发一次写；`area_list` 的解析路径按参照项目 `Zeppelinpp/bilibili-streamer` 修正为 `data[]` **直接数组** + `show_pinyin=1`（早期写成 `data.list[]` 会把分区读空、界面降级只读，是「分区没有修改选项」的根因）。⑤ **布局调整**（第 5 条）：直播间状态移到**标题输入框左边**；开播 / 下播按钮**独占一行**（`db-anchor-live-row`）。⑥ **ROOM_CHANGE 自动更新**（第 6 条）：弹幕 WS 推来的 `ROOM_CHANGE`（只读 `data.room_id` 与 `data.title`，字段形态取自参照实现 `HakaseZ/BiliLiveWatcher`、登记于 A66-1）经 `danmubox://room` 回到前端，命中 `anchorRoom.room_id` 时就地更新标题输入框（限制：未连接自己直播间收不到；`danmubox-cli` 的事件循环也补了这一支，打一行「直播间标题变更」方便命令行核对）。冒烟 `37-anchor-room.mjs` 按新语义补了五组读数（按钮显隐 / 预取 / 跨账号 / 分区即存 / ROOM_CHANGE 更新）。

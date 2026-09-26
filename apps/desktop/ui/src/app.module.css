@@ -1179,10 +1179,10 @@
    ⚠ 留的是**外层** `.chatWrap` 的下内边距，不是 `.scroller` 的：滚动容器的
    `scrollHeight` / 贴底判据一个字节都不动（虚拟列表照旧按自己的口径贴底），
    变的只是它可见的那一段高度。
-   开关（`ui.interact_single_slot`）关掉时浮层不渲染，这段预留随之消失 ——
-   `data-interact-slot` 由 `RoomView` 按开关打在滚动容器那一层；第二选择器是同形态的
-   CSS 兜底（浮层在 DOM 里才生效），两者取值完全一致。 */
-.chatWrap[data-interact-slot="true"],
+   预留高度不再用 `data-interact-slot` 常驻（开关打开但无活跃消息时不应占着一段空白）：
+   改由 `:has(> .interactSlot)` 绑定浮层是否存在 —— 互动槽在 `InteractSlot` 淡出后整块卸载
+   （见该组件的 idle 卸载），元素不在即不命中、预留高度归零、弹幕自动回填。
+   开关（`ui.interact_single_slot`）关掉时浮层不渲染，这段预留随之消失，与过去一致。 */
 .chatWrap:has(> .interactSlot) {
   padding-bottom: calc(var(--avatar) + 8px + var(--sp-3) * 2);
 }

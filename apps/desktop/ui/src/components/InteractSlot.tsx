@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 
 import { useApp } from "../store";
 import { Avatar } from "./Avatar";
@@ -43,11 +43,22 @@ export function InteractSlot() {
   }, [messages, activeRoomId]);
 
   if (!latest) return null;
+  // 用 `latest.local_id` 作 key：下一条互动到达即整块重挂，`idle` 随之重置为 false，
+  // 不依赖 effect，也就不踩 set-state-in-effect；进场 / 退场 / 接力动画靠内层 key 重挂触发。
+  return <InteractSlotInner key={latest.local_id} latest={latest} prev={prev} />;
+}
+
+function InteractSlotInner({ latest, prev }: { latest: Message; prev?: Message }) {
+  const [idle, setIdle] = useState(false);
+  // 空闲（最新一条互动已淡出）时整块卸载，弹幕区底部预留高度随之归零、上方弹幕自动回填
+  // （仿官方网页直播间「互动消息」条：无消息时那条位置不留空白）。预留高度由 CSS 绑在
+  // `.interactSlot` 元素存在上（见 app.module.css 的 `:has` 选择器），这里只在淡出动画结束后
+  // 把元素摘掉；进场 / 退场 / 接力动画全部保留，不重写组件。
+  if (idle) return null;
 
   return (
     <div className={styles.interactSlot} data-testid="db-interact-slot" aria-hidden="true">
       <div
-        key={latest.local_id}
         className={styles.interactSlotBox}
         style={
           {
@@ -55,6 +66,10 @@ export function InteractSlot() {
             "--slot-life-ms": `${INTERACT_SLOT_MS + 300}ms`,
           } as CSSProperties
         }
+        onAnimationEnd={(event) => {
+          // 仅自身这条「生命周期」动画结束才判定空闲；行内进/退场动画会冒泡上来，凭动画名过滤。
+          if (event.animationName === "interactSlotLife") setIdle(true);
+        }}
       >
         {prev && (
           <div

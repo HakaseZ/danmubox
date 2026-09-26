@@ -46,7 +46,7 @@ import styles from "../app.module.css";
 export const PANE_RATIO_MIN = 0.1;
 export const PANE_RATIO_MAX = 0.9;
 /** 契约 §8 记的默认份额（`prefs` 一定给得出值，这里是它缺席时的兜底）。 */
-const PANE_RATIO_FALLBACK = 0.35;
+const PANE_RATIO_FALLBACK = 0.25;
 /** 方向键一次微调的步长。 */
 const KEY_STEP = 0.02;
 /** 键盘微调的落盘节流：连按只写最后一次（拖动那条路是松手写一次）。 */
@@ -270,9 +270,7 @@ export function SplitPanes({
     const baseGrow = grow;
     let latest = share;
     let moved = false;
-    /** 这一次拖动里礼物栏的折叠状态（`giftCollapsed` 是按下那一刻的快照，拖动中不跟着变）。 */
-    let collapsed = giftCollapsed;
-    /** 按下那一刻它是不是折叠着：ESC / pointercancel 要还原到这一档（见 `abort`）。 */
+    /** 按下那一刻礼物栏是不是折叠着：松手时据此决定要不要回写开合（见 `up`）。 */
     const wasCollapsed = giftCollapsed;
 
     const move = (moveEvent: PointerEvent) => {
@@ -286,24 +284,12 @@ export function SplitPanes({
       latest = roundRatio(clampRatio(raw));
       if (!moved) {
         moved = true;
-        // 折叠态下「拖开」= 展开：折叠优先于份额，不展开这一栏根本拖不动。
-        if (collapsed) {
-          collapsed = false;
-          handlers.current.onExpand();
-        }
         setDragging(true);
-      } else if (!collapsed && raw <= PANE_RATIO_MIN) {
-        // 展开态下「压到底」= 收起：份额已经被夹在下限、指针还在往更小的那一侧走，
-        // 用户的意思就是「这一栏不要了」（与点「收起」同一条路）。一次拖动只收一次
-        // （`collapsed` 举起来就不再调），免得指针每动一像素都回写一遍状态。
-        collapsed = true;
-        handlers.current.onCollapse();
-      } else if (collapsed && !wasCollapsed && raw > PANE_RATIO_MIN) {
-        // 反悔了：刚收起又把指针拖回下限以内 ⇒ 重新展开。只在「按下时本来是展开的」这一档
-        // 成立 —— 按下时就折叠着的（第一下移动已经把它展开），反向拖不该再把它收回去。
-        collapsed = false;
-        handlers.current.onExpand();
       }
+      // 拖动全程**只**改可视份额（`--gift-share` / `--danmaku-share`），**不**在中途改写
+      // `giftCollapsed`（不调 onExpand / onCollapse）：折叠态几何突变会把这场拖动「卡死」
+      // （issue 260926：拖到一半被识别成已收起、后续拖不动）。折叠态下靠 `paneGiftCollapsed`
+      // 在拖动期间让位给实时份额（见 `pane`）来预览展开，松手才落盘开合。
       liveRef.current = latest;
       applyShare(latest);
     };
@@ -313,19 +299,21 @@ export function SplitPanes({
       releaseRef.current?.();
       if (!moved) return; // 只是点了一下分割条：什么都没发生，不写偏好
       liveRef.current = latest;
+      // 松手才决定开合：展开态把份额压到下限 = 收起；折叠态拖到下限以上 = 展开。
+      // 拖动中没有回写 store，礼物栏此刻的几何与按下时一致，不会有中途跳变。
+      if (latest <= PANE_RATIO_MIN) {
+        if (!wasCollapsed) handlers.current.onCollapse();
+      } else if (wasCollapsed) {
+        handlers.current.onExpand();
+      }
       handlers.current.onRatio(latest);
     };
 
     /** ESC / pointercancel：撤销这一次拖动，回到已落盘的那一份（不写偏好）。 */
     const abort = () => {
       releaseRef.current?.();
-      // 开合状态也要还原：拖动途中收起 / 展开过而按下时是另一档的，ESC 之后得回到那一档 ——
-      // 否则「撤销这一次拖动」只撤回了份额，礼物栏却留在被这一拖改过的开合状态上。
-      if (collapsed !== wasCollapsed) {
-        collapsed = wasCollapsed;
-        if (wasCollapsed) handlers.current.onCollapse();
-        else handlers.current.onExpand();
-      }
+      // 拖动中从没改过开合状态（不调 onExpand / onCollapse，松手才决定），所以这里只需把
+      // 实时份额还原成按下前的那一份；礼物栏的折叠态本来就随 prop 原样保留。
       if (liveRef.current === null) return;
       liveRef.current = null;
       applyShare(baseGrow);
@@ -513,7 +501,7 @@ export function SplitPanes({
         className={[
           styles.pane,
           isGift ? styles.paneGift : styles.paneDanmaku,
-          isGift && giftCollapsed ? styles.paneGiftCollapsed : "",
+          isGift && giftCollapsed && !dragging ? styles.paneGiftCollapsed : "",
         ]
           .filter(Boolean)
           .join(" ")}

@@ -26,7 +26,9 @@ import styles from "../app.module.css";
  *    （`column` / `column-reverse`）决定：换位因此**不搬节点** —— 弹幕列表的滚动位置、
  *    虚拟列表状态、两栏各自的内部滚动全都原样保留，读屏与 tab 顺序也稳定地按主次走。
  * 3. **折叠优先于份额**：礼物栏折叠着时它只有折叠头那么高（弹幕区拿走剩下的全部），
- *    但分割条仍在、仍可拖 —— 折叠态下拖动 / 微调就是「把这一栏拖开」，与点「展开」同一条路。
+ *    但分割条仍在、仍可拖 —— 折叠态下拖动 / 微调就是「把这一栏拖开」，与点「展开」同一条路；
+ *    反过来**展开态下把份额压到下限还想再压小就是「把这一栏收起」**（需求 2026-09-26），
+ *    与点「收起」同一条路 —— 两个方向合起来就是「拖分割线也能开合」，不必非得点那枚箭头。
  *
  * **触摸下这三条手势谁说了算**（2026-09-21 实测重写，细节见下面那个 `useEffect`）：
  * 浏览器在 touchstart 那一刻就把 `touch-action` 快照给手势识别器了，之后 JS 再改它、
@@ -71,6 +73,12 @@ interface Props {
   onSwap: () => void;
   /** 折叠态下拖动 / 微调把这一栏拖开时调一次（与点「展开」同一条路）。 */
   onExpand: () => void;
+  /**
+   * 展开态下把份额拖（或微调）到 `PANE_RATIO_MIN` **还想再压小**时调一次
+   * （与点「收起」同一条路）。语义与 `onExpand` 对称：**份额到下限 = 收起** ——
+   * 用户把分割条一路压到头的意图是「这一栏不要了」，而不是「留 10% 在那儿」。
+   */
+  onCollapse: () => void;
   /** 弹幕字号缩放（`ui.font_scale`）：弹幕栏最小高度里的行盒部分跟着它缩。 */
   fontScale: number;
   /** 礼物栏是不是折叠着（折叠 = 这一栏只有折叠头那么高）。 */
@@ -90,6 +98,7 @@ export function SplitPanes({
   onRatio,
   onSwap,
   onExpand,
+  onCollapse,
   fontScale,
   giftCollapsed,
   danmaku,
@@ -133,9 +142,9 @@ export function SplitPanes({
   // 回调放进 ref：指针监听器活在按下那一刻的闭包里，而房间页随时会因为新弹幕重渲染。
   // 写在**布局阶段**（渲染期写 ref 会让被丢弃的那一版渲染把值漏进来）：指针事件永远在
   // 提交之后才到，处理器读到的因此一定是最新的那一组回调。
-  const handlers = useRef({ onRatio, onSwap, onExpand });
+  const handlers = useRef({ onRatio, onSwap, onExpand, onCollapse });
   useLayoutEffect(() => {
-    handlers.current = { onRatio, onSwap, onExpand };
+    handlers.current = { onRatio, onSwap, onExpand, onCollapse };
   });
 
   const applyShare = useCallback((value: number) => {
@@ -261,18 +270,32 @@ export function SplitPanes({
     const baseGrow = grow;
     let latest = share;
     let moved = false;
+    /** 这一次拖动里礼物栏的折叠状态（`giftCollapsed` 是按下那一刻的快照，拖动中不跟着变）。 */
+    let collapsed = giftCollapsed;
 
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
       // 指针停在哪儿，分割条就跟到哪儿：礼物栏在下面时，指针上方是弹幕区。
+      // 这一式同时也把**方向**翻好了 —— 礼物栏在上时指针越往上它越矮，在下时越往下越矮，
+      // 于是下面的「越过下限」判据两栏通用，不必再分一次上下。
       const offset = moveEvent.clientY - rect.top;
-      latest = roundRatio(clampRatio(giftOnTop ? offset / usable : 1 - offset / usable));
+      const raw = giftOnTop ? offset / usable : 1 - offset / usable;
+      latest = roundRatio(clampRatio(raw));
       if (!moved) {
         moved = true;
         // 折叠态下「拖开」= 展开：折叠优先于份额，不展开这一栏根本拖不动。
-        if (giftCollapsed) handlers.current.onExpand();
+        if (collapsed) {
+          collapsed = false;
+          handlers.current.onExpand();
+        }
         setDragging(true);
+      } else if (!collapsed && raw <= PANE_RATIO_MIN) {
+        // 展开态下「压到底」= 收起：份额已经被夹在下限、指针还在往更小的那一侧走，
+        // 用户的意思就是「这一栏不要了」（与点「收起」同一条路）。一次拖动只收一次
+        // （`collapsed` 举起来就不再调），免得指针每动一像素都回写一遍状态。
+        collapsed = true;
+        handlers.current.onCollapse();
       }
       liveRef.current = latest;
       applyShare(latest);
@@ -328,6 +351,13 @@ export function SplitPanes({
     // 方向键移动的是**分割条**：向上 ⇒ 上面那一栏变矮、下面那一栏变高。
     const growGift = up ? !giftOnTop : giftOnTop;
     const base = liveRef.current ?? share;
+    // 已经停在下限还要往「把礼物栏压扁」那一侧按 = 收起（与拖动那条路同一条语义：
+    // 份额到下限 = 收起）。判据必须在下面那条 `next === base` 之前：夹在下限时
+    // `next` 与 `base` 相等，那是「按不动了」，不是「什么都没发生」。
+    if (!growGift && base <= PANE_RATIO_MIN) {
+      if (!giftCollapsed) handlers.current.onCollapse();
+      return;
+    }
     const next = roundRatio(clampRatio(base + (growGift ? KEY_STEP : -KEY_STEP)));
     if (next === base) return;
     if (giftCollapsed) handlers.current.onExpand();

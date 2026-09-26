@@ -19,10 +19,12 @@ import { test } from "node:test";
 
 import {
   collapseCheapGiftRows,
+  GIFT_KINDS,
   giftStatRows,
   interactAutoHidden,
   splitGiftRows,
   toDisplayRows,
+  type DisplayRow,
 } from "./filtering.ts";
 import { INTERACT_AUTO_HIDE_MS, type Message, type Prefs } from "./types.ts";
 
@@ -282,6 +284,66 @@ test("边界：0.09 / 0.10 算低价、0.11 与 0（上游没给价）不算，�
     assert.equal(bucket?.count, 2);
     assert.equal(bucket?.message.amount, 190, `${area}：桶的金额是整桶合计`);
   }
+});
+
+test("panelAllRows 是筛前那一份：选中一族之后另外两族仍在（三格常驻，不互斥）", () => {
+  // 需求 2026-09-26：三族筛选是**并集**，不是三选一。三格若从筛后那一份统计，选中 SC 之后
+  // 礼物 / 大航海两格的条数归零、被 `count > 0` 滤掉而**按钮消失**，就再也点不回来了。
+  const messages = [
+    msg("gift", "投喂 铅笔", CHEAP_A),
+    msg("gift", "投喂 橡皮", NOT_CHEAP),
+    msg("gift", "投喂 铅笔屑", CHEAP_B),
+    msg("superchat", "30 元的 SC", { amount: 30 }),
+    msg("guard", "开通 舰长", { amount: 138_000, guard_level: 3 }),
+    msg("danmaku", "普通弹幕"),
+  ];
+  const rows = toDisplayRows(messages, prefs());
+  const split = splitGiftRows(rows, prefs({ "ui.gift_pane_kinds": ["superchat"] }));
+
+  assert.deepEqual(
+    split.giftRows.map((row) => row.message.kind),
+    ["superchat"],
+    "giftRows 是筛后那一份：礼物栏只渲染选中的那一族",
+  );
+  assert.deepEqual(
+    split.panelAllRows.map((row) => row.message.kind),
+    ["gift", "gift", "gift", "superchat", "guard"],
+    "panelAllRows 是筛前那一份：三族都在（弹幕行本来就不在礼物栏里）",
+  );
+
+  // 三格各自的条数 = 按 kind 加总 `count`（`RoomView` 里 `giftGroups` 的算法）：
+  // 筛前口径下三格都有数，一个都不会被 `count > 0` 滤掉。
+  const cellCount = (kind: DisplayRow["message"]["kind"], source: DisplayRow[]) =>
+    source
+      .filter((row) => row.message.kind === kind)
+      .reduce((sum, row) => sum + row.count, 0);
+  assert.deepEqual(
+    GIFT_KINDS.map((kind) => cellCount(kind, split.panelAllRows)),
+    [3, 1, 1],
+    "礼物 / SC / 大航海 三格常驻（各自的条数是本场的全部，不受筛选影响）",
+  );
+  assert.deepEqual(
+    GIFT_KINDS.map((kind) => cellCount(kind, split.giftRows)),
+    [0, 1, 0],
+    "对照：筛后那一份里只有选中族有数（改前正是它让另外两格消失）",
+  );
+
+  // 低价礼物桶对两份各折一次：筛前那一份也折（同一条 `collapseCheapGiftRows`），
+  // 所以三格与总计条读到的「条数 / 金额」同口径、可对照。
+  const collapsed = splitGiftRows(
+    rows,
+    prefs({ "ui.gift_collapse_cheap": true, "ui.gift_pane_kinds": ["superchat"] }),
+  );
+  assert.deepEqual(
+    collapsed.panelAllRows.map((row) => row.message.kind),
+    ["gift", "gift", "superchat", "guard"],
+    "筛前那一份里两条低价礼物同样折成一条桶",
+  );
+
+  // `ui.gift_panel` 关掉时礼物栏整体不在：两份都空（这一格连「筛没筛」都谈不上）。
+  const off = splitGiftRows(rows, prefs({ "ui.gift_panel": false }));
+  assert.deepEqual(off.giftRows, [], "礼物栏关：筛后那份空");
+  assert.deepEqual(off.panelAllRows, [], "礼物栏关：筛前那份也空");
 });
 
 test("自动消失是显示层的：到点不画，但消息一直在，关掉开关同一帧回来", () => {

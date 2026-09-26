@@ -247,9 +247,14 @@ export function SplitPanes({
     const region = regionRef.current;
     if (!region || releaseRef.current) return;
     const rect = region.getBoundingClientRect();
-    const track = event.currentTarget.offsetHeight;
-    const usable = rect.height - track;
+    // 热区已经**不占布局高度**（`.splitter` 的负 margin，见 app.module.css）：两栏分掉整块
+    // 高度，分割条的**正中**就是两栏的分界 —— 因此这里不再减 `track`，
+    // 减了会让「拖到顶端 / 底端」时落盘的份额差一截（夹取点整体偏移半个热区）。
+    const usable = rect.height;
     if (usable <= 0) return;
+    // 触屏没有 hover：按住时给热区挂 `data-grab`，把手靠它显形（松手即摘）。
+    const el = event.currentTarget;
+    el.dataset.grab = "true";
 
     const pointerId = event.pointerId;
     /** 拖动前的那一份 grow（折叠态是 0）：拖动作废时原地还原的就是它。 */
@@ -261,7 +266,7 @@ export function SplitPanes({
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
       // 指针停在哪儿，分割条就跟到哪儿：礼物栏在下面时，指针上方是弹幕区。
-      const offset = moveEvent.clientY - rect.top - track / 2;
+      const offset = moveEvent.clientY - rect.top;
       latest = roundRatio(clampRatio(giftOnTop ? offset / usable : 1 - offset / usable));
       if (!moved) {
         moved = true;
@@ -303,6 +308,8 @@ export function SplitPanes({
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", key);
+      // 松手 / 取消即摘掉 `data-grab`：把手回到隐藏态（触屏这条等价于 hover 退出）。
+      delete el.dataset.grab;
       setDragging(false);
     };
 

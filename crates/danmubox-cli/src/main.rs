@@ -236,24 +236,32 @@ async fn emotes_owned(store: &Arc<ConfigStore>) -> Result<()> {
 }
 
 /// 房管列表接口的只读核对：路径、参数与响应形状的实测入口。
+///
+/// 只取前 [`ADMIN_CLI_LIMIT`] 条：名单接口是分页 + 限速的（连发会被风控挡回 412），
+/// 这里是**核对形状**用的调试入口，不该把整份名单翻完。
+const ADMIN_CLI_LIMIT: i64 = 200;
+
 async fn admin_lists(store: &Arc<ConfigStore>, room: &str) -> Result<()> {
     let live = BiliLive::with_store(Arc::clone(store))?;
     let resolved = live.resolve_room(room).await?;
     let admin = BiliAdmin::new(Arc::clone(store))?;
     println!("# 房管列表（房间 {}）", resolved.room_id);
 
-    match admin.silent_list(resolved.room_id).await {
-        Ok(list) => {
-            println!("禁言名单 {} 条", list.len());
+    match admin
+        .silent_list(resolved.room_id, 0, ADMIN_CLI_LIMIT)
+        .await
+    {
+        Ok((list, total)) => {
+            println!("禁言名单 {}/{} 条", list.len(), total);
             for user in list {
                 println!("  uid={} {} {}", user.uid, user.uname, user.face);
             }
         }
         Err(err) => println!("禁言名单失败：{err}"),
     }
-    match admin.blacklist(resolved.room_id).await {
-        Ok(list) => {
-            println!("黑名单 {} 条", list.len());
+    match admin.blacklist(resolved.room_id, 0, ADMIN_CLI_LIMIT).await {
+        Ok((list, total)) => {
+            println!("黑名单 {}/{} 条", list.len(), total);
             for user in list {
                 println!("  uid={} {} {}", user.uid, user.uname, user.face);
             }

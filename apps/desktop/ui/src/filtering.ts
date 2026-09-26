@@ -252,6 +252,16 @@ export function interactAutoHidden(message: Message, prefs: Prefs, now: number):
 }
 
 /**
+ * 互动/进场消息的展示文案（docs/ui.md §4.8）。有 `content` 用 `content`（引擎所给，
+ * 如「关注了主播」「分享了直播间」），否则回落到「<昵称> 进入直播间」。
+ * 弹幕行（`MessageRow`）与互动槽位（`InteractSlot`）共用，保证同一句话两处一致。
+ */
+export function interactText(message: Message): string {
+  if (message.content.length > 0) return message.content;
+  return `${message.uname || "有人"} 进入直播间`;
+}
+
+/**
  * 过滤 + 礼物连击折叠。只折叠**礼物连击**：同一次连击的每条礼物共享 `combo_id`，
  * 合成一行，`count` 记条数、`amount` 累加。
  *
@@ -280,6 +290,10 @@ export function toDisplayRows(
 
   for (const message of messages) {
     if (!passesFilter(message, prefs)) continue;
+    // 互动/进场消息共用单一槽位（ui.interact_single_slot）：开时直接从列表剔除，
+    // 改由 `InteractSlot` 浮层显示（docs/ui.md §4.8）。消息仍在 `messages` 里，
+    // 关掉开关即逐条回到列表（与「自动消失不丢内容」同一口径）。
+    if (prefs["ui.interact_single_slot"] && message.kind === "interact") continue;
     if (interactAutoHidden(message, prefs, now)) continue;
 
     const last = rows[rows.length - 1];
@@ -308,8 +322,9 @@ export function toDisplayRows(
 /**
  * 礼物类三族（docs/ui.md §5）：礼物 / SC / 大航海。
  *
- * 它们是**两枚偏好键各自作用的对象**：`ui.gift_in_danmaku` 决定它们要不要留在弹幕流里，
- * `ui.gift_panel` 决定独立礼物栏存在不存在；`filter.kinds` 白名单是更上一层、对两处都生效
+ * 它们是**三枚偏好键各自作用的对象**：`ui.gift_in_danmaku` 决定它们要不要留在弹幕流里，
+ * `ui.gift_panel` 决定独立礼物栏存在不存在，`ui.gift_pane_kinds` 决定礼物栏里**留下哪几族**
+ * （取值域就是这三项的子集）；`filter.kinds` 白名单是更上一层、对两处都生效
  * （`toDisplayRows` 已先把白名单外的行滤掉）。
  */
 export const GIFT_KINDS: readonly MessageKind[] = ["gift", "superchat", "guard"];
@@ -337,8 +352,18 @@ export function splitGiftRows(
   // 折叠是**纯派生**：两处的桶都从同一个 `rows` 现折，`messages` 一个元素都不动 ——
   // 关掉开关下次重算就逐条回来（数量、顺序、金额都回到原样）。
   const collapse = prefs["ui.gift_collapse_cheap"];
+  // 礼物栏内的按 kind 筛选（`ui.gift_pane_kinds`，契约 §8）：空数组 = 全显示，选中 N 项 =
+  // 只留这 N 项的并集。**只作用礼物栏这一头** —— 下面的 `chatBase` 完全不经过它，
+  // 弹幕流那一份一个像素都不动（与 `filter.kinds` 互不串味）。
+  // **先筛后折**：低价礼物桶折出来的那一条 kind 恒为 `gift`，先筛就不会出现
+  // 「把礼物族筛掉了、桶却还在」这种自相矛盾的行；桶里的金额也因此自然是筛后合计。
+  const kinds = prefs["ui.gift_pane_kinds"];
   const panelRows = prefs["ui.gift_panel"]
-    ? rows.filter((row) => GIFT_KINDS.includes(row.message.kind))
+    ? rows.filter(
+        (row) =>
+          GIFT_KINDS.includes(row.message.kind) &&
+          (kinds.length === 0 || kinds.includes(row.message.kind)),
+      )
     : [];
   const giftRows = collapse ? collapseCheapGiftRows(panelRows) : panelRows;
   const chatBase = prefs["ui.gift_in_danmaku"]
@@ -369,10 +394,35 @@ const COINS_PER_YUAN = 1000;
  * `amount <= 0` 表示上游没给价（协议 §10.2 / §10.6：无价字段时 `0`，不得猜测）——
  * 这时返回**空串**，界面不画金额格，也不拿 0 冒充一个数。
  */
+/**
+ * 折算成**元**的数值（`amountText` 要打印的那一半，不带单位）。
+ *
+ * 单独留一枚函数，是因为礼物栏的总计条要把三族的金额**加在一起**再打印
+ * （三族单位已统一为元，见 `amountText`）——字符串没法相加，所以求和走这里。
+ * `amount <= 0`（上游没给价）返回 `0`：它是「没有数」而不是「免费」，
+ * 加进总额里不加不减，与「不画金额格」同一口径。
+ */
+export function amountYuan(amount: number, kind: MessageKind): number {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return kind === "superchat" ? amount : amount / COINS_PER_YUAN;
+}
+
 export function amountText(amount: number, kind: MessageKind): string {
-  if (!Number.isFinite(amount) || amount <= 0) return "";
-  const yuan = kind === "superchat" ? amount : amount / COINS_PER_YUAN;
+  const yuan = amountYuan(amount, kind);
+  if (yuan <= 0) return "";
   return `${yuan.toLocaleString(undefined, { maximumFractionDigits: 3 })} 元`;
+}
+
+/**
+ * 金额（**元**）的紧凑记法：`¥1,168.7`（整数不补小数，金瓜子换算后最多三位小数）。
+ *
+ * 与 `amountText` 只差单位字样：那一条用于**行内的金额格**（带「元」、读起来是一句），
+ * 这一条用于礼物栏的两个**统计位**（总计条与筛选格的图标旁，要的是紧凑）。
+ * `<= 0`（上游没给价 / 三族合计就是 0）返回**空串** —— 界面据此不画这一格，不拿 `¥0` 冒充。
+ */
+export function yuanText(yuan: number): string {
+  if (!Number.isFinite(yuan) || yuan <= 0) return "";
+  return `¥${yuan.toLocaleString(undefined, { maximumFractionDigits: 3 })}`;
 }
 
 /**

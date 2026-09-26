@@ -689,21 +689,48 @@ async fn admin_unmute(state: State<'_, AppState>, room_id: i64, uid: i64) -> Api
     admin.unmute(room_id, uid).await.map_err(ApiError::from)
 }
 
-/// 禁言名单（契约 §7）。与黑名单列表同款：只读，非房管时上游 code 原样带回。
-#[tauri::command]
-async fn admin_silent_list(state: State<'_, AppState>, room_id: i64) -> ApiResult<Vec<SilentUser>> {
-    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    admin.silent_list(room_id).await.map_err(ApiError::from)
+/// 名单的一段（契约 §7）：**增量加载**用。
+///
+/// `items` = 本次新增的条目（不含调用方已有的那一段），`total` = 上游总数。
+/// 改前一次返回整份名单：禁言那份每页只有 10 条，一个真实房间要连发 49 次 POST，
+/// 会被上游风控挡回 HTTP 412 的验证页 —— 分页 + 限速是那个 412 的正解。
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+struct AdminListSlice<T> {
+    items: Vec<T>,
+    total: i64,
 }
 
-/// 房间黑名单（契约 §7）。
+/// 禁言名单的一段（契约 §7）。只读，非房管时上游 code 原样带回。
+#[tauri::command]
+async fn admin_silent_list(
+    state: State<'_, AppState>,
+    room_id: i64,
+    offset: i64,
+    limit: i64,
+) -> ApiResult<AdminListSlice<SilentUser>> {
+    let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    let (items, total) = admin
+        .silent_list(room_id, offset, limit)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(AdminListSlice { items, total })
+}
+
+/// 房间黑名单的一段（契约 §7）。
 #[tauri::command]
 async fn admin_blacklist_list(
     state: State<'_, AppState>,
     room_id: i64,
-) -> ApiResult<Vec<BlacklistedUser>> {
+    offset: i64,
+    limit: i64,
+) -> ApiResult<AdminListSlice<BlacklistedUser>> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    admin.blacklist(room_id).await.map_err(ApiError::from)
+    let (items, total) = admin
+        .blacklist(room_id, offset, limit)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(AdminListSlice { items, total })
 }
 
 /// 加入黑名单（契约 §7）。

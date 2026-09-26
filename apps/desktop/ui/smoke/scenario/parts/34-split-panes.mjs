@@ -39,14 +39,14 @@
     }
     // 归一形态：礼物栏折叠（点折叠头收起；它顺带收起别的面板）
     if (byTestId("db-gift-area")) {
-      byTestId("db-gift-dock").click();
+      byTestId("db-gift-toggle").click();
       await sleep(350);
     }
     var panesBox0 = rect(byTestId("db-panes"));
     var splitBox0 = rect(byTestId("db-pane-splitter"));
     var giftBox0 = rect(byTestId("db-pane-gift"));
     var danmakuBox0 = rect(byTestId("db-pane-danmaku"));
-    var headBox0 = rect(byTestId("db-gift-dock"));
+    var headBox0 = rect(byTestId("db-gift-total"));
     var ratioAtEntry = window.__prefs["ui.gift_pane_ratio"];
     var splitX = panesBox0.left + panesBox0.width / 2;
 
@@ -156,7 +156,7 @@
     out.splitterRemountAvailable = remountAvailable;
     out.splitterCollapsedAfterRemount = remountAvailable && !byTestId("db-gift-area") &&
       Math.abs(rect(byTestId("db-pane-gift")).height - headBox0.height) <= 1;
-    byTestId("db-gift-dock").click();
+    byTestId("db-gift-toggle").click();
     await sleep(400);
     var remountedRatio = shownRatio();
     out.splitterRatioSurvivesRemount = remountAvailable && !!remountedRatio && !!draggedRatio &&
@@ -187,7 +187,7 @@
     firePointer(window, "pointerup", splitX, panesBox1.bottom + 300);
     await sleep(450);
     var downGift = rect(byTestId("db-pane-gift"));
-    var downHead = rect(byTestId("db-gift-dock"));
+    var downHead = rect(byTestId("db-gift-total"));
     out.splitterExtremeDownKeepsHead = downGift.height >= downHead.height - 1 && downHead.height > 0;
     out.splitterExtremeDownClampedRatio = window.__prefs["ui.gift_pane_ratio"] === 0.1;
 
@@ -284,7 +284,7 @@
     var danmakuProbeEl = byTestId("db-pane-danmaku");
     var danmakuProbeBox = rect(danmakuProbeEl);
     out.swapTouchMoveFreeWhenIdle = paneTouchMoveProbe(danmakuProbeEl) === false;
-    var dockBoxBeforeNextTap = rect(byTestId("db-gift-dock"));
+    var dockBoxBeforeNextTap = rect(byTestId("db-gift-total"));
     // 「折叠头开合」的量法 = 这一栏自己那两枚钩子：列表根 db-gift-area（**展开才在场上**，
     // 见 docs/ui.md §5.3）与折叠头的 aria-expanded。**不能**拿 db-gift-body 当折叠状态：
     // 那是**行内**的正文格（MessageRow 的 t("body")，同 §5.3 的钩子表），只有「本来就有礼物行」
@@ -293,7 +293,7 @@
     // 与「那一下 click 有没有被吞」无关）。
     var giftFoldBeforeNextTap = [
       !!byTestId("db-gift-area"),
-      byTestId("db-gift-dock").getAttribute("aria-expanded"),
+      byTestId("db-gift-toggle").getAttribute("aria-expanded"),
     ];
     firePointer(danmakuProbeEl, "pointerdown", splitX, danmakuProbeBox.top + 30);
     await sleep(620);
@@ -307,16 +307,16 @@
     //      任何一处点击都会被吃掉（冒烟里的 panelBackOnCommon 就是这么假失败的）。
     //      这里按下 -> 抬起 -> click 三步齐全，与用户真按一次完全同形。
     await sleep(120);
-    firePointer(byTestId("db-gift-dock"), "pointerdown",
+    firePointer(byTestId("db-gift-toggle"), "pointerdown",
       dockBoxBeforeNextTap.left + dockBoxBeforeNextTap.width / 2,
       dockBoxBeforeNextTap.top + dockBoxBeforeNextTap.height / 2);
-    firePointer(byTestId("db-gift-dock"), "pointerup",
+    firePointer(byTestId("db-gift-toggle"), "pointerup",
       dockBoxBeforeNextTap.left + dockBoxBeforeNextTap.width / 2,
       dockBoxBeforeNextTap.top + dockBoxBeforeNextTap.height / 2);
-    byTestId("db-gift-dock").click();
+    byTestId("db-gift-toggle").click();
     await sleep(400);
     out.swapDoesNotEatNextTap = (!!byTestId("db-gift-area") !== giftFoldBeforeNextTap[0]) &&
-      (byTestId("db-gift-dock").getAttribute("aria-expanded") !== giftFoldBeforeNextTap[1]);
+      (byTestId("db-gift-toggle").getAttribute("aria-expanded") !== giftFoldBeforeNextTap[1]);
     snap();
 
     // ---- 关掉独立礼物栏：分区退化为弹幕区全高、分割条与礼物栏一起消失、换位随之停用 ----

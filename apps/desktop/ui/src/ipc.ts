@@ -8,6 +8,7 @@ import type {
   Account,
   AccountQr,
   AccountQrPoll,
+  AdminListSlice,
   AdminUser,
   AnchorArea,
   AnchorGateView,
@@ -139,10 +140,12 @@ export const api = {
 
   // 房管（契约 §7）：只读列表用 call（失败要进日志），写操作用 invoke。
   // 权限判断走 `room_session` 的 `is_admin`，绝不「先点了再看上游错误码」。
-  adminSilentList: (roomId: number) =>
-    call<AdminUser[]>("admin_silent_list", { roomId }),
-  adminBlacklistList: (roomId: number) =>
-    call<AdminUser[]>("admin_blacklist_list", { roomId }),
+  // 两条名单是**分段**取的（`offset` = 手上已有的条数、`limit` = 这次再拿几条）：
+  // 一次把整份翻完会连发几十次 POST，被上游风控挡回 HTTP 412 的验证页（契约 §7）。
+  adminSilentList: (roomId: number, offset: number, limit: number) =>
+    call<AdminListSlice<AdminUser>>("admin_silent_list", { roomId, offset, limit }),
+  adminBlacklistList: (roomId: number, offset: number, limit: number) =>
+    call<AdminListSlice<AdminUser>>("admin_blacklist_list", { roomId, offset, limit }),
   adminKeywordsList: (roomId: number) =>
     call<string[]>("admin_keywords_list", { roomId }),
   adminMute: (roomId: number, uid: number, hour: number, msg?: string) =>

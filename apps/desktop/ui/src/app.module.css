@@ -1026,9 +1026,15 @@
   position: relative;
   flex: none;
   height: var(--splitter-hit);
+  /* 热区**不占布局高度**：上下各让掉自身的一半（负 margin），把自己抬到**两栏交界之上**。
+     两栏因此在 flex 布局里**相邻无缝** —— 行的 hover / 选中洗色能一直顶到容器边界，
+     中间只剩一条 1px 的线，改前那条把高亮截断的原色带就此消失。
+     ⚠ 光把 `background` 改透明是没有用的：`.panes` 自己没有背景，露出来的是同一个色，
+     真正的缝隙来自这块热区在布局上把两栏推开。 */
+  margin-block: calc(var(--splitter-hit) / -2);
+  z-index: 1;
   cursor: row-resize;
   touch-action: none;
-  background: var(--bg);
   /* 两栏的**分界线**（issue 2609171849 #4 第 3 点，用户原话：「分割独立礼物栏的那个横折叠区域，
      弄点横线或者虚线之类的（类似于折叠屏分屏的那个提示），而且现在 2 区间没有任何边界，
      有点不便于区分区域」）。改前这里只从 `::before` 画一条 1px 的 `--border` 发丝线 ——
@@ -1036,7 +1042,6 @@
      **虚线** + `--fold-line`（`--fg-subtle`，非文字图形要素对两套主题的底色都 ≥ 3:1），
      正是折叠区分屏提示那种画法。线贴在上一个区间的下缘 —— 「两个区间的边界」就是这个意思；
      它整条横贯，与礼物栏在上还是在下无关（分割条在 DOM 里恒在两栏之间，见 SplitPanes）。 */
-  border-top: 1px dashed var(--fold-line);
 }
 
 /* 触摸设备上把热区撑到 24px（= 24dp ≈ 3.8mm）。
@@ -1050,18 +1055,71 @@
    的点击面（弹幕行高约 40px，吃掉太多会让贴着边界的行点不开）。
    只改热区不改那条线：`::before` 依旧绝对定位在热区正中，视觉一寸不动。 */
 @media (pointer: coarse) {
+  /* 触摸档 **24px → 16px**：热区现在是**浮起来**的，会盖住上下各一半 —— 24px 就是各 12px，
+     而礼物栏那条总计条只有 ~27px 高，一大半会点不到。16px（各 8px）是折中，
+     命中率仍需在模拟器 / 真机上实测复核。 */
   .splitter {
-    height: 24px;
+    height: 16px;
+    margin-block: -8px;
   }
 }
 
-/* 悬停 / 键盘聚焦 / 拖动中：分界线换成强调色**实线**（「这里能拖」的提示照旧，只是虚线换实线）。
-   线宽 1 → 2px 不改这块热区的外层高度（`box-sizing: border-box` + `height` 定死），
-   两栏的高度分配因此不会被这条提示推动，拖动中量到的几何也就不会抖。 */
-.splitter:hover,
-.splitter:focus-visible,
-.splitter[data-dragging="true"] {
-  border-top: 2px solid var(--accent);
+/* 两栏的**分界线**：改前画在热区自己的顶边（虚线），礼物栏在上时它紧贴礼物栏那一侧、
+   悬停还会变 2px 强调色，看起来像归属于那一栏（用户 2026-09-26 指出的正是这个）。
+   现在两栏已经相邻无缝，热区**正中**就是两栏真正的分界 —— 线画在这里，
+   礼物栏在上还是在下都落在同一个位置，不再偏向任何一栏。
+   **实线**（用户要求）+ `--fold-line`（非文字图形要素对两套主题的底色都 ≥ 3:1）。 */
+.splitter::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--fold-line);
+}
+
+/* **把手**：叠在线的正中、水平居中的一枚短横条。平时 `opacity: 0`（不打扰），
+   悬停 / 键盘聚焦 / 拖动中 / 按住（`data-grab`，触屏没有 hover）时显形。
+   不放进两侧的条子里 —— 那边有文字与「展开 / 收起」图标，360px 下没有余量。 */
+.splitter::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+  background: var(--fold-line);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+/* 悬停 / 键盘聚焦 / 拖动中：线与把手一起换成强调色（「这里能拖」的提示）。
+   不改变任何几何 —— 线是伪元素、热区高度定死，两栏的高度分配不会被这条提示推动，
+   拖动中量到的几何也就不会抖。 */
+.splitter:hover::before,
+.splitter:focus-visible::before,
+.splitter[data-dragging="true"]::before {
+  height: 2px;
+  background: var(--accent);
+}
+
+.splitter:hover::after,
+.splitter:focus-visible::after,
+.splitter[data-dragging="true"]::after,
+.splitter[data-grab="true"]::after {
+  opacity: 1;
+  background: var(--accent);
+}
+
+/* 把手的显隐也得让位给**动效偏好**（口径同房间头标题的跑马灯）。 */
+@media (prefers-reduced-motion: reduce) {
+  .splitter::after {
+    transition: none;
+  }
 }
 
 .splitter:focus-visible {
@@ -1103,6 +1161,124 @@
   display: flex;
   flex-direction: column;
   position: relative;
+}
+
+/* 互动/进场消息共用单槽位（`InteractSlot`，docs/ui.md §4.8）：浮于弹幕区底部偏左、
+   轻量非侵入（pointer-events: none 不挡弹幕交互，仿官方网页直播间「互动消息」条的位置）。
+   它只是一条浮层，blast radius 小，不影响 `.chatArea` / `.scroller` 的滚动与贴底。 */
+.interactSlot {
+  position: absolute;
+  left: var(--sp-3);
+  bottom: var(--sp-3);
+  z-index: 5;
+  /* 浮层本身不接交互，避免遮住下面的弹幕行点击/右键。 */
+  pointer-events: none;
+  max-width: min(72%, 360px);
+  /* 字号随弹幕区基准（--fs-root）缩放，与列表同一套令牌。 */
+  font-size: var(--fs-root);
+}
+
+/* 胶囊底：半透明玻璃质感，沿用面板令牌，轻微阴影 + 圆角（pill）。
+   按消息 local_id 作 key 重挂时整块重启 `interactSlotLife`：出现后保持可见，
+   空闲 INTERACT_SLOT_MS 后整体淡出（fill forwards 维持隐藏），下一条到达瞬间恢复。 */
+.interactSlotBox {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(6px);
+  animation: interactSlotLife var(--slot-life-ms, 4300ms) ease forwards;
+}
+
+/* 槽位里的每一行（头像 + 文案）同一盒内重叠，便于「新进旧出」接力。 */
+.interactSlotRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 4px 4px;
+  box-sizing: border-box;
+  height: calc(var(--avatar) + 8px);
+  white-space: nowrap;
+}
+
+/* 进场：自下而上滑入 + 淡入；时长走内联 `--slot-replace-ms`（INTERACT_SLOT_REPLACE_MS）。 */
+.interactSlotEnter {
+  animation: interactSlotIn var(--slot-replace-ms, 220ms) ease-out;
+}
+/* 退场：向上滑出 + 淡出，绝对定位叠在进场行之上同框完成顶替。 */
+.interactSlotExit {
+  position: absolute;
+  inset: 0 0 auto 0;
+  animation: interactSlotOut var(--slot-replace-ms, 220ms) ease-in forwards;
+}
+
+@keyframes interactSlotIn {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes interactSlotOut {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+}
+
+/* 浮层生命周期：出现即满不透明，撑过 INTERACT_SLOT_MS 后淡出并维持隐藏（forwards）。
+   `--slot-life-ms` 由组件按 INTERACT_SLOT_MS + 300 注入，故这里只用 fallback。 */
+@keyframes interactSlotLife {
+  0%,
+  92% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 头像：复用 `.avatar`（同属 app.module.css，类名哈希一致，可被这里选中），
+   约束到槽位所需的小尺寸；无头像时 Avatar 返回 null，外层不占位。 */
+.interactSlotAvatar {
+  flex: 0 0 auto;
+  width: calc(var(--avatar) * 0.82);
+  height: calc(var(--avatar) * 0.82);
+  border-radius: 50%;
+  overflow: hidden;
+}
+.interactSlotAvatar .avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+.interactSlotAvatar .avatarFallback {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+}
+
+.interactSlotText {
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 沉浸模式（issue #1）：`RoomView` 收起房间头 / 输入区（含表情、短语、筛选三个面板）/
@@ -1637,46 +1813,97 @@
 }
 
 /* 礼物 / SC 栏：**与弹幕区上下分区的一栏**（issue #8），高度由份额驱动（不再按内容、也不再固定）。
-   栏内**没有自己的行样式**了（用户 2026-09-16 第 2 条）：行就是弹幕行（`MessageRow`，
+   栏内**没有自己的行样式**（用户 2026-09-16 第 2 条）：行就是弹幕行（`MessageRow`，
    scope="gift"），列表就是 `MessageList`（`.chatArea` / `.scroller` / `.msgList`）——
-   布局、底色、自动滚动全部与弹幕区同一套代码；两条 CSS 规则因此只剩折叠头与汇总。 */
-.giftDockHead {
+   布局、底色、自动滚动全部与弹幕区同一套代码；这里的规则因此只剩**两条统计条**。
+
+   三段 = 总计条 / 列表 / 筛选条，**总计条永远贴屏幕中心（贴分割条）**、筛选条永远在外侧**
+   （需求 2026-09-26）。顺序由 `data-on-top` 翻 `flex-direction`，**不搬节点** ——
+   列表的滚动位置与虚拟列表状态不受礼物栏在上在下影响。
+   ⚠ 不能指望外层 `.panes` 的 `column-reverse`：它只翻两栏，栏内不受影响。 */
+.giftPane {
   display: flex;
-  flex: none; /* 折叠头永远按自己的高度占位，不被展开区挤压 */
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.giftPane[data-on-top="true"] {
+  flex-direction: column-reverse;
+}
+
+/* 总计条：`礼物 12条 ¥1,168.7` + 右端展开 / 收起图标。
+   **它就是拖动热区**（`cursor: row-resize` 与那条热区由 SplitPanes 负责，这里只管排版）。
+   折叠态它是唯一一条，因此它也是这一栏的最小高度（带 `data-pane-head`，实测进 `--gift-min-h`）。 */
+.giftPaneTotal {
+  display: flex;
+  flex: none; /* 永远按自己的高度占位，不被展开区挤压 */
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
   padding: var(--sp-1) var(--sp-3);
-  border: none;
-  border-radius: 0;
-  background: transparent;
   font-size: var(--fs-2);
   color: var(--fg-dim);
-  text-align: left;
 }
 
-.giftDockHead:hover {
-  border: none;
-  background: var(--hover-wash);
-}
-
-.giftDockTitle {
-  color: var(--fg);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.giftDockSummary {
+.giftPaneTotalText {
   flex: 1;
   min-width: 0;
+  color: var(--fg);
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.giftDockToggle {
+/* 筛选条：三格分类金额（`icon + ¥金额`），点击切换筛选（多选并集）。
+   放在**远离**热区的外侧 —— 热区会吞掉它覆盖的那 8px 点击，三格密集点击不能让给它。 */
+.giftPaneFilter {
+  display: flex;
   flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+}
+
+.giftPaneChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2);
   color: var(--fg-dim);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* 选中的那一格：与房管面板「批量」那枚同一套**模式态**语言（强调色填充）。
+   带上 `:hover` 是因为通用 `button:hover` 的优先级会把填充洗掉。 */
+.giftPaneChip[aria-pressed="true"],
+.giftPaneChip[aria-pressed="true"]:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.giftPaneIcon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+/* 「返回」箭头旋转 90° 充当展开 / 收起：**展开态朝上**（点它收起）、**收起态朝下**（点它展开）。
+   原图标指向左，`rotate(90deg)` 顺时针 → 朝上，`rotate(-90deg)` → 朝下。 */
+.ctlIcon[data-dir="up"] {
+  transform: rotate(90deg);
+}
+
+.ctlIcon[data-dir="down"] {
+  transform: rotate(-90deg);
 }
 
 /* 「回到最新」（用户 2026-09-13 #2：「指这整个按钮删掉，用一个返回按钮旋转 90° 来代替」）：
@@ -1970,12 +2197,71 @@
   border-radius: var(--r-2);
 }
 
-/* 一行里的「勾选框 + 名字」：复选框本体不撑高，热区交给这一层 label（窄屏见文件末尾的 40px 口径） */
+/* 一行的勾选槽：复选框本体不撑高，热区交给这一层 `label`（窄屏见文件末尾的 40px 口径）。
+   **常驻**：非批量时 `data-hidden` 让它 `visibility: hidden` —— 只藏不拆，
+   占的那一格一个像素都不动，这就是「开关批量零跳位」的全部机关。 */
 .adminPick {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
   cursor: pointer;
+}
+
+.adminPick[data-hidden="true"] {
+  visibility: hidden;
+}
+
+/* 名字格：放不下时默认**可横滑**（触屏 / 滚轮都能推，滚动条隐藏），
+   悬停或键盘聚焦且真的放不下（`data-scroll`，由 JS 在被指到时量一次）才跑马灯。
+   完整文本始终在 `title` 上，任何形态下都取得到。 */
+.adminName {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.adminName::-webkit-scrollbar {
+  display: none;
+}
+
+/* 跑马灯态：容器改 `hidden`，否则横滑与位移会互相打架。 */
+.adminName[data-scroll="true"] {
+  overflow: hidden;
+}
+
+/* 轨道 = **两份完全相同**的拷贝首尾相接，动画走 `-50%`（正好一份），
+   循环处因此没有断口；间隙算在每一份自己的右内边距里 —— 与房间头标题逐字同源。 */
+.adminNameTrack {
+  display: flex;
+  width: max-content;
+}
+
+.adminName[data-scroll="true"] .adminNameTrack {
+  animation: adminNameMarquee 8s linear infinite;
+}
+
+.adminNameItem {
+  flex: none;
+  padding-right: var(--sp-5);
+}
+
+@keyframes adminNameMarquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* 跑马灯同样让位给**动效偏好**（口径同房间头标题）。 */
+@media (prefers-reduced-motion: reduce) {
+  .adminName[data-scroll="true"] .adminNameTrack {
+    animation: none;
+  }
 }
 
 /* 批量模式下勾中的行：与勾选框同一个状态（不靠 hover 也一眼看得出选了谁） */
@@ -1984,19 +2270,27 @@
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
 }
 
-/* 名单：芯片流式换行。它在第 1 / 2 排之下（issue #5），与上面那一排之间留一个「分」 */
+/* 名单（需求 2026-09-26）：改前是**芯片流式换行**，勾选框只在批量模式下插入 ——
+   一开批量每个芯片都变宽、换行位置全变，整片名单重排。现在**每行一项**、等列，
+   勾选槽常驻占位（`.adminPick[data-hidden]`），开关批量因此**零跳位**。
+   它**自己滚**（改前滚的是整个面板，头部会被一起滚走）。 */
 .adminList {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--sp-1);
   margin: var(--sp-2) 0 var(--sp-1);
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .adminItem {
-  display: inline-flex;
+  display: flex;
+  flex: none;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-1) var(--sp-2);
+  /* 行高固定（`--tap-min` 的窄屏热区口径）：批量与否都不变。 */
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
   font-size: var(--fs-2);
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -2018,6 +2312,41 @@
   min-width: 0;
   font-size: var(--fs-2);
   padding: var(--sp-1) var(--sp-2);
+}
+
+/* 输入框那一枚**三态按钮**（需求 2026-09-26）：`禁言（禁用灰）` → `转圈（检查中）`
+   → `禁言` / `解除禁言`。**宽度按最长的那一档定死**（「添加 / 删除屏蔽词」），
+   因此态与态之间切换时整排一个像素都不跳 —— 这正是「按钮文案自动切换」被否掉的原因。 */
+.adminAction {
+  flex: none;
+  min-width: 7em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 「检查中」的转圈：与文字同色的一枚旋转环，尺寸贴 `--fs-2` 的行高。 */
+.adminSpinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: adminSpin 700ms linear infinite;
+}
+
+@keyframes adminSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 动效偏好：不停转的圈对开了「减少动态效果」的人是负担，这里只把它放慢（不去掉 ——
+   去掉就没有「正在检查」这一档的可见证据了）。 */
+@media (prefers-reduced-motion: reduce) {
+  .adminSpinner {
+    animation-duration: 2.4s;
+  }
 }
 
 /* 上游拒绝时原样展示 code + message，不做本地翻译 */
@@ -2795,11 +3124,6 @@
     background: var(--bg-elevated);
     padding-top: var(--sp-2);
     z-index: 1;
-  }
-
-  /* 礼物折叠条只占一行，不把弹幕列表挤掉 */
-  .giftDockHead {
-    flex-wrap: nowrap;
   }
 
   /* 批量模式的勾选行：复选框本体不撑高（撑了会变形），热区交给它外面那层 label

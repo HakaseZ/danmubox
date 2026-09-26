@@ -230,7 +230,7 @@
 | 返回列表 | 从房间页返回列表页，等同于关闭当前房间页 |
 | 标签数量 | 不做硬上限；超过可视宽度横向滚动，不折叠为下拉 |
 | 溢出标签 | 非激活标签不入渲染队列；连接与该房间的会话缓冲照常保持 |
-| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-avatar-stack` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-spam` / `db-msg-mention` / `db-msg-body` / `db-msg-sc-card` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-chat-area` / `db-msg-count` / `db-gift-dock` / `db-gift-area` / `db-gift-scroll` / `db-gift-list` / `db-gift-anchor` / `db-gift-row` / `db-gift-avatar` / `db-gift-avatar-col` / `db-gift-avatar-stack` / `db-gift-identity` / `db-gift-name` / `db-gift-spam` / `db-gift-badges` / `db-gift-body` / `db-gift-sc-card` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col`。口径：**`db-msg-count` 现在只属于礼物连击与低价礼物桶**（弹幕聚合行不再画行内 `×N`，数量已印在身份位的「刷屏 ×N」里，§8.4 第二条） |
+| 稳定钩子 | 上述区域带 `data-testid`（`db-list-page` / `db-room-header` / `db-chat-wrap` / `db-chat-scroll` / `db-bottom-anchor` / `db-msg-row` / `db-msg-list` / `db-msg-time` / `db-msg-avatar` / `db-msg-avatar-col` / `db-msg-avatar-stack` / `db-msg-identity` / `db-msg-badges` / `db-msg-name` / `db-msg-spam` / `db-msg-mention` / `db-msg-body` / `db-msg-sc-card` / `db-context-menu` / `db-panel` / `db-emote-tabs` / `db-emote-tab` / `db-emote-group` / `db-emote-item` / `db-phrase-add` / `db-composer-tools` / `db-input-count` / `db-account` / `db-chat-area` / `db-msg-count` / `db-gift-total` / `db-gift-total-text` / `db-gift-filter` / `db-gift-chip` / `db-gift-area` / `db-gift-scroll` / `db-gift-list` / `db-gift-anchor` / `db-gift-row` / `db-gift-avatar` / `db-gift-avatar-col` / `db-gift-avatar-stack` / `db-gift-identity` / `db-gift-name` / `db-gift-spam` / `db-gift-badges` / `db-gift-body` / `db-gift-sc-card` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount` / `db-follow-item` / `db-follow-name` / `db-follow-status` / `db-follow-last-live` / `db-room-name` / `db-room-tab` / `db-tab-drop` / `db-owned-error` / `db-admin-panel` / `db-admin-tabs` / `db-admin-tab` / `db-admin-tabpanel` / `db-admin-batch` / `db-admin-select` / `db-admin-select-all` / `db-admin-batch-bar` / `db-admin-confirm` / `db-admin-close` / `db-admin-error` / `db-admin-*-item`），冒烟脚本按它定位，不依赖 CSS 类名。**行排版的几何断言只认这些钩子**：徽标组→昵称的间距量 `db-msg-badges` 与 `db-msg-name`，折行后的行盒量 `db-msg-body`（`Range.getClientRects()`），头像与首行的关系量 `db-msg-avatar-col`。口径：**`db-msg-count` 现在只属于礼物连击与低价礼物桶**（弹幕聚合行不再画行内 `×N`，数量已印在身份位的「刷屏 ×N」里，§8.4 第二条） |
 
 ### 2.3.1 沉浸模式（需求 §2.11）
 
@@ -281,7 +281,7 @@
 | `App.tsx` | 页面切换（`activeRoomId`）、主题解析落到 `<html data-theme>`、订阅事件 |
 | `RoomList.tsx` | 主页：页头（标题 + 全局**主题按钮**，§2.2 / §8.3）、账号行（**整行即入口** → `AccountManager`，§2.2.1）、加房间输入、已连接房间卡片、关注列表（排序 / 分页 / 状态文案，§2.2） |
 | `RoomView.tsx` | 房间页装配：房间头（三态点、标题循环滚动，§3.1）、弹幕区与礼物栏的上下分区（`SplitPanes`，§5.4）、输入区、房管确认条 |
-| `SplitPanes.tsx` | 弹幕区与礼物栏共享的**上下分区**：两栏高度份额（`ui.gift_pane_ratio`）、可拖动分割条（热区 ≥ 8px、↑↓ 微调）、长按 0.5s 拖拽换位（`ui.gift_pane_on_top`）、两栏最小高度（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头）；拖动中的份额只写 DOM、松手才回写偏好（§5.4） |
+| `SplitPanes.tsx` | 弹幕区与礼物栏共享的**上下分区**：两栏高度份额（`ui.gift_pane_ratio`）、可拖动分割条（**热区浮起透明**、↑↓ 微调）、长按 0.5s 拖拽换位（`ui.gift_pane_on_top`）、两栏最小高度（弹幕区 ≥ 3 行、礼物栏 ≥ 总计条）；拖动中的份额只写 DOM、松手才回写偏好（§5.4） |
 | `MessageList.tsx` | 虚拟列表 + 自动跟随 + 悬停暂停（§7） |
 | `MessageRow.tsx` | 单行渲染：时间戳（受 `ui.show_timestamp` 门控，位置在身份行右端；无身份行的行在正文块首行）、头像列、身份行（昵称 + 徽标）、正文（含 `@` 高亮）、失败 / 未确认标记、行右键入口（§4.1 / §4.2 / §4.4 / §4.5） |
 | `Composer.tsx` | 输入区与三个面板（表情 / 短语 / 筛选）、回复条、@ 提示、浮动提示、工具行、发送簇（含电池，§6） |
@@ -665,9 +665,11 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 开关 | 偏好键 | 默认 | 行为 |
 |---|---|---|---|
 | 互动/进场消息自动消失 | `ui.interact_auto_hide` | `true` | `interact` 行显示 8 秒后淡出、随后**不再画这一行**（空间随之回收）；关掉则常驻，且**先前消失的那些行原样回来**（官方客户端即「显示一下就消失」） |
+| 互动消息共用单槽位 | `ui.interact_single_slot` | `true` | 互动/进场消息**不进弹幕列表**，改在弹幕区底部浮层显示**最新一条**，下一条到来时快速顶掉上一条，空闲 `INTERACT_SLOT_MS`（4s）后自动淡出；关掉则退化为「列表行 + 自动消失」（`ui.interact_auto_hide`）的旧行为 |
 | 系统类消息 | `filter.kinds` 里的 `system` 项 | 不在白名单（不显示） | 取消勾选即 `system` 行一律不渲染；勾上则与普通行同样式渲染 |
 
 - 自动消失的实现：行按 8 秒跑一段淡出动画，**到点只是不再画这一行** —— 判据 `filtering.interactAutoHidden`（`ts + INTERACT_AUTO_HIDE_MS <= now`）在**显示层**的派生里（`filtering.toDisplayRows`），与动画共用同一个常量（`types.ts` 的 `INTERACT_AUTO_HIDE_MS`），两者不会错位。`store` 那批定时器只做一件事：到点把 `interactTick` 挪一格，叫醒派生重算。现在的口径是「消失」属于显示层：消息一直在会话缓冲里（受契约 §4.3 的上限约束），关掉开关同一帧就回来。**离开房间仍要清掉这些定时器**（`store` 的 `clearRoomTimers`），否则残留的定时器会把另一个房间的画面算到别的时刻上。
+- **互动消息共用单槽位**（`ui.interact_single_slot`，默认开，仿官方网页直播间「互动消息」条）：互动/进场消息**整类移出弹幕列表**——`filtering.toDisplayRows` 在开关打开时直接跳过 `kind === "interact"`，因此不管量多大都不会在弹幕区逐行堆叠、挤占空间。它们改由 `InteractSlot` 浮层（`data-testid="db-interact-slot"`）呈现：固定在弹幕区底部偏左的半透明胶囊，显示当前房间**最新一条**互动消息（头像 + 文案，文案规则与弹幕行同一枚 `interactText`：有 `content` 用 `content`、否则回落「<昵称> 进入直播间」）；下一条互动到达时，旧的那条向上滑出、新的自下而上滑入（过渡 `INTERACT_SLOT_REPLACE_MS` = 220ms），逐条接力顶替；超过 `INTERACT_SLOT_MS`（4s）没有新互动则整体淡出，下一条到达瞬间恢复。浮层 `pointer-events: none`，不遮挡弹幕交互。它同样只是显示层派生：消息始终留在会话缓冲里，关掉这枚开关即逐条回到列表。
 
 **补位（用户 2026-09-22 第 2 条）**：`interact` 的 `ts` 一律是**本地收包时刻**（见 `protocol.md` §10.4），判据必然到点成立，因此行**真的被移除**、下方的弹幕随虚拟列表自然上移填空，不再是「透明却占位」的空洞。此前取上游载荷时钟时，行只被 CSS 淡成透明、仍占位，就是用户报的「空位不被填充」。跟随态仍由 `pinToBottom` 贴底；已暂停跟随态时锚定行的屏幕位移为 0（按 `MessageList` 的 `scrollerTopRef` 容器位移补账口径），不被推走。
 - 系统类消息包含开播 / 下播 / 标题变更 / 公告（`core` 的 `SYSTEM_CMDS` 全集）：**不区分公告类与生命周期类**，一个门管全部：`ui.system_notice` 键已删除（存量 `prefs.json` 的迁移见契约 §8），系统类消息只由 `filter.kinds` 的 `system` 门控。
@@ -704,14 +706,18 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 | tab | 列表来源 | 增 | 单点（行右键菜单，§4.5） | 批量（动作条） |
 |---|---|---|---|---|
-| 禁言 | `admin_silent_list`（`SilentUser[]`） | uid 输入 + 「禁言」（时长在确认条上选） | 「解除禁言」 | 「批量解除禁言」 |
-| 黑名单 | `admin_blacklist_list`（`BlacklistedUser[]`） | uid 输入 + 「拉黑」 | 「移出黑名单」 | 「批量移出黑名单」 |
-| 屏蔽词 | `admin_keywords_list`（`string[]`） | 文本输入 + 「添加屏蔽词」（回车同效） | 「删除」 | 「批量删除屏蔽词」 |
+| 禁言 | `admin_silent_list`（`AdminListSlice<SilentUser>`，增量分页，见下） | uid 输入 + 「禁言」（时长在确认条上选） | 「解除禁言」 | 「批量解除禁言」 |
+| 黑名单 | `admin_blacklist_list`（`AdminListSlice<BlacklistedUser>`，增量分页） | uid 输入 + 「拉黑」 | 「移出黑名单」 | 「批量移出黑名单」 |
+| 屏蔽词 | `admin_keywords_list`（`string[]`，上游不分页，一次给完，前端切片） | 文本输入 + 「添加屏蔽词」（回车同效） | 「删除」 | 「批量删除屏蔽词」 |
 
 - **三个 tab**：`role=tablist` + 三个 `role=tab` + `role=tabpanel`，与表情分组**同一套 WAI-ARIA tabs 口径**（`aria-selected` / `aria-controls` / roving tabindex；←→ 换 tab、Home / End 跳首尾，焦点跟着选中项走；选中态挂在 `aria-selected` 上，另有 `:focus-visible`）。tab 文案**就是名单名**（「禁言」/「黑名单」/「屏蔽词」），**不带计数**——条数由名单自己的芯片数给出，不在 tab 上另算一份。**一次只渲染当前 tab 的那一块**（第 1 排 + 第 2 排 + 错误条 + 列表），所以任一时刻面板里最多只有一条错误条。
 - **单点动作在右键菜单里**：名单行内不再挂动作按钮（与消息行同一条口径），右键名单行弹出该 tab 对应的那一个动作（`db-context-menu`）。
 - **批量**：**第 1 排末尾**的批量图标钮（`data-testid="db-admin-batch"`，`aria-pressed`，打开时从透明底换成强调色填充；图标是「清单 + 勾」——两行「勾 + 名字」，正是打开批量后名单的样子，规范同 §3.1）打开后，每行前出现勾选框（`aria-label` 带名字 / 词，外面包一层 `label` 承担窄屏 40px 热区，点名字也能勾），第 1 排**正下方**升起第 2 排（`data-testid="db-admin-batch-bar"`）：该 tab 的「全选」/「取消全选」（`db-admin-select-all`）、「已选 N 项」、该 tab 的批量动作（`db-admin-batch-action`）。批量只作用当前 tab，**换 tab / 关批量即清空勾选**；勾选数按**当前列表**算——写成功后重读三块，已经不在名单里的勾选自动落下去，「已选 N 项」与按下的对象因此永远一致。
-- **数据预载**：**连上有房管权限的房间就把三块加载好**（`RoomView` 里依赖 `[isAdmin, room.room_id]` 的 effect——身份是异步到的，`isAdmin` 必须在依赖里，否则进房那一帧按无权限渲染、这一批数据永远不拉），打开面板时再**静默重拉一次**（无 spinner、无按钮）保证新鲜。**面板展开期间按 60 秒周期静默轮询三块**（issue202609242158 第 8 条 A2）：链条式调度（不重叠）、不可见整拍跳过、失败按 60 → 120 → 240 → 480 秒封顶退避、成功复位，收起面板即停，落地前复核 `activeRoomId` 仍是它（防串房）。写操作成功后自动重读三块（以远端为准，不在本地猜上游怎么变）。
+- **数据预载与刷新（无手动刷新按钮）**：**连上有房管权限的房间就把三块加载好**（`RoomView` 里依赖 `[isAdmin, room.room_id]` 的 effect——身份是异步到的，`isAdmin` 必须在依赖里，否则进房那一帧按无权限渲染、这一批数据永远不拉），打开面板时再**静默重拉一次**（无 spinner、无按钮）保证新鲜。**面板展开期间按 5 分钟周期静默轮询三块**（原 60 秒周期已废弃：房管面板不是高频功能，无差别轮询既招风控、又无谓打上游）：链条式调度（不重叠）、不可见整拍跳过、失败按 5 → 10 → 20 → 40 分钟封顶退避、成功复位，收起面板即停，落地前复核 `activeRoomId` 仍是它（防串房）。写操作成功后自动重读三块（以远端为准，不在本地猜上游怎么变）。
+- **增量加载**：三块各先拉 **30 条**，名单滚到底再补 **10 条**直到翻完（屏蔽词上游无分页，前端切片）。**重读保留已加载水位**——按手上已有的条数取，用户翻到一半不会被打回 30 条。禁言那份每页只有 10 条，适配器内部翻页 + 限速（150–250ms / 页），一次翻完整份会连发几十次 POST 被上游风控挡回 HTTP 412（契约 §7 的 `admin_silent_list` 因此改成分段取）。
+- **名单每行一项**：名单是**等列的行**（行高 40px），不再是流式芯片；勾选框槽位**常驻**（非批量时 `visibility: hidden` 但占位），开关批量因此**零跳位**；行内文字超宽可横滑、**只有悬停 / 键盘聚焦的那一行**跑马灯（`prefers-reduced-motion` 下也停）。右键菜单承载单点动作（与消息行同口径）。
+- **输入框按钮三态（固定宽，不跳位）**：`禁言（禁用灰）` → `转圈（检查中）` → `禁言` / `解除禁言`。「检查中」那一档会先按房间节流地取一次**全量**（30s 内不重复打上游），再据结果给出实际动作；输入框非数字（uid）或空（屏蔽词）时按钮保持禁用灰。
+- **错误分两类**：业务拒绝（上游带回 `code` + `message`）原样展示、不翻译不猜语义；传输层 / 风控（拿不到 JSON 信封，例如 HTTP 412 的验证页）只给一句人话 + 重试提示，**完整原文只进日志**（不进界面）。三块的错误各自独立、不互相清空。
 - **面板内的三块列表照常请求上游，拒绝原因原样展示**：上游的拒绝原样展示为 `code` + `message`（不翻译、不猜语义），三块的错误各自独立显示、不互相清空（各自挂在所属 tab 内）。由于入口本身只对房管出现（上一节），这一档只覆盖「面板打开期间身份被撤销 / 重取不到」：那时面板随之收起。
 - 纯文本的输入沿用输入区已有的组件风格（input + 按钮，回车提交）。
 
@@ -792,7 +798,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 │ 00:12:07  礼 王五 投喂 小心心 ×3                               │   ← 弹幕区（默认在上）
 │                                                            (↓) │      内部滚动，唯一生长区是这一块分区
 ├──────────────────────────────────────────────────────────────┤   ← 分割条（常驻，热区 8px，可拖）
-│ 礼物 / SC（6）  本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 /        │   ← 礼物折叠条（折叠态只有这一行）
+│ 礼物 / SC（6）  本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 /        │   ← 礼物总计条（折叠态只有这一行）
 │                 大航海 1 · 138 元                     收起 ▴  │
 ├──────────────────────────────────────────────────────────────┤   ← 展开后：栏内独立滚动（栏高由份额定）
 │ (头像) 王五:                                                 │      行与弹幕行**逐项相同**：
@@ -822,9 +828,9 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 与弹幕区同一套呈现 | **行 = 弹幕行**：栏内的每一条都由 **`MessageRow`** 渲染（`scope="gift"`），列表由 **`MessageList`** 渲染（`scope="gift"`）—— 布局（头像列 / 身份行 / 正文块 / 金额行）、设计令牌、行盒尺度、悬停洗色、行右键菜单全部与弹幕区同一份代码；**两处各持自己的滚动位置与虚拟列表状态**，互不影响。渲染差异只有三处，都是刻意的：① 行内 `data-testid` 前缀（`db-gift-*` / `db-msg-*`，让冒烟能分辨是哪一个实例）；② 空态文案（栏内空时写「本场还没有礼物」）；③ **礼物 / 大航海那一行金额**（见下面「金额与单位」一行）。冒烟按 `giftParity*` 一组断言（行盒 / 头像列 / 身份行 / 正文块几何与字号、行与两栏的**计算底色**逐项相等） |
 | 一条一行 | **每个礼物 / SC / 大航海一条**：头像 + 昵称（身份行）+ 内容（`Message.content`）+ 数量（`×N`，正文行内）+ 金额（独占一行）都在**同一条行里**；**不存在**「金额排行一条 + 内容详情一条」的两段式结构 |
 | 数量 | 与弹幕行同一口径（`filtering.toDisplayRows` 的折叠结果）：**礼物行恒有 `×N`**（没折叠就是 `×1`），SC / 大航海没有连击折叠，因此不画那一格 |
-| 金额与单位 | 金额行 = `filtering.amountText(amount, kind)`：**三类一律按元展示** —— SC 的 `amount` 上游就是元，礼物与大航海是金瓜子、按 **`元 = 金瓜子 / 1000`** 换算（契约 §5「金额单位」）。**大航海的 `amount` 是实付**（播报载荷的价；标价不计，同一笔开通只出一条 —— `protocol.md` §10.6），所以折叠头/金额行上的大航海数字就是买家实付。整数元不带小数、非整数保留必要小数（`138 元` / `0.1 元`）；`amount <= 0`（上游没给价）**不画这一行**。**位置与规格与弹幕区里 SC 的金额行同一格**（`.scAmount`：正文块里的块级一格、`--fs-3`、加粗）；**SC 两处都画**，**礼物 / 大航海只在礼物栏这一份画**（弹幕流行内不塞金额，见 §4.1）。冒烟按 `giftDockAmounts*`（带单位、连击折叠后是总额）、`giftDockNoRawCoinDisplay`（金瓜子原值不许直接贴「元」）与 `giftAmountOnlyInPane`（同一批礼物在弹幕流那一行没有金额格、在礼物栏那一行有）断言 |
-| 折叠态汇总 | 标题行 =「礼物 / SC（N）」+ **按 kind 分组**的汇总（每组 `<kind> <条数> · <金额> 元`，空组不出现），例如「本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 / 大航海 1 · 138 元」。三组单位**都是元**（见「金额与单位」一行）。**是否合并成一条合计**未定 —— 未决项见 `docs/roadmap.md` §2.2。分组明细是一个可缩的省略项（`text-overflow: ellipsis`）：窄屏下放不下就截断，标题上那个总条数不缩 —— 明细是给宽屏「一眼看清」用的，条数才是窄屏的兜底 |
-| 折叠 | 默认**折叠**（只有折叠头一行 = 这一栏的最小高度，§5.4）；展开时会收起其它四个面板（五者互斥，§2.3）—— 礼物栏也算一个面板 |
+| 金额与单位 | 金额行 = `filtering.amountText(amount, kind)`：**三类一律按元展示** —— SC 的 `amount` 上游就是元，礼物与大航海是金瓜子、按 **`元 = 金瓜子 / 1000`** 换算（契约 §5「金额单位」）。**大航海的 `amount` 是实付**（播报载荷的价；标价不计，同一笔开通只出一条 —— `protocol.md` §10.6），所以总计条/金额行上的大航海数字就是买家实付。整数元不带小数、非整数保留必要小数（`138 元` / `0.1 元`）；`amount <= 0`（上游没给价）**不画这一行**。**位置与规格与弹幕区里 SC 的金额行同一格**（`.scAmount`：正文块里的块级一格、`--fs-3`、加粗）；**SC 两处都画**，**礼物 / 大航海只在礼物栏这一份画**（弹幕流行内不塞金额，见 §4.1）。冒烟按 `giftDockAmounts*`（带单位、连击折叠后是总额）、`giftDockNoRawCoinDisplay`（金瓜子原值不许直接贴「元」）与 `giftAmountOnlyInPane`（同一批礼物在弹幕流那一行没有金额格、在礼物栏那一行有）断言 |
+| 总计条与筛选条（取代原折叠头） | 礼物栏展开后是**上中下三段**：`总计条`（贴在**屏幕中心那一端**、兼作拖动热区、`data-pane-head`）、`列表`、`筛选条`（贴在**远离中心那一端**）。**折叠态只剩总计条**，列表与筛选条都收起。总计条文案 = `礼物 N条 ¥X`（例「礼物 12条 ¥1,168.7」）；开启筛选后只给条数、不给金额（金额已分列在下面的筛选条），即 `礼物 N条`。右端是**展开 / 收起图标**（返回箭头旋转 90°，`aria-label` 随态翻转）—— 原「折叠头」被它吸收，展开态不再另有一条折叠头。筛选条是三枚芯片 `[<icon> ¥<金额>]`，分别画礼物 / SC / 大航海三族当场的金额合计；点芯片切换 `ui.gift_pane_kinds` 并集筛选（不选 = 全显示，选多项 = 并集，契约 §8），纯派生、不改缓冲、统计链**先筛选后汇总**。三族图标取自 `public/icons/`（`gift.svg` / `sc.png` / `guard.png`） |
+| 折叠 | 默认**折叠**（只有总计条一行 = 这一栏的最小高度，§5.4）；展开时会收起其它四个面板（五者互斥，§2.3）—— 礼物栏也算一个面板 |
 | 滚动 | 展开后**栏内独立滚动**（栏高由份额定，见 §5.4），与弹幕区互不影响，但**判据与实现同源**：同一份虚拟列表 + 同一条 8px 贴底判据（`scrollHeight - scrollTop - clientHeight < 8`）+ 同一个 `scrollToIndex(align: "end")` 贴底路子 + 同一枚「回到最新」悬浮钮 + 同一套悬停暂停（`ui.pause_on_hover`）。**不给礼物栏另写一份滚动逻辑**；两处各持自己的滚动位置与虚拟列表状态（`room-page.mjs` 的 `giftFollow*` / `giftPaused*` / `giftJumpButton*` 与 `giftScrollIndependentOfChat` 一组断言） |
 | 长正文不截断 | 行里的正文块**折行、不裁剪**（与 §4.1 的正文同一规格：`white-space: pre-wrap`、`text-overflow: clip`、不 `nowrap`）—— SC 的长留言整段看得见。冒烟按 `giftScNotTruncated` / `chatScNotTruncated`（正文块 `scrollWidth/scrollHeight` 都不超 `clientWidth/clientHeight`）与 `giftScFullTextPresent` / `chatScFullTextPresent`（整段文字都在 DOM 里）断言 |
 | 内容 | 三类都进：`gift`（`<动作词> <礼物名>`）、`superchat`（留言正文）、`guard`（开通播报） |
@@ -833,7 +839,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 切换 | 筛选面板「辅助功能」块里的两枚开关（「弹幕包含礼物」/「独立礼物栏」，§8.5）：写回这两枚键，切换即重排，**不丢消息**（数据仍在同一 store，只有渲染位置变） |
 | 无源不画、列照占位 | V1 礼物与大航海的 `face` 是空串（上游没有这个字段，见 §4.1）—— 那两条行**不画图**，但**头像列照常占位**（与弹幕行同一口径，§4.2：否则同栏的行会左右不齐）；SC 与 V2 礼物有源就画（同一个 `Avatar` 组件，`--avatar` = 1.25 × 行盒）。冒烟按 `giftDockAvatarsOnlyWhereSourced`（5 行里 3 个 img）、`giftDockAvatarColAlwaysReserved`（5 列）与 `giftDockAvatarSameBoxAsChat`（头像盒与弹幕行同一档）断言 |
 | 不变式 | 折叠 / 展开礼物栏**不改变弹幕区的宽度**（只改两栏的高度分配） |
-| 钩子 | 列表根 `db-gift-area`（展开才在场上）、滚动容器 `db-gift-scroll`、虚拟高度块 `db-gift-list`、「回到最新」`db-gift-anchor`、行 `db-gift-row`、行内 `db-gift-avatar(-col)` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-sc-card` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount`；弹幕区那一族同时补齐 `db-chat-area`（列表根）与 `db-msg-count`（`×N` 那一格） |
+| 钩子 | 列表根 `db-gift-area`（展开才在场上）、滚动容器 `db-gift-scroll`、虚拟高度块 `db-gift-list`、「回到最新」`db-gift-anchor`、**总计条 `db-gift-total`（= `data-pane-head`，兼作拖动热区）与其文案 `db-gift-total-text`**、**筛选条 `db-gift-filter`** 与筛选芯片 `db-gift-chip`（`aria-pressed` 表选中态）、行 `db-gift-row`、行内 `db-gift-avatar(-col)` / `db-gift-identity` / `db-gift-name` / `db-gift-badges` / `db-gift-body` / `db-gift-sc-card` / `db-gift-count` / `db-gift-amount` / `db-gift-sc-amount`；弹幕区那一族同时补齐 `db-chat-area`（列表根）与 `db-msg-count`（`×N` 那一格） |
 
 **低价礼物桶（`ui.gift_collapse_cheap`）与统计剔除（`ui.gift_exclude_cheap_stats`）** —— 两枚键的默认值、
 类型见 [`contract.md`](contract.md) §8；**「对两个区域都生效」与「不丢内容 / 可逆」是硬口径**。
@@ -854,10 +860,10 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | `amount <= 0` | **不算低价**，两枚开关都不碰它：本页的既有口径是「上游没给价、不得猜测」（金额格也不画），把它折进低价桶等于替上游猜价 |
 | 折叠的形状（**两处各折一次**） | 低价礼物在**弹幕区**与**礼物栏**里**各**合并成一条，形态与弹幕刷屏（`aggregate.ts` / §8.4 第二条）**同一套**：合并行带 `senders`（桶里前 3 位赠送者、按首次出现去重，`filtering.collapseCheapGiftRows` 产出），`MessageRow` 据此在头像列画 **30% 错位堆叠**的前几位头像、并在身份位印**数量**（「低价礼物 ×N」），**不再逐个显示用户名**（用户 2026-09-22 第 3 条）。`MessageRow` 不区分来源地渲染（刷屏聚合与礼物桶共用 `aggregated` 判据 = `senders` 在不在）。金额格仍只有礼物栏那一份画；`×N` 与金额是整桶合计。两处各持自己的行集合（同一个函数、各调一次，`filtering.splitGiftRows`），互不影响 |
 | 与连击折叠的关系 | **不是同一件事**：连击折叠折的是同一个动作的重复（取最新一条的身份，位置跟着连击走，`filtering.toDisplayRows`）；低价礼物桶折的是一段时间里所有人的零钱礼物、彼此无关。叠加时顺序是**先连击、后成桶**（桶里的 `count` 已是连击折叠后的次数）。实现是 `filtering.collapseCheapGiftRows`；**弹幕区与礼物栏都过它**（`splitGiftRows` 内部对两头各调一次） |
-| 剔除的口径 | `filtering.giftStatRows` 把低价礼物（含折出来那一条桶）从**统计**里整条剔掉：标题的 `礼物 / SC（N）` 与三组明细都只算剩下的那些。**只改统计** —— 两个区域的行都照旧渲染（「不影响它们作为消息的展示」就是这枚键的定义）。**统计面只有礼物栏折叠头这一处**：弹幕区的礼物行不画金额、也没有汇总，所以这枚键在那里的效果是「什么都不改」——这是有意的，不为了对称去编造第二处统计（契约 §8 口径表） |
+| 剔除的口径 | `filtering.giftStatRows` 把低价礼物（含折出来那一条桶）从**统计**里整条剔掉：标题的 `礼物 / SC（N）` 与三组明细都只算剩下的那些。**只改统计** —— 两个区域的行都照旧渲染（「不影响它们作为消息的展示」就是这枚键的定义）。**统计面只有礼物栏总计条这一处**：弹幕区的礼物行不画金额、也没有汇总，所以这枚键在那里的效果是「什么都不改」——这是有意的，不为了对称去编造第二处统计（契约 §8 口径表） |
 | 统计全空时 | 低价礼物被剔光、统计集为空而礼物栏里还有条目时，标题行写「本场 低价礼物已剔除」；不写「本场暂无礼物」—— 展开区里那些礼物是看得见的，标题说「暂无」就是自相矛盾 |
 | 不丢内容（硬口径） | 剔除 / 折叠 / 隐藏（`ui.gift_panel`、`ui.gift_in_danmaku`）/ 自动消失（§4.8）**都只改显示**：原始消息一直留在会话缓冲里（只受契约 §4.3 的上限约束），这些开关**不得**让任何一条提前消失。`splitGiftRows` / `giftStatRows` / `toDisplayRows` 全是纯派生（不改入参），关掉开关下一次重算即**逐条复原** |
-| 可逆（含顺序 / 数量 / 金额） | 关掉「折叠低价礼物」：两个区域各自回到**一条一行**，顺序（会话内的时间序）、条数、每行金额、`×N` 与折叠头统计逐项与开之前相同；关掉「剔除低价礼物统计」：统计串逐字回到原样。判据落在**原始消息**上——它们从头到尾没被动过 |
+| 可逆（含顺序 / 数量 / 金额） | 关掉「折叠低价礼物」：两个区域各自回到**一条一行**，顺序（会话内的时间序）、条数、每行金额、`×N` 与总计条统计逐项与开之前相同；关掉「剔除低价礼物统计」：统计串逐字回到原样。判据落在**原始消息**上——它们从头到尾没被动过 |
 | 边界（实测归属） | `0.09 元`（90 金瓜子）算低价、`0.1 元`（100 金瓜子，恰好等于门槛）算低价、`0.11 元`（110 金瓜子）不算低价、`0`（上游没给价）不算低价 |
 | 机制级验证 | 单测 `node --test src/filtering.test.ts`（`apps/desktop/ui`）：两个区域各折一次、关掉即逐条按原序原对象回来、剔除只改统计、边界四项、自动消失到点不画且开关可逆、纯派生不改入参 |
 | 冒烟按 | `cheapGift*` 一组：两枚开关默认关且可持久化（点开 → 翻偏好 → 再点回）、折叠开启后礼物栏**条目数真的变少**且合并行的 `×N` / 金额是整桶合计、剔除开启后**汇总金额与总条数真的变少**而礼物栏条目数不变、四个边界值各自归属、SC 与大航海在这两枚开关四种组合下都不变。`switchScope*` 一组：**两个区域各量一次**折叠（弹幕区的桶行带 `×2`、礼物栏条目 3 → 2）、关掉后两处逐条复原（顺序 / 条数 / 金额 / 统计串）、剔除只动统计不动任何一处的行、自动消失到点不画而关掉开关原样回来 |
@@ -874,8 +880,8 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 [房间头 ……]
 [共享分区（flex-1，唯一生长区；面板 / 房管面板 / 输入区展开时挤的是它）
    ├ 弹幕区     ← 内部滚动（MessageList 的 .scroller）
-   ├ 分割条     ← 常驻；热区 8px（--splitter-hit），顶边画一条**虚线**（--fold-line）= 两栏的分界
-   └ 礼物栏     ← 内部滚动；折叠态 = 只有折叠头
+   ├ 分割条     ← 常驻、热区**浮起透明**（负 margin + z-index，不占布局高度）；线画在热区条**朝向弹幕区一侧**、居中一条**实线** 1px（--fold-line），礼物栏在上 / 在下都落在两栏分界上
+   └ 礼物栏     ← 内部滚动；折叠态 = 只有总计条
  ]
 [弹出面板 / 房管面板 / 日志条 / 举报条]
 [输入区]
@@ -884,19 +890,19 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 项 | 规则 |
 |---|---|
 | 两枚键 | `ui.gift_pane_ratio`（number，默认 `0.35`，范围 **0.10–0.90**）= 礼物栏占**分区高度**的份额，**与它在上面还是下面无关**；`ui.gift_pane_on_top`（boolean，默认 `false` = 弹幕在上、礼物在下）。两者都持久化（契约 §8），重开应用保持 |
-| 默认形态 | 弹幕吃掉绝大部分高度、礼物栏折叠在下方。礼物栏折叠着时它**只有折叠头那么高**（折叠优先于份额），弹幕区拿走剩下的全部 |
-| 分界线 | 线画在分割条**自己的顶边**上：**虚线**（`dashed`）+ `--fold-line`（= `--fg-subtle`），对比度深色 **4.4:1** / 浅色 **3.88:1**（非文字图形要素的 3:1 达标线，冒烟按 `foldLineContrastOnCanvas` 断言；读数 `foldLineContrastPx`）。`::before` 那条整条删掉，不是叠着画。悬停 / 键盘聚焦 / 拖动中改画**实线强调色**（「这里能拖」的提示照旧；1 → 2px 不改热区外层高度，两栏高度分配不被推动） |
-| 拖动分割条 | 指针事件（`pointerdown` / `pointermove` / `pointerup` + 窗口级监听），**触摸与鼠标同一条路**；`touch-action: none` **静态**写在分割条上，触摸拖动因此不会被页面滚动抢走（touchstart 那一刻就已生效，不存在「拿起来之后再改」的问题），`cursor: row-resize`。热区：桌面 / 鼠标 = `--splitter-hit` **8px**（需求下限）；**触摸设备（`@media (pointer: coarse)`）= 24px** |
+| 默认形态 | 弹幕吃掉绝大部分高度、礼物栏折叠在下方。礼物栏折叠着时它**只有总计条那么高**（折叠优先于份额），弹幕区拿走剩下的全部 |
+| 分界线 | 线画在热区条**朝向弹幕区那一侧**、**居中一条实线** 1px（`--fold-line` = `--fg-subtle`），礼物栏在上 / 在下都成立（`.splitter::before`），对比度深色 **4.4:1** / 浅色 **3.88:1**（非文字图形要素的 3:1 达标线，冒烟按 `foldLineContrastOnCanvas` 断言；读数 `foldLineContrastPx`）。悬停 / 键盘聚焦 / 拖动中改画 **2px 强调色**（`--accent`，「这里能拖」的提示照旧，不改热区外层高度，两栏高度分配不被推动）。把手叠在线的正中（`::after`，28×4，平时 `opacity: 0`、悬停 / 聚焦 / 拖动 / 移动端按住时显形） |
+| 拖动分割条 | 指针事件（`pointerdown` / `pointermove` / `pointerup` + 窗口级监听），**触摸与鼠标同一条路**；`touch-action: none` **静态**写在分割条上，触摸拖动因此不会被页面滚动抢走（touchstart 那一刻就已生效，不存在「拿起来之后再改」的问题），`cursor: row-resize`。**热区浮起**：`margin-block` 取负、背景透明、`z-index` 提层，两栏在布局上相邻无缝（高亮因此能顶到容器边界，不再被 8px 缝截断）；桌面 / 鼠标 = `--splitter-hit` **8px**，触摸设备（`@media (pointer: coarse)`）从 24px 降到 **16px**（浮起后会盖住上下各一半热区高度，24px 会盖掉礼物栏总计条大半） |
 | 折叠态下拖动 | **拖开 = 展开**：折叠态下这一栏由内容定高、份额驱动不了它，所以拖动 / 键盘微调那一下与点「展开」同一条路（`onExpand`，含「五者互斥」那套收面板）。不这么做的话，折叠态下分割条就是「拖不动的死键」 |
 | 键盘 | 分割条可聚焦（`role="separator"` + `tabIndex`），`↑` / `↓` 每次微调 0.02：移动的是**分割条**（向上 ⇒ 上面那一栏变矮）。连按只有最后一次落盘（350ms 节流） |
-| 最小高度 | **双向生效**，由 CSS 兜住（夹到极限时浏览器就地分配，窗口从 1440 拖到 360 也成立）：礼物栏 ≥ 它的**折叠头**（实测值写进 `--gift-min-h`）；弹幕区 ≥ **3 行**（`9em × ui.font_scale + 3 × --sp-4`，即 3 ×（两行盒 + 上下 `--sp-2`），见 §9.2）。两栏都 `flex-basis: 0` + `flex-grow: <份额>`，**两个 grow 之和恒为 1**（折叠态与关掉礼物栏时弹幕区取 1）—— 和小于 1 时 Flexbox 只分配「和」那么多自由空间，底部会白白空掉一截 |
+| 最小高度 | **双向生效**，由 CSS 兜住（夹到极限时浏览器就地分配，窗口从 1440 拖到 360 也成立）：礼物栏 ≥ 它的**总计条**（实测值写进 `--gift-min-h`）；弹幕区 ≥ **3 行**（`9em × ui.font_scale + 3 × --sp-4`，即 3 ×（两行盒 + 上下 `--sp-2`），见 §9.2）。两栏都 `flex-basis: 0` + `flex-grow: <份额>`，**两个 grow 之和恒为 1**（折叠态与关掉礼物栏时弹幕区取 1）—— 和小于 1 时 Flexbox 只分配「和」那么多自由空间，底部会白白空掉一截 |
 | 存的是指针意图 | 落盘的份额是**指针意图**（夹进 0.10–0.90），像素级的夹取在渲染时由最小高度完成：同一窗口尺寸下重开必然得到同一画面；窗口变小时两栏一起被夹住，不会溢出、不会把某一栏压到 0 |
 | 长按换位 | **长按任一栏 0.5s**（与「拖动分割条」靠元素区分，与「在列表里滚动 / 选字」靠 8px 位移阈值区分：0.5s 前移动超过 8px 就放弃）→ 该栏**半透明跟随指针**（`opacity: .6` + `translateY`），拖到另一栏松手 = 两栏上下互换（写回 `ui.gift_pane_on_top`）；**拖回本栏 / ESC / pointercancel = 取消**；落点那一栏描一圈强调色。判据是**指针有没有越过分割条**（两栏的边界），不是「落在对方矩形里」—— 礼物栏折叠着时它只有 27px 高，按矩形判等于要求像素级瞄准。**触摸下「滚动 / 换位」的分工靠一条常驻的非 passive `touchmove`**（挂在分区根节点上，只在「拿起来之后」`preventDefault()`）：（浏览器在 **touchstart 那一刻**就把 `touch-action` 快照给手势识别器，拿起来之后再改 CSS 或在 `pointermove` 上 `preventDefault()` 拦不住已经起跑的手势）。换位**不搬节点**：DOM 顺序恒为「弹幕 → 分割条 → 礼物栏」，上下只由 `flex-direction`（`column` / `column-reverse`）决定，所以弹幕列表的滚动位置与虚拟列表状态原样保留，读屏 / tab 顺序也稳定地按主次走 |
 | 换位时的比例 | **比例跟着分区走、不跟着某一栏走**：换位只改上下顺序，两栏各自的高度一个像素都不变（礼物栏还是那么多高度，只是挪到了上面）。理由是份额的含义本来就是「礼物栏占分区的比例」，与位置无关 —— 两个量分开存，互相不牵制 |
-| 换位拖拽期间 | 全局 `user-select: none`（拖到另一栏时会经过大片可选的弹幕正文，不禁选字的话 Chrome 会判成「开始选字」并发 `pointercancel`）；换位拖拽松手之后浏览器补发的那一下 `click` / `contextmenu` 被吞掉（否则松手会顺手点开行的东西 / 把折叠头开合一次），**且只吞它自己那一下**：举旗在松手那一刻，**放旗在下一次真的按下 / 按键**（两条窗口级捕获监听）—— 松手后紧接着那一次真的按下再点击必须照旧生效（冒烟 `swapDoesNotEatNextTap`；探针读数 `toggledByNextTap`，`false` 即「点击被整个吞掉」）。 |
+| 换位拖拽期间 | 全局 `user-select: none`（拖到另一栏时会经过大片可选的弹幕正文，不禁选字的话 Chrome 会判成「开始选字」并发 `pointercancel`）；换位拖拽松手之后浏览器补发的那一下 `click` / `contextmenu` 被吞掉（否则松手会顺手点开行的东西 / 把总计条开合一次），**且只吞它自己那一下**：举旗在松手那一刻，**放旗在下一次真的按下 / 按键**（两条窗口级捕获监听）—— 松手后紧接着那一次真的按下再点击必须照旧生效（冒烟 `swapDoesNotEatNextTap`；探针读数 `toggledByNextTap`，`false` 即「点击被整个吞掉」）。 |
 | 礼物栏关掉时（`ui.gift_panel=false`） | 共享区域退化为**弹幕区全高**，**分割条不渲染**（长按换位也随之停用 —— 没有另一栏可换） |
-| 尺寸与钩子 | 分区 `db-panes`（`data-gift` / `data-on-top` / `data-dragging`）、两栏 `db-pane-danmaku` / `db-pane-gift`（`data-swap-drag` / `data-swap-over`；`db-pane-gift` 就是礼物栏那一栏，它的第一个子元素是折叠头，带 `data-pane-head`）、分割条 `db-pane-splitter`（`role="separator"` + `aria-valuenow`）。礼物**折叠条**仍是 `db-gift-dock`（= 礼物栏的折叠头） |
-| 冒烟 | `testing.md` §9 的 `roomPage*` 之外新增 `splitter*` / `swap*` 一组（拖分割条改比例并落盘、最小高度夹取、长按换位与取消、关掉礼物栏后退化），见 `docs/testing.md` §10 的 C-11。**分界线**另有一组（整块包在 `foldLineBlockRan` 里）：`foldLineIsDashed` / `foldLineWidthPx`（线是虚线、宽度 ≥ 1px）、`foldLineUsesToken`（颜色 = `--fold-line` 的计算值）、`foldLineContrastOnCanvas` / `foldLineContrastPx`（对画布 ≥ 3:1，读数）、`foldLineOldBorderContrast`（**反面对照**：`--border` 发丝线的读数，两套主题都 < 1.6:1）、`foldLineSeparatesPanes`（线真的落在两栏之间，礼物栏在上在下都成立）、`foldLinePseudoGone`（`::before` 那条整条删掉）。**手势归属**另有两条行为级断言（`swapTouchMoveOwnedWhenArmed` / `swapTouchMoveFreeWhenIdle`）：给区块派发一个可取消的 `touchmove`，拿起来时必须 `defaultPrevented`（滚动被收走）、没拿起来时必须不被拦（列表照旧滚）；`swapDoesNotEatNextTap` 量的是换位拖拽之后**紧接着那一次真的按下再点击**必须照旧生效 —— 判据是**礼物栏自己的折叠状态翻转**（列表根 `db-gift-area` 在场与否 + 折叠头 `aria-expanded`），**不要**拿行内钩子 `db-gift-body` 当这一栏的开合：那是**行内正文格**（见 §5.3 钩子表），礼物列表为空时开合两态都取不到它，断言会恒为 false。⚠ 这些断言用的是**合成事件**，天然绕开浏览器的手势管线 —— 「拿起来后第一次 `pointermove` 被 `pointercancel` 收走」这类真机故障在合成事件下**照不出来**，所以「触摸排序 / 换位在真机上真的能成」这一条由模拟器实测（CDP 注入真实触摸序列、Android WebView Chrome/124）背书。 |
+| 尺寸与钩子 | 分区 `db-panes`（`data-gift` / `data-on-top` / `data-dragging`）、两栏 `db-pane-danmaku` / `db-pane-gift`（`data-swap-drag` / `data-swap-over`；`db-pane-gift` 就是礼物栏那一栏，它的第一个子元素是**总计条**，带 `data-pane-head`）、分割条 `db-pane-splitter`（`role="separator"` + `aria-valuenow`）。礼物栏的**总计条**（`db-gift-total`，带 `data-pane-head`）即折叠态那一行，也兼作拖动热区 |
+| 冒烟 | `testing.md` §9 的 `roomPage*` 之外新增 `splitter*` / `swap*` 一组（拖分割条改比例并落盘、最小高度夹取、长按换位与取消、关掉礼物栏后退化），见 `docs/testing.md` §10 的 C-11。**分界线**另有一组（整块包在 `foldLineBlockRan` 里）：`foldLineIsSolid` / `foldLineWidthPx`（线是实线、宽度 ≥ 1px）、`foldLineUsesToken`（颜色 = `--fold-line` 的计算值）、`foldLineContrastOnCanvas` / `foldLineContrastPx`（对画布 ≥ 3:1，读数）、`foldLineOldBorderContrast`（**反面对照**：`--border` 发丝线的读数，两套主题都 < 1.6:1）、`foldLineSeparatesPanes`（线真的落在两栏之间，礼物栏在上在下都成立）、`foldLineDrawnByPseudo`（`.splitter::before` 即分界线本身、居中实线，热区浮起透明不挡布局）。**手势归属**另有两条行为级断言（`swapTouchMoveOwnedWhenArmed` / `swapTouchMoveFreeWhenIdle`）：给区块派发一个可取消的 `touchmove`，拿起来时必须 `defaultPrevented`（滚动被收走）、没拿起来时必须不被拦（列表照旧滚）；`swapDoesNotEatNextTap` 量的是换位拖拽之后**紧接着那一次真的按下再点击**必须照旧生效 —— 判据是**礼物栏自己的折叠状态翻转**（列表根 `db-gift-area` 在场与否 + 总计条 `db-gift-total` 的开合图标态），**不要**拿行内钩子 `db-gift-body` 当这一栏的开合：那是**行内正文格**（见 §5.3 钩子表），礼物列表为空时开合两态都取不到它，断言会恒为 false。⚠ 这些断言用的是**合成事件**，天然绕开浏览器的手势管线 —— 「拿起来后第一次 `pointermove` 被 `pointercancel` 收走」这类真机故障在合成事件下**照不出来**，所以「触摸排序 / 换位在真机上真的能成」这一条由模拟器实测（CDP 注入真实触摸序列、Android WebView Chrome/124）背书。 |
 
 ---
 
@@ -1285,8 +1291,8 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 |---|---|---|
 | 房间列表页 | 单列、居中、左右留白 24px；页头一行（标题在左、主题按钮在右） | 单列，左右留白 12px；页头仍是一行：标题是 `flex` 的可缩项，主题按钮 `flex: none`，因此 360px 宽也不换行、不横向滚动 |
 | 房间头 | **一排**：◀返回（圆形）· ●状态点 · 直播间标题（`--fs-5` 加粗，放不下就循环滚动） ······ 在线 / 看过 · `⋯`（圆形）。标题不另起一排，电池不在顶栏 | 同一套一排结构；两枚圆形控件直径都是 `--ctl-round`（= `--tap-min` 40px）。标题是 `flex: 1 1 0` + `min-width: 0`，因此窄屏也**不会**被甩到第二排；任何宽度下**不许横向滚动** |
-| 共享分区（弹幕区 ⇕ 礼物栏） | **唯一的生长区与滚动区**（需求 §2.7）：弹幕区默认在上、礼物栏在下，中间一条常驻的分割条（热区 8px）；两栏都各自内部滚动，比例由 `ui.gift_pane_ratio` 驱动、上下由 `ui.gift_pane_on_top` 决定（§5.4） | 同左：两栏仍是上下分区、分割条一样常驻可拖（窄屏没有单独一套排布），最小高度也照样成立（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头） |
-| 礼物 / SC 栏 | 共享分区里的下半栏（默认）：折叠态一行（折叠头）、展开后栏内滚动，**全宽、不换行** | 同样一行折叠头与同样的分区，不换行，不挤掉弹幕区 |
+| 共享分区（弹幕区 ⇕ 礼物栏） | **唯一的生长区与滚动区**（需求 §2.7）：弹幕区默认在上、礼物栏在下，中间一条常驻的分割条（**热区浮起透明**）；两栏都各自内部滚动，比例由 `ui.gift_pane_ratio` 驱动、上下由 `ui.gift_pane_on_top` 决定（§5.4） | 同左：两栏仍是上下分区、分割条一样常驻可拖（窄屏没有单独一套排布），最小高度也照样成立（弹幕区 ≥ 3 行、礼物栏 ≥ 总计条） |
+| 礼物 / SC 栏 | 共享分区里的下半栏（默认）：折叠态一行（总计条）、展开后栏内滚动，**全宽、不换行** | 同样一行总计条与同样的分区，不换行，不挤掉弹幕区 |
 | 弹出面板（表情 / 短语 / 筛选） | 文档流里的一块，向上展开，只挤压列表（不遮最新一条）；**三个面板都是定高**（顶上没有标题、没有「关闭」）：高度 = 三行大表情格 + 面板上下内边距 + **面板的 1px 上边框**（`--panel-h`，见 §6.1 / §6.3；宽屏实测 **169.1 / 168.1 / 168.1px**（表情 / 筛选 / 短语），冒烟 `panelHeightsMatch` 钉这条，`app.module.css:1638`），**不随内容伸缩**；限高 `--panel-max-h` = 260px。另有 `--live-dot` = 8px（状态点**看得见的那颗点**的直径，元素盒仍是 `--sp-3` 12px、热区不缩）与 `--title-gap` = 2.5em（循环滚动的标题两份拷贝之间的间隙） | **同一口径**：也在文档流里，只挤压列表、不遮最新一条；区别只在定高里的上下内边距（窄屏 `--sp-3`）与限高——窄屏用视口份额 `--panel-max-h-narrow` = **45vh**（844px 下 ≈ 380px），内容超出由**面板内部滚动**承担，不去吃列表空间。三个面板同样没有标题与「关闭」（收起靠再点一次工具按钮或点面板外面） |
 | 房管面板 | 同弹出面板（文档流、只挤压列表、限高 260px）；**排布是「头部一行 + 两排都贴顶」**（§4.9）：头部一行 = 三个 tab（禁言 / 黑名单 / 屏蔽词，**不带计数**）+ 贴右的**一枚 X 图标关闭**（40 × 40 正圆，与房间头同一个控件族）；第 1 排 = 输入框（`flex: 1`，这一排**唯一可缩的一项**）+ 该 tab 的主操作 + 批量图标钮；批量模式下第 1 排**正下方**多一排 = 全选 / 已选 N 项 / 批量动作。列表与错误条在两排之下 | 同一套排布（文档流、限高 45vh、内部滚动、关闭仍是那枚 X 图标钮）；**两排都不换行、不竖排**：输入框可缩、按钮不缩，360px 下量到的宽度不溢出（口径与房间头那条相同：任何宽度下不许横向滚动）；tab 轨道放不下时自己横向滚（不挤压关闭按钮） |
 | 账号管理对话框 | 居中卡片（`max-width: 680px`），顶对齐，点背景或 `Esc` 关闭（头部没有「关闭」按钮） | 贴底 sheet：占满宽度、顶部圆角、内容可滚动；同样只有背景与 `Esc` 两条关闭路。它是**模态流程**（不是在读弹幕时顺手展开的面板），所以这里用覆盖式而不是挤压 |
@@ -1312,7 +1318,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 间距阶 | `--sp-1 … --sp-5` | 4 / 8 / 12 / 16 / 24 px | 间距只从这一档取；**弹幕行内只允许 `--sp-1`（贴）与 `--sp-2`（分）**（§4.1） |
 | 圆角阶 | `--r-1 … --r-4`、`--r-full` | 4 / 8 / 12 / 16 / 999 px | WhatsApp 口径：**控件（按钮 / 单行输入 / 下拉 / 芯片）一律 `--r-full` 胶囊**（写在 `index.css` 的元素默认值里），多行输入 `--r-4`，卡片 / 账号行 / 关注项 `--r-3`，对话框与右键菜单 `--r-4`，sheet 顶部 `--r-4`、正圆 `--r-full`；例外（页签上圆角、表情格、菜单项、礼物折叠行）在各自规则里显式覆盖 |
 | 字号阶 | `--fs-1 … --fs-8` | 0.79 / 0.86 / 0.93 / 1 / 1.07 / 1.15 / 1.3 / 1.43 em | **全部是 em**，不能写成 px：基准字号由 body 的 `--fs-root`（14px）给出，**只有弹幕区**再乘 `ui.font_scale`（写成 em，面板区不乘），因此字号滑杆作用到弹幕区的所有文字（§8.2） |
-| 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是**彩色底上**的文字色，`--accent-text` 是「强调色**作为文字**」（与填充分开：填充只要 3:1、文字要 4.5:1，浅色下两者必须分叉），遮罩 `--overlay`，悬停洗色 `--hover-wash`，**选中一条弹幕时整行那层底色 `--select-wash`**（与悬停同族、同色，只是重一档；行底色因此全宽，见 §4.10），**两栏分界的虚线色 `--fold-line`**（= `--fg-subtle`，见 §5.4）；`--mention` 是**正文里 `@昵称`** 的强调色：深色 `#fb7299`（对 `--bg` 7.1:1 / 对 `--bg-elevated` 6.6:1）、浅色 `#c2185b`（米色 4.9:1 / 白面 5.9:1）—— 它是压在画布 / 表面上的**字色**，不复用 `--badge-fg`（那是彩底上的白字，只对彩底负责） |
+| 颜色语义槽 | 背景 `--bg`；表面 `--bg-elevated`；下沉面 / 输入 `--bg-input`；分隔线 `--border`；正文 `--fg`；次级文字 `--fg-dim` / `--fg-muted` / `--fg-subtle`；强调 `--accent`；成功 `--ok`；警告 `--warn`；错误 `--danger` | 见 `:root` | 主题色只在这里；`--on-accent` / `--on-ok` / `--on-danger` 是**彩色底上**的文字色，`--accent-text` 是「强调色**作为文字**」（与填充分开：填充只要 3:1、文字要 4.5:1，浅色下两者必须分叉），遮罩 `--overlay`，悬停洗色 `--hover-wash`，**选中一条弹幕时整行那层底色 `--select-wash`**（与悬停同族、同色，只是重一档；行底色因此全宽，见 §4.10），**两栏分界线的实线色 `--fold-line`**（= `--fg-subtle`，见 §5.4）；`--mention` 是**正文里 `@昵称`** 的强调色：深色 `#fb7299`（对 `--bg` 7.1:1 / 对 `--bg-elevated` 6.6:1）、浅色 `#c2185b`（米色 4.9:1 / 白面 5.9:1）—— 它是压在画布 / 表面上的**字色**，不复用 `--badge-fg`（那是彩底上的白字，只对彩底负责） |
 | 徽标底色 | `--gold`、`--neutral`、`--guard-1…3`、`--sc-1…5`、`--block-platform`、`--block-room`、`--badge-fg`、`--badge-lift`、`--badge-border` | 见 `:root` | 粉丝牌**不吃**这些：它的真彩色来自上游（§4.2），令牌只兜底；`--sc-1…5` 是**醒目留言卡片的五档底色**：深色基座 `#2f6fd0` / `#1e9e8a` / `#c9a227` / `#d1603d` / `#c0392b`，来源标注【B+】——**本项目自己的设计令牌**，与 ac站网页端 SC 卡片的逐档比对**没做过**（`protocol.md` 附录 A 的 A.2「SC 卡片配色档位边界」仍待校准）；档位边界（100 / 500 / 1000 / 2000 元）同样是本地取值，依据见 §4.1。卡片实际用的是「该档色 22% 混 `--bg-elevated`」的底色 + 该档实色描边 |
 | 顶栏 / 状态点 / 浮动提示 | `--header-bg`（半透明顶栏：本主题表面色 88%）、`--header-lift`（自上而下的一道高光）、`--live-on` / `--live-off` / `--live-idle`（状态点三态：绿=开播 / 红=下播 / **灰=未连接**；房间头与房间标签页两处**共用这三枚**）、`--toast-bg` / `--toast-fg`（失败浮动提示） | 见 `:root` | 顶栏的「半透明深色层次」由这三条混出来，**深浅两套自动成立**（浅色下同一槽就是半透明白面）；状态点的色值与 `--ok` / `--danger` 分开命名：语义不同（在不在播 ≠ 连接状态），浅色下也要各自达标。**灰色那一档不新造颜色**：取次级文字的中性灰 `--fg-dim` |
 | 阴影 / 遮罩 | `--shadow-menu`、`--shadow-dialog`、`--shadow-sheet`、`--overlay` | — | 菜单 / 对话框 / sheet / 遮罩各一处 |

@@ -28,6 +28,11 @@
 
 ### Added
 
+- **房管面板 / 礼物栏统计 / 分割条三项改造**（2026-09-26；需求草稿 `docs/draft-20260926-admin-gift-splitter.md`）：
+  - **房管面板**：名单改为**每行一项**（行高 40px、勾选槽常驻零跳位、行内横滑 + 仅悬停 / 聚焦行跑马灯）；输入框按钮**三态固定宽**（禁用灰 → 转圈检查中 → 禁言 / 解除禁言）；错误**分两类**（业务拒绝原样 `code+message`，传输 / 风控只给人话、完整原文只进日志）；**增量加载**（先 30 条、滚到底补 10 条）；同步机制去掉 60 秒轮询，改为打开面板后台全量 + 写后重读 + **面板展开每 5 分钟静默刷新**（无按钮、无提示）；`admin_silent_list` / `admin_blacklist_list` 改**分页增量**（`offset` / `limit`，返回 `AdminListSlice<...>`），禁言按页限速翻页，根治一次性翻完 481 条连发几十次 POST 被上游风控挡回 HTTP 412 的根因。
+  - **礼物栏统计**：从折叠头拆成**总计条（贴中心、兼拖动热区，文案 `礼物 N条 ¥X`）**与**筛选条（外侧，三枚 `[icon ¥金额]` 芯片切换 `ui.gift_pane_kinds` 并集筛选）**；折叠态只剩总计条；统计链改为**先筛选后汇总**。
+  - **分割条**：热区**浮起透明**（负 margin + z-index，不占布局高度，两栏相邻无缝），线画在热区条**朝弹幕区一侧居中实线** 1px（`--fold-line`），保留居中把手（悬停 / 聚焦 / 拖动 / 触摸显形），触摸命中区 24px → 16px。
+  - 影响：`docs/contract.md` §3 / §7 / §8、`docs/ipc.md` §3 / §3.1 / §5、`docs/ui.md` §4.9 / §5.3 / §5.4、`docs/architecture.md`、本文件均已同步；`danmubox-cli` 同步改用分页端口。
 - **「我的直播间」：账号行「我的直播间」按钮展开管理区，两级分区选择，开播人脸认证二维码提示框，开播后长按复制推流参数**（2026-09-19 起；2026-09-24 按用户最新要求重构；需求 `REQUIREMENTS.md` §2.14，用户原话随该节）：
   账号管理对话框里，**每个账号行的删除按钮右侧**有一枚「我的直播间」按钮（`db-anchor-toggle`），点击**展开**该账号的直播间管理区（含直播间标题、两级联动分区选择、开播 / 下播）。**标题与分区默认取上次开播（下播 / 准备中）保留的数据**，用户不改即可直接沿用开播、不必重填。开播被上游**身份校验**挡住（`60043` / `60024`）时**弹出二维码提示框**引导官方 App 扫码认证（`FaceAuth` 走 `open_url` 打开认证页、`QrConfirm` 离线编码二维码）；开播成功后直接在管理区下方渲染推流地址 / 推流码，**长按该值即复制（不显示复制键）**，下播即消失。
   实现：新端口 `AnchorRoom`（`own` / `set_title` / `go_live(area_v2)` / `end_live` / `area_list`，`crates/danmubox-core/src/ports.rs`）—— 与只读的 `LiveSource` 分工明确：那个**看别人的**房间（游客也可用），这个**管自己的**房间；四个新命令 `anchor_room` / `anchor_title_set` / `anchor_area_list` / `anchor_live_set`（IPC 由 39 条增至 **43 条**，`generate_handler!` 与 `docs/ipc.md` §3 逐条对齐）；`QrConfirm` 那张二维码由**命令层**用 `qrcode` crate 把 `AnchorGate.qr` **就地离线编码**成 `qr_svg` 一并带出（与扫码登录完全同一条口径，不联网生成、不交给第三方服务；`qr_svg` 只出现在命令层载荷里，**不进** `core` 的 `AnchorGate`）；上游侧**全部**落在 `crates/danmubox-bili/src/anchor.rs`（分区列表 `room/v1/Area/getList`、改标题 `Room/update`、三段式 `startLive`、app 签名与公开 appkey/appsec 等端点与签名，**只有这个模块**允许出现这些 URL 与签名）。**事件清单不变**：不新增事件名 —— 状态按需现取，开播 / 下播 / 改标题成功之后由界面重拉。
@@ -40,6 +45,8 @@
   否决的方案：① **自动轮询认证状态、通过后自动重拉开播** —— 违反写操作「失败即停」，且本仓既没有「认证已完成」这条推送面、也没有可查认证状态的只读端点，做出来就是臆造；② **给未知的非 0 code 也配一套引导** —— 违反 `AGENT.md` §8 第 7 条（不得为未实测的 ac站行为编造数值 / 语义）。代价：多一个领域模型与一条端到端的呈现路径，且**认证页地址与 `data.qr` 的实际形态都仍未实测**（登记为 `docs/protocol.md` 附录 A66 未实测清单第 ⑤ 项），要等完成一次真实人脸认证才能闭环。
   规格：`REQUIREMENTS.md` §2.14、`docs/contract.md` §3 / §5 / §7 / §9、`docs/ipc.md` §3 / §3.1、`docs/protocol.md` §18 / §18.5 与附录 A66、`docs/ui.md` §2.2.2、`docs/testing.md` §10.1 C-16 / §14。
   **实现落地**：2026-09-24 按本修订实现（见上条），后端 `anchor.rs` 与前端 `AccountManager.tsx` 按 §2.2.2 新口径落地；未实测条目见上条与附录 A66。
+
+- **互动消息共用单槽位（仿官方网页直播间）**（2026-09-26，需求随用户对话）：新增偏好 `ui.interact_single_slot`（默认开，契约 §8）。开启时互动/进场消息整类移出弹幕列表（`filtering.toDisplayRows` 直接跳过 `kind === "interact"`），不再逐行堆叠挤占弹幕区空间；改在弹幕区底部浮层 `InteractSlot`（`data-testid="db-interact-slot"`）显示当前房间**最新一条**互动消息（头像 + 文案，文案复用 `interactText`），下一条到达时快速顶掉上一条（滑入/滑出接力，过渡 220ms），空闲 4s 自动淡出；关闭则退化为「列表行 + 自动消失」（`ui.interact_auto_hide`）旧行为。纯显示层派生：消息始终留在会话缓冲里，关掉开关即逐条回到列表。文档：`docs/contract.md` §8、`docs/ui.md` §4.8。
 
 ### Changed
 
@@ -85,6 +92,8 @@
 - **一键诊断整套删除（净 −2001 行）**（2026-09-21，issue 202609211940 第 4 条）：删掉 `crates/danmubox-core/src/diagnose.rs`、`crates/danmubox-bili/src/diagnose.rs`、`apps/desktop/src-tauri/src/diagnose.rs` 与 Android 原生写文件插件 `DiagnosePlugin.kt`；删掉符号 `core::paths::downloads_dir()`、`bili::redact` 的 `redact_for_export` / `EXPORT_KEYS` / `mask_numbers`（`redact()` 与 `SECRET_KEYS` 保留，脱敏仍是单一出口）、`ws.rs` / `http.rs` 里 `danmu_info(..., diag)` 的 `diag` 参数与全部采集埋点、外壳的 `DiagnoseStart` / `DiagnoseExport` / `diagnose_start` / `diagnose_export` / `AppState.engine` / `secret_numbers()`，以及 `log_bridge` 里**只为诊断存在**的那条写入路径（`RAW_TARGET` / `MessageVisitor.fields`）；前端删掉 `ipc.ts` 的 `diagnoseStart` / `diagnoseExport`、`types.ts` 的 `DiagnoseStart` / `DiagnoseExport`、`RoomView.tsx` 的四个诊断状态与该面板、`app.module.css` 的 `.diagnose*` 整段。**保留** `core::bus` 的 `Counters` / `CounterSnapshot`（`MessageSink` / `session` / `proto` / `cmd` / `ws` / CLI 仍用，CLI 打印计数走 `snapshot()`；它不再被诊断读取）。**IPC 条数 39 → 37**（`async fn` 29 → 28、同步 `fn` 10 → 9，「同步命令」名单里不再有 `diagnose_start`；`diagnose_export` 原本是唯一「另接 `app: tauri::AppHandle`」的 async 命令，这条例外随之消失，`chat_send` 仍接）。**为什么**：这套采集采出来的数据意义不大 —— 「连上了却收不到弹幕」这条链路要的事实（票据 `code`、`op=7` / `op=8`、入站帧间隔、退避与候选节点）在日志里本来就有，而它自带的存储、脱敏加严档与三端写文件路径是一整片需要长期维护的面。**否决了什么及理由**：① 只把入口从菜单里藏起来、代码留着——不解决问题，还留着三端权限与写文件路径的维护面；② 只删 Android 那条 MediaStore 写文件路径——另一半（core 采集环 + 报告渲染 + 两条 IPC）照旧；③ 保留 `downloads_dir()` 备用——没有调用方就是死代码。**代价**：Android 侧失去了唯一一个「把业务日志交出来」的入口，现在只剩 `adb logcat`（`docs/testing.md` §10.5 已如实改写）；「一次诊断恰好一个文件」这条口径随之作废，本地文件回到只有 `config.toml` 与 `prefs.json` 两个、**没有任何写数据目录之外的产物**。规格：`docs/contract.md` §4（删常量行与 §4.4）/ §7 / §9、`docs/ipc.md` §2 / §3 / §3.1、`docs/ui.md` §2.2 / §3.2 / §3.5、`docs/architecture.md` §2.1 / §2.2 / §5 / §9.3 / §9.4、`docs/operations.md` §1.3 / §2 / §3 / §4 / §5、`docs/testing.md` §2 / §10.4 / §10.5、`docs/protocol.md` 附录 A48、`docs/roadmap.md` §2.1、`README.md`、`REQUIREMENTS.md` §2.12 / §2.13。`AGENT.md` §9 里那条「`diagnose.rs` 13 处」是历史记录，**保留不动**。
 
 ### Fixed
+
+- **弹幕页标题随 ROOM_CHANGE 自动刷新**：在「我的直播间」面板改自己房间标题（`saveAnchorTitle`）落地后，新标题只写进了 `anchorRoom` / `anchorRooms`、没有写回 `state.rooms` 同 `room_id` 条目，导致弹幕页头部标题（`db-room-title`）不刷新。现按 `room_id` 把新标题合并回 `state.rooms`（与 `onRoom` 处理外部 `ROOM_CHANGE` 同一口径），改完标题头部即时更新。
 
 - **「我的直播间」修复与交互即时化（issue202609242158，2026-09-24）**，后端落点 `crates/danmubox-bili/src/anchor.rs`、前端落点 `apps/desktop/ui/src/store.ts` / `components/AccountManager.tsx` / `components/Composer.tsx` / `app.module.css` / `App.tsx` / `RoomView.tsx`：
   **后端（第 2 / 3.1 / 3.2 条）**：

@@ -24,6 +24,20 @@
 //! | 增加屏蔽词 | `POST …/v1/banned/AddShieldKeyword`，`{room_id, keyword}` | 参数按官方前端核对，未实测 |
 //! | 删除屏蔽词 | `POST …/v1/banned/DelShieldKeyword`，`{room_id, keyword}` | 参数按官方前端核对，未实测 |
 //!
+//! # 412 风控与并发突发（A45）
+//!
+//! 三条**只读**列表（禁言 / 黑名单 / 屏蔽词）在房管面板打开瞬间若**并发**拉取，
+//! 会触发 app-ucenter 网关的 412 风控验证页（`text/html`，非 JSON）；A45 实测补
+//! `buvid3/buvid4` 仍 412，即不是缺设备指纹，根因是「并发突发 + 客户端指纹」。两层防御：
+//!
+//! 1. **串行**：进程级护栏 [`LISTS_GUARD`] 把三条只读列表强制串行，从源头消除并发突发
+//!    （桌面端三个 IPC 命令每次都 `BiliAdmin::new`、实例不共享，故用进程级锁而非实例字段）。
+//! 2. **有界重试**：黑名单这一条走 `app-ucenter` 的 **GET**，遇 412 退避后重试
+//!    [`BLACKLIST_412_MAX_RETRIES`] 次（间隔 [`BLACKLIST_412_BACKOFF`]）。这是 admin 层
+//!    纵深防御，与 `http.rs` 全局「4xx 不重试」不矛盾——那个纪律防的是 POST 副作用 /
+//!    防风控升级，这里是幂等只读 GET。退避时长 / 重试次数**待 `docs/protocol.md` 附录 A
+//!    实测校准**，先取与 [`PAGE_GAP`] 同量级的值。
+//!
 //! # 错误处理
 //!
 //! 非 0 `code` 一律原样带回（`code` + 上游 `message`），**不赋予**「未登录 / 权限不足」
@@ -75,6 +89,24 @@ const PAGE_GAP: std::time::Duration = std::time::Duration::from_millis(200);
 /// 上限太小会在真实房间里静默截断。触顶时打 `warn`，调用方从日志就能看出被截断。
 const MAX_PAGES: i64 = 60;
 
+/// 黑名单 GET 遇 412 风控页时的有界重试次数（A45）。
+///
+/// 只对**幂等只读 GET** 退避重试；POST（禁言 / 屏蔽词列表）按 `http.rs` 全局纪律一律不重试。
+/// 具体次数**待 `docs/protocol.md` 附录 A 实测校准**，先取 2（首请求 + 两次重试 = 最多 3 次）。
+const BLACKLIST_412_MAX_RETRIES: u32 = 2;
+/// 412 重试之间的退避时长（A45）。**待 `docs/protocol.md` 附录 A 实测校准**，
+/// 先取与 [`PAGE_GAP`] 同量级的 200ms。
+const BLACKLIST_412_BACKOFF: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// 房管「三个只读列表」的串行护栏（A45）。
+///
+/// 房管面板打开瞬间并发拉取禁言 / 黑名单 / 屏蔽词三条只读列表会触发 412 风控页。
+/// 桌面端 `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` 每个 IPC 命令
+/// 都 `BiliAdmin::new`，实例不共享，故用**进程级**护栏把三条只读列表强制串行，
+/// 从源头消除「并发突发」。写操作（禁言 / 拉黑 / 屏蔽词增删）不进此锁——
+/// 它们是用户单次触发的低频动作，且全局纪律要求 POST 一律不重试。
+static LISTS_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// 房管操作适配器。凭据由 `BiliHttp` 实时读取当前 profile。
 pub struct BiliAdmin {
     http: BiliHttp,
@@ -124,15 +156,34 @@ impl BiliAdmin {
     }
 
     /// GET（黑名单列表用）。
+    ///
+    /// 幂等只读 GET：遇 412 风控页（`docs/protocol.md` A45，`text/html`）做**有界退避重试**
+    /// （最多 [`BLACKLIST_412_MAX_RETRIES`] 次，间隔 [`BLACKLIST_412_BACKOFF`]）。这是 admin
+    /// 层的纵深防御，与 `http.rs` 全局「4xx 不重试」不矛盾——那个纪律防的是 POST 副作用 /
+    /// 防风控升级，这里是不可变只读 GET。其它错误（含非 412 的 4xx）直接透传，不重试。
     async fn get(&self, url: &str, params: &[(&str, String)]) -> Result<Value> {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs(params.iter().map(|(k, v)| (*k, v.as_str())))
             .finish();
-        let (value, _) = self
-            .http
-            .get_with_cookies(&format!("{url}?{query}"))
-            .await?;
-        Ok(value)
+        let full = format!("{url}?{query}");
+        let mut attempt: u32 = 0;
+        loop {
+            match self.http.get_with_cookies(&full).await {
+                Ok((value, _)) => return Ok(value),
+                // 仅对 412 风控页退避重试：幂等只读 GET，重试无副作用。
+                Err(e) if is_412_risk(&e) && attempt < BLACKLIST_412_MAX_RETRIES => {
+                    attempt += 1;
+                    tracing::warn!(
+                        url = url,
+                        attempt,
+                        max = BLACKLIST_412_MAX_RETRIES,
+                        "黑名单 GET 遇 412 风控页，退避后重试（退避/次数待 protocol.md 附录 A 实测校准）"
+                    );
+                    tokio::time::sleep(BLACKLIST_412_BACKOFF).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
@@ -145,6 +196,15 @@ fn ensure_ok(value: &Value, what: &str) -> Result<()> {
             value.get("message").and_then(Value::as_str).unwrap_or("")
         )))),
     }
+}
+
+/// 判断错误是否来自上游 412 风控验证页（A45）。
+///
+/// 依赖 `http.rs` 的 `get_with_cookies` 在 `UPSTREAM_ERROR` 文案里写入 `HTTP 412`
+/// （已被 `http.rs` 的 `non_json_get_names_endpoint_status_and_body_head` 回归锁死）。
+/// 若 `http.rs` 改写错误文案格式，这里必须同步。
+fn is_412_risk(e: &Error) -> bool {
+    e.code() == "UPSTREAM_ERROR" && e.to_string().contains("HTTP 412")
 }
 
 fn int(value: &Value, keys: &[&str]) -> i64 {
@@ -228,6 +288,8 @@ impl RoomAdmin for BiliAdmin {
         offset: i64,
         limit: i64,
     ) -> Result<(Vec<SilentUser>, i64)> {
+        // A45：三条只读列表强制串行，消除并发突发。
+        let _guard = LISTS_GUARD.lock().await;
         if limit <= 0 || offset < 0 {
             return Ok((Vec::new(), 0));
         }
@@ -324,6 +386,8 @@ impl RoomAdmin for BiliAdmin {
         offset: i64,
         limit: i64,
     ) -> Result<(Vec<BlacklistedUser>, i64)> {
+        // A45：三条只读列表强制串行，消除并发突发。
+        let _guard = LISTS_GUARD.lock().await;
         if limit <= 0 || offset < 0 {
             return Ok((Vec::new(), 0));
         }
@@ -413,6 +477,8 @@ impl RoomAdmin for BiliAdmin {
     }
 
     async fn keywords(&self, room_id: i64) -> Result<Vec<String>> {
+        // A45：三条只读列表强制串行，消除并发突发。
+        let _guard = LISTS_GUARD.lock().await;
         let csrf = self.csrf()?;
         let value = self
             .post(
@@ -551,5 +617,26 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("100004"), "{rendered}");
         assert!(rendered.contains("不是管理员"), "{rendered}");
+    }
+
+    #[test]
+    fn is_412_risk_detects_risk_page_only() {
+        // 412 风控页（A45）：`http.rs` 的 `decode_failure` 在本错误文案里写 `HTTP 412`。
+        let risk = Error::Upstream(
+            "upstream error: GET /xlive/app-ucenter/v2/xbanned/banned/GetBlackList \
+             HTTP 412 content-type=text/html <!DOCTYPE html>..."
+                .into(),
+        );
+        assert!(is_412_risk(&risk), "412 风控页必须识别为可重试");
+        // 非 412 的 4xx（例如路径写错返回 404）：不可重试，直接透传。
+        let not_risk = Error::Upstream(
+            "upstream error: GET /xlive/.../GetBlackList HTTP 404 content-type=text/html".into(),
+        );
+        assert!(!is_412_risk(&not_risk), "404 不应触发重试");
+        // 网络层错误（不含 HTTP 状态码）：不可重试。
+        let net = Error::Upstream("upstream error: 请求失败: error sending request".into());
+        assert!(!is_412_risk(&net), "网络错误不应触发重试");
+        // 其它错误类别（非 UPSTREAM_ERROR）一律不重试。
+        assert!(!is_412_risk(&Error::NotLoggedIn), "非上游错误不重试");
     }
 }

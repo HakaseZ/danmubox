@@ -211,6 +211,9 @@ export function RoomView({
   const loadAdmin = useApp((store) => store.loadAdmin);
   const runAdmin = useApp((store) => store.runAdmin);
   const startAdminPolling = useApp((store) => store.startAdminPolling);
+  // 面板按钮三态的「检查」与名单滚到底的「补一段」：都在 store 里（分页 + 限速 + 节流）。
+  const checkAdminMember = useApp((store) => store.checkAdminMember);
+  const loadAdminMore = useApp((store) => store.loadAdminMore);
   const loggedIn = session?.logged_in ?? false;
 
   /**
@@ -1083,6 +1086,8 @@ export function RoomView({
           keywords={adminKeywords}
           errors={adminErrors}
           busy={adminBusy}
+          onCheck={(tab, value) => checkAdminMember(room.room_id, tab, value)}
+          onLoadMore={(tab) => loadAdminMore(room.room_id, tab)}
           onConfirm={setAdminConfirm}
           onClose={() => {
             setAdminOpen(false);

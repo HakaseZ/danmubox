@@ -200,6 +200,21 @@ export interface AdminUser {
   face: string;
 }
 
+/** 房管面板的三块（禁言 / 黑名单 / 屏蔽词）。 */
+export type AdminTab = "silent" | "blacklist" | "keywords";
+
+/**
+ * 房管名单的**一段**（契约 §7）：`admin_silent_list` / `admin_blacklist_list` 的返回形状。
+ *
+ * `items` = 本次新增的条目（不含调用方已有的那一段），`total` = 上游总数 ——
+ * 前端据此决定「还翻不翻」。改前一次返回整份名单，禁言那份每页只有 10 条，
+ * 一个真实房间要连发 49 次 POST 并被风控挡回 412，因此改成分段取。
+ */
+export interface AdminListSlice<T> {
+  items: T[];
+  total: number;
+}
+
 /**
  * 房管写操作的待确认对象（`docs/ui.md` §4.5 / §4.9）。
  * 这些操作会不可逆地影响他人，因此一律先出确认条，且文案要说清对象与时长。

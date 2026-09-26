@@ -21,6 +21,7 @@ import type {
   Account,
   AccountQr,
   AdminAction,
+  AdminTab,
   AdminUser,
   AnchorArea,
   AnchorGateView,
@@ -227,8 +228,25 @@ interface AppStore {
   /**
    * 读房管三块列表：只读，无权限也放行，错误原样展示。返回**这一批有没有拿到**
    * （三块全成 = true；各自失败各自留痕）—— 面板展开期的静默轮询按它判退避（第 8 条 A2）。
+   *
+   * **分段取**：`limit` 缺省 = 每块 `ADMIN_PAGE`（30）条；**重读时保留已加载水位**
+   * —— 已经翻到 80 条就不会被打回 30 条。屏蔽词上游没有分页，一次给完。
    */
-  loadAdmin: (roomId: number) => Promise<boolean>;
+  loadAdmin: (roomId: number, limit?: number) => Promise<boolean>;
+  /** 名单滚到底再补一段（`ADMIN_STEP` = 10 条）。屏蔽词是前端切片，不调上游。 */
+  loadAdminMore: (roomId: number, tab: AdminTab) => Promise<void>;
+  /**
+   * 「这个对象在不在名单里」—— 房管面板按钮三态的依据。
+   *
+   * 会先按房间**节流地取一次全量**，因此结论是权威的：只在已加载的那 30 条里查，
+   * 会把「还没翻到的成员」误判成不在名单里（需求 2026-09-26：拉黑时目标常常
+   * 根本不在直播间、也没被翻到）。
+   */
+  checkAdminMember: (
+    roomId: number,
+    tab: AdminTab,
+    value: string | number,
+  ) => Promise<boolean>;
   /** 执行一次房管写操作；调用方负责二次确认。成功返回 true。 */
   runAdmin: (roomId: number, action: AdminAction) => Promise<boolean>;
   /**
@@ -803,11 +821,30 @@ async function runAnchorPoll(store: StoreApi<AppStore>, account: string, gen: nu
   scheduleAnchorPoll(store, account, delay, gen);
 }
 
+/** 房管三块名单的**首屏**条数：三块各先拿这么多，滚到底再补（需求 2026-09-26）。 */
+const ADMIN_PAGE = 30;
+/** 名单滚到底一次补多少条。 */
+const ADMIN_STEP = 10;
 /**
- * 房管三块列表的**静默刷新周期**（issue202609242158 第 8 条 A2）。名单变化比开播状态慢，
- * 周期放宽到 60 秒；纪律与上面两块完全一致。
+ * 「取全量」时的条数上限（安全阀）。
+ *
+ * 上游禁言每页固定 10 条、页间已限速 200ms，取 500 条最坏是 50 页 ≈ 10 秒 ——
+ * 这是一次**用户触发**的操作（在输入框里按下按钮），不是轮询，可以慢。
  */
-const ADMIN_REFRESH_MS = 60_000;
+const ADMIN_FULL_LIMIT = 500;
+/** 同一房间两次「取全量」之间的最小间隔：连点输入框不该打爆上游。 */
+const ADMIN_FULL_THROTTLE_MS = 30_000;
+/** 各房间最近一次「取全量」的时刻（UTC 毫秒）。 */
+const adminFullAt: Record<number, number> = {};
+
+/**
+ * 房管三块列表的**静默刷新周期**。
+ *
+ * 改前是 60 秒 —— 用户 2026-09-26 判定「不对」：房管面板不是高频功能，
+ * 无差别轮询既招风控（每拍都要翻几十页）又没打到真正需要的时点。放宽到 **5 分钟**，
+ * 与「打开面板时拉一次」「写操作后重读」配合（需求 2026-09-26）。
+ */
+const ADMIN_REFRESH_MS = 300_000;
 const ADMIN_REFRESH_MAX_MS = ADMIN_REFRESH_MS * 8;
 
 let adminPollTimer: number | undefined;
@@ -1728,18 +1765,26 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
-  async loadAdmin(roomId) {
+  async loadAdmin(roomId, limit) {
     // 三块各自失败各自留痕：一块挂了不该把另外两块的列表也清空。
     const errors: AppStore["adminErrors"] = {};
+    // **保留已加载水位**：重读（5 分钟静默刷新 / 写后重读）按「手上已有多少条」取，
+    // 否则用户翻到 80 条会被打回 30 条 —— 那个体验比 412 还糟。
+    const state0 = get();
+    const want = (have: number) => Math.max(ADMIN_PAGE, have, limit ?? 0);
     const [silent, blacklist, keywords] = await Promise.all([
-      api.adminSilentList(roomId).catch((error: unknown) => {
-        errors.silent = describeError(error);
-        return undefined;
-      }),
-      api.adminBlacklistList(roomId).catch((error: unknown) => {
-        errors.blacklist = describeError(error);
-        return undefined;
-      }),
+      api
+        .adminSilentList(roomId, 0, want(state0.adminSilent.length))
+        .catch((error: unknown) => {
+          errors.silent = describeError(error);
+          return undefined;
+        }),
+      api
+        .adminBlacklistList(roomId, 0, want(state0.adminBlacklist.length))
+        .catch((error: unknown) => {
+          errors.blacklist = describeError(error);
+          return undefined;
+        }),
       api.adminKeywordsList(roomId).catch((error: unknown) => {
         errors.keywords = describeError(error);
         return undefined;
@@ -1750,12 +1795,51 @@ export const useApp = create<AppStore>((set, get, store) => ({
     if (get().activeRoomId !== roomId) return true;
     const ok = Object.keys(errors).length === 0;
     set((state) => ({
-      adminSilent: silent ?? state.adminSilent,
-      adminBlacklist: blacklist ?? state.adminBlacklist,
+      adminSilent: silent?.items ?? state.adminSilent,
+      adminBlacklist: blacklist?.items ?? state.adminBlacklist,
       adminKeywords: keywords ?? state.adminKeywords,
       adminErrors: errors,
     }));
     return ok;
+  },
+
+  async loadAdminMore(roomId, tab) {
+    // 屏蔽词上游没有分页（一次给完），这里不动上游 —— 它走前端切片。
+    if (tab === "keywords") return;
+    const offset =
+      tab === "silent" ? get().adminSilent.length : get().adminBlacklist.length;
+    try {
+      const slice =
+        tab === "silent"
+          ? await api.adminSilentList(roomId, offset, ADMIN_STEP)
+          : await api.adminBlacklistList(roomId, offset, ADMIN_STEP);
+      if (get().activeRoomId !== roomId) return;
+      set((state) =>
+        tab === "silent"
+          ? { adminSilent: [...state.adminSilent, ...slice.items] }
+          : { adminBlacklist: [...state.adminBlacklist, ...slice.items] },
+      );
+    } catch (error) {
+      // 补一段失败**不**清掉已经加载的整段，只留痕。
+      set((state) => ({
+        adminErrors: { ...state.adminErrors, [tab]: describeError(error) },
+      }));
+    }
+  },
+
+  async checkAdminMember(roomId, tab, value) {
+    // 只在**已加载的那一批**里查会误判：名单是分段取的，目标可能还没被翻到。
+    // 因此先按房间节流地取一次全量，再回答（需求 2026-09-26）。
+    const now = Date.now();
+    if (now - (adminFullAt[roomId] ?? 0) >= ADMIN_FULL_THROTTLE_MS) {
+      adminFullAt[roomId] = now;
+      await get().loadAdmin(roomId, ADMIN_FULL_LIMIT);
+    }
+    const state = get();
+    if (state.activeRoomId !== roomId) return false;
+    if (tab === "keywords") return state.adminKeywords.includes(String(value));
+    const list = tab === "silent" ? state.adminSilent : state.adminBlacklist;
+    return list.some((user) => user.uid === value);
   },
 
   async runAdmin(roomId, action) {

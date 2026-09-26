@@ -7,7 +7,7 @@ import {
 } from "react";
 
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
-import type { AdminAction, AdminUser } from "../types";
+import type { AdminAction, AdminTab, AdminUser } from "../types";
 import styles from "../app.module.css";
 
 interface Props {
@@ -17,13 +17,21 @@ interface Props {
   /** 三块各自的读取错误：原样 code + message（不翻译、不猜测上游语义）。 */
   errors: { silent?: string; blacklist?: string; keywords?: string };
   busy: boolean;
+  /**
+   * 查这个对象在不在名单里（按钮三态的依据）。
+   * **会先按房间节流地取一次全量** —— 只在已加载那一批里查会把「还没翻到的成员」
+   * 误判成不在名单里（需求 2026-09-26）。
+   */
+  onCheck: (tab: AdminTab, value: string | number) => Promise<boolean>;
+  /** 名单滚到底再补一段（屏蔽词上游没有分页，上层按前端切片处理）。 */
+  onLoadMore: (tab: AdminTab) => Promise<void>;
   /** 面板只负责发起动作，二次确认与执行都在上层。 */
   onConfirm: (action: AdminAction) => void;
   onClose: () => void;
 }
 
-/** 面板的三个 tab：禁言名单 / 黑名单 / 屏蔽词，一次只渲染当前这一个。 */
-type AdminTab = "silent" | "blacklist" | "keywords";
+// 面板的三个 tab：禁言名单 / 黑名单 / 屏蔽词，一次只渲染当前这一个。
+// `AdminTab` 已提到 `types.ts` —— store 的两个新方法（检查 / 补一段）也要按它分派。
 
 /** tab 的顺序（键盘 ←→ 与屏幕上的顺序同源）。 */
 const TAB_ORDER: AdminTab[] = ["silent", "blacklist", "keywords"];
@@ -55,6 +63,14 @@ const ACTION_OFF: Record<AdminTab, string> = {
   blacklist: "移出黑名单",
   keywords: "删除屏蔽词",
 };
+
+/**
+ * 名单**首屏**条数与滚到底一次补多少条（需求 2026-09-26）。
+ * 与 `store.ts` 的 `ADMIN_PAGE` / `ADMIN_STEP` 同值 —— 前者是向上游要的条数，
+ * 这里是屏蔽词那份**前端切片**的步长（屏蔽词上游没有分页，一次给完）。
+ */
+const ADMIN_PAGE = 30;
+const ADMIN_STEP = 10;
 
 /** tabpanel 的 id：tab 的 `aria-controls` 与它的 `aria-labelledby` 靠它对上。 */
 const ADMIN_PANEL_ID = "db-admin-tabpanel";
@@ -97,6 +113,8 @@ export function AdminPanel({
   keywords,
   errors,
   busy,
+  onCheck,
+  onLoadMore,
   onConfirm,
   onClose,
 }: Props) {
@@ -112,6 +130,19 @@ export function AdminPanel({
   const railRef = useRef<HTMLDivElement>(null);
   /** 输入框那一枚按钮的三态（需求 2026-09-26）。 */
   const [check, setCheck] = useState<CheckState>({ phase: "idle" });
+  /** 屏蔽词**前端切片**的已显示条数 —— 上游没有分页（一次给完），翻页在这里做。 */
+  const [wordShown, setWordShown] = useState(ADMIN_PAGE);
+
+  /** 名单滚到底 → 再补一段。屏蔽词不调上游，只把切片放长。 */
+  const onListScroll = (event: { currentTarget: HTMLElement }) => {
+    const el = event.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > 24) return;
+    if (tab === "keywords") {
+      setWordShown((shown) => shown + ADMIN_STEP);
+      return;
+    }
+    void onLoadMore(tab);
+  };
 
   // tab 文案**不再带计数**（issue #3：「禁言 3」→「禁言」）：条数就是三块列表自己的长度
   // （`silent` / `blacklist` / `keywords`），屏幕上由 `.adminList` 里的芯片数直接给出，
@@ -144,6 +175,7 @@ export function AdminPanel({
     setTab(next);
     setPicked([]);
     setMenu(null);
+    setWordShown(ADMIN_PAGE);
   };
 
   /**
@@ -256,22 +288,13 @@ export function AdminPanel({
       : parseUid(tab === "silent" ? muteUid : blackUid);
 
   /**
-   * 这个目标在不在名单里 —— 按钮三态的依据。
-   *
-   * **现版本只查已加载的那一批**（同步即可）；返回 `Promise` 是为了让三态里「检查中」
-   * 那一档真的可见，接上全量读取时只是把这里换成一次 `await` 上游读取。
-   * 屏蔽词按**纯文本、完全匹配、无正则** —— 上游**实际**怎么匹配由服务端决定，
+   * 这个目标在不在名单里 —— 按钮三态的依据，**交给上层**（它会先取一次全量再回答）。
+   * 屏蔽词按**纯文本、完全匹配、无正则**判断；上游**实际**怎么匹配由服务端决定，
    * 界面不对它做任何承诺文案。
    */
   const checkTarget = useCallback(
-    (value: string | number): Promise<boolean> => {
-      const inList =
-        tab === "keywords"
-          ? keywords.includes(String(value))
-          : (tab === "silent" ? silent : blacklist).some((user) => user.uid === value);
-      return Promise.resolve(inList);
-    },
-    [tab, keywords, silent, blacklist],
+    (value: string | number): Promise<boolean> => onCheck(tab, value),
+    [onCheck, tab],
   );
 
   useEffect(() => {
@@ -527,7 +550,7 @@ export function AdminPanel({
             </div>
             {batchBar}
             {errorRow(errors.silent)}
-            <div className={styles.adminList}>
+            <div className={styles.adminList} onScroll={onListScroll}>
               {silent.length === 0 ? (
                 <span className={styles.previewLabel}>（名单为空）</span>
               ) : (
@@ -564,7 +587,7 @@ export function AdminPanel({
             </div>
             {batchBar}
             {errorRow(errors.blacklist)}
-            <div className={styles.adminList}>
+            <div className={styles.adminList} onScroll={onListScroll}>
               {blacklist.length === 0 ? (
                 <span className={styles.previewLabel}>（名单为空）</span>
               ) : (
@@ -609,11 +632,11 @@ export function AdminPanel({
             </div>
             {batchBar}
             {errorRow(errors.keywords)}
-            <div className={styles.adminList}>
+            <div className={styles.adminList} onScroll={onListScroll}>
               {keywords.length === 0 ? (
                 <span className={styles.previewLabel}>（还没有屏蔽词）</span>
               ) : (
-                keywords.map((item) =>
+                keywords.slice(0, wordShown).map((item) =>
                   row(wordKey(item), "db-admin-keyword-item", item, [
                     {
                       label: "删除",

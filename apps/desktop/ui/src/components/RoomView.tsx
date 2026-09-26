@@ -196,9 +196,11 @@ export function RoomView({
   const loadReportReasons = useApp((store) => store.loadReportReasons);
   const openProfile = useApp((store) => store.openProfile);
   const roomStats = useApp((store) => store.roomStats[room.room_id]);
-  // 房管权限前置：身份来自 `room_session`（进房时取一次 + 事件更新）。
-  // 拿不到身份时 `is_admin` 为 undefined → 按**无权限**渲染，而不是先放行再看上游错误码。
+  // 房管权限前置：房管身份来自 `room_session`，主播身份由登录 uid 与房间主播 uid 对上。
+  // 拿不到身份时 `is_admin` 为 undefined，且主播 uid 不匹配 → 按**无权限**渲染。
   const isAdmin = useApp((store) => store.roomIdentities[room.room_id]?.is_admin) === true;
+  const isAnchor = session?.uid === room.anchor_uid && room.anchor_uid !== 0;
+  const canAdmin = isAdmin || isAnchor;
   // 弹幕字数上限（第 12 条 / 契约 C3）：随本人身份一起来的 `danmaku_length`
   // （上游 `getInfoByUser` 的 `data.property.danmu.length`）。取不到时 Composer 按官方缺省 20 回落，
   // 这里不兜底、不写死数值。
@@ -340,6 +342,15 @@ export function RoomView({
   }, []);
 
   /**
+   * 收起礼物栏（**只收、不开**）：点折叠头那条路走 `toggleGiftDock`（它能开），
+   * 这里给拖动分割条用 —— 把份额压到下限就是「把这一栏拖没」（需求 2026-09-26），
+   * 与点「收起」同源；收起改的只是**折叠态**，份额该落盘还是落盘（`SplitPanes` 松手照写）。
+   */
+  const closeGiftDock = useCallback(() => {
+    setGiftOpen(false);
+  }, []);
+
+  /**
    * 系统返回手势第 2 级：在房间页 → 回房间列表。`onBack` 就是房间头那枚圆形返回键
    * （`App.tsx` 传给它的正是 store 的 `closeRoom`），两条入口同源。
    */
@@ -443,16 +454,16 @@ export function RoomView({
     setImmersive(false);
   }, [room.room_id, setImmersive]);
 
-  // 房管入口按身份出现（第 3 条，契约 C6）：面板打开期间身份被撤销（事件更新 / 会话重建）
-  // 就收起面板与确认条 —— 不能让「非房管还开着房管面板」这一档留下来。
+  // 房管入口按身份出现（第 3 条，契约 C6）：面板打开期间房管与主播身份均失效
+  // （事件更新 / 会话重建）就收起面板与确认条 —— 不能让「无权限还开着房管面板」这一档留下来。
   // 身份不是本组件的事件（它从 store 的事件更新里来），因此这里就是同步点；
-  // 也不改成「渲染期按 `isAdmin` 屏蔽面板」—— 那会让身份恢复时面板自己弹回来，是另一种行为。
+  // 也不改成「渲染期按 `canAdmin` 屏蔽面板」—— 那会让身份恢复时面板自己弹回来，是另一种行为。
   useEffect(() => {
-    if (isAdmin) return;
+    if (canAdmin) return;
     // oxlint-disable-next-line react/set-state-in-effect
     setAdminOpen(false);
     setAdminConfirm(null);
-  }, [isAdmin]);
+  }, [canAdmin]);
 
   // 房管面板展开期间的静默轮询（issue202609242158 第 8 条 A2）：面板开着才跑、收起即停
   // （卸载 / 切房由 effect 清理停掉）。打开面板时 `toggleAdminPanel` 已同步重拉过一次，
@@ -484,13 +495,13 @@ export function RoomView({
   }, [loggedIn, loadRoomIdentity, room.room_id]);
 
   // 房管数据**进房就加载**（用户 2026-09-13 第 4 条：「连接到有房管权限的直播间时就加载好
-  // 房管的数据」）：身份是**异步到的**（`room_session` 一次 + 事件更新），所以 `isAdmin`
+  // 房管的数据」）：身份是**异步到的**（`room_session` 一次 + 事件更新），所以 `canAdmin`
   // 必须在依赖里 —— 没有它，进房那一帧身份还是 false，这一批数据就永远不会被拉。
   // 打开面板时再静默重拉一次（见 `toggleAdminPanel`），保证看到的是新鲜的。
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canAdmin) return;
     void loadAdmin(room.room_id);
-  }, [isAdmin, loadAdmin, room.room_id]);
+  }, [canAdmin, loadAdmin, room.room_id]);
 
   useEffect(() => {
     if (reportTarget) void loadReportReasons();
@@ -528,7 +539,7 @@ export function RoomView({
     // 但 `measure()` 得有人叫第一声）。
   }, [titleText, fontScale, room.room_id, immersive]);
 
-  const { chatRows, giftRows } = splitGiftRows(rows, prefs);
+  const { chatRows, giftRows, panelAllRows } = splitGiftRows(rows, prefs);
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
   // 见 splitGiftRows）；折叠态是它自己的本地状态，与偏好无关。
   // `ui.gift_collapse_cheap` 在 `splitGiftRows` 里对**两头各折一次**（弹幕区与礼物栏都折，
@@ -561,11 +572,19 @@ export function RoomView({
    * 打开时低价礼物整条桶**不进统计**（issue 2609162056 第 4 条）。这枚键只改这一处的口径 ——
    * 礼物栏的条目由 `giftRows` 渲染，与它无关；「礼物 / SC（N）」那个 N 也跟着这里走
    * （它数的就是这份汇总的条数，不是礼物栏的行数）。
+   *
+   * **两个口径，别混**（需求 2026-09-26）：
+   * - **总计条 = 先筛选后汇总**：`giftStat` 走筛后的 `giftRows`，所以筛选一变它就跟着变；
+   * - **三格 = 未筛选口径常驻展示**：`giftKindStat` 走筛前的 `panelAllRows`，本场该族有数据
+   *   那一格就一直在 —— 否则选中某族之后其余两族条数归零、被 `count > 0` 滤掉而**按钮消失**，
+   *   看着就成了「三选一」的互斥筛选（三族其实是并集，见 `toggleGiftKind`）。
    */
   const giftStat = giftStatRows(giftRows, prefs);
+  /** 筛选条那三格的统计源：**筛前**全集（三族都在，格子因此常驻）。 */
+  const giftKindStat = giftStatRows(panelAllRows, prefs);
   /** 三族各自的条数与金额（**筛选条**那三个格）。空组不出现。 */
   const giftGroups = GIFT_KINDS.map((kind) => {
-    const group = giftStat.filter((row) => row.message.kind === kind);
+    const group = giftKindStat.filter((row) => row.message.kind === kind);
     return {
       kind,
       label: KIND_LABEL[kind],
@@ -575,12 +594,19 @@ export function RoomView({
         (sum, row) => sum + amountYuan(row.message.amount, row.message.kind),
         0,
       ),
+      // 这一格**出不出**看本场有没有这一族（`panelAllRows`），**不看统计数**：
+      // `ui.gift_exclude_cheap_stats` 会把某一族的统计剔成 0，格子若跟着消失，
+      // 用户就点不掉已经选中的那一族筛选（筛选条上连入口都没了）。
+      present: panelAllRows.some((row) => row.message.kind === kind),
     };
-  }).filter((group) => group.count > 0);
+  }).filter((group) => group.present);
 
-  /** 三族合计（**总计条**）。条数与金额都与筛选条同源 —— 统计链是「先筛选、后汇总」。 */
-  const giftTotalCount = giftGroups.reduce((sum, group) => sum + group.count, 0);
-  const giftTotalYuan = giftGroups.reduce((sum, group) => sum + group.yuan, 0);
+  /** 三族合计（**总计条**）。筛后口径 —— 统计链是「先筛选、后汇总」。 */
+  const giftTotalCount = giftStat.reduce((sum, row) => sum + row.count, 0);
+  const giftTotalYuan = giftStat.reduce(
+    (sum, row) => sum + amountYuan(row.message.amount, row.message.kind),
+    0,
+  );
   /** 礼物栏内正在按 kind 筛选（契约 §8 `ui.gift_pane_kinds` 非空）。 */
   const giftFiltering = giftPaneKinds.length > 0;
 
@@ -592,9 +618,12 @@ export function RoomView({
    *
    * 统计集空的两档沿用改前的口径：礼物栏里还有条目（被 `ui.gift_exclude_cheap_stats` 剔出
    * 统计的低价礼物）时写「低价礼物已剔除」，而不是「0 条」—— 列表里明明有东西。
+   *
+   * 取哪一档看 `giftStat`（**筛后**），不看 `giftGroups`（三格是**未筛选**口径）：
+   * 三格常驻之后它不再等价于「本场筛完了还有没有东西」。
    */
   const giftTotalText =
-    giftGroups.length > 0
+    giftStat.length > 0
       ? `礼物 ${giftTotalCount}条${giftFiltering ? "" : ` ${yuanText(giftTotalYuan)}`}`
       : giftRows.length > 0
         ? "低价礼物已剔除"
@@ -621,10 +650,10 @@ export function RoomView({
   const messageMenuItems = (message: Message): MenuItem[] => {
     const mine = session !== undefined && message.uid === session.uid;
     const isDanmaku = message.kind === "danmaku";
-    // 房管三项的可用条件：自己是房管 + 目标有 uid + 不是自己。
-    const canModerate = isAdmin && !mine && message.uid !== 0;
-    const moderateHint = !isAdmin
-      ? "你不是本直播间房管"
+    // 房管三项的可用条件：自己是房管或主播 + 目标有 uid + 不是自己。
+    const canModerate = canAdmin && !mine && message.uid !== 0;
+    const moderateHint = !canAdmin
+      ? "你不是本直播间主播或房管"
       : mine
         ? "这是你自己"
         : message.uid === 0
@@ -665,7 +694,7 @@ export function RoomView({
             "filter.uids": [...new Set([...prefs["filter.uids"], message.uid])],
           }),
       },
-      // 房管三项（issue #3）：**权限前置**——不是房管就置灰并说明原因，
+      // 房管三项（issue #3）：**权限前置**——既不是主播也不是房管就置灰并说明原因，
       // 绝不做成「点了再看上游错误码」。确认条会带上对象与时长。
       {
         label: "禁言…",
@@ -729,11 +758,10 @@ export function RoomView({
   };
 
   const headerMenuItems: MenuItem[] = [
-    // 房管入口（第 3 条，契约 C6）：**只有确认是本房间房管**才出现这一项。
-    // 判据与官方 web 一致（`protocol.md` A38：`getInfoByUser` → `data.badge.is_room_admin || admin_level > 0`，
-    // 本实现落在 `RoomSession.is_admin`）。拿不到身份（`undefined`）= 无权限 = **没有这个入口**，
-    // 不是置灰让用户点开看上游报错 —— 用户要的是「有房管身份才有房管界面的选项」。
-    ...(isAdmin
+    // 房管入口（第 3 条，契约 C6）：确认是本房间主播或房管才出现这一项。
+    // 房管判据来自 `RoomSession.is_admin`，主播判据则是登录 uid 与 `anchor_uid` 相同；
+    // 两者都对不上 = 无权限 = **没有这个入口**，而不是置灰让用户点开看上游报错。
+    ...(canAdmin
       ? [
           {
             label: adminOpen ? "收起房管面板" : "房管面板",
@@ -886,10 +914,12 @@ export function RoomView({
         onRatio={(value) => onPrefs({ "ui.gift_pane_ratio": value })}
         onSwap={() => onPrefs({ "ui.gift_pane_on_top": !giftPaneOnTop })}
         onExpand={openGiftDock}
+        onCollapse={closeGiftDock}
         danmaku={
           <div
             className={styles.chatWrap}
             data-testid="db-chat-wrap"
+            data-interact-slot={prefs["ui.interact_single_slot"] ? "true" : undefined}
             onPointerDown={onChatPointerDown}
             onPointerUp={onChatPointerUp}
             onPointerCancel={onChatPointerCancel}
@@ -903,7 +933,9 @@ export function RoomView({
             />
             {/* 互动/进场消息共用单槽位（ui.interact_single_slot，docs/ui.md §4.8）：
                 浮在弹幕区底部偏左，显示最新一条、下一条快速顶掉上一条，空闲淡出。
-                关掉开关时互动消息退回弹幕列表行（由 filtering.toDisplayRows 控制）。 */}
+                容器上的 `data-interact-slot` 让 CSS 提前给浮层预留高度（不等第一条到达）；
+                开关关 = 互动消息**完全不显示**：列表不画、浮层不渲染，预留高度一并收回
+                （由 `filtering.toDisplayRows` 无条件剔除 interact 行 + 这里不渲染浮层共同实现）。 */}
             {prefs["ui.interact_single_slot"] && <InteractSlot />}
           </div>
         }
@@ -948,7 +980,9 @@ export function RoomView({
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={toggleGiftDock}
                 >
-                  {/* 返回箭头旋转 90°（展开态朝上、收起态朝下），图标规范同 §3.1。 */}
+                  {/* **就是房间头那枚返回键的 `<`**（同一条 path、同一套 24 盒 / 1.75 描边规范，
+                      用户 2026-09-26：「不要用指代方向的三根线的箭头」），只是按 `data-dir`
+                      旋转 90°（展开态朝上 = 收起，收起态朝下 = 展开）。 */}
                   <svg
                     className={styles.ctlIcon}
                     viewBox="0 0 24 24"
@@ -956,7 +990,7 @@ export function RoomView({
                     data-dir={giftOpen ? "up" : "down"}
                   >
                     <path
-                      d="M19.125 12H4.875M10.875 6 4.875 12l6 6"
+                      d="M15 4.875 9 12l6 7.125"
                       fill="none"
                       stroke="currentColor"
                       strokeWidth="1.75"
@@ -1078,7 +1112,7 @@ export function RoomView({
       )}
 
       {/* 房管面板（issue #3）：三块列表收成三个 tab，单点在右键菜单、批量在多选动作条。
-          入口只在 `isAdmin` 时出现（第 3 条，契约 C6），因此渲染出来就是房管身份 ——
+          入口只在 `canAdmin` 时出现（第 3 条，契约 C6），因此渲染出来就是主播或房管身份 ——
           面板里不再有身份提示；打开即静默刷新（第 5 条），所以读取失败的**错误条必须留在面板里**
           （没有手动刷新按钮，错误是唯一的反馈）。
           它是文档流里的一块（不是浮层），与输入区的面板一样只挤压弹幕列表；

@@ -185,19 +185,14 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             None,
             None,
         ),
-        // 互动/进场消息：默认「显示一会儿就淡出」，关掉则常驻（需求 §2.4）。
-        spec(
-            "ui.interact_auto_hide",
-            Ty::Bool,
-            json!(true),
-            None,
-            None,
-            None,
-        ),
         // 互动/进场消息共用弹幕区一处固定槽位（仿官方网页直播间，默认开）。
-        // 开时互动消息不进弹幕列表，改在弹幕区底部浮层显示最新一条、下一条快速顶掉上一条，
-        // 空闲片刻自动淡出；关时退化为「列表行 + 自动消失」（ui.interact_auto_hide）的旧行为。
+        // 它同时就是「看不看互动消息」的总开关：开时互动消息不进弹幕列表，改在弹幕区底部
+        // 浮层显示最新一条、下一条快速顶掉上一条，空闲片刻自动淡出，弹幕区底部为它留一段
+        // 预留高度；关时互动消息**完全不显示**（列表与浮层都不画，预留高度一并收回）。
         // 纯派生、不改缓冲（docs/ui.md §4.8）。
+        //
+        // 旧的 `ui.interact_auto_hide`（显示一会儿自动淡出）已整条删除：单槽位这枚键
+        // 已经把「看不看互动」这件事说完，再留一枚叠加的开关只会让用户不知道该拨哪一枚。
         spec(
             "ui.interact_single_slot",
             Ty::Bool,
@@ -258,8 +253,9 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // （三档之比见 `session.rs` 的 `GIFT_TIER_SHARE`），价值越高留得越多。
         //
         // 互动与系统两档**刻意小得多**（300 / 200）：互动是「一次性、看过即弃」的消息
-        // （`ui.interact_auto_hide` 默认就是显示一会儿自动淡出），系统事件（开播 / 下播 /
-        // 标题变更 / 公告）一天也没几条 —— 两者都不需要深度回滚，而弹幕需要。
+        // （默认只由弹幕区底部那处单槽位浮层呈现最新一条，`ui.interact_single_slot`），
+        // 系统事件（开播 / 下播 / 标题变更 / 公告）一天也没几条 —— 两者都不需要深度回滚，
+        // 而弹幕需要。
         //
         // 取值范围与旧键一致（100–100000）：六枚同域，文档里一行讲得清。
         spec(
@@ -701,7 +697,11 @@ mod tests {
             json!(false),
             "低价礼物剔除统计默认关：默认形态必须与改前一致（契约 §8）"
         );
-        assert_eq!(prefs.get("ui.interact_auto_hide").unwrap(), json!(true));
+        assert_eq!(
+            prefs.get("ui.interact_single_slot").unwrap(),
+            json!(true),
+            "单槽位默认开：互动消息由弹幕区底部浮层呈现（契约 §8）"
+        );
         assert_eq!(
             prefs.get("ui.danmaku_aggregate").unwrap(),
             json!(true),
@@ -784,7 +784,7 @@ mod tests {
             json!({ "ui.font_scale": 3.0 }),
             json!({ "ui.theme": "neon" }),
             json!({ "ui.auto_scroll": "yes" }),
-            json!({ "ui.interact_auto_hide": 1 }),
+            json!({ "ui.interact_single_slot": 1 }),
             // 共享分区的两枚键（契约 §8）：顺序只能是布尔、份额只能是 0.10–0.90 的数
             json!({ "ui.gift_pane_on_top": "yes" }),
             json!({ "ui.gift_pane_on_top": 1 }),

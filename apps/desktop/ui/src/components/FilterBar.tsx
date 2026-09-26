@@ -9,6 +9,14 @@ const ALL_KINDS: MessageKind[] = [
   "guard",
   "system",
 ];
+/**
+ * 真正走 `filter.kinds` 白名单的那几种。
+ *
+ * `interact` **不在此列**：它的勾选框绑的是 `ui.interact_single_slot`（互动消息一律不进
+ * 弹幕列表，改由底部浮层呈现，见 `docs/ui.md` §4.8）。取消到一项不剩时的兜底因此只恢复
+ * 这五种，不把 `interact` 塞回去。
+ */
+const LIST_KINDS: MessageKind[] = ALL_KINDS.filter((kind) => kind !== "interact");
 
 interface Props {
   prefs: Prefs;
@@ -34,7 +42,10 @@ export function FilterBar({ prefs, onChange }: Props) {
       ? current.filter((item) => item !== kind)
       : [...current, kind];
     // 全选等于不过滤；一个都不选则什么都看不到，因此至少保留一项。
-    onChange({ "filter.kinds": next.length === 0 ? ALL_KINDS : next });
+    // 兜底里**不含 `interact`**：那一枚勾选框绑的是 `ui.interact_single_slot`（见下面
+    // 清单里的分支），不归 `filter.kinds` 管 —— 塞回白名单只会让它躺一个自己控制不了的
+    // kind（存量 `prefs.json` 里 `filter.kinds` 带 `interact` 的那些值仍照原样保留）。
+    onChange({ "filter.kinds": next.length === 0 ? LIST_KINDS : next });
   };
 
   return (
@@ -44,22 +55,42 @@ export function FilterBar({ prefs, onChange }: Props) {
         {/* 六种 kind 的勾选清单：**两列**（左列 1/3/5、右列 2/4/6，DOM 序 = 阅读序），
             窄屏 360 也放得下（docs/ui.md §8.5）。 */}
         <div className={styles.filterKinds}>
-          {ALL_KINDS.map((kind) => (
-            <label key={kind}>
-              <input
-                type="checkbox"
-                checked={prefs["filter.kinds"].includes(kind)}
-                onChange={() => toggleKind(kind)}
-              />
-              {KIND_LABEL[kind]}
-            </label>
-          ))}
+          {/* 互动/进场那一项**不进 `filter.kinds` 白名单**：它绑的是 `ui.interact_single_slot`
+              —— 勾上 = 互动消息由弹幕区底部那处浮层槽位呈现（弹幕区为它留一段预留高度）；
+              不勾 = 互动消息完全不显示（列表与浮层都不画，预留高度一并收回）。
+              两种状态下互动消息都**不进弹幕列表**（`filtering.toDisplayRows`），
+              所以这一项就是「看不看互动」的总开关（docs/ui.md §4.8）。
+              `filter.kinds` 的取值域仍保留 `interact`（存量 `prefs.json` 里可能有它），
+              只是这一枚勾选框不再读写它。 */}
+          {ALL_KINDS.map((kind) =>
+            kind === "interact" ? (
+              <label key={kind} title="互动消息（底部浮层显示最新一条，不勾则完全不显示）">
+                <input
+                  type="checkbox"
+                  checked={prefs["ui.interact_single_slot"]}
+                  onChange={(event) =>
+                    onChange({ "ui.interact_single_slot": event.target.checked })
+                  }
+                />
+                {KIND_LABEL[kind]}
+              </label>
+            ) : (
+              <label key={kind}>
+                <input
+                  type="checkbox"
+                  checked={prefs["filter.kinds"].includes(kind)}
+                  onChange={() => toggleKind(kind)}
+                />
+                {KIND_LABEL[kind]}
+              </label>
+            ),
+          )}
         </div>
       </section>
 
       <section className={styles.filterSection} data-testid="db-filter-aux">
         <h3>辅助功能</h3>
-        {/* 字号滑杆占满一整行（它需要宽度），七枚开关与「消息类型」同款两列清单：
+        {/* 字号滑杆占满一整行（它需要宽度），六枚开关与「消息类型」同款两列清单：
             窄屏 360 与宽屏都是同一份 DOM（docs/ui.md §8.5、§9.1）。
             中间两枚是低价礼物（单个价值 ≤ 0.1 元）的开关（issue 2609162056 第 3、4 条）：
             「折叠低价礼物」只改礼物栏的分组形状、「剔除低价礼物统计」只改折叠头的统计口径，
@@ -89,16 +120,6 @@ export function FilterBar({ prefs, onChange }: Props) {
               }
             />
             时间戳
-          </label>
-          <label title="互动消息自动消失">
-            <input
-              type="checkbox"
-              checked={prefs["ui.interact_auto_hide"]}
-              onChange={(event) =>
-                onChange({ "ui.interact_auto_hide": event.target.checked })
-              }
-            />
-            互动消息自动消失
           </label>
           <label title="弹幕包含礼物">
             <input

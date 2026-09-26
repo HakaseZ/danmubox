@@ -57,8 +57,9 @@ const EP_KEYWORD_ADD: &str =
 const EP_KEYWORD_DEL: &str =
     "https://api.live.bilibili.com/xlive/web-ucenter/v1/banned/DelShieldKeyword";
 
-/// 黑名单单页条数（官方前端 `ps`；实测该接口接受 30）。
-const BLACK_PAGE_SIZE: i64 = 30;
+/// 黑名单单页条数（官方前端 `ps`；实测 36 条名单在 `ps=30` 时截断，
+/// `ps=50/100/200` 均一页返回全部 36 条）。
+const BLACK_PAGE_SIZE: i64 = 100;
 /// 禁言名单每页固定 10 条（上游 `ps` 是**页码**不是条数，实测 `ps=1` 取到前 10 条）。
 const SILENT_PAGE_SIZE: i64 = 10;
 /// 翻页之间的间隔。

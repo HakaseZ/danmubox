@@ -56,8 +56,6 @@ const EXPECTED_FALSE = new Set([
   "step3_headerHasPopularity",
   "step3_systemRendered",
   "step3_dividerTextPresent",
-  // 值字段（不是断言）：关掉自动消失开关后的偏好值本来就该是 false
-  "step6_prefAutoHide",
 ]);
 
 /**

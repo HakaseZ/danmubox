@@ -46,7 +46,12 @@
   规格：`REQUIREMENTS.md` §2.14、`docs/contract.md` §3 / §5 / §7 / §9、`docs/ipc.md` §3 / §3.1、`docs/protocol.md` §18 / §18.5 与附录 A66、`docs/ui.md` §2.2.2、`docs/testing.md` §10.1 C-16 / §14。
   **实现落地**：2026-09-24 按本修订实现（见上条），后端 `anchor.rs` 与前端 `AccountManager.tsx` 按 §2.2.2 新口径落地；未实测条目见上条与附录 A66。
 
-- **互动消息共用单槽位（仿官方网页直播间）**（2026-09-26，需求随用户对话）：新增偏好 `ui.interact_single_slot`（默认开，契约 §8）。开启时互动/进场消息整类移出弹幕列表（`filtering.toDisplayRows` 直接跳过 `kind === "interact"`），不再逐行堆叠挤占弹幕区空间；改在弹幕区底部浮层 `InteractSlot`（`data-testid="db-interact-slot"`）显示当前房间**最新一条**互动消息（头像 + 文案，文案复用 `interactText`），下一条到达时快速顶掉上一条（滑入/滑出接力，过渡 220ms），空闲 4s 自动淡出；关闭则退化为「列表行 + 自动消失」（`ui.interact_auto_hide`）旧行为。纯显示层派生：消息始终留在会话缓冲里，关掉开关即逐条回到列表。文档：`docs/contract.md` §8、`docs/ui.md` §4.8。
+- **互动消息共用单槽位（仿官方网页直播间）**（2026-09-26，需求随用户对话）：新增偏好 `ui.interact_single_slot`（默认开，契约 §8）。开启时互动/进场消息整类移出弹幕列表（`filtering.toDisplayRows` 直接跳过 `kind === "interact"`），不再逐行堆叠挤占弹幕区空间；改在弹幕区底部浮层 `InteractSlot`（`data-testid="db-interact-slot"`）显示当前房间**最新一条**互动消息（头像 + 文案，文案复用 `interactText`），下一条到达时快速顶掉上一条（滑入/滑出接力，过渡 220ms），空闲 4s 自动淡出；关闭则互动消息**完全不显示**（列表与浮层都不画，为浮层预留的那段高度一并收回）。纯显示层派生：消息始终留在会话缓冲里，开关拨回去即按同样顺序出现。开启时弹幕区底部为浮层**预留一段高度**，不再遮住最新一条弹幕（2026-09-26 补）。文档：`docs/contract.md` §8、`docs/ui.md` §4.8。
+
+- **房管：主播也有房管权限；礼物栏可拖分割线收起；互动槽位预留高度**（2026-09-26，需求随用户对话）：
+  - **主播本人也有房管权限**：房管面板入口与消息右键的房管三项（禁言 / 拉黑 / 解除禁言）对主播本人同样可用 —— 判据由 `RoomSession.is_admin` 扩成「`is_admin` **或**登录 uid == 该房间 `anchor_uid` 且非 0」。「选中某条弹幕直接禁言」沿用既有的「禁言…」→ 二次确认条链路，不需新写入口。上游禁言记录里的 `admin_level`（0 = 主播、1 = 房管）本就把主播算在房管动作内。
+  - **礼物栏收起多了拖动这条路**：拖 / 方向键微调分割线把份额压到下限（`PANE_RATIO_MIN` = 0.1）以下即收起，不必非得点折叠头那枚箭头（`SplitPanes` 新增 `onCollapse`，与既有 `onExpand` 对称）。
+  - **互动槽位预留高度**：`ui.interact_single_slot` 打开时弹幕区容器带 `data-interact-slot`，CSS 给它一段下内边距（槽位高度上下各一道安全间距），底部浮层落在预留区里 —— **不再遮住最新一条弹幕**（此前几乎必挡）。留的是**外层容器**的 `padding-bottom`，滚动容器的 `scrollHeight` 与贴底判据未动。
 
 ### Changed
 
@@ -87,9 +92,17 @@
 - **`artifacts-windows` 缓存 release `target`**（2026-09-18，两轮真跑取数后保留）：命中时 Windows job 全程 **281s**、只缓存 registry 时基线 **645s**，净省 **364s**（`出 Windows 产物` 601s → 225s，cargo 9m26s → 3m12s）；代价是该缓存条目 561 MB、缓存步恢复 30s，仓库缓存总占用到 8.46 GiB / 10 GiB。读数与判据见 `docs/operations.md` §5.13。
 - **Android 产物从 `macos-14` 挪到 `ubuntu-latest`**（2026-09-18）：`tauri android build` 本身不需要 macOS，原先并进 macOS 那条 job 只是早期顺手 —— 代价是私有仓口径下这一步按 **×10** 计费（15–21 分钟 ⇒ 150–210 计费分钟），且把稀缺的 macOS runner 占满 20 分钟。因此把 `artifacts` **拆成两条**：`artifacts`（`macos-14`，只出 `.dmg`）与 `artifacts-android`（`ubuntu-latest`，出**已签名的** release APK）。与 `scripts/android-env.sh` 的两处宿主差异都收在新 job 内：cmdline-tools 取 **linux** 包（版本号 `16111833` 与 macOS 那份相同）、NDK 的 prebuilt 目录**按宿主实际探测**（`linux-x86_64` / `darwin-x86_64`），不再写死。规格：[`docs/operations.md`](docs/operations.md) §5.13。
 
+- **第二轮界面调整：房管名单两列 / 点击选中 / 单昵称、礼物箭头与筛选三格、聚合改滑动窗口、房管取量提速**（2026-09-26，需求随用户对话）：
+  - **房管名单**：由「每行一项」的竖排改**两列等宽网格**（窄屏 360 仍是两列）；批量多选**去掉复选框**，改为**点行即选中**（行高亮 = 已选中，`Tab` 聚焦后 Enter / Space 同样切换）；每行**只显示一个昵称** —— 跑马灯的第二份拷贝默认隐藏，只有真的放不下（`data-scroll`）时才出现（改前容器是 `overflow-x: auto`，短昵称时两份拷贝都可见，看着像「一个人显示了两个名字」）。冒烟 `31-admin.mjs` 随之改为点行（`db-admin-select` 这个 testid 移除）。
+  - **礼物栏**：折叠箭头由「一条横线 + 一个尖括号」的三段线改成**与房间头返回键同一枚 `<`**（`data-dir` 旋转机制不变）；**筛选条三格不再互斥** —— 三格的数字改按**未筛选**口径统计（本场该族有数据就常驻、可随时增减），总计条维持**先筛选后汇总**（改前三格从筛后那一份统计，选中一族后其余两族条数归零、被 `count > 0` 滤掉而整个消失、再也点不回来）。
+  - **刷屏弹幕聚合改滑动窗口**：窗口基准由这一串的**第一条**改为**上一条**，每并入一条即把窗口往后刷一次 5 秒，**无条数上限**（删掉 `AGGREGATE_MAX_COUNT` = 999 这条封顶）；代表行仍是第一条（React key 稳定、后续加入不重建节点、行不跳位）。
+  - **房管名单取量提速**：黑名单 `BLACK_PAGE_SIZE` 30 → **100**（实测：某房间 36 条，`ps=30` 只给 30 条、`ps=50/100/200` 一页全给 —— 上游真实按 `ps` 给量，不只是回显）；前端首屏 `ADMIN_PAGE` 30 → **100**。禁言仍受上游硬约束（每页固定 10 条、`ps` 是页码不是条数）与 200ms 页间隔（防 HTTP 412 风控）限制，**未改**。
+
 ### Removed
 
 - **一键诊断整套删除（净 −2001 行）**（2026-09-21，issue 202609211940 第 4 条）：删掉 `crates/danmubox-core/src/diagnose.rs`、`crates/danmubox-bili/src/diagnose.rs`、`apps/desktop/src-tauri/src/diagnose.rs` 与 Android 原生写文件插件 `DiagnosePlugin.kt`；删掉符号 `core::paths::downloads_dir()`、`bili::redact` 的 `redact_for_export` / `EXPORT_KEYS` / `mask_numbers`（`redact()` 与 `SECRET_KEYS` 保留，脱敏仍是单一出口）、`ws.rs` / `http.rs` 里 `danmu_info(..., diag)` 的 `diag` 参数与全部采集埋点、外壳的 `DiagnoseStart` / `DiagnoseExport` / `diagnose_start` / `diagnose_export` / `AppState.engine` / `secret_numbers()`，以及 `log_bridge` 里**只为诊断存在**的那条写入路径（`RAW_TARGET` / `MessageVisitor.fields`）；前端删掉 `ipc.ts` 的 `diagnoseStart` / `diagnoseExport`、`types.ts` 的 `DiagnoseStart` / `DiagnoseExport`、`RoomView.tsx` 的四个诊断状态与该面板、`app.module.css` 的 `.diagnose*` 整段。**保留** `core::bus` 的 `Counters` / `CounterSnapshot`（`MessageSink` / `session` / `proto` / `cmd` / `ws` / CLI 仍用，CLI 打印计数走 `snapshot()`；它不再被诊断读取）。**IPC 条数 39 → 37**（`async fn` 29 → 28、同步 `fn` 10 → 9，「同步命令」名单里不再有 `diagnose_start`；`diagnose_export` 原本是唯一「另接 `app: tauri::AppHandle`」的 async 命令，这条例外随之消失，`chat_send` 仍接）。**为什么**：这套采集采出来的数据意义不大 —— 「连上了却收不到弹幕」这条链路要的事实（票据 `code`、`op=7` / `op=8`、入站帧间隔、退避与候选节点）在日志里本来就有，而它自带的存储、脱敏加严档与三端写文件路径是一整片需要长期维护的面。**否决了什么及理由**：① 只把入口从菜单里藏起来、代码留着——不解决问题，还留着三端权限与写文件路径的维护面；② 只删 Android 那条 MediaStore 写文件路径——另一半（core 采集环 + 报告渲染 + 两条 IPC）照旧；③ 保留 `downloads_dir()` 备用——没有调用方就是死代码。**代价**：Android 侧失去了唯一一个「把业务日志交出来」的入口，现在只剩 `adb logcat`（`docs/testing.md` §10.5 已如实改写）；「一次诊断恰好一个文件」这条口径随之作废，本地文件回到只有 `config.toml` 与 `prefs.json` 两个、**没有任何写数据目录之外的产物**。规格：`docs/contract.md` §4（删常量行与 §4.4）/ §7 / §9、`docs/ipc.md` §2 / §3 / §3.1、`docs/ui.md` §2.2 / §3.2 / §3.5、`docs/architecture.md` §2.1 / §2.2 / §5 / §9.3 / §9.4、`docs/operations.md` §1.3 / §2 / §3 / §4 / §5、`docs/testing.md` §2 / §10.4 / §10.5、`docs/protocol.md` 附录 A48、`docs/roadmap.md` §2.1、`README.md`、`REQUIREMENTS.md` §2.12 / §2.13。`AGENT.md` §9 里那条「`diagnose.rs` 13 处」是历史记录，**保留不动**。
+
+- **删掉「互动消息自动消失」开关 `ui.interact_auto_hide`**（2026-09-26）：单槽位这枚键已经把「看不看互动」说完，再留一枚叠加的开关只会让用户不知道该拨哪一枚。整条链一并删除：偏好键（Rust `prefs.rs` 与前端 `types.ts`）、`INTERACT_AUTO_HIDE_MS` 常量、`filtering.interactAutoHidden` 判据、`store` 那批到点定时器与已无写入方的 `interactTick` 字段（含 `App.tsx` 的订阅与依赖）、`MessageRow` 的 `.autoHide` 淡出与 `@keyframes interactFade`、`FilterBar` 那枚复选框，以及四处冒烟里的相关读数。**「互动」勾选项改为绑定 `ui.interact_single_slot`** 作为新展示的开关：开 = 浮层呈现（含预留高度），关 = 互动消息**完全不显示**（列表与浮层都不画，预留高度一并收回）。`MessageKind` / `KindArr` 类型域保留 `interact`（防存量 `prefs.json` 里 `filter.kinds` 含它时校验失败）。规格：`docs/contract.md` §8、`docs/ui.md` §4.8、`docs/testing.md`。
 
 ### Fixed
 

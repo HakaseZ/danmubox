@@ -264,7 +264,7 @@ type StatusEvent = {
 
 ## 5. Zustand store 形状
 
-单一 store（`create<AppStore>`，无切片拆分）。**store 里存的就是 §3.1 的载荷对象**（snake_case），不做 camelCase 转写；本地实现细节只有三个 UI 专用字段（`send_state` / `send_reason` / `interactTick`）。
+单一 store（`create<AppStore>`，无切片拆分）。**store 里存的就是 §3.1 的载荷对象**（snake_case），不做 camelCase 转写；本地实现细节只有两个 UI 专用字段（`send_state` / `send_reason`）。
 
 ```ts
 type AppStore = {
@@ -283,7 +283,6 @@ type AppStore = {
 
   // 弹幕：只有「当前房间」一份，随一次房内会话生死（离开 / 切房即清空）
   messages: Message[];             // 显示上限 2000 条，见 §8
-  interactTick: number;            // UI 专用：「互动消息自动消失」的到点重算信号（判据在 filtering.interactAutoHidden）
   seeding: boolean;                // 首屏历史回填进行中
   lastSend?: ChatSendResult;       // **只属于当前房间**：切房即清、非当前房间的结果不落（§8）
   roomStats: Record<number, { online?: number; watched?: number }>;

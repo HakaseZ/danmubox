@@ -11,24 +11,23 @@ import type { DisplayRow, SenderRef } from "./filtering";
 import type { Message, Prefs } from "./types";
 
 /**
- * 聚合窗口（毫秒）：一条聚合行只收**锚点之后**这个窗口内的消息（契约 §4）。
+ * 聚合窗口（毫秒）：一条聚合行只收**上一条之后**这个窗口内的消息（契约 §4）。
  *
  * 取 5 秒的依据：契约 §4 的「相同内容 5 秒内去重」是同一个尺度上的节流窗口，
  * 单个人在那里已经被压成 5 秒一条 —— 窗口取同一档，聚合里出现的多条就只可能来自
  * **不同的观众**，正是这条需求要的形态（「不同的观众短时间内刷同一个弹幕」）。
  *
- * **非滑动**：锚点 = 这一行的第一条，不随后续加入顺延。滑动窗口下，一个人流量不断时
- * 这条行会一直长下去、永远闭不了口；非滑动则窗口一到就另起一行，行的寿命有确定上界。
+ * **滑动**：基准是这一串的**最后一条**，每并进一条就把整个窗口往后刷一次 5 秒 ——
+ * 只要这条刷屏还在有人接，它就一直并进同一行，**没有条数上限**（用户：「5 秒内聚合，
+ * 每聚合一条重新刷新一次 5 秒，无上限」）。
+ *
+ * 当初定「非滑动」（锚点 = 第一条、不随后续顺延）的理由是怕「一个人流量不断时这一行
+ * 永远闭不了口、行的寿命没有上界」。实际用下来那正是刷屏本来的样子：非滑动会把同一波
+ * 刷屏按 5 秒**硬切**成好几串，每串都可能不够 `AGGREGATE_MIN_COUNT` 而一行都不折，
+ * `×N` 也被摊成好几个小数 —— 折不出来的聚合等于没有聚合。改回滑动之后，行的收口
+ * 交给「下一条换了键 / 超过 5 秒没人再接」，行的寿命由刷屏自己结束，不再人为封顶。
  */
 export const AGGREGATE_WINDOW_MS = 5000;
-
-/**
- * 一条聚合行最多折叠的条数。到顶即封口，由下一条开一行新的（契约 §4）。
- *
- * 窗口已经限住了「多久」，这一条是**上界兜底**：窗口内刷了几千条时，
- * 一行的 `count` 仍有确定上限 —— 渲染开销与数字长度都可预期，也不必给 `×N` 另设显示上限。
- */
-export const AGGREGATE_MAX_COUNT = 999;
 
 /**
  * **折叠门槛**：同键的一串要够 3 条才折成一行，不足就逐条照原样显示（契约 §4）。
@@ -102,8 +101,8 @@ function sendersOf(run: DisplayRow[]): SenderRef[] {
  * （`docs/ui.md` §8.4 的第二张表）。
  *
  * 单趟「先收 run、再决定折不折」：
- * - **run** = 相邻 + 同键 + 与**锚点**（run 第一条）时间差 ≤ `AGGREGATE_WINDOW_MS`
- *   + 条数 < `AGGREGATE_MAX_COUNT`；
+ * - **run** = 相邻 + 同键 + 与**上一条**（run 最后一条）时间差 ≤ `AGGREGATE_WINDOW_MS`
+ *   —— 滑动窗口，每并入一条即顺延，**没有条数上限**；
  * - 只有 run 长度 ≥ `AGGREGATE_MIN_COUNT` **且**参与观众去重后 ≥ `AGGREGATE_MIN_SENDERS`
  *   位不同 uid 才折成一行（`message` = run 第一条，`count` = run 长度，
  *   `senders` = 去重后前 `AGGREGATE_AVATARS_SHOWN` 位）；
@@ -113,6 +112,8 @@ function sendersOf(run: DisplayRow[]): SenderRef[] {
  *
  * 折出来的那一行**不改身份**：`message` 仍是第一条（头像列的**几张**头像来自 `senders`，
  * 正文 / 时间戳 / React key 都不动，行因此不跳位、节点不重建），只加 `count` 与 `senders`。
+ * 注意窗口的基准（**最后**一条）与代表行（**第一**条）是两回事，且是刻意的：
+ * 代表行若跟着窗口走到最后一条，React key 每来一条同文本就变一次 ⇒ 行节点重建、行在列表里抖。
  *
  * **开关**：`ui.danmaku_aggregate` 关掉即逐条显示（返回入参本身，不复制、不重排）——
  * 与礼物那两枚开关同一条口径：折叠只是显示层的派生，关掉就回到原样。
@@ -157,10 +158,11 @@ export function aggregateRows(rows: DisplayRow[], prefs: Prefs): DisplayRow[] {
       runKey = key;
       continue;
     }
+    // **滑动**：与这串的**最后一条**比（不是第一条）—— 每并入一条，窗口就整体往后
+    // 刷一次 5 秒，因此只要这条刷屏还有人接，它就一直长在同一行里，不设条数上限。
     const joinable =
       key === runKey &&
-      Math.abs(row.message.ts - run[0].message.ts) <= AGGREGATE_WINDOW_MS &&
-      run.length < AGGREGATE_MAX_COUNT;
+      Math.abs(row.message.ts - run[run.length - 1].message.ts) <= AGGREGATE_WINDOW_MS;
     if (joinable) {
       run.push(row);
       continue;

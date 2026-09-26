@@ -13,7 +13,6 @@ import {
 } from "./session-messages";
 import {
   adminDoneText,
-  INTERACT_AUTO_HIDE_MS,
   SEND_CONFIRM_TIMEOUT_MS,
   SEND_MATCH_WINDOW_MS,
 } from "./types";
@@ -63,15 +62,7 @@ interface AppStore {
    */
   immersive: boolean;
   messages: Message[];
-  /**
-   * 「互动消息自动消失」的**重算信号**（`ui.interact_auto_hide`，docs/ui.md §4.8）：
-   * 每次有互动行到点就变一下，让派生（`filtering.toDisplayRows`）重新算一遍。
-   *
-   * 它**不是**一份「隐藏清单」——到点这件事完全由 `ts + INTERACT_AUTO_HIDE_MS` 派生，
-   * 消息一直留在 `messages` 里：关掉开关，早先「消失」的那些行同一帧就原样回来
-   * （issue 2609171849 第 5 条：自动消失不许丢内容，开关关掉要能恢复原样）。
-   */
-  interactTick: number;
+  /** 各房间的连接状态（`ConnState` + 一句话详情）。 */
   status: Record<number, { state: ConnState; detail: string }>;
   /** 各房间最近一次的观众数（协议 §10.7）；上游还没给过的一侧为 undefined。 */
   roomStats: Record<number, { online?: number; watched?: number }>;
@@ -310,20 +301,6 @@ interface AppStore {
 let unsubscribe: (() => void) | undefined;
 
 /**
- * 互动/进场消息自动消失的定时器（`ui.interact_auto_hide` 打开时）。
- *
- * 它们**只负责到点那一刻叫醒一次重算**（把 `interactTick` 挪一格），不删任何消息
- * （见 `scheduleInteractHide`）。房间切换或离开房间仍要清掉：`local_id` 只在一次房内会话内
- * 唯一，残留的定时器会把另一个房间的画面算到别的时刻上。
- */
-let interactTimers: number[] = [];
-
-function clearInteractTimers() {
-  for (const timer of interactTimers) window.clearTimeout(timer);
-  interactTimers = [];
-}
-
-/**
  * 本地待确认行（乐观渲染）的 `local_id` 序号：取**负数**（`-1`、`-2`、…），
  * 负号就是「本地生成」这个前缀。真实 `local_id` 由后端按会话单调分配、恒为正，
  * 因此两者永不碰撞：React key 不会重、`onMessage` 的单调判定也不会被带偏
@@ -353,15 +330,14 @@ function clearSendTimer(localId: number) {
 }
 
 /**
- * 离开房间（返回列表 / 关标签 / 移除房间）时把两类定时器一起清掉。
+ * 离开房间（返回列表 / 关标签 / 移除房间）时把待确认行的超时兜底定时器清掉。
  * 待确认行随 `messages` 一起清空（契约 §4.3：缓冲的生命周期 = 一次房内会话），
  * 残留的超时回调只会对着另一个房间的同号消息空转。
  *
- * **拨偏好不走这里**：`updatePrefs` 里动 `ui.interact_auto_hide` 只该重排互动消息的定时器，
- * 顺手清掉发送定时器会让那条永远停在「无状态」—— 超时兜底也就永远不会到点。
+ * **拨偏好不走这里**：偏好改动不该顺手清掉发送定时器，否则那条会永远停在「无状态」
+ * —— 超时兜底也就永远不会到点（无头冒烟实测过这一条）。
  */
 function clearRoomTimers() {
-  clearInteractTimers();
   for (const timer of sendTimers.values()) window.clearTimeout(timer);
   sendTimers.clear();
   // 本地行随 `messages` 一起清空（契约 §4.3：缓冲的生命周期 = 一次房内会话），
@@ -821,8 +797,8 @@ async function runAnchorPoll(store: StoreApi<AppStore>, account: string, gen: nu
   scheduleAnchorPoll(store, account, delay, gen);
 }
 
-/** 房管三块名单的**首屏**条数：三块各先拿这么多，滚到底再补（需求 2026-09-26）。 */
-const ADMIN_PAGE = 30;
+/** 房管三块名单的**首屏**条数：黑名单实测 `ps=100` 可一页返回 36 条，三块各先拿 100 条。 */
+const ADMIN_PAGE = 100;
 /** 名单滚到底一次补多少条。 */
 const ADMIN_STEP = 10;
 /**
@@ -1015,40 +991,6 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
 }
 
 /**
- * 互动/进场消息到点**不再从缓冲里摘掉**：只把 `interactTick` 挪一下，让派生重算 ——
- * 「到点的不画」这一判据在显示层（`filtering.toDisplayRows` / `interactAutoHidden`），
- * 判据是 `ts + INTERACT_AUTO_HIDE_MS`，与行上那段淡出动画同一个常量。
- *
- * 为什么不再删：用户 2026-09-21（issue 2609171849 第 5 条）要求这些显示层的开关
- * 「都不会丢掉相应内容，把开关关掉后要能恢复原样」。旧实现是
- * `messages.filter(...)`，消息一摘就再也回不来了（`ui.interact_auto_hide` 拨回 false
- * 也只会让**之后**来的行常驻）——那是真的丢内容。改后缓冲里一条不少，开关一关就回来。
- *
- * `roomId` 记下来是为了防房间切换后误判：`local_id` 只在一次房内会话内唯一，
- * 残留的定时器不该去动另一个房间的画面。
- *
- * **补位前提（issue 2026-09-22 第 2 条）**：`message.ts` 一律是**本地收包时刻**
- * （`cmd.rs` 的 `interact_json` / `interact_v2` 同口径，上游载荷时间戳只进 debug 留档，
- * 见 `protocol.md` §10.4），因此 `Math.max(0, ts + 8000 - now)` **必然到点** —— 行真的被
- * 移除，下方的弹幕随虚拟列表自然上移填空（不是透明占位）。这正是「互动消失后空位被填充」
- * 的唯一前提；若哪天改回取上游时钟，这条补位又会退化成「行只被 CSS 淡成透明、空位不补」。
- */
-function scheduleInteractHide(store: StoreApi<AppStore>, roomId: number, messages: Message[]) {
-  const now = Date.now();
-  for (const message of messages) {
-    if (message.kind !== "interact") continue;
-    const timer = window.setTimeout(
-      () => {
-        if (store.getState().activeRoomId !== roomId) return;
-        store.setState({ interactTick: Date.now() });
-      },
-      Math.max(0, message.ts + INTERACT_AUTO_HIDE_MS - now),
-    );
-    interactTimers.push(timer);
-  }
-}
-
-/**
  * 把界面的 `messages` 换成**该房间当前会话**的快照（`history_query`，契约 §7）。
  *
  * 「进房间」与「会话结束后再点刷新」是同一条口径（契约 §4.3：重进是全新会话、缓冲从空开始），
@@ -1065,9 +1007,6 @@ async function syncSessionMessages(store: StoreApi<AppStore>, roomId: number): P
   if (store.getState().activeRoomId !== roomId) return;
   const messages = adoptSessionSnapshot(snapshot, store.getState().messages);
   store.setState({ messages });
-  if (store.getState().prefs?.["ui.interact_auto_hide"]) {
-    scheduleInteractHide(store, roomId, messages);
-  }
 }
 
 /**
@@ -1100,7 +1039,6 @@ export const useApp = create<AppStore>((set, get, store) => ({
   rooms: [],
   immersive: false,
   messages: [],
-  interactTick: 0,
   status: {},
   roomStats: {},
   logs: [],
@@ -1182,9 +1120,6 @@ export const useApp = create<AppStore>((set, get, store) => ({
           const messages = insertIncoming(current, message);
           if (messages === null) return;
           set({ messages });
-          if (get().prefs?.["ui.interact_auto_hide"]) {
-            scheduleInteractHide(store, message.room_id, [message]);
-          }
         },
         onRoomStats: (event) =>
           set((state) => {
@@ -1491,16 +1426,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
       set({ error: describeError(error) });
       return;
     }
-    // 只有这个开关本身变了才动定时器：其它偏好改动不能顺手撤销已排好的到点重算
-    // （无头冒烟实测：任何与自动消失无关的偏好改动，都会让列表里的互动消息永久留下）。
-    // 拨回 false 时**不用**恢复什么：行由 `ts + INTERACT_AUTO_HIDE_MS` 派生，
-    // `prefs` 一变重算就把早先「消失」的那些行原样画回来（消息一直在 `messages` 里）。
-    if (patch["ui.interact_auto_hide"] === undefined) return;
-    clearInteractTimers();
-    const roomId = get().activeRoomId;
-    if (patch["ui.interact_auto_hide"] === true && roomId !== undefined) {
-      scheduleInteractHide(store, roomId, get().messages);
-    }
+    // 偏好改动**不动任何定时器**（无头冒烟实测过：任何偏好改动顺手清发送定时器，
+    // 都会让那条待确认行永远停在「无状态」）。互动消息那批到点定时器已随
+    // `ui.interact_auto_hide` 一起删除，这里因此没有需要重排的东西。
   },
 
   setNotice(notice) {

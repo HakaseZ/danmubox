@@ -12,7 +12,7 @@ import {
   type DisplayRow,
 } from "../filtering";
 import type { Message, Prefs } from "../types";
-import { INTERACT_AUTO_HIDE_MS, SEND_STATE_TEXT } from "../types";
+import { SEND_STATE_TEXT } from "../types";
 import styles from "../app.module.css";
 
 /** 正文里的 @昵称（用户 2026-09-13 第 1 条）：`@` 之后到空白或句读为止都算名字
@@ -183,11 +183,6 @@ export function MessageRow({
         ? interactText(message)
         : "";
 
-  // 互动/进场消息：默认显示一会儿就淡出，到点这一行**不再被画**（`filtering.interactAutoHidden`，
-  // 判据 `ts + INTERACT_AUTO_HIDE_MS`）—— 消息仍在会话缓冲里，关掉 `ui.interact_auto_hide`
-  // 就原样回来（issue 2609171849 第 5 条，见 docs/ui.md §4.8）。
-  const autoHide = message.kind === "interact" && prefs["ui.interact_auto_hide"];
-
   // 本地乐观行**不加任何待确认视觉**（用户 2026-09-13 的更正：「发出去就是和已发送一样的状态，
   // 上游返回的数据只做校验」）：插入时不带 `send_state`，因此这一行与「别的客户端看到的我」
   // 渲染逐项相同。标记只在**发送没成**时出现（整行不弱化，要读得清）：被拒的那条还要把正文
@@ -211,7 +206,6 @@ export function MessageRow({
   );
   const variant = [
     kindClass[message.kind] ?? "",
-    autoHide ? styles.autoHide : "",
     // SC 档位（`--sc-tier` 写在这一行上、往下继承给卡片）：卡片**只包内容部**，
     // 是下面那个 `.scCard` 节点（见 §4.1），不再是整行 —— 所以这里只留档位、不留卡片类名。
     scTier > 0 ? styles[`scTier${scTier}`] : "",
@@ -302,7 +296,6 @@ export function MessageRow({
       data-testid={t("row")}
       data-sc-tier={scTier > 0 ? scTier : undefined}
       data-selected={selected ? "true" : undefined}
-      style={autoHide ? { animationDuration: `${INTERACT_AUTO_HIDE_MS}ms` } : undefined}
       onContextMenu={(event) => {
         event.preventDefault();
         onMenu(message, { x: event.clientX, y: event.clientY });

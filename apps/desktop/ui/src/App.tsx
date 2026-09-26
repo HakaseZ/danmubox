@@ -322,9 +322,6 @@ export function App() {
   const rooms = useApp((state) => state.rooms);
   const activeRoomId = useApp((state) => state.activeRoomId);
   const messages = useApp((state) => state.messages);
-  // 「互动消息自动消失」的到点信号：它只用来**触发重算**（判据在 filtering.toDisplayRows，
-  // 见 store.interactTick）。没有它，行虽然不会丢，但到点那一下没人叫醒 React。
-  const interactTick = useApp((state) => state.interactTick);
   const status = useApp((state) => state.status);
   const prefs = useApp((state) => state.prefs);
   const logs = useApp((state) => state.logs);
@@ -464,15 +461,7 @@ export function App() {
     return () => media.removeEventListener("change", apply);
   }, [prefs]);
 
-  // `interactTick` 在依赖里是**必须**的：互动行到点那一下由它触发重算
-  // （`toDisplayRows` 的第三参默认 `Date.now()`；到点的不画，但消息不丢）。
-  // 回调体里读不到它，规则因此判它「多余」—— 它要的正是「值没变也重算」这件事
-  // （到点的那一刻钟要重新读一次）。整条规则在这一处（依赖数组那一行）按**误报**处理。
-  const rows = useMemo(
-    () => (prefs ? toDisplayRows(messages, prefs) : []),
-    // oxlint-disable-next-line react/exhaustive-deps
-    [messages, prefs, interactTick],
-  );
+  const rows = useMemo(() => (prefs ? toDisplayRows(messages, prefs) : []), [messages, prefs]);
 
   const activeRoom = rooms.find((room) => room.room_id === activeRoomId);
 

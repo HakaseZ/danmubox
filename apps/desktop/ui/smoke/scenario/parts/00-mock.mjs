@@ -40,7 +40,11 @@
     // 礼物类消息的两枚开关（契约 §8，issue 2609152029 第 1 条把旧的
     // 「ui.gift_panel_mode」这个字符串键拆成了这两枚布尔键）：管弹幕流的那枚与管独立礼物栏的
     // 那枚各管一头，**默认都是 true**（两处都渲染）。
-    "ui.gift_in_danmaku": true, "ui.gift_panel": true, "ui.interact_auto_hide": true,
+    "ui.gift_in_danmaku": true, "ui.gift_panel": true,
+    // 互动/进场消息（契约 §8，默认 true）：勾上 = 弹幕区底部浮层呈现最新一条（列表不画互动行、
+    // 弹幕区为浮层留一段预留高度）；不勾 = 互动消息**完全不显示**。它同时就是这一类的总开关，
+    // 替身里必须与 prefs_get 同形，界面才量得到「默认开」这件事。
+    "ui.interact_single_slot": true,
     // 共享分区的顺序与份额（issue #8，契约 §8 新增的两枚键）：默认「礼物在下、份额 0.35」。
     // 替身里必须与 prefs_get 同形（真实命令返回的是**合并过默认值的全集**），否则界面拿到的
     // 是 undefined、断言也就量不到「默认值」这件事。

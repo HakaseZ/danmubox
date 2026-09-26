@@ -1026,9 +1026,15 @@
   position: relative;
   flex: none;
   height: var(--splitter-hit);
+  /* 热区**不占布局高度**：上下各让掉自身的一半（负 margin），把自己抬到**两栏交界之上**。
+     两栏因此在 flex 布局里**相邻无缝** —— 行的 hover / 选中洗色能一直顶到容器边界，
+     中间只剩一条 1px 的线，改前那条把高亮截断的原色带就此消失。
+     ⚠ 光把 `background` 改透明是没有用的：`.panes` 自己没有背景，露出来的是同一个色，
+     真正的缝隙来自这块热区在布局上把两栏推开。 */
+  margin-block: calc(var(--splitter-hit) / -2);
+  z-index: 1;
   cursor: row-resize;
   touch-action: none;
-  background: var(--bg);
   /* 两栏的**分界线**（issue 2609171849 #4 第 3 点，用户原话：「分割独立礼物栏的那个横折叠区域，
      弄点横线或者虚线之类的（类似于折叠屏分屏的那个提示），而且现在 2 区间没有任何边界，
      有点不便于区分区域」）。改前这里只从 `::before` 画一条 1px 的 `--border` 发丝线 ——
@@ -1036,7 +1042,6 @@
      **虚线** + `--fold-line`（`--fg-subtle`，非文字图形要素对两套主题的底色都 ≥ 3:1），
      正是折叠区分屏提示那种画法。线贴在上一个区间的下缘 —— 「两个区间的边界」就是这个意思；
      它整条横贯，与礼物栏在上还是在下无关（分割条在 DOM 里恒在两栏之间，见 SplitPanes）。 */
-  border-top: 1px dashed var(--fold-line);
 }
 
 /* 触摸设备上把热区撑到 24px（= 24dp ≈ 3.8mm）。
@@ -1050,18 +1055,71 @@
    的点击面（弹幕行高约 40px，吃掉太多会让贴着边界的行点不开）。
    只改热区不改那条线：`::before` 依旧绝对定位在热区正中，视觉一寸不动。 */
 @media (pointer: coarse) {
+  /* 触摸档 **24px → 16px**：热区现在是**浮起来**的，会盖住上下各一半 —— 24px 就是各 12px，
+     而礼物栏那条总计条只有 ~27px 高，一大半会点不到。16px（各 8px）是折中，
+     命中率仍需在模拟器 / 真机上实测复核。 */
   .splitter {
-    height: 24px;
+    height: 16px;
+    margin-block: -8px;
   }
 }
 
-/* 悬停 / 键盘聚焦 / 拖动中：分界线换成强调色**实线**（「这里能拖」的提示照旧，只是虚线换实线）。
-   线宽 1 → 2px 不改这块热区的外层高度（`box-sizing: border-box` + `height` 定死），
-   两栏的高度分配因此不会被这条提示推动，拖动中量到的几何也就不会抖。 */
-.splitter:hover,
-.splitter:focus-visible,
-.splitter[data-dragging="true"] {
-  border-top: 2px solid var(--accent);
+/* 两栏的**分界线**：改前画在热区自己的顶边（虚线），礼物栏在上时它紧贴礼物栏那一侧、
+   悬停还会变 2px 强调色，看起来像归属于那一栏（用户 2026-09-26 指出的正是这个）。
+   现在两栏已经相邻无缝，热区**正中**就是两栏真正的分界 —— 线画在这里，
+   礼物栏在上还是在下都落在同一个位置，不再偏向任何一栏。
+   **实线**（用户要求）+ `--fold-line`（非文字图形要素对两套主题的底色都 ≥ 3:1）。 */
+.splitter::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--fold-line);
+}
+
+/* **把手**：叠在线的正中、水平居中的一枚短横条。平时 `opacity: 0`（不打扰），
+   悬停 / 键盘聚焦 / 拖动中 / 按住（`data-grab`，触屏没有 hover）时显形。
+   不放进两侧的条子里 —— 那边有文字与「展开 / 收起」图标，360px 下没有余量。 */
+.splitter::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+  background: var(--fold-line);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+/* 悬停 / 键盘聚焦 / 拖动中：线与把手一起换成强调色（「这里能拖」的提示）。
+   不改变任何几何 —— 线是伪元素、热区高度定死，两栏的高度分配不会被这条提示推动，
+   拖动中量到的几何也就不会抖。 */
+.splitter:hover::before,
+.splitter:focus-visible::before,
+.splitter[data-dragging="true"]::before {
+  height: 2px;
+  background: var(--accent);
+}
+
+.splitter:hover::after,
+.splitter:focus-visible::after,
+.splitter[data-dragging="true"]::after,
+.splitter[data-grab="true"]::after {
+  opacity: 1;
+  background: var(--accent);
+}
+
+/* 把手的显隐也得让位给**动效偏好**（口径同房间头标题的跑马灯）。 */
+@media (prefers-reduced-motion: reduce) {
+  .splitter::after {
+    transition: none;
+  }
 }
 
 .splitter:focus-visible {

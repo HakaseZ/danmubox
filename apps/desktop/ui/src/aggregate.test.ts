@@ -5,14 +5,13 @@
 //
 // 为什么单独测这一层：刷屏折叠的几条判据**都没法从界面上「看着像对」推出来** ——
 // 「够几条才折」（`AGGREGATE_MIN_COUNT`）、「是不是不止一个人在刷」（两位不同 uid）、
-// 「窗口是**锚点**起的非滑动窗口」、「关掉开关就逐条显示」。它们同时决定行数、头像列画几张
+// 「窗口是**滑动**的（与上一条比，每并入一条刷新一次）」、「关掉开关就逐条显示」。它们同时决定行数、头像列画几张
 // 头像、身份位印什么，因此在这里逐条钉住（`docs/ui.md` §8.4 第二张表、契约 §4）。
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
   AGGREGATE_AVATARS_SHOWN,
-  AGGREGATE_MAX_COUNT,
   AGGREGATE_WINDOW_MS,
   aggregateRows,
 } from "./aggregate.ts";
@@ -123,25 +122,43 @@ test("两位不同观众才折：同一个人的三条重复逐条显示", () =>
   );
 });
 
-test("窗口是**锚点**起的非滑动窗口：锚点之后超过 5 秒的另起一行", () => {
-  const anchor = msg("窗口样本", { ts: T0, uid: 301, uname: "窗口一号" });
-  const inside = msg("窗口样本", { ts: T0 + AGGREGATE_WINDOW_MS - 100, uid: 302, uname: "窗口二号" });
-  const outside = msg("窗口样本", { ts: T0 + AGGREGATE_WINDOW_MS + 100, uid: 303, uname: "窗口三号" });
+test("窗口是**滑动**的：与上一条比，每并入一条就把 5 秒往后刷一次", () => {
+  const first = msg("窗口样本", { ts: T0, uid: 301, uname: "窗口一号" });
+  const second = msg("窗口样本", { ts: T0 + AGGREGATE_WINDOW_MS - 100, uid: 302, uname: "窗口二号" });
+  const third = msg("窗口样本", { ts: T0 + AGGREGATE_WINDOW_MS + 100, uid: 303, uname: "窗口三号" });
 
-  const out = aggregateRows(rowsOf([anchor, inside, outside]), prefs());
-  assert.equal(
-    out.length,
-    3,
-    "第三条离**锚点**（第一条）超过一个窗口 ⇒ 另起一串；" +
-      "滑动窗口下它与第二条只差 200ms、三条会并成一行（正是这条判据要挡住的）",
-  );
-  assert.ok(out.every((item) => item.senders === undefined));
+  // 第三条离**第一条**已超过一个窗口，但离**上一条**只有 200ms ⇒ 并入同一串：
+  // 非滑动（与第一条比）会在这里切成两串，两串都不够门槛 ⇒ 三行且一行都不折。
+  const out = aggregateRows(rowsOf([first, second, third]), prefs());
+  assert.equal(out.length, 1, "只看与上一条的距离：窗口随每一条往后顺延");
+  assert.equal(out[0].count, 3);
+  assert.equal(out[0].message, first, "代表行仍是第一条（窗口的基准改成最后一条，代表行不跟着走）");
 
-  // 同一批消息，只把第三条挪进锚点的窗口内：立刻折成一行（窗口的**边界**在这里）。
-  const insideLast = { ...outside, ts: T0 + AGGREGATE_WINDOW_MS };
-  const folded = aggregateRows(rowsOf([anchor, inside, insideLast]), prefs());
-  assert.equal(folded.length, 1, "与锚点相差正好等于窗口的那一条仍算窗口内（≤ 而非 <）");
-  assert.equal(folded[0].count, 3);
+  // 边界：与**上一条**相差正好等于窗口的那一条仍算窗口内（≤ 而非 <）
+  const atEdge = msg("窗口样本", { ts: T0 + AGGREGATE_WINDOW_MS * 2 + 100, uid: 304, uname: "窗口四号" });
+  const folded = aggregateRows(rowsOf([first, second, third, atEdge]), prefs());
+  assert.equal(folded.length, 1, "与上一条相差正好一个窗口 ⇒ 仍在窗口内");
+  assert.equal(folded[0].count, 4);
+
+  // 断开：离**上一条**超过一个窗口 ⇒ 这一串在此封口；新的那一串只有一条、不够门槛 ⇒ 逐条显示
+  const late = msg("窗口样本", { ts: T0 + AGGREGATE_WINDOW_MS * 2 + 200, uid: 305, uname: "窗口五号" });
+  const split = aggregateRows(rowsOf([first, second, third, late]), prefs());
+  assert.equal(split.length, 2, "离上一条超过一个窗口 ⇒ 另起一串（行数不再由「离第一条多远」决定）");
+  assert.equal(split[0].count, 3);
+  assert.equal(split[1].message, late);
+  assert.equal(split[1].senders, undefined, "新串只有一条 ⇒ 原样输出，不折");
+});
+
+test("长蔓延：每 4 秒一条连发 10 条（跨 36 秒）仍并成同一行", () => {
+  // 首尾相差 36 秒（远超一个窗口），但相邻两条都只差 4 秒：滑动窗口下这一波一直
+  // 并到没人再刷为止；旧的非滑动会在这里按 5 秒切成 8 串、串串不够门槛 ⇒ 一条都不折。
+  const drift = spam(10, { step: 4000 });
+
+  const out = aggregateRows(rowsOf(drift), prefs());
+  assert.equal(out.length, 1);
+  assert.equal(out[0].count, drift.length, "count 说全部条数（没有中途硬切）");
+  assert.equal(out[0].message, drift[0]);
+  assert.equal(out[0].senders?.length, AGGREGATE_AVATARS_SHOWN, "头像列仍只画前几位");
 });
 
 test("头像列只画前 AGGREGATE_AVATARS_SHOWN 位观众的头像（face 取自那条消息）", () => {
@@ -166,15 +183,19 @@ test("头像列只画前 AGGREGATE_AVATARS_SHOWN 位观众的头像（face 取�
   );
 });
 
-test("条数上限：一串到 AGGREGATE_MAX_COUNT 即封口，多出来的开一行新的", () => {
-  const overflow = spam(AGGREGATE_MAX_COUNT + 1, { step: 0 });
-  const out = aggregateRows(rowsOf(overflow), prefs());
+test("没有条数上限：一串刷多少条都并进同一行（旧的那条 999 封顶已删）", () => {
+  // 1200 条同一时刻刷进来（旧逻辑会在第 1000 条处封口、由下一条开一行新的）。
+  const flood = spam(1200, { step: 0 });
 
-  assert.equal(out.length, 2, "到顶封口，第 1000 条另起一行");
-  assert.equal(out[0].count, AGGREGATE_MAX_COUNT);
-  assert.equal(out[1].count, 1, "新的一串只有一条，不够门槛 ⇒ 逐条显示（没有 senders）");
-  assert.equal(out[1].senders, undefined);
-  assert.equal(out[1].message, overflow[AGGREGATE_MAX_COUNT]);
+  const out = aggregateRows(rowsOf(flood), prefs());
+  assert.equal(out.length, 1, "只由「相邻间隔 ≤ 窗口」封口，不再有封顶");
+  assert.equal(out[0].count, flood.length, "count 照报全部条数");
+  assert.equal(out[0].message, flood[0]);
+  assert.equal(
+    out[0].senders?.length,
+    AGGREGATE_AVATARS_SHOWN,
+    "条数无上限，头像列仍是前几位（总数由身份位的 `×N` 说）",
+  );
 });
 
 test("开关关掉就逐条显示：原样返回入参那一份，不复制、不重排", () => {

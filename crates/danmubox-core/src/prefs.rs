@@ -157,7 +157,14 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         // **只作用于礼物栏** —— 弹幕区有自己的 `filter.kinds`，两枚互不串味。
         // 类型沿用 `filter.kinds` 的 `KindArr`（六种 kind 的任意子集）：界面只渲染礼物三族，
         // 写进别的 kind 是**无效果**而不是非法值，因此不另立一枚更窄的类型。
-        spec("ui.gift_pane_kinds", Ty::KindArr, json!([]), None, None, None),
+        spec(
+            "ui.gift_pane_kinds",
+            Ty::KindArr,
+            json!([]),
+            None,
+            None,
+            None,
+        ),
         // 低价礼物（单个价值 ≤ 0.1 元 = 100 金瓜子）的两枚开关（issue 2609162056 第 3、4 条）。
         // **默认都是 false**：多数人现有效果不该被这两条辅助开关改掉 —— 折叠会改礼物栏的分组形状、
         // 剔除会改折叠头的统计口径，两者都是「用户自己要才生效」的显示偏好。

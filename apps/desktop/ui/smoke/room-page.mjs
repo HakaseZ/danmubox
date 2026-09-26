@@ -105,6 +105,7 @@ const BLOCKS = [
   "35-cheap-gift.mjs",
   "36-status-poll.mjs",
   "37-anchor-room.mjs",
+  "38-title-slot.mjs",
 ];
 const MOCK_PART = "00-mock.mjs";
 const HARNESS_PART = "10-harness.mjs";

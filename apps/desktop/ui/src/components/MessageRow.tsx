@@ -6,6 +6,7 @@ import {
   badgesFor,
   formatClock,
   GUARD_TITLE,
+  interactText,
   medalColors,
   superChatTier,
   type DisplayRow,
@@ -179,7 +180,7 @@ export function MessageRow({
     message.content.length > 0
       ? message.content
       : message.kind === "interact"
-        ? `${message.uname || "有人"} 进入直播间`
+        ? interactText(message)
         : "";
 
   // 互动/进场消息：默认显示一会儿就淡出，到点这一行**不再被画**（`filtering.interactAutoHidden`，

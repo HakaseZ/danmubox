@@ -1163,6 +1163,124 @@
   position: relative;
 }
 
+/* 互动/进场消息共用单槽位（`InteractSlot`，docs/ui.md §4.8）：浮于弹幕区底部偏左、
+   轻量非侵入（pointer-events: none 不挡弹幕交互，仿官方网页直播间「互动消息」条的位置）。
+   它只是一条浮层，blast radius 小，不影响 `.chatArea` / `.scroller` 的滚动与贴底。 */
+.interactSlot {
+  position: absolute;
+  left: var(--sp-3);
+  bottom: var(--sp-3);
+  z-index: 5;
+  /* 浮层本身不接交互，避免遮住下面的弹幕行点击/右键。 */
+  pointer-events: none;
+  max-width: min(72%, 360px);
+  /* 字号随弹幕区基准（--fs-root）缩放，与列表同一套令牌。 */
+  font-size: var(--fs-root);
+}
+
+/* 胶囊底：半透明玻璃质感，沿用面板令牌，轻微阴影 + 圆角（pill）。
+   按消息 local_id 作 key 重挂时整块重启 `interactSlotLife`：出现后保持可见，
+   空闲 INTERACT_SLOT_MS 后整体淡出（fill forwards 维持隐藏），下一条到达瞬间恢复。 */
+.interactSlotBox {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(6px);
+  animation: interactSlotLife var(--slot-life-ms, 4300ms) ease forwards;
+}
+
+/* 槽位里的每一行（头像 + 文案）同一盒内重叠，便于「新进旧出」接力。 */
+.interactSlotRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 4px 4px;
+  box-sizing: border-box;
+  height: calc(var(--avatar) + 8px);
+  white-space: nowrap;
+}
+
+/* 进场：自下而上滑入 + 淡入；时长走内联 `--slot-replace-ms`（INTERACT_SLOT_REPLACE_MS）。 */
+.interactSlotEnter {
+  animation: interactSlotIn var(--slot-replace-ms, 220ms) ease-out;
+}
+/* 退场：向上滑出 + 淡出，绝对定位叠在进场行之上同框完成顶替。 */
+.interactSlotExit {
+  position: absolute;
+  inset: 0 0 auto 0;
+  animation: interactSlotOut var(--slot-replace-ms, 220ms) ease-in forwards;
+}
+
+@keyframes interactSlotIn {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes interactSlotOut {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+}
+
+/* 浮层生命周期：出现即满不透明，撑过 INTERACT_SLOT_MS 后淡出并维持隐藏（forwards）。
+   `--slot-life-ms` 由组件按 INTERACT_SLOT_MS + 300 注入，故这里只用 fallback。 */
+@keyframes interactSlotLife {
+  0%,
+  92% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 头像：复用 `.avatar`（同属 app.module.css，类名哈希一致，可被这里选中），
+   约束到槽位所需的小尺寸；无头像时 Avatar 返回 null，外层不占位。 */
+.interactSlotAvatar {
+  flex: 0 0 auto;
+  width: calc(var(--avatar) * 0.82);
+  height: calc(var(--avatar) * 0.82);
+  border-radius: 50%;
+  overflow: hidden;
+}
+.interactSlotAvatar .avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+.interactSlotAvatar .avatarFallback {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+}
+
+.interactSlotText {
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 沉浸模式（issue #1）：`RoomView` 收起房间头 / 输入区（含表情、短语、筛选三个面板）/
    举报条 / 房管面板 / 日志块 —— 那几块都是**条件渲染**（不在 DOM 里），弹幕区因此长高，
    虚拟列表按 `MessageList` 的 `ResizeObserver` 重新量高。留在场上的只有弹幕区、礼物 / SC 栏

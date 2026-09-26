@@ -11,6 +11,7 @@ import { AdminPanel } from "./AdminPanel";
 import { Composer, type PanelKind } from "./Composer";
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
 import { MessageList } from "./MessageList";
+import { InteractSlot } from "./InteractSlot";
 import { SplitPanes } from "./SplitPanes";
 import { BACK_PRIORITY, registerBackHandler } from "../back";
 import { LIVE_DOT_CLASS, LIVE_TEXT, liveKindOf } from "../liveKind";
@@ -900,6 +901,10 @@ export function RoomView({
               prefs={prefs}
               onMenu={(message, at) => setMessageMenu({ at, message })}
             />
+            {/* 互动/进场消息共用单槽位（ui.interact_single_slot，docs/ui.md §4.8）：
+                浮在弹幕区底部偏左，显示最新一条、下一条快速顶掉上一条，空闲淡出。
+                关掉开关时互动消息退回弹幕列表行（由 filtering.toDisplayRows 控制）。 */}
+            {prefs["ui.interact_single_slot"] && <InteractSlot />}
           </div>
         }
         /* 独立礼物栏（issue 2609152029 第 5 条改成**每个礼物 / SC / 大航海一条**；

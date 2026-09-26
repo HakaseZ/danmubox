@@ -2045,6 +2045,13 @@ export const useApp = create<AppStore>((set, get, store) => ({
         anchorRoom: state.anchorPanelFor === account ? room : state.anchorRoom,
         anchorTitleDraft: state.anchorPanelFor === account ? undefined : state.anchorTitleDraft,
         anchorError: state.anchorPanelFor === account ? undefined : state.anchorError,
+        // 自己房间改标题后，弹幕页头部标题（来自 `state.rooms`，见 `App` 的 `activeRoom`）
+        // 也要跟着刷新：按 `room_id` 把新标题合并进 `state.rooms` 同条目，与 `onRoom`
+        // 处理外部 `ROOM_CHANGE` 是同一口径（`{...item, ...room}`）。否则在「我的直播间」
+        // 面板改完标题，弹幕页头部仍显示旧标题（issue：标题不随 ROOM_CHANGE 自动更新）。
+        rooms: state.rooms.map((item) =>
+          item.room_id === room.room_id ? { ...item, title: room.title } : item,
+        ),
       }));
       return true;
     } catch (error) {

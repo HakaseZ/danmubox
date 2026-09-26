@@ -444,6 +444,13 @@ export interface Prefs {
    * 消息一直留在会话缓冲里，关掉这枚开关先前消失的那些行会**原样回来**（docs/ui.md §4.8）。
    */
   "ui.interact_auto_hide": boolean;
+  /**
+   * 互动/进场消息共用弹幕区一处固定槽位（仿官方网页直播间，默认 `true`）。
+   * 开时互动消息**不进弹幕列表**（不再逐行堆叠、挤占空间），改在弹幕区底部浮层显示
+   * 最新一条，下一条到来时快速顶掉上一条，空闲片刻自动淡出；关时退化为「列表行 +
+   * 自动消失」（`ui.interact_auto_hide`）的旧行为。纯派生、不改缓冲（docs/ui.md §4.8）。
+   */
+  "ui.interact_single_slot": boolean;
   /** 弹幕行首时间戳显示开关（HH:mm:ss，本地时区）。 */
   "ui.show_timestamp": boolean;
   /**
@@ -675,6 +682,18 @@ export const KIND_LABEL: Record<MessageKind, string> = {
  * 消息仍在会话缓冲里，`ui.interact_auto_hide` 关掉就原样回来（docs/ui.md §4.8）。
  */
 export const INTERACT_AUTO_HIDE_MS = 8000;
+
+/**
+ * 互动槽位（ui.interact_single_slot）浮层在**没有新互动消息**后多久自动淡出（毫秒）。
+ * 下一条互动到达会重置这个计时，因此连续互动时浮层常驻、逐条接力顶替（docs/ui.md §4.8）。
+ */
+export const INTERACT_SLOT_MS = 4000;
+
+/**
+ * 互动槽位「新进旧出」的快速顶替过渡时长（毫秒）。新消息自下而上滑入、旧消息同时向上滑出，
+ * 靠元素 `key` 重挂触发 CSS 入场动画实现（docs/ui.md §4.8）。
+ */
+export const INTERACT_SLOT_REPLACE_MS = 220;
 
 /**
  * 发送失败那条**浮动提示**从出现到消失的时长（含淡出）。

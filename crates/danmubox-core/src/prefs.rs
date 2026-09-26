@@ -194,6 +194,18 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
             None,
             None,
         ),
+        // 互动/进场消息共用弹幕区一处固定槽位（仿官方网页直播间，默认开）。
+        // 开时互动消息不进弹幕列表，改在弹幕区底部浮层显示最新一条、下一条快速顶掉上一条，
+        // 空闲片刻自动淡出；关时退化为「列表行 + 自动消失」（ui.interact_auto_hide）的旧行为。
+        // 纯派生、不改缓冲（docs/ui.md §4.8）。
+        spec(
+            "ui.interact_single_slot",
+            Ty::Bool,
+            json!(true),
+            None,
+            None,
+            None,
+        ),
         // 弹幕聚合：同一条弹幕被不同观众在窗口内重复发送时折成一行（规则与常量见契约 §4）。
         // **默认 `true`**：聚合**本来就是现有行为**，这枚键只是把它变成可关的开关 ——
         // 关掉 = 逐条照原样显示。与 `ui.gift_collapse_cheap` 那两枚的取舍正好相反

@@ -665,9 +665,11 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 开关 | 偏好键 | 默认 | 行为 |
 |---|---|---|---|
 | 互动/进场消息自动消失 | `ui.interact_auto_hide` | `true` | `interact` 行显示 8 秒后淡出、随后**不再画这一行**（空间随之回收）；关掉则常驻，且**先前消失的那些行原样回来**（官方客户端即「显示一下就消失」） |
+| 互动消息共用单槽位 | `ui.interact_single_slot` | `true` | 互动/进场消息**不进弹幕列表**，改在弹幕区底部浮层显示**最新一条**，下一条到来时快速顶掉上一条，空闲 `INTERACT_SLOT_MS`（4s）后自动淡出；关掉则退化为「列表行 + 自动消失」（`ui.interact_auto_hide`）的旧行为 |
 | 系统类消息 | `filter.kinds` 里的 `system` 项 | 不在白名单（不显示） | 取消勾选即 `system` 行一律不渲染；勾上则与普通行同样式渲染 |
 
 - 自动消失的实现：行按 8 秒跑一段淡出动画，**到点只是不再画这一行** —— 判据 `filtering.interactAutoHidden`（`ts + INTERACT_AUTO_HIDE_MS <= now`）在**显示层**的派生里（`filtering.toDisplayRows`），与动画共用同一个常量（`types.ts` 的 `INTERACT_AUTO_HIDE_MS`），两者不会错位。`store` 那批定时器只做一件事：到点把 `interactTick` 挪一格，叫醒派生重算。现在的口径是「消失」属于显示层：消息一直在会话缓冲里（受契约 §4.3 的上限约束），关掉开关同一帧就回来。**离开房间仍要清掉这些定时器**（`store` 的 `clearRoomTimers`），否则残留的定时器会把另一个房间的画面算到别的时刻上。
+- **互动消息共用单槽位**（`ui.interact_single_slot`，默认开，仿官方网页直播间「互动消息」条）：互动/进场消息**整类移出弹幕列表**——`filtering.toDisplayRows` 在开关打开时直接跳过 `kind === "interact"`，因此不管量多大都不会在弹幕区逐行堆叠、挤占空间。它们改由 `InteractSlot` 浮层（`data-testid="db-interact-slot"`）呈现：固定在弹幕区底部偏左的半透明胶囊，显示当前房间**最新一条**互动消息（头像 + 文案，文案规则与弹幕行同一枚 `interactText`：有 `content` 用 `content`、否则回落「<昵称> 进入直播间」）；下一条互动到达时，旧的那条向上滑出、新的自下而上滑入（过渡 `INTERACT_SLOT_REPLACE_MS` = 220ms），逐条接力顶替；超过 `INTERACT_SLOT_MS`（4s）没有新互动则整体淡出，下一条到达瞬间恢复。浮层 `pointer-events: none`，不遮挡弹幕交互。它同样只是显示层派生：消息始终留在会话缓冲里，关掉这枚开关即逐条回到列表。
 
 **补位（用户 2026-09-22 第 2 条）**：`interact` 的 `ts` 一律是**本地收包时刻**（见 `protocol.md` §10.4），判据必然到点成立，因此行**真的被移除**、下方的弹幕随虚拟列表自然上移填空，不再是「透明却占位」的空洞。此前取上游载荷时钟时，行只被 CSS 淡成透明、仍占位，就是用户报的「空位不被填充」。跟随态仍由 `pinToBottom` 贴底；已暂停跟随态时锚定行的屏幕位移为 0（按 `MessageList` 的 `scrollerTopRef` 容器位移补账口径），不被推走。
 - 系统类消息包含开播 / 下播 / 标题变更 / 公告（`core` 的 `SYSTEM_CMDS` 全集）：**不区分公告类与生命周期类**，一个门管全部：`ui.system_notice` 键已删除（存量 `prefs.json` 的迁移见契约 §8），系统类消息只由 `filter.kinds` 的 `system` 门控。

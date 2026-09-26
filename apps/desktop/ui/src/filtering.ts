@@ -252,6 +252,16 @@ export function interactAutoHidden(message: Message, prefs: Prefs, now: number):
 }
 
 /**
+ * 互动/进场消息的展示文案（docs/ui.md §4.8）。有 `content` 用 `content`（引擎所给，
+ * 如「关注了主播」「分享了直播间」），否则回落到「<昵称> 进入直播间」。
+ * 弹幕行（`MessageRow`）与互动槽位（`InteractSlot`）共用，保证同一句话两处一致。
+ */
+export function interactText(message: Message): string {
+  if (message.content.length > 0) return message.content;
+  return `${message.uname || "有人"} 进入直播间`;
+}
+
+/**
  * 过滤 + 礼物连击折叠。只折叠**礼物连击**：同一次连击的每条礼物共享 `combo_id`，
  * 合成一行，`count` 记条数、`amount` 累加。
  *
@@ -280,6 +290,10 @@ export function toDisplayRows(
 
   for (const message of messages) {
     if (!passesFilter(message, prefs)) continue;
+    // 互动/进场消息共用单一槽位（ui.interact_single_slot）：开时直接从列表剔除，
+    // 改由 `InteractSlot` 浮层显示（docs/ui.md §4.8）。消息仍在 `messages` 里，
+    // 关掉开关即逐条回到列表（与「自动消失不丢内容」同一口径）。
+    if (prefs["ui.interact_single_slot"] && message.kind === "interact") continue;
     if (interactAutoHidden(message, prefs, now)) continue;
 
     const last = rows[rows.length - 1];

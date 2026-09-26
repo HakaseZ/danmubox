@@ -40,6 +40,7 @@ const PREFS_BASE: Prefs = {
   "ui.gift_collapse_cheap": false,
   "ui.gift_exclude_cheap_stats": false,
   "ui.interact_auto_hide": true,
+  "ui.interact_single_slot": true,
   "ui.show_timestamp": false,
   "ui.danmaku_aggregate": true,
   "composer.phrases": [],
@@ -290,8 +291,10 @@ test("自动消失是显示层的：到点不画，但消息一直在，关掉�
   const messages = [talk, enter, msg("danmaku", "后面这条")];
   const snapshot = structuredClone(messages);
 
-  const on = prefs({ "ui.interact_auto_hide": true });
-  const off = prefs({ "ui.interact_auto_hide": false });
+  // 这一条专测「自动消失」本身，故关掉单槽位（ui.interact_single_slot 默认开会把互动行
+  // 整个移出列表，测不到 auto_hide 的到点隐藏）；单槽位行为由下面那条单测负责。
+  const on = prefs({ "ui.interact_auto_hide": true, "ui.interact_single_slot": false });
+  const off = prefs({ "ui.interact_auto_hide": false, "ui.interact_single_slot": false });
 
   assert.equal(interactAutoHidden(enter, on, ts + INTERACT_AUTO_HIDE_MS - 1), false);
   assert.equal(interactAutoHidden(enter, on, ts + INTERACT_AUTO_HIDE_MS), true);
@@ -321,6 +324,35 @@ test("自动消失是显示层的：到点不画，但消息一直在，关掉�
     "关掉开关：消失过的那条原序回来",
   );
   assert.equal(restored[1].message, enter, "回来的就是原来那条消息对象");
+});
+
+test("互动单槽位：开时互动行不进弹幕列表（空间回收），关时退回列表", () => {
+  const talk = msg("danmaku", "普通弹幕");
+  const enter = msg("interact", "观众进场");
+  const follow = msg("interact", "关注了主播");
+  const messages = [talk, enter, follow];
+
+  // 单槽位开：互动消息改由 `InteractSlot` 浮层显示，列表里一行都不留。
+  const slotOn = prefs({ "ui.interact_single_slot": true });
+  assert.deepEqual(
+    toDisplayRows(messages, slotOn).map((row) => row.message.content),
+    ["普通弹幕"],
+    "单槽位开：互动行全部从列表移除，只留普通弹幕",
+  );
+
+  // 单槽位关：退化为「列表行 + 自动消失」旧行为。这里顺手关掉 auto_hide，
+  // 否则默认 auto_hide 会因示例时间戳（2023 年）早已到点而不画互动行，断言就测不到「退回列表」。
+  const slotOff = prefs({ "ui.interact_single_slot": false, "ui.interact_auto_hide": false });
+  assert.deepEqual(
+    toDisplayRows(messages, slotOff).map((row) => row.message.content),
+    ["普通弹幕", "观众进场", "关注了主播"],
+    "单槽位关：互动行照旧进列表",
+  );
+
+  // 纯派生、不丢内容：消息一条不少、对象未改写；关掉开关即原样回来。
+  assert.equal(messages.length, 3, "不许动 `messages` 缓冲");
+  assert.equal(toDisplayRows(messages, slotOn).length, 1, "列表只剩普通弹幕那一行");
+  assert.equal(toDisplayRows(messages, slotOff)[1].message, enter, "关时互动行就是原消息对象");
 });
 
 test("折叠与剔除都不动 `messages`：桶行的合计只活在派生出来的那一行上", () => {

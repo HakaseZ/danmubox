@@ -73,8 +73,8 @@
 | `emotes_owned` | 无 | `Emote[]` | `UPSTREAM_ERROR` `INTERNAL` | 主站「我的表情」：用户**拥有**的表情包（`upower_` 家族）。`package_kind="owned"`、`room_id=0`、唯一键 = `"upower_" + 表情 text`（`crates/danmubox-bili/src/emote.rs:67-69`）；未登录时上游退化为免费表情包，因此**不报** `NOT_LOGGED_IN`（`emote.rs:398-401`） |
 | `admin_mute` | `room_id: i64, uid: i64, hour: i64, msg: Option<String>` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数（`lib.rs:611-627`）。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
 | `admin_unmute` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 解除禁言 |
-| `admin_silent_list` | `room_id: i64` | `SilentUser[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 当前禁言名单（只读），条目形状见 `contract.md` §5 |
-| `admin_blacklist_list` | `room_id: i64` | `BlacklistedUser[]` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 黑名单（只读）。内部把 `roomId` 解析成主播 uid 后按 `anchor_id` 寻址——上游这个接口不吃房间号 |
+| `admin_silent_list` | `room_id: i64, offset: i64, limit: i64` | `AdminListSlice<SilentUser>` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 当前禁言名单的**一段**（只读，增量加载用）：`offset` = 已在手上的条数、`limit` = 本次还要拿几条，返回 `{ items, total }`，`items` 是本次新增。`AdminListSlice` 见 §3.1，条目形状见 `contract.md` §5。翻页 + 限速由适配器负责——一次翻完整份名单会连发几十次 POST 被上游风控挡回 HTTP 412 |
+| `admin_blacklist_list` | `room_id: i64, offset: i64, limit: i64` | `AdminListSlice<BlacklistedUser>` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 黑名单的**一段**（只读，增量加载）；语义与上同。内部把 `roomId` 解析成主播 uid 后按 `anchor_id` 寻址——上游这个接口不吃房间号 |
 | `admin_blacklist_add` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 加入黑名单（拉黑会解除关系并禁止互动，比禁言重） |
 | `admin_blacklist_del` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 移出黑名单 |
 | `admin_keywords_list` | `room_id: i64` | `string[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 直播间屏蔽词（只读） |
@@ -98,8 +98,8 @@
 | `accounts_list` | `lib.rs:726` | `emotes_owned` | `lib.rs:606` |
 | `account_qr_start` | `lib.rs:802` | `admin_mute` | `lib.rs:615` |
 | `account_qr_poll` | `lib.rs:832` | `admin_unmute` | `lib.rs:631` |
-| `account_switch` | `lib.rs:736` | `admin_silent_list` | `lib.rs:638` |
-| `account_logout` | `lib.rs:767` | `admin_blacklist_list` | `lib.rs:645` |
+| `account_switch` | `lib.rs:736` | `admin_silent_list` | `lib.rs:706` |
+| `account_logout` | `lib.rs:767` | `admin_blacklist_list` | `lib.rs:722` |
 | `account_remove` | `lib.rs:749` | `admin_blacklist_add` | `lib.rs:655` |
 | `rooms_list` | `lib.rs:216` 同步 | `admin_blacklist_del` | `lib.rs:665` |
 | `rooms_refresh_status` | `lib.rs:238` | `admin_keywords_list` | `lib.rs:675` |
@@ -134,7 +134,8 @@
 | `Account` | `contract.md` §5（`ports.rs:63`） | `accounts_list` 返回、`QrPoll.account` |
 | `Emote` / `EmotePackage` | `contract.md` §5（`model.rs:313` / `model.rs:299`） | `emotes_list` / `emotes_owned` 返回 |
 | `FollowedRoom` | `contract.md` §5（`model.rs:345`） | `follow_list` 返回 |
-| `SilentUser` / `BlacklistedUser` | `contract.md` §5（`model.rs:368` / `model.rs:376`） | `admin_silent_list` / `admin_blacklist_list` 返回 |
+| `SilentUser` / `BlacklistedUser` | `contract.md` §5（`model.rs:447` / `model.rs:455`） | `admin_silent_list` / `admin_blacklist_list` 的 `items` 元素 |
+| `AdminListSlice<T>` | `lib.rs:699`（`AdminListSlice { items: Vec<T>, total: i64 }`） | `admin_silent_list` / `admin_blacklist_list` 返回；`items` = 本次新增、`total` = 上游总数，前端据此决定「还翻不翻」 |
 | `ReportReason` | `contract.md` §5（`model.rs:235`） | `report_reasons` 返回、`chat_report` 参数 |
 | `PrefsSnapshot` | `contract.md` §8（`crates/danmubox-core/src/prefs.rs:103-294`） | `prefs_get` / `prefs_set`；25 键、键名即契约字面（TS 侧类型名 `Prefs`，`apps/desktop/ui/src/types.ts:379`） |
 
@@ -342,10 +343,10 @@ type SendState = "unconfirmed" | "rejected";   // Message.send_state（另有 Me
 | `loadFollowed()` | `follow_list` | 会话就绪后与登录/换号后各自动调用一次；返回后按 `ui.md` §2.2 的排序链渲染。**返回是否成功**（`boolean`）供列表页轮询判退避；失败仍进全局错误条，不静默 |
 | `startListStatusPolling()` | `rooms_refresh_status`（+ 登录时的 `follow_list`） | 列表页的开播状态轮询（`contract.md` §4）：返回**停止函数**，进房间页或卸载即停。进入列表页立即一拍，之后每 30 秒一拍（`store.ts:528-531`）；`document.visibilityState` 不是 `visible` 就整拍跳过（不发请求）；下一拍只在上一拍落地后才排（**不重叠**）；失败按 30 → 60 → 120 → 240 秒封顶退避、成功复位。落 `rooms` 走与 `rooms_list` 同一个**快照序号护栏**（§8） |
 | `startAnchorPolling(account)` | `anchor_room` | 「我的直播间」展开区的静默轮询（`ui.md` §2.2.2）：返回停止函数，面板收起 / 关对话框 / 换号即停。展开时已同步拉过一次，首拍按周期排；之后每 30 秒一拍、`document.visibilityState` 不是 `visible` 就整拍跳过、失败按 30 → 60 → 120 → 240 秒封顶退避；落地前复核身份世代，并与标题 / 分区写共用发起序号护栏（§8.1） |
-| `startAdminPolling(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 房管面板展开期的静默轮询（`ui.md` §4.9）：返回停止函数，收起即停；每 60 秒一拍、不可见整拍跳过、失败退避、落地复核 `activeRoomId`（§8） |
+| `startAdminPolling(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 房管面板展开期的静默轮询（`ui.md` §4.9）：返回停止函数，收起即停；每 **5 分钟**一拍、不可见整拍跳过、失败退避、落地复核 `activeRoomId`（§8） |
 | `loadBalance()` | `wallet_balance` | 状态栏展示；进入房间时刷新；换人即作废（§8） |
 | `loadRoomIdentity(roomId)` | `room_session` | 进房取一次快照；之后靠 `danmubox://session` 更新。落地前复核身份世代（§8） |
-| `loadAdmin(roomId)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块；落地前复核 `activeRoomId` 仍是它（§8）。**返回三块是否全成**（`boolean`，供静默轮询判退避） |
+| `loadAdmin(roomId, limit?)` | `admin_silent_list` / `admin_blacklist_list` / `admin_keywords_list` | 三块各自失败各自留痕，一块挂了不清空另外两块；落地前复核 `activeRoomId` 仍是它（§8）。**保留已加载水位**：`limit` 缺省 = 每块首屏 30 条，重读时按手上已有条数取，用户翻到的位置不被打回（`ui.md` §4.9）。**返回三块是否全成**（`boolean`，供静默轮询判退避）。增量「再补一段」走 `loadAdminMore(roomId, tab)`（每次 `+10`），`checkAdminMember(roomId, tab, value)` 会先按房间节流地取一次全量再回答（按钮三态用，§4.9） |
 | `runAdmin(roomId, action)` | `admin_mute` / `admin_unmute` / `admin_blacklist_add` / `admin_blacklist_del` / `admin_keywords_add` / `admin_keywords_del` | 一次一个写操作；成功后就地重读三块，`adminBusy` 期间禁用按钮 |
 | `updatePrefs(patch)` | `prefs_set` | 用返回的全量生效值覆盖 `prefs` |
 | `openProfile(uid)` | `open_url` | 点昵称跳用户主页 |

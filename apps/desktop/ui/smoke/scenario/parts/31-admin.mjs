@@ -345,10 +345,10 @@
     await sleep(350);
     out.panelExclusiveFilterReplacesPhrase = allByTestId("db-panel").length === 1 &&
       !byTestId("db-phrase-add") && openPanelCount() === 1;
-    // db-gift-dock 现在就是**那枚折叠头按钮**本身（issue #8 把礼物栏搬进共享分区后，
-    // 它的根是 db-pane-gift、折叠头是它的第一个子元素），所以直接点它。
-    var exclusiveDockHead = byTestId("db-gift-dock");
-    if (exclusiveDockHead) exclusiveDockHead.click();
+    // db-gift-total 是礼物栏的总计条（data-pane-head，折叠态唯一一行），它本身不是按钮；
+    // 展开 / 收起入口是它右端的 db-gift-toggle，点它即开礼物栏（与房管面板互斥）。
+    var exclusiveGiftToggle = byTestId("db-gift-toggle");
+    if (exclusiveGiftToggle) exclusiveGiftToggle.click();
     await sleep(450);
     out.panelExclusiveGiftDockClosesPanel = !!byTestId("db-gift-area") &&
       !byTestId("db-panel") && !byTestId("db-admin-panel") && openPanelCount() === 1;

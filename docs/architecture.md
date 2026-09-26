@@ -135,7 +135,7 @@ graph LR
 | `DanmakuSender` | trait `:213`；`send` `:217` | `room_id` + 内容 / 颜色 / 模式 + 可选 `EmoteToken` / `ReplyTarget` → `SendReport`（`SendOutcome` + 上游原始 code / message） | `bili::send` |
 | `DanmakuReporter` | trait `:229`；`reasons` `:231`、`report` `:234` | 无输入 → `ReportReason[]`；`Message` + 理由 → 成功 / 失败 | `bili::report` |
 | `EmoteProvider` | trait `:238`；`emotes` `:240`、`owned` `:248` | `room_id` + `RoomSession`（我在该房间的粉丝牌与大航海等级、是否房管）→ `Emote[]`；`owned` → 主站表情 `Emote[]` | `bili::emote` |
-| `RoomAdmin` | trait `:257`；`silent_list` `:259`、`mute` `:263`、`unmute` `:266`、`blacklist` `:269`、`blacklist_add` `:272`、`blacklist_del` `:275`、`keywords` `:278`、`keyword_add` `:281`、`keyword_del` `:284` | `room_id`（写操作另带 uid / 词）→ 名单数组或写操作结果 | `bili::admin` |
+| `RoomAdmin` | trait `:257`；`silent_list(room_id, offset, limit) -> (Vec<SilentUser>, i64)`、`blacklist(room_id, offset, limit) -> (Vec<BlacklistedUser>, i64)` 为**分页增量**接口（翻页 + 限速由 `bili::admin` 负责，见 `admin.rs`）；其余 `mute` / `unmute` / `blacklist_add` / `blacklist_del` / `keywords` / `keyword_add` / `keyword_del` 均为单点写操作 | `room_id`（写操作另带 uid / 词）→ 名单数组或写操作结果 | `bili::admin` |
 | `RoomCatalog` | trait `:288`；`followed` `:290` | 无输入 → `FollowedRoom[]`（`live_status == 1` 置顶由实现内的 `core::model::sort_followed` 完成） | `bili::follow` |
 | `WalletProvider` | trait `:294`；`balance` `:296` | 无输入 → 余额数值 | `bili::wallet` |
 | `AnchorRoom` | trait `:307`；`own` `:310`、`set_title` `:313`、`go_live` `:319`、`end_live` `:322` | 无输入 → `OwnRoom`（`None` = 该账号没有开通直播间）；标题 → 写操作结果；无输入 → `StreamEndpoints`（开播成功）/ `AnchorGate`（开播被身份校验挡住，二选一）/ 写操作结果（下播） | `bili::anchor` |

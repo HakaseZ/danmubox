@@ -18,7 +18,7 @@
     out.giftPrefsDefault = window.__prefs["ui.gift_in_danmaku"] === true &&
       window.__prefs["ui.gift_panel"] === true;
     out.giftInDanmakuByDefault = !!rowWith("投喂 小心心") && !!rowWith("开通 舰长");
-    var dock = byTestId("db-gift-dock");
+    var dock = byTestId("db-gift-total");
     var composer = document.querySelector("textarea").closest('[class*="composer"]');
     // 位置（issue #8 起）：礼物折叠条现在在**共享分区**里 —— 弹幕区之下、输入区**之前**，
     // 不再挂在输入区下方。判据因此从「在输入区之后」改成「在分区里 + 在弹幕区之后 + 在输入区之前」。
@@ -49,7 +49,7 @@
     out.giftDockNoCrossUnitSum = giftSummary.indexOf(yuan(1168.7)) < 0 &&
       giftSummary.indexOf("1168.7") < 0 && giftSummary.indexOf("139.73") < 0 &&
       giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("140730") < 0;
-    // db-gift-dock 现在**就是**那枚折叠头按钮（issue #8），不再是「容器里装着一枚按钮」
+    // db-gift-total 是礼物栏的**总计条**（data-pane-head，折叠态唯一一行；issue #8 之后由折叠头演变而来），不再是「容器里装着一枚按钮」
     dock.click();
     await sleep(300);
     out.giftDockExpands = !!byTestId("db-gift-area");
@@ -467,13 +467,15 @@
     var paneDanmakuBox = rect(byTestId("db-pane-danmaku"));
     var paneGiftBox = rect(byTestId("db-pane-gift"));
     out.foldLinePrecondition = !!splitEl && window.__prefs["ui.gift_panel"] === true;
-    out.foldLineIsDashed = !!splitStyle && splitStyle.borderTopStyle === "dashed" &&
-      parseFloat(splitStyle.borderTopWidth) >= 1;
-    out.foldLineWidthPx = splitStyle
-      ? Math.round(parseFloat(splitStyle.borderTopWidth) * 10) / 10 : null;
+    // 线画在 `.splitter::before`（居中实线 1px，见 docs/ui.md §5.4）：分割条本身不再带边框。
+    var splitPseudo = splitEl ? getComputedStyle(splitEl, "::before") : null;
+    out.foldLineIsSolid = !!splitPseudo && splitPseudo.borderTopStyle === "solid" &&
+      parseFloat(splitPseudo.borderTopWidth) >= 1;
+    out.foldLineWidthPx = splitPseudo
+      ? Math.round(parseFloat(splitPseudo.borderTopWidth) * 10) / 10 : null;
     // 线的颜色 = 令牌值（令牌真的被消费了，不是写死的色值）
-    out.foldLineUsesToken = !!splitStyle && splitStyle.borderTopColor === cssColorOf("--fold-line");
-    out.foldLineColor = splitStyle ? splitStyle.borderTopColor : null;
+    out.foldLineUsesToken = !!splitPseudo && splitPseudo.borderTopColor === cssColorOf("--fold-line");
+    out.foldLineColor = splitPseudo ? splitPseudo.borderTopColor : null;
     // 可见性：线的颜色对画布 ≥ 3:1（与「正文对背景 ≥ 4.5:1」同一套 WCAG 算式）。
     // 反面对照 foldLineOldBorderContrast 是改前那条线（--border）的读数，两套主题都 < 1.6:1。
     out.foldLineContrastOnCanvas = contrastRatio(
@@ -487,8 +489,8 @@
         Math.abs(splitBox.bottom - paneGiftBox.top) < 1) ||
        (Math.abs(splitBox.top - paneGiftBox.bottom) < 1 &&
         Math.abs(splitBox.bottom - paneDanmakuBox.top) < 1));
-    // 改前那条居中发丝线（::before）整条删掉，不是叠着画
-    out.foldLinePseudoGone = !splitEl || getComputedStyle(splitEl, "::before").content === "none";
+    // `.splitter::before` 即分界线本身（居中实线），不是叠着画、也不是删掉
+    out.foldLineDrawnByPseudo = !!splitEl && getComputedStyle(splitEl, "::before").content !== "none";
     snap();
     foldLineBlockRan = true;
     } catch (e) {
@@ -504,12 +506,12 @@
     await sleep(300);
     out.giftSwitchPanelOff = setGiftSwitch("独立礼物栏", false);
     await sleep(350);
-    out.giftPanelOffHidesDock = !byTestId("db-gift-dock");
+    out.giftPanelOffHidesDock = !byTestId("db-gift-total");
     out.giftPanelOffKeepsStream = !!rowWith("投喂 小心心") &&
       !!rowWith(scLowSpec.content);
     out.giftSwitchInDanmakuOff = setGiftSwitch("弹幕包含礼物", false);
     await sleep(350);
-    out.giftBothOffHidesDock = !byTestId("db-gift-dock");
+    out.giftBothOffHidesDock = !byTestId("db-gift-total");
     out.giftBothOffHidesStream = !rowWith("投喂 小心心") &&
       !rowWith(scLowSpec.content) && !rowWith("开通 舰长");
     // 普通弹幕不受这两枚开关影响（它们只管礼物类三族）。判据现场推一条**新的**弹幕再找它：
@@ -521,11 +523,11 @@
     out.giftSwitchesKeepDanmaku = !!rowWith("两枚开关都关时的普通弹幕");
     out.giftSwitchPanelOnly = setGiftSwitch("独立礼物栏", true);
     await sleep(350);
-    out.giftPanelOnlyShowsDock = !!byTestId("db-gift-dock");
+    out.giftPanelOnlyShowsDock = !!byTestId("db-gift-total");
     out.giftPanelOnlyKeepsStreamOff = !rowWith("投喂 小心心");
-    // db-gift-dock 在 issue #8 之后是**礼物栏的折叠头**（礼物栏那一栏的根是 db-pane-gift），
-    // 它本身就是那枚按钮 —— 不再是「容器里有按钮」。
-    byTestId("db-gift-dock").click();
+    // db-gift-total 是**礼物栏的总计条**（data-pane-head，折叠态唯一一行）；它本身不是按钮，
+    // 展开/收起入口是它右端的 db-gift-toggle（见 docs/ui.md §5.3）。
+    byTestId("db-gift-toggle").click();
     await sleep(350);
     out.giftPanelOnlyRendersAllRows = allByTestId("db-gift-row").length === 5;
     // 回到默认（两枚都开）：同样先开面板再点开关；开面板那一下已经把展开的礼物栏收起来了，
@@ -535,7 +537,7 @@
     await sleep(300);
     out.giftSwitchBothBackOn = setGiftSwitch("弹幕包含礼物", true);
     await sleep(350);
-    out.giftRestoredToDefault = !!byTestId("db-gift-dock") && !byTestId("db-gift-area") &&
+    out.giftRestoredToDefault = !!byTestId("db-gift-total") && !byTestId("db-gift-area") &&
       !!rowWith("投喂 小心心") && window.__prefs["ui.gift_in_danmaku"] === true &&
       window.__prefs["ui.gift_panel"] === true;
     snap();

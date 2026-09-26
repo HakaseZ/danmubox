@@ -619,14 +619,6 @@ fn migrate_legacy_buffer_rows(prefs: &mut Prefs, file: &Map<String, Value>) {
 mod tests {
     use super::*;
 
-    /// 代码里**已经删掉、契约 §8 那张表还没同步删掉**的键。
-    ///
-    /// 一致性校验是双向的（契约里有而 SPECS 没有 = 界面那枚开关形同虚设；SPECS 里有而
-    /// 契约没有 = 凭空多一枚键），删键这一趟两者必然错位一拍：本批 `docs/**` 由主线单独
-    /// 同步。这里给一拍宽限 —— 契约删掉那一行后，把这个常量连同下面那处过滤一起删掉即可
-    /// （留着也不会误放行：它只是让「已删的键」不参与比对）。
-    const PENDING_CONTRACT_REMOVAL: &[&str] = &["ui.interact_auto_hide"];
-
     /// SPECS 必须与**契约 §8 的表**逐键一致——这里真的去读契约，不是数个数。
     ///
     /// 2026-09-12（issue #6）的教训：`ui.show_timestamp` 在界面、契约、文档、
@@ -657,10 +649,6 @@ mod tests {
                 continue;
             };
             if let Some((key, _)) = rest.split_once('`') {
-                // 已从代码删掉、契约待同步的那几枚不参与比对（见 `PENDING_CONTRACT_REMOVAL`）。
-                if PENDING_CONTRACT_REMOVAL.contains(&key) {
-                    continue;
-                }
                 documented.push(key.to_string());
             }
         }

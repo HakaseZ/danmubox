@@ -84,9 +84,8 @@ danmubox/
 | 发弹幕节流 | 同房间最小间隔 2s；相同内容 5s 内去重 | `crates/danmubox-bili/src/send.rs:20`、`send.rs:22` |
 | 列表页开播状态刷新 | **30 秒**，仅在**房间列表页可见**时进行 | `apps/desktop/ui/src/store.ts:528` |
 | 列表页刷新失败退避 | 失败一次后按 `60 → 120 → 240` 秒翻倍、`240` 秒封顶（成功即复位；正常周期仍是 30 秒），上一拍没回来不发下一拍 | `apps/desktop/ui/src/store.ts:572-582` |
-| 弹幕聚合窗口 | **5000 ms**（`AGGREGATE_WINDOW_MS`）；与**锚点**（这一行的第一条）比，**非滑动** | `apps/desktop/ui/src/aggregate.ts:23` |
+| 弹幕聚合窗口 | **5000 ms**（`AGGREGATE_WINDOW_MS`）；与**上一条**（这一串的最后一条）比，**滑动**：每并入一条即把窗口往后刷一次 5 秒，**无条数上限** | `apps/desktop/ui/src/aggregate.ts:23` |
 | 弹幕聚合折叠门槛 | **3 条**（`AGGREGATE_MIN_COUNT`）；不够这一数的一串逐条原样显示 | `apps/desktop/ui/src/aggregate.ts:43` |
-| 弹幕聚合条数上限 | **999**（`AGGREGATE_MAX_COUNT`）；到顶即封口，由下一条开一行新的 | `apps/desktop/ui/src/aggregate.ts:31` |
 | 弹幕聚合头像列张数 | **3**（`AGGREGATE_AVATARS_SHOWN`）；头像列只回答「是几个人在刷」，多出来的不画 | `apps/desktop/ui/src/aggregate.ts:54` |
 | 弹幕聚合归一化 | `danmaku` 的正文：去首尾空白 → 连续空白并成一个空格 → 大小写不敏感；**表情弹幕**按 `emote.emoticon_unique`（图不同即不同条） | `apps/desktop/ui/src/aggregate.ts:75-82` |
 | 时间表示 | 统一 UTC 毫秒，类型 `i64` | `crates/danmubox-core/src/lib.rs:30` |
@@ -95,7 +94,7 @@ danmubox/
 
 - **不同观众**在窗口内发的**同一条**弹幕，够多时折成一行：身份位印「刷屏 ×N」（N = `count`），头像列画前几位发言者的头像（规则与展示见 [`ui.md`](ui.md) §8.4）。
 - **两个门槛都要过**才折：一串够 `AGGREGATE_MIN_COUNT` = **3 条**，**且**参与观众按 uid 去重后 ≥ `AGGREGATE_MIN_SENDERS` = **2** 位不同 uid（后者是**私有常量**，`apps/desktop/ui/src/aggregate.ts:60`）。同一个人的重复不算聚合。
-- 判定**先收 run 再判**：run = 相邻 + 同键 + 与**锚点**（run 第一条）时间差 ≤ `AGGREGATE_WINDOW_MS` 且条数 < `AGGREGATE_MAX_COUNT`；不折的 run 里每一行**原样逐条输出**（行数不变）。折出的那一行：`message` = run 第一条、`count` = run 长度、`senders` = 去重后前 `AGGREGATE_AVATARS_SHOWN` 位（`apps/desktop/ui/src/aggregate.ts:122-174`）。
+- 判定**先收 run 再判**：run = 相邻 + 同键 + 与**上一条**（run 最后一条）时间差 ≤ `AGGREGATE_WINDOW_MS`（**滑动**，每并入一条即刷新一次窗口，**无条数上限**）；不折的 run 里每一行**原样逐条输出**（行数不变）。折出的那一行：`message` = run 第一条（**代表行不随后续加入而变**，React key 因此稳定、行不跳位）、`count` = run 长度、`senders` = 去重后前 `AGGREGATE_AVATARS_SHOWN` 位（`apps/desktop/ui/src/aggregate.ts:122-174`）。
 - 只有 `danmaku` 参与；**本地乐观行**（`local_id < 0`）不参与；空正文不聚合（`aggregate.ts:75-82`）；低价礼物桶（`row.cheap`）不参与。
 - **可关**：`ui.danmaku_aggregate`（§8）为假即逐条原样显示（返回入参本身，不复制、不重排）。
 - **不改上游数据、不落盘、不加 IPC**：这是显示层的一条折叠规则，与 `MessageSink` 对「同一条被送两遍」的去重（`crates/danmubox-core/src/bus.rs:230-246`）互不相干；会话缓冲里仍是逐条原样。
@@ -475,8 +474,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.gift_pane_kinds` | string[] | `[]`（空 = 全显示） | 六种 kind 的子集；界面只渲染礼物 / SC / 大航海三族 | **礼物栏内**按 kind 筛选：空数组 = 全显示，选中 N 项 = 只显示这 N 项的**并集**。**只作用于礼物栏**——弹幕区有自己的 `filter.kinds`，两枚互不串味。类型与 `filter.kinds` 同为 `KindArr`，写进礼物三族以外的 kind 是**无效果**而不是非法值。纯派生、不改缓冲：它改的是礼物栏的条目与统计（统计链 = **先筛选、后汇总**），弹幕流那一份一个像素都不动。见 [`ui.md`](ui.md) §5.3 |
 | `ui.gift_collapse_cheap` | boolean | `false` | — | 把单个价值 ≤ 0.1 元（= 100 金瓜子）的礼物合并成**一条**（`false` = 默认，一条一行不变）。**两个区域都生效**：弹幕区与礼物栏**各折一次**（同一份判据、同一种桶形状）；SC / 大航海不在其列。折叠是**纯派生**——原始消息一条不动，关掉即逐条复原。门槛、落点判据与合并行的形状见 [`ui.md`](ui.md) §5.3「低价礼物桶」。桶行的形态**与弹幕刷屏同一套**（带 `senders`：头像列 30% 错位堆叠前 3 位赠送者、身份位印数量、不再逐个显示用户名，用户 2026-09-22 第 3 条），`MessageRow` 不区分来源地渲染 |
 | `ui.gift_exclude_cheap_stats` | boolean | `false` | — | 把 ≤ 0.1 元的礼物从**折叠汇总 / 统计**里剔除（`false` = 默认，统计与展示一致）。**只改统计**：这些礼物作为消息的展示（礼物栏条目、弹幕区的行）不受影响。统计面只有**礼物栏总计条**那一处（弹幕区没有统计面）——这张键**出现在哪就管到哪**，见 [`ui.md`](ui.md) §5.3「剔除的口径」 |
-| `ui.interact_auto_hide` | boolean | `true` | — | 互动/进场消息显示一会儿后自动消失（`false` = 常驻）。消失**只是显示层不画**（判据 `ts + INTERACT_AUTO_HIDE_MS`，`apps/desktop/ui/src/types.ts:566`）：消息仍留在会话缓冲里（§4.3），关掉这枚键先前消失的那些行**原样回来**——「自动消失」不许丢内容，见 [`ui.md`](ui.md) §4.8 |
-| `ui.interact_single_slot` | boolean | `true` | — | 互动/进场消息共用弹幕区一处固定槽位（仿官方网页直播间）。`true` = 互动消息**不进弹幕列表**（不逐行堆叠、挤占空间），改在弹幕区底部浮层显示**最新一条**，下一条到来时快速顶掉上一条，空闲片刻自动淡出；`false` = 退化为「列表行 + 自动消失」（`ui.interact_auto_hide`）的旧行为。纯派生、不改缓冲：消息始终留在会话缓冲里，关掉开关即逐条回到列表。见 [`ui.md`](ui.md) §4.8 |
+| `ui.interact_single_slot` | boolean | `true` | — | 互动/进场消息**看不看**的唯一开关（仿官方网页直播间的「互动消息」条）。`true` = 互动消息**不进弹幕列表**（不逐行堆叠、挤占空间），改在弹幕区底部浮层显示**最新一条**，下一条到来时快速顶掉上一条，空闲片刻自动淡出；**弹幕区底部为它预留一段高度**，浮层落在预留区里、压不到任何一行。`false` = 互动消息**完全不显示**（列表不画、浮层也不画），预留高度一并收回。纯派生、不改缓冲：消息始终留在会话缓冲里，开关拨回去即按同样顺序回来。见 [`ui.md`](ui.md) §4.8 |
 | `ui.danmaku_aggregate` | boolean | `true` | — | 同一条弹幕被不同观众在窗口内重复发送时折成一行（`×N` + 头像堆叠；规则与常量见 §4）。`false` = 逐条原样显示。**默认 `true` = 保留现有行为**——聚合本来就是现有效果，这枚键只是把它变成可关的开关（与 `ui.gift_collapse_cheap` 那两枚相反：它们默认 `false`，因为会改变现有效果）。与「不丢内容」同一口径：折叠**只是显示层的派生**，原始消息一条不动，关掉即逐条复原 |
 | `ui.show_timestamp` | boolean | `false` | — | 弹幕前是否显示时间戳 |
 | `composer.phrases` | string[] | `[]` | — | 自定义短语（REQUIREMENTS.md §2.2）；短语面板唯一的内容来源，点一下插入输入框 |
@@ -515,7 +513,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | 上游没给价（`amount <= 0`） | **不算低价**：§5 的既有口径里 `amount <= 0` 表示上游没给价（不得猜价，界面也不画金额格）。两枚开关因此都不碰它——不然「不知道多少钱」会被当成「0.1 元以下」处理 |
 | 只管礼物 | 只有 `kind = "gift"` 参与判定；SC 与大航海不受这两枚键影响（订单形态与价位都不同，SC 最低 30 元、舰长 138 元） |
 | **两个区域** | 「两个区域」= **弹幕区**与**礼物栏**（共享上下分区的两栏；礼物类消息按 `ui.gift_in_danmaku` / `ui.gift_panel` 落进这两栏，默认两处都有）。折叠在**两处各生效一次**；剔除统计的**统计面只有礼物栏总计条那一处**（弹幕区没有统计面，因此这枚键在那一栏什么都不改——不编造第二处统计）。两处共用同一枚 `isCheapGift` 判据与同一个桶实现（`filtering.collapseCheapGiftRows` / `giftStatRows`） |
-| **不丢内容（硬口径）** | 剔除 / 折叠 / 隐藏（`ui.gift_panel`、`ui.gift_in_danmaku`）/ 自动消失（`ui.interact_auto_hide`）**全部是显示层的派生**：原始消息始终留在会话缓冲里（只受 §4.3 的上限约束），这些开关**不得**让任何一条提前消失。把开关关回去，两处各自恢复到原样——顺序、数量、金额都要与开之前逐项相同 |
+| **不丢内容（硬口径）** | 剔除 / 折叠 / 隐藏（`ui.gift_panel`、`ui.gift_in_danmaku`）/ 互动的浮层呈现（`ui.interact_single_slot`）**全部是显示层的派生**：原始消息始终留在会话缓冲里（只受 §4.3 的上限约束），这些开关**不得**让任何一条提前消失。把开关关回去，两处各自恢复到原样——顺序、数量、金额都要与开之前逐项相同 |
 | 两枚互相独立 | 折叠只改两处的分组形状，剔除只改统计口径；四种组合都有确定行为（`ui.md` §8.5） |
 | 默认都是 `false` | **默认行为与改前逐字一致**：多数人的现有效果不该被这两条辅助开关改变；要用的自己勾 |
 
@@ -525,7 +523,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 
 | REQUIREMENTS.md 小节 | 契约内承载位置 |
 |---|---|
-| §2.1 看弹幕 | §5（`Message` 全字段、`RoomStats`）、§6（`LIVE` / `PREPARING` → `live_status`；昵称与标题取自 `getH5InfoByRoom`）、§7 `rooms_refresh_status` / `danmubox://room` / `danmubox://room_stats`、§8 `filter.kinds` / `ui.interact_auto_hide` / `ui.show_timestamp`；进场回填与显示一致性见 §4.3、§5 `is_history`；跨观众聚合的常量与判据见 §4、开关见 §8 `ui.danmaku_aggregate` |
+| §2.1 看弹幕 | §5（`Message` 全字段、`RoomStats`）、§6（`LIVE` / `PREPARING` → `live_status`；昵称与标题取自 `getH5InfoByRoom`）、§7 `rooms_refresh_status` / `danmubox://room` / `danmubox://room_stats`、§8 `filter.kinds` / `ui.interact_single_slot` / `ui.show_timestamp`；进场回填与显示一致性见 §4.3、§5 `is_history`；跨观众聚合的常量与判据见 §4、开关见 §8 `ui.danmaku_aggregate` |
 | §2.2 发弹幕 | §3 `DanmakuSender` / `WalletProvider` / `EmoteProvider`、§5 `Emote` / `EmoteRef` / `SendOutcome` / `RoomSession.danmaku_length`、§7 `chat_send` / `emotes_list` / `emotes_owned` / `wallet_balance`、§8 `composer.phrases`；输入草稿见 §4.3 |
 | §2.3 身份与徽标 | §5 徽标说明 / `guard_level` / `medal_guard_level` / `RoomSession.my_medal_level` / `Message.face`、§7 `open_url`、§8 `ui.show_timestamp` |
 | §2.4 举报 | §3 `DanmakuReporter`（含 `reasons()`）、§5 `upstream_id`、§7 `chat_report` / `report_reasons` |

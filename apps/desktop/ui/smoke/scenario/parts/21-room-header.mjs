@@ -21,8 +21,8 @@
 
     // 铺 2 条实时弹幕 + 互动 + 系统（step3 需要历史行与实时行同时在场）
     window.__emit("danmubox://message", window.__mk("danmaku", "这是实时弹幕"));
-    // 进场行的自动摘除定时器 = 这条消息的 ts + 8s（store.scheduleInteractHide）。
-    // 后面「面板展开不弹走视口」那条断言必须先等它落定：摘掉一行会把下面整体顶上去一行高。
+    // 互动消息不再进弹幕列表（改由 `ui.interact_single_slot` 的浮层槽位呈现），
+    // 因此下面断言的是「列表里没有互动行」+「浮层槽位出现」。
     var interactMsg = window.__mk("interact", "");
     window.__interactAt = interactMsg.ts;
     window.__emit("danmubox://message", interactMsg);
@@ -38,11 +38,11 @@
     out.step3_headerHasWatched = text().indexOf("看过 34.6万") >= 0;
     out.step3_headerHasPopularity = text().indexOf("人气") >= 0;
     out.step3_systemRendered = text().indexOf("标题或分区变更") >= 0;
-    out.step3_interactRendered = !!interact;
+    out.step3_interactNotInList = !interact;
     out.step3_historyOpacity = hist ? getComputedStyle(hist).opacity : null;
     out.step3_liveOpacity = live ? getComputedStyle(live).opacity : null;
     out.step3_dividerTextPresent = text().indexOf("以上为进场前的最新弹幕") >= 0;
-    out.step3_interactAnimation = interact ? getComputedStyle(interact).animationName : null;
+    out.step3_interactSlotShown = !!byTestId("db-interact-slot");
     // 窄屏：头部（在线 / 看过 / 电池）与弹幕列表都不许横向滚动——放不下就换行，不许溢出
     var headerEl0 = byTestId("db-room-header");
     var scrollerEl0 = byTestId("db-chat-scroll");

@@ -62,14 +62,7 @@ interface AppStore {
    */
   immersive: boolean;
   messages: Message[];
-  /**
-   * 显示层的**重算信号**（`App.tsx` 的 `chatRows` 依赖里读它）。
-   *
-   * 「互动消息自动消失」那整条链（`ui.interact_auto_hide`）已删除，互动消息改由单槽位浮层
-   * 呈现（`ui.interact_single_slot`），不再有到点定时器挪动这个值 —— 字段留着只是因为
-   * `App.tsx` 那处订阅还在（那一处由后续清理一并收掉）。
-   */
-  interactTick: number;
+  /** 各房间的连接状态（`ConnState` + 一句话详情）。 */
   status: Record<number, { state: ConnState; detail: string }>;
   /** 各房间最近一次的观众数（协议 §10.7）；上游还没给过的一侧为 undefined。 */
   roomStats: Record<number, { online?: number; watched?: number }>;
@@ -1046,7 +1039,6 @@ export const useApp = create<AppStore>((set, get, store) => ({
   rooms: [],
   immersive: false,
   messages: [],
-  interactTick: 0,
   status: {},
   roomStats: {},
   logs: [],

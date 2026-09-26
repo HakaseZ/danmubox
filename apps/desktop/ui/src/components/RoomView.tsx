@@ -930,7 +930,7 @@ export function RoomView({
             {/* 互动/进场消息共用单槽位（ui.interact_single_slot，docs/ui.md §4.8）：
                 浮在弹幕区底部偏左，显示最新一条、下一条快速顶掉上一条，空闲淡出。
                 容器上的 `data-interact-slot` 让 CSS 提前给浮层预留高度（不等第一条到达）；
-                开关关掉时互动消息改回列表的行（由 filtering.toDisplayRows 控制）。 */}
+                开关关掉时互动消息完全不显示（列表与浮层都不画，预留高度一并收回）。 */}
             {prefs["ui.interact_single_slot"] && <InteractSlot />}
           </div>
         }

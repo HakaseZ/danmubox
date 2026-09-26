@@ -417,19 +417,21 @@
     out.adminKeywordDelRequestShape = !!lastWordDel &&
       lastWordDel.args.roomId === 5440 && lastWordDel.args.word === "刷屏";
 
-    // ---- 批量（issue #4）：打开后行前出现勾选框、上方有全选、底部升起当前 tab 的动作条；
+    // ---- 批量（issue #4）：打开后整行可点击高亮，上方有全选、底部升起当前 tab 的动作条；
     //      选中 N 项 → **一次**确认（文案含数量）→ 按序执行（N 次调用，顺序即屏幕顺序）。
     if (adminTabOf("keywords")) adminTabOf("keywords").click();
     await sleep(300);
     if (byTestId("db-admin-batch")) byTestId("db-admin-batch").click();
     await sleep(300);
     var batchToggle = byTestId("db-admin-batch");
+    var adminRows = allByTestId(adminRowTestId("keywords"));
     out.adminBatchControlsShown = !!batchToggle &&
       batchToggle.getAttribute("aria-pressed") === "true" &&
       !!byTestId("db-admin-select-all") && !!byTestId("db-admin-batch-bar") &&
-      allByTestId("db-admin-select").length === adminListItemsOf("keywords");
-    var adminBoxes = allByTestId("db-admin-select");
-    adminBoxes.forEach(function (box) { box.click(); });
+      adminRows.length > 0 && adminRows.every(function (row) {
+        return row.getAttribute("role") === "checkbox" && row.tabIndex === 0;
+      });
+    adminRows.forEach(function (row) { row.click(); });
     await sleep(300);
     var batchBar = byTestId("db-admin-batch-bar");
     // ---- item 5 的第 2 排（批量模式才出现）：紧贴第 1 排**正下方**（间距 = 那一排自己的上外边距
@@ -465,8 +467,8 @@
       put("adminPanelHotspotsWithBatchBad", batchHotspots);
       put("adminPanelHotspotsWithBatchAtLeast40", batchHotspots.length === 0);
     }
-    out.adminBatchBarShowsCount = !!batchBar && adminBoxes.length === 2 &&
-      batchBar.innerText.indexOf("已选 " + adminBoxes.length + " 项") >= 0;
+    out.adminBatchBarShowsCount = !!batchBar && adminRows.length === 2 &&
+      batchBar.innerText.indexOf("已选 " + adminRows.length + " 项") >= 0;
     var delsBeforeBatch = callsWithArgs.filter(function (c) {
       return c.cmd === "admin_keywords_del";
     }).length;

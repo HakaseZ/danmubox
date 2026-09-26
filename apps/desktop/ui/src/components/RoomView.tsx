@@ -196,9 +196,11 @@ export function RoomView({
   const loadReportReasons = useApp((store) => store.loadReportReasons);
   const openProfile = useApp((store) => store.openProfile);
   const roomStats = useApp((store) => store.roomStats[room.room_id]);
-  // 房管权限前置：身份来自 `room_session`（进房时取一次 + 事件更新）。
-  // 拿不到身份时 `is_admin` 为 undefined → 按**无权限**渲染，而不是先放行再看上游错误码。
+  // 房管权限前置：房管身份来自 `room_session`，主播身份由登录 uid 与房间主播 uid 对上。
+  // 拿不到身份时 `is_admin` 为 undefined，且主播 uid 不匹配 → 按**无权限**渲染。
   const isAdmin = useApp((store) => store.roomIdentities[room.room_id]?.is_admin) === true;
+  const isAnchor = session?.uid === room.anchor_uid && room.anchor_uid !== 0;
+  const canAdmin = isAdmin || isAnchor;
   // 弹幕字数上限（第 12 条 / 契约 C3）：随本人身份一起来的 `danmaku_length`
   // （上游 `getInfoByUser` 的 `data.property.danmu.length`）。取不到时 Composer 按官方缺省 20 回落，
   // 这里不兜底、不写死数值。
@@ -443,16 +445,16 @@ export function RoomView({
     setImmersive(false);
   }, [room.room_id, setImmersive]);
 
-  // 房管入口按身份出现（第 3 条，契约 C6）：面板打开期间身份被撤销（事件更新 / 会话重建）
-  // 就收起面板与确认条 —— 不能让「非房管还开着房管面板」这一档留下来。
+  // 房管入口按身份出现（第 3 条，契约 C6）：面板打开期间房管与主播身份均失效
+  // （事件更新 / 会话重建）就收起面板与确认条 —— 不能让「无权限还开着房管面板」这一档留下来。
   // 身份不是本组件的事件（它从 store 的事件更新里来），因此这里就是同步点；
-  // 也不改成「渲染期按 `isAdmin` 屏蔽面板」—— 那会让身份恢复时面板自己弹回来，是另一种行为。
+  // 也不改成「渲染期按 `canAdmin` 屏蔽面板」—— 那会让身份恢复时面板自己弹回来，是另一种行为。
   useEffect(() => {
-    if (isAdmin) return;
+    if (canAdmin) return;
     // oxlint-disable-next-line react/set-state-in-effect
     setAdminOpen(false);
     setAdminConfirm(null);
-  }, [isAdmin]);
+  }, [canAdmin]);
 
   // 房管面板展开期间的静默轮询（issue202609242158 第 8 条 A2）：面板开着才跑、收起即停
   // （卸载 / 切房由 effect 清理停掉）。打开面板时 `toggleAdminPanel` 已同步重拉过一次，
@@ -484,13 +486,13 @@ export function RoomView({
   }, [loggedIn, loadRoomIdentity, room.room_id]);
 
   // 房管数据**进房就加载**（用户 2026-09-13 第 4 条：「连接到有房管权限的直播间时就加载好
-  // 房管的数据」）：身份是**异步到的**（`room_session` 一次 + 事件更新），所以 `isAdmin`
+  // 房管的数据」）：身份是**异步到的**（`room_session` 一次 + 事件更新），所以 `canAdmin`
   // 必须在依赖里 —— 没有它，进房那一帧身份还是 false，这一批数据就永远不会被拉。
   // 打开面板时再静默重拉一次（见 `toggleAdminPanel`），保证看到的是新鲜的。
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canAdmin) return;
     void loadAdmin(room.room_id);
-  }, [isAdmin, loadAdmin, room.room_id]);
+  }, [canAdmin, loadAdmin, room.room_id]);
 
   useEffect(() => {
     if (reportTarget) void loadReportReasons();
@@ -621,10 +623,10 @@ export function RoomView({
   const messageMenuItems = (message: Message): MenuItem[] => {
     const mine = session !== undefined && message.uid === session.uid;
     const isDanmaku = message.kind === "danmaku";
-    // 房管三项的可用条件：自己是房管 + 目标有 uid + 不是自己。
-    const canModerate = isAdmin && !mine && message.uid !== 0;
-    const moderateHint = !isAdmin
-      ? "你不是本直播间房管"
+    // 房管三项的可用条件：自己是房管或主播 + 目标有 uid + 不是自己。
+    const canModerate = canAdmin && !mine && message.uid !== 0;
+    const moderateHint = !canAdmin
+      ? "你不是本直播间主播或房管"
       : mine
         ? "这是你自己"
         : message.uid === 0
@@ -665,7 +667,7 @@ export function RoomView({
             "filter.uids": [...new Set([...prefs["filter.uids"], message.uid])],
           }),
       },
-      // 房管三项（issue #3）：**权限前置**——不是房管就置灰并说明原因，
+      // 房管三项（issue #3）：**权限前置**——既不是主播也不是房管就置灰并说明原因，
       // 绝不做成「点了再看上游错误码」。确认条会带上对象与时长。
       {
         label: "禁言…",
@@ -729,11 +731,10 @@ export function RoomView({
   };
 
   const headerMenuItems: MenuItem[] = [
-    // 房管入口（第 3 条，契约 C6）：**只有确认是本房间房管**才出现这一项。
-    // 判据与官方 web 一致（`protocol.md` A38：`getInfoByUser` → `data.badge.is_room_admin || admin_level > 0`，
-    // 本实现落在 `RoomSession.is_admin`）。拿不到身份（`undefined`）= 无权限 = **没有这个入口**，
-    // 不是置灰让用户点开看上游报错 —— 用户要的是「有房管身份才有房管界面的选项」。
-    ...(isAdmin
+    // 房管入口（第 3 条，契约 C6）：确认是本房间主播或房管才出现这一项。
+    // 房管判据来自 `RoomSession.is_admin`，主播判据则是登录 uid 与 `anchor_uid` 相同；
+    // 两者都对不上 = 无权限 = **没有这个入口**，而不是置灰让用户点开看上游报错。
+    ...(canAdmin
       ? [
           {
             label: adminOpen ? "收起房管面板" : "房管面板",
@@ -1078,7 +1079,7 @@ export function RoomView({
       )}
 
       {/* 房管面板（issue #3）：三块列表收成三个 tab，单点在右键菜单、批量在多选动作条。
-          入口只在 `isAdmin` 时出现（第 3 条，契约 C6），因此渲染出来就是房管身份 ——
+          入口只在 `canAdmin` 时出现（第 3 条，契约 C6），因此渲染出来就是主播或房管身份 ——
           面板里不再有身份提示；打开即静默刷新（第 5 条），所以读取失败的**错误条必须留在面板里**
           （没有手动刷新按钮，错误是唯一的反馈）。
           它是文档流里的一块（不是浮层），与输入区的面板一样只挤压弹幕列表；

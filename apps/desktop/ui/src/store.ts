@@ -821,8 +821,8 @@ async function runAnchorPoll(store: StoreApi<AppStore>, account: string, gen: nu
   scheduleAnchorPoll(store, account, delay, gen);
 }
 
-/** 房管三块名单的**首屏**条数：三块各先拿这么多，滚到底再补（需求 2026-09-26）。 */
-const ADMIN_PAGE = 30;
+/** 房管三块名单的**首屏**条数：黑名单实测 `ps=100` 可一页返回 36 条，三块各先拿 100 条。 */
+const ADMIN_PAGE = 100;
 /** 名单滚到底一次补多少条。 */
 const ADMIN_STEP = 10;
 /**

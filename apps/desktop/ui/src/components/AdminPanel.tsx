@@ -537,6 +537,7 @@ export function AdminPanel({
         role="tabpanel"
         aria-labelledby={adminTabId(tab)}
         data-testid="db-admin-tabpanel"
+        className={styles.adminTabPanel}
       >
         {tab === "silent" && (
           <>

@@ -97,80 +97,72 @@ function sendersOf(run: DisplayRow[]): SenderRef[] {
 }
 
 /**
- * 弹幕聚合：把相邻、同键、同窗口内、**够多条且不止一个人**的弹幕折成一行
- * （`docs/ui.md` §8.4 的第二张表）。
+ * 弹幕聚合：把**同一窗口内同键**的弹幕折成一行（`docs/ui.md` §8.4 的第二张表）。
  *
- * 单趟「先收 run、再决定折不折」：
- * - **run** = 相邻 + 同键 + 与**上一条**（run 最后一条）时间差 ≤ `AGGREGATE_WINDOW_MS`
- *   —— 滑动窗口，每并入一条即顺延，**没有条数上限**；
- * - 只有 run 长度 ≥ `AGGREGATE_MIN_COUNT` **且**参与观众去重后 ≥ `AGGREGATE_MIN_SENDERS`
- *   位不同 uid 才折成一行（`message` = run 第一条，`count` = run 长度，
- *   `senders` = 去重后前 `AGGREGATE_AVATARS_SHOWN` 位）；
- * - 否则 run 里每一行**原样逐条输出**（不折的 run 一个对象都不动）。
- * 先收后判的理由：折不折要看**整串**（够不够 3 条、有没有第二位观众），
- * 边收边定就得先假定它会折、判不成立时再把前面几行吐回去 —— 那才是会留下中间态的写法。
+ * 与旧版的关键差别（issue 260926 后续）：不要求同键弹幕**连续** —— 中间可以插任何别的行
+ * （不同文本弹幕、礼物 / SC / 大航海 / 互动 / 系统、本地乐观行、空正文、低价礼物桶），
+ * 这些都不参与聚合，也**不打断**某一键的累积。判据仍只有两条门槛：同键的一组够
+ * `AGGREGATE_MIN_COUNT` 条、**且**去重后够 `AGGREGATE_MIN_SENDERS` 位不同 uid 才折
+ * （`message` = 组里第一条，`count` = 组大小，`senders` = 前几位观众）。
  *
- * 折出来的那一行**不改身份**：`message` 仍是第一条（头像列的**几张**头像来自 `senders`，
- * 正文 / 时间戳 / React key 都不动，行因此不跳位、节点不重建），只加 `count` 与 `senders`。
- * 注意窗口的基准（**最后**一条）与代表行（**第一**条）是两回事，且是刻意的：
- * 代表行若跟着窗口走到最后一条，React key 每来一条同文本就变一次 ⇒ 行节点重建、行在列表里抖。
+ * 两遍：
+ * - **第一遍分组**：顺一个 `Map<key, Group>` 收，一条同键消息只要离本组**最后并入**那条同键
+ *   消息 ≤ `AGGREGATE_WINDOW_MS`（滑动窗口，与上一条同键比）就并进同一组；超窗口则同键另起
+ *   一组（旧组封口）。非聚合行（键为 `null`）既不进组、也不打断任何组。
+ * - **第二遍决定折不折**：够门槛的组折成一行（代表行用第一条，React key 不动、节点不重建、
+ *   正文 / 时间戳都不动，只加 `count` 与 `senders`）；不够门槛的组一行都不动，成员留在原位
+ *   （不重排、不复制）。折叠**不改入参**——折出来的行是新对象，原消息一个字段都没动。
  *
- * **开关**：`ui.danmaku_aggregate` 关掉即逐条显示（返回入参本身，不复制、不重排）——
- * 与礼物那两枚开关同一条口径：折叠只是显示层的派生，关掉就回到原样。
- *
+ * 关掉 `ui.danmaku_aggregate` 即逐条显示（返回入参本身，不复制、不重排）。
  * 输入是 `filtering.toDisplayRows` 的输出（已过滤 + 已做礼物连击折叠）；不改动入参。
  */
 export function aggregateRows(rows: DisplayRow[], prefs: Prefs): DisplayRow[] {
   if (!prefs["ui.danmaku_aggregate"]) return rows;
 
-  const out: DisplayRow[] = [];
-  let run: DisplayRow[] = [];
-  let runKey: string | null = null;
-
-  const flush = () => {
-    if (run.length === 0) return;
-    const senders = sendersOf(run);
-    if (run.length >= AGGREGATE_MIN_COUNT && senders.length >= AGGREGATE_MIN_SENDERS) {
-      out.push({ ...run[0], count: run.length, senders });
-    } else {
-      // 不折：这一串逐条照原样（**同一个行对象**，不是副本）—— 门槛没到的刷屏
-      // 与改前逐条渲染完全一样。
-      for (const row of run) out.push(row);
-    }
-    run = [];
-    runKey = null;
-  };
-
-  for (const row of rows) {
-    // 低价礼物桶（`ui.gift_collapse_cheap`）**不参与**：它是另一条合并规则的产品
-    // （T5 的口径：桶行 `cheap === true`、`count`/`amount` 已是整桶合计），别把它再并一次。
+  interface Group {
+    indices: number[];
+    lastTs: number;
+  }
+  const groups: Group[] = [];
+  const activeByKey = new Map<string, Group>();
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    // 低价礼物桶（`ui.gift_collapse_cheap`）不参与：它是另一条合并规则的产品，别再并一次。
     // 桶本来只装 `gift`、`aggregateKey` 对非弹幕已经返回 null —— 这一句是显式的边界，
     // 免得以后桶装得下别的 kind 时悄悄串味。
     const key = row.cheap ? null : aggregateKey(row.message);
-    if (key === null) {
-      // 不参与聚合的行把当前的 run 就地封口（键不同的行天然把链断开），自己也独占一行。
-      flush();
-      out.push(row);
-      continue;
+    if (key === null) continue; // 非聚合行：不进组、也不打断任何组
+    const g = activeByKey.get(key);
+    if (g !== undefined && row.message.ts - g.lastTs <= AGGREGATE_WINDOW_MS) {
+      // 滑动窗口：与上一条同键比，每并入一条即顺延 —— 没有条数上限。
+      g.indices.push(i);
+      g.lastTs = row.message.ts;
+    } else {
+      if (g !== undefined) groups.push(g); // 同键但超出窗口：旧组封口，同键另起一组
+      const ng: Group = { indices: [i], lastTs: row.message.ts };
+      activeByKey.set(key, ng);
     }
-    if (run.length === 0) {
-      run = [row];
-      runKey = key;
-      continue;
-    }
-    // **滑动**：与这串的**最后一条**比（不是第一条）—— 每并入一条，窗口就整体往后
-    // 刷一次 5 秒，因此只要这条刷屏还有人接，它就一直长在同一行里，不设条数上限。
-    const joinable =
-      key === runKey &&
-      Math.abs(row.message.ts - run[run.length - 1].message.ts) <= AGGREGATE_WINDOW_MS;
-    if (joinable) {
-      run.push(row);
-      continue;
-    }
-    flush();
-    run = [row];
-    runKey = key;
   }
-  flush();
+  for (const g of activeByKey.values()) groups.push(g);
+
+  // 够门槛才折；不够门槛的组一行都不动（成员留在原位，不重排、不复制）。
+  const dropped = new Set<number>();
+  const repAt = new Map<number, DisplayRow>();
+  for (const g of groups) {
+    const members = g.indices.map((index) => rows[index]);
+    const senders = sendersOf(members);
+    if (members.length >= AGGREGATE_MIN_COUNT && senders.length >= AGGREGATE_MIN_SENDERS) {
+      for (let k = 1; k < members.length; k++) dropped.add(g.indices[k]);
+      // 代表行 = 第一条；`message` 仍是第一条（身份 / 正文 / React key 都不动），只加 `count` 与 `senders`。
+      repAt.set(g.indices[0], { ...members[0], count: members.length, senders });
+    }
+  }
+
+  const out: DisplayRow[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (dropped.has(i)) continue; // 被折进代表行的后续同键消息：丢弃
+    const rep = repAt.get(i);
+    out.push(rep !== undefined ? rep : rows[i]);
+  }
   return out;
 }

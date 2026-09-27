@@ -2129,13 +2129,25 @@
   margin-bottom: var(--sp-2);
 }
 
-/* 房管面板（issue #3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表 */
+/* 房管面板（issue #3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表。
+   纵向 flex 列：头部 / 名单区 / 批量条三段，只有「名单」自己滚动，批量条用 flex
+   钉在最底部始终可见（不再依赖 position: sticky 的脆弱可见性，issue 260926 后续）。 */
 .adminPanel {
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
   padding: var(--sp-2) var(--sp-3);
   max-height: var(--panel-max-h);
-  overflow-y: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 名单区（tabpanel）：填满面板剩余高度，内部让名单滚动（表单固定在上方、不被一起滚走）。 */
+.adminTabPanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 三块列表收成**横向 tab 轨道**（issue 2609132259 #1）：外观与表情分组的轨道同一套
@@ -2192,12 +2204,13 @@
 }
 
 /* 批量操作条（issue #5 / 260926 第 5 条）：只在批量模式下渲染，作为面板**最后一行**
-   `position: sticky; bottom: 0` 钉在可见底部，从下方滑入（不再插在表单与列表之间，
-   避免高度突变与焦点丢失；按钮功能不变）。`animation` 在挂载时播放一次上滑，
+   由 flex 钉在可见底部（`.adminPanel` 是 flex 列、面板本身不滚），从下方滑入
+   （不再插在表单与列表之间，避免高度突变与焦点丢失；按钮功能不变）。改用 flex 钉底
+   替代 `position: sticky`：长名单只在 `.adminList` 内滚动，批量条始终在面板可见视口内，
+   不会被滚出（见 issue 260926 后续修的 CodeRabbit 意见）。`animation` 在挂载时播放一次上滑，
    `prefers-reduced-motion` 下不播。行内三样都不换行，360px 下按内容算得下（§9.1）。 */
 .adminBatchBar {
-  position: sticky;
-  bottom: 0;
+  flex: none;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -2295,20 +2308,16 @@
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
 }
 
-/* 名单使用两列等宽网格，每个条目占一格；名单自己滚，头部不会被一起滚走。 */
+/* 名单使用两列等宽网格，每个条目占一格；名单自己滚（`flex: 1` 填满 tabpanel 剩余高度，
+   表单固定在它上方、不被一起滚走），批量条钉在面板底部、不压到最后一行。 */
 .adminList {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-1);
   margin: var(--sp-2) 0 var(--sp-1);
-  max-height: 240px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-}
-
-/* 批量条钉在面板底部（`position: sticky; bottom: 0`）时会盖住名单最底一行，
-   开启批量时给名单补一段底部留白，让最后一条始终露在条上方（issue 260926 第 5 条）。 */
-.adminPanel[data-batch="true"] .adminList {
-  padding-bottom: calc(var(--tap-min) + var(--sp-3) + var(--sp-2));
 }
 
 .adminItem {

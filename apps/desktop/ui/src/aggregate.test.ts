@@ -226,9 +226,9 @@ test("折叠不改入参：那一串消息一个字段都没动，折出来的�
   assert.notEqual(folded[0], list[0], "折出来的行是新对象（`count` / `senders` 只活在它上面）");
 });
 
-test("只有弹幕参与：礼物 / 互动 / 系统各行独占一行，也不把两边的弹幕串起来", () => {
-  const talk = spam(3);
-  // 同一批正文的礼物 / 互动 / 系统：`aggregateKey` 对非弹幕一律返回 null。
+test("非弹幕不参与聚合、也不打断同键弹幕：中间插礼物/互动/系统，同文本弹幕仍折成一行", () => {
+  const talk = spam(3); // 3 条同文本弹幕
+  // 同一批正文的礼物 / 互动 / 系统：`aggregateKey` 对非弹幕一律返回 null，不进任何组。
   const others = (["gift", "interact", "system"] as const).flatMap((kind, kindIndex) =>
     [0, 1, 2].map((index) =>
       msg("刷屏样本", {
@@ -240,27 +240,62 @@ test("只有弹幕参与：礼物 / 互动 / 系统各行独占一行，也不�
     ),
   );
 
-  // 中间隔着三行非弹幕 ⇒ 前后各一串两条，两串都不够门槛 ⇒ 一条都不折。
+  // 中间隔着三行非弹幕 ⇒ 旧版（要求连续）会切成两串都不够门槛；新版按键分组、容忍插花，
+  // 3 条同文本弹幕并成一组（插花不计入）。
   const out = aggregateRows(rowsOf([...talk.slice(0, 2), ...others, ...talk.slice(2)]), prefs());
-  assert.equal(out.length, 2 + others.length + 1);
-  assert.ok(out.every((item) => item.senders === undefined), "非弹幕不聚合，也不参与邻居的聚合");
+  assert.equal(out.length, 1 + others.length, "非弹幕各自独占；同文本弹幕跨插花折成一行");
+  const agg = out.find((item) => item.senders !== undefined);
+  assert.ok(agg, "存在一条聚合行");
+  assert.equal(agg!.count, 3, "count = 同文本弹幕总条数（插花不计入）");
+  assert.deepEqual(
+    agg!.senders?.map((sender) => sender.uid),
+    talk.slice(0, AGGREGATE_AVATARS_SHOWN).map((message) => message.uid),
+    "头像列仍是前几位（与旧版同口径）",
+  );
 
-  // 非弹幕自己再怎么重复也不折（这里只有它们自己）。
+  // 非弹幕自己再怎么重复也不折（它们不会进任何组）。
   const onlyOthers = aggregateRows(rowsOf(others), prefs());
   assert.equal(onlyOthers.length, others.length, "礼物 / 互动 / 系统一条一行（形态各不相同）");
 });
 
-test("本地乐观行与空正文不参与：本地那条自己站一行，也把两边的弹幕串隔开", () => {
+test("本地乐观行与空正文不参与：乐观行自己独占一行，但同文本弹幕仍跨它合并", () => {
   const before = spam(2);
   const optimistic = msg("刷屏样本", { local_id: -1, uid: 999, uname: "我" });
   const after = spam(2);
+  // 乐观行 `local_id < 0` ⇒ `aggregateKey` 返回 null，不进组、也不打断邻居：
+  // 前后 4 条同文本并成一组，折成一行（乐观行自己仍独占）。
   const out = aggregateRows(rowsOf([...before, optimistic, ...after]), prefs());
-
-  assert.equal(out.length, 5, "本地那条不许被折进别人的行里，也不许把前后两串连起来");
-  assert.ok(out.every((item) => item.senders === undefined));
+  assert.equal(out.length, 2, "4 条同文本折成一行 + 乐观行自己一行");
+  const agg = out.find((item) => item.senders !== undefined);
+  assert.ok(agg, "同文本弹幕跨乐观行合并");
+  assert.equal(agg!.count, 4, "count 含乐观行两侧的同文本弹幕");
+  const opt = out.find((item) => item.senders === undefined);
+  assert.ok(opt, "乐观行仍在（不被折进别人的行里，也不许把前后两串连起来后让自己消失）");
+  assert.equal(opt!.message.local_id, -1, "乐观行是它自己那条");
 
   const empty = [0, 1, 2].map((index) => msg("", { ts: T0 + index * 100, uid: 500 + index }));
   const blanks = aggregateRows(rowsOf(empty), prefs());
   assert.equal(blanks.length, 3, "空正文没有可比较的内容：一条都不折");
   assert.ok(blanks.every((item) => item.senders === undefined));
+});
+
+test("不同文本的弹幕插在中间不阻止同文本折叠：只有同键才并组", () => {
+  // 同一条「哈哈哈」×3 被异文本弹幕（「666」×2）与一条礼物隔开，但同键归组 ⇒ 3 条哈哈哈仍折成一行。
+  const haha = spam(3);
+  const other = [
+    msg("666", { ts: T0 + 250, uid: 600, uname: "甲" }),
+    msg("666", { ts: T0 + 350, uid: 601, uname: "乙" }),
+  ];
+  const gift = msg("666", { ts: T0 + 450, kind: "gift", uid: 602, uname: "丙" });
+  const out = aggregateRows(
+    rowsOf([haha[0], other[0], haha[1], gift, other[1], haha[2]]),
+    prefs(),
+  );
+  // 1 条聚合（哈哈哈 ×3）+ 两条 666 弹幕 + 1 条礼物 = 4 行。
+  assert.equal(out.length, 4, "同文本折叠后，异文本与礼物各自独占");
+  const agg = out.find((item) => item.senders !== undefined);
+  assert.ok(agg, "哈哈哈 ×3 折成一行（插花不阻止）");
+  assert.equal(agg!.count, 3, "count = 同键弹幕总条数");
+  const others = out.filter((item) => item.senders === undefined);
+  assert.equal(others.length, 3, "两条 666 弹幕（同键但仅 2 条）与一条礼物都未折");
 });

@@ -168,7 +168,7 @@
         other: otherRoomId,
         // 开合态读 `aria-expanded`（列表根折叠也挂载，见文件头）；顺带记下「它在场上」。
         giftExpandBefore: giftExpandedNow(),
-        giftAreaMounted: !!byTestId("db-gift-area"),
+        giftListMounted: !!byTestId("db-gift-area"),
         giftHeightBefore: Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10,
         headHeightBefore: Math.round(headBox0.height * 10) / 10,
         ratioPrefBefore: window.__prefs["ui.gift_pane_ratio"],
@@ -182,7 +182,7 @@
         return t ? t.getAttribute("data-room-id") : null;
       })();
       remountProbe.giftExpandAfterOther = giftExpandedNow();
-      remountProbe.giftAreaAfterOther = !!byTestId("db-gift-area");
+      remountProbe.giftListMountedAfterOther = !!byTestId("db-gift-area");
       tabByRoomId(remountRoomId).click();
       await sleep(900);
       remountProbe.activeAfterBack = (function () {
@@ -192,7 +192,7 @@
         return t ? t.getAttribute("data-room-id") : null;
       })();
       remountProbe.giftExpandAfterBack = giftExpandedNow();
-      remountProbe.giftAreaAfterBack = !!byTestId("db-gift-area");
+      remountProbe.giftListMountedAfterBack = !!byTestId("db-gift-area");
       remountProbe.giftHeightAfterBack = byTestId("db-pane-gift")
         ? Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10 : null;
       remountProbe.ratioPrefAfterBack = window.__prefs["ui.gift_pane_ratio"];
@@ -203,6 +203,9 @@
     out.splitterRemountAvailable = remountAvailable;
     out.splitterCollapsedAfterRemount = remountAvailable && giftExpandedNow() === "false" &&
       Math.abs(rect(byTestId("db-pane-gift")).height - headBox0.height) <= 1;
+    // 单轴模型：切房之后礼物列表照旧**在场**（折叠 ≠ 卸载；复位复位的是开合那一档，
+    // 不是把这一栏从场上撤掉）。
+    out.splitterListStaysMountedAfterRemount = remountAvailable && !!byTestId("db-gift-area");
     byTestId("db-gift-toggle").click();
     await sleep(400);
     var remountedRatio = shownRatio();

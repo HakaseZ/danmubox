@@ -230,6 +230,7 @@ graph TD
 | `apps/desktop/ui/src/filtering.test.ts` | `filtering.ts` | 过滤 / 折叠 / 互动浮层那一族（低价礼物两枚开关对两个区域都生效、四种机制都可逆且不丢内容） |
 | `apps/desktop/ui/src/interact-slot.test.ts` | `interact-slot.ts` | 互动槽位的活跃/卸载判据（10 条）：只认本房间的 `interact` 且取 `ts` 最新那条、次新的只作接力退场层且**只在它被顶掉时还在屏幕上才画**、寿命 = `INTERACT_SLOT_MS` + `INTERACT_SLOT_FADE_MS`（空闲 4s + 淡出 300ms，到点 `remainingMs <= 0`）、`now` 与最新那条的到达时刻之差就是剩余寿命、没有活跃消息时不排卸载定时器 |
 | `apps/desktop/ui/src/session-messages.test.ts` | `session-messages.ts` | 会话换代后的消息列表规则（同一条只入列一次、`history_query` 快照落地、会话重建后新消息不再被 `local_id` 判丢） |
+| `apps/desktop/ui/src/admin-list.test.ts` | `admin-list.ts` | 房管名单分页的纯逻辑（8 条，需求 §六 6.7 / 6.8 / 6.9 / 6.11 / 6.13）：水位按**上游口径**的 `next_offset`（与去重后的列表长度分离）、按 uid 去重且列表有界、在途锁（在途 / 已到终点都不许再打上游、落地即复位）、终点判定（上游 `done` / 下一游标越过 `total` / 原地打转三种收口）、作废点整体清回初始态、两块名单状态互相独立、首屏与步长常量共用一处 |
 
 ```bash
 cd apps/desktop/ui
@@ -237,6 +238,7 @@ node --test src/aggregate.test.ts
 node --test src/filtering.test.ts
 node --test src/interact-slot.test.ts
 node --test src/session-messages.test.ts
+node --test src/admin-list.test.ts
 node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑某几条
 ```
 

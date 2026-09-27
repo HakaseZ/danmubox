@@ -62,7 +62,7 @@ danmubox/
 | `RoomCatalog` | 关注列表（`followed()`；定义见 `ports.rs:288-291`） |
 | `WalletProvider` | 电池余额（`ports.rs:313-316`） |
 | `UserProfile` | **按 uid 取用户资料 —— 当前只取头像**（`ports.rs:318-335`）：`face_of(uid) -> String`（`String` 不是 `Result`：需求把每一种失败都定义成同一个结果，见下）。大航海 / V1 礼物 / 缺头像的 SC 的载荷里**没有头像字段**（§5 `Message.face`、`protocol.md` §10.6 与附录 A），界面又要求大航海必须有头像（`REQUIREMENTS.md` §三 3.1–3.6、§八 第 1 条），因此只能按 `Message.uid` 现取。**取不到即空串**（需求 3.3）：上游非 0 code、网络失败、`uid <= 0` 三种情形**同解**——不报错、不阻塞上屏，界面按「无头像」渲染；实现内做**进程级去重与缓存**（同一 uid 只问一次上游，需求 3.4），**非 0 code 不写缓存** |
-| `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查（`ports.rs:257-298`）。仅房管可用；上游非 0 code 原样带回、不赋语义。`silent_list` / `blacklist` 为**分页增量**接口（`(room_id, offset, limit) -> (Vec, i64)`）：适配器内部翻页 + 限速（禁言每页 10 条），一次性翻完整份名单会连发几十次 POST 被上游风控挡回 HTTP 412 |
+| `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查（`ports.rs:257-298`）。仅房管可用；上游非 0 code 原样带回、不赋语义。`silent_list` / `blacklist` 为**分页增量**接口（`(room_id, offset, limit)`）：适配器内部翻页 + 限速（禁言每页 10 条），一次性翻完整份名单会连发几十次 POST 被上游风控挡回 HTTP 412。返回形状与 §7 的 `AdminListSlice` 同形（`items` / `total` / `next_offset` / `done`）——带出**上游口径的下一游标**与终点标记，单次响应体量封顶时由前端后台继续补齐 |
 | `AnchorRoom` | **我自己的直播间**（主播视角）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此不渲染按钮）、`set_title()` 改标题、`set_area(area_v2)` 改分区（**独立写入口**，不必等到开播，issue202609241553 第 4 条）、`go_live(area_v2)` 开播（`area_v2: Option<i64>`：缺省沿用直播间当前 `area_id`；`Some(<=0)` 判 `BAD_REQUEST`；否则作为开播分区覆盖；成功返回 §5 `StreamEndpoints`；**被上游身份校验挡住**时返回 §5 `AnchorGate`）、`end_live()` 下播、`area_list()` 取两级分区树（§5 `AnchorArea`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作 + 取分区全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只作用于 `account` 指定的账号自己的直播间（缺省当前账号）**——「作用于哪个账号」在构造期由 `BiliAnchor::new_for(account)` 决定，**不进端口签名**；**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义**。**唯一的例外是 `AnchorGate`**：它承载的是「上游在响应里明说了该怎么继续」的那两个码（实测 `60043`、社区实现观察到的 `60024`，见 `protocol.md` §18.5），产出的是**引导**而不是判定——原 `code` / `msg` 一个字不改地一起带回，其余非 0 code 仍然不赋语义 |
 
 **架构约束**：`core` 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层。本期不定义任何 MCP 工具、协议或端点。
@@ -436,8 +436,17 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `emotes_owned` | 主站「我的表情」（`package_kind` 为 `owned`，唯一键 = `"upower_" + 表情 text`，`crates/danmubox-bili/src/emote.rs:67-69`）；未登录时上游退化为免费表情包 |
 | `admin_mute` | 禁言（`hour`：`-1` 永久 / `0` 本场 / 其余为小时数）；仅房管成立，上游非 0 code 原样带回、不赋语义 |
 | `admin_unmute` | 解除禁言 |
-| `admin_silent_list` | 直播间禁言名单的**一段**（`AdminListSlice<SilentUser>`，`{ items, total }`；`offset` = 已有条数、`limit` = 本次再拿几条）——房管功能做完整所需，官方面板也有这一栏 |
+| `admin_silent_list` | 直播间禁言名单的**一段**（`AdminListSlice<SilentUser>` = `{ items, total, next_offset, done }`；入参 `offset` = 本次起点、`limit` = 本次最多再拿几条）——房管功能做完整所需，官方面板也有这一栏 |
 | `admin_blacklist_list` | 直播间黑名单的**一段**（`AdminListSlice<BlacklistedUser>`，语义同上）。内部按 `anchor_id` 寻址（上游不吃房间号） |
+
+`AdminListSlice<T>` 的四项（§7，前端按它消费，`docs/ipc.md` §3.1）：
+
+| 字段 | 语义 |
+|---|---|
+| `items: T[]` | 这一段里的条目（不含调用方已有的那一段） |
+| `total: number` | 上游总数 |
+| `next_offset: number` | **上游口径**的下一次 `offset`（**不是**去重后的列表长度）—— 前端据此继续补齐，不会在同段反复取回 |
+| `done: boolean` | `true` = 已到终点，不再打上游；`false` = 还有下一段（单次响应体量封顶时也带下一游标，由前端后台继续补齐，封顶因此不让条目永久取不到） |
 | `admin_blacklist_add` | 加入直播间黑名单 |
 | `admin_blacklist_del` | 移出直播间黑名单 |
 | `admin_keywords_list` | 直播间屏蔽词列表 |

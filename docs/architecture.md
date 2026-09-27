@@ -136,7 +136,7 @@ graph LR
 | `DanmakuSender` | trait `:213`；`send` `:217` | `room_id` + 内容 / 颜色 / 模式 + 可选 `EmoteToken` / `ReplyTarget` → `SendReport`（`SendOutcome` + 上游原始 code / message） | `bili::send` |
 | `DanmakuReporter` | trait `:229`；`reasons` `:231`、`report` `:234` | 无输入 → `ReportReason[]`；`Message` + 理由 → 成功 / 失败 | `bili::report` |
 | `EmoteProvider` | trait `:238`；`emotes` `:240`、`owned` `:248` | `room_id` + `RoomSession`（我在该房间的粉丝牌与大航海等级、是否房管）→ `Emote[]`；`owned` → 主站表情 `Emote[]` | `bili::emote` |
-| `RoomAdmin` | trait `:257`；`silent_list(room_id, offset, limit) -> (Vec<SilentUser>, i64)`、`blacklist(room_id, offset, limit) -> (Vec<BlacklistedUser>, i64)` 为**分页增量**接口（翻页 + 限速由 `bili::admin` 负责，见 `admin.rs`）；其余 `mute` / `unmute` / `blacklist_add` / `blacklist_del` / `keywords` / `keyword_add` / `keyword_del` 均为单点写操作 | `room_id`（写操作另带 uid / 词）→ 名单数组或写操作结果 | `bili::admin` |
+| `RoomAdmin` | trait `:257`；`silent_list(room_id, offset, limit)`、`blacklist(room_id, offset, limit)` 为**分页增量**接口（翻页 + 限速由 `bili::admin` 负责，见 `admin.rs`），返回形状与契约 §7 的 `AdminListSlice` 同形（`items` / `total` / `next_offset` / `done`：带出上游口径的下一游标与终点标记）；其余 `mute` / `unmute` / `blacklist_add` / `blacklist_del` / `keywords` / `keyword_add` / `keyword_del` 均为单点写操作 | `room_id`（写操作另带 uid / 词）→ 名单分页切片或写操作结果 | `bili::admin` |
 | `RoomCatalog` | trait `:288`；`followed` `:290` | 无输入 → `FollowedRoom[]`（`live_status == 1` 置顶由实现内的 `core::model::sort_followed` 完成） | `bili::follow` |
 | `WalletProvider` | trait `:313`；`balance` `:315` | 无输入 → 余额数值 | `bili::wallet` |
 | `UserProfile` | trait `:331`；`face_of(uid) -> String` `:334` | `uid` → 头像地址（空串 = 取不到，**没有错误通道**：需求把每一种失败都定义成空串） | `bili::profile` |

@@ -12,9 +12,9 @@ use danmubox_bili::{
     BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
-    Account, AnchorLiveOutcome, AnchorRoom, AuthProvider, DanmakuReporter, DanmakuSender,
-    EmoteProvider, LiveSource, QrPoll, QrState, RoomAdmin, RoomCatalog, SessionState, UserProfile,
-    WalletProvider,
+    Account, AdminListSlice, AnchorLiveOutcome, AnchorRoom, AuthProvider, DanmakuReporter,
+    DanmakuSender, EmoteProvider, LiveSource, QrPoll, QrState, RoomAdmin, RoomCatalog,
+    SessionState, UserProfile, WalletProvider,
 };
 use danmubox_core::{
     config_path, data_dir, prefs_path, AnchorArea, AnchorGate, AnchorGateKind, BlacklistedUser,
@@ -695,19 +695,12 @@ async fn admin_unmute(state: State<'_, AppState>, room_id: i64, uid: i64) -> Api
     admin.unmute(room_id, uid).await.map_err(ApiError::from)
 }
 
-/// 名单的一段（契约 §7）：**增量加载**用。
-///
-/// `items` = 本次新增的条目（不含调用方已有的那一段），`total` = 上游总数。
-/// 改前一次返回整份名单：禁言那份每页只有 10 条，一个真实房间要连发 49 次 POST，
-/// 会被上游风控挡回 HTTP 412 的验证页 —— 分页 + 限速是那个 412 的正解。
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-struct AdminListSlice<T> {
-    items: Vec<T>,
-    total: i64,
-}
-
 /// 禁言名单的一段（契约 §7）。只读，非房管时上游 code 原样带回。
+///
+/// 返回 `AdminListSlice<SilentUser>` = `{ items, total, next_offset, done }`（定义在
+/// `danmubox_core::ports`，与端口 `RoomAdmin::silent_list` 同一形状）—— `next_offset` 是
+/// **上游口径**的下一游标，`done` 是终点标记；单次响应体量封顶时 `done` 为假并带回真实游标，
+/// 由前端后台继续补齐（6.13 / 6.15）。
 #[tauri::command]
 async fn admin_silent_list(
     state: State<'_, AppState>,
@@ -716,14 +709,13 @@ async fn admin_silent_list(
     limit: i64,
 ) -> ApiResult<AdminListSlice<SilentUser>> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let (items, total) = admin
+    admin
         .silent_list(room_id, offset, limit)
         .await
-        .map_err(ApiError::from)?;
-    Ok(AdminListSlice { items, total })
+        .map_err(ApiError::from)
 }
 
-/// 房间黑名单的一段（契约 §7）。
+/// 房间黑名单的一段（契约 §7）。语义与 `admin_silent_list` 相同。
 #[tauri::command]
 async fn admin_blacklist_list(
     state: State<'_, AppState>,
@@ -732,11 +724,10 @@ async fn admin_blacklist_list(
     limit: i64,
 ) -> ApiResult<AdminListSlice<BlacklistedUser>> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let (items, total) = admin
+    admin
         .blacklist(room_id, offset, limit)
         .await
-        .map_err(ApiError::from)?;
-    Ok(AdminListSlice { items, total })
+        .map_err(ApiError::from)
 }
 
 /// 加入黑名单（契约 §7）。

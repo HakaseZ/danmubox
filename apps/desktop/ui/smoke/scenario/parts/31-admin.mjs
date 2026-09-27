@@ -296,12 +296,18 @@
     out.layoutAdminBottomGap = bottomGap(byTestId("db-chat-scroll"));
     out.layoutAdminFollowing = out.layoutAdminBottomGap < 8;
     out.layoutNoJumpButtonWithAdminPanel = !byTestId("db-bottom-anchor");
-    // 窄屏：房管面板同样是文档流里的一块（只挤列表、不遮最新一条），限高 + 内部滚动 + 关闭入口 + 热区 ≥ 40px
+    // 窄屏：房管面板同样是文档流里的一块（只挤列表、不遮最新一条），限高 + **面板本身不滚、
+    // 只有名单内部滚动**（6.1–6.3）+ 关闭入口 + 热区 ≥ 40px。
+    // 改前这里钉的是「面板自己可滚」（`overflowY === "auto"`）——T5 把滚动权交给 `.adminList`，
+    // 那条断言是**必然要改**的既有口径。
     if (NARROW) {
       var adminPanelRect = rect(adminPanel);
+      var adminListEl = byTestId("db-admin-list");
       var adminPanelNewest = rows()[rows().length - 1];
       put("adminPanelInFlow", getComputedStyle(adminPanel).position !== "fixed");
-      put("adminPanelScrollable", getComputedStyle(adminPanel).overflowY === "auto");
+      put("adminPanelNotScrollable", getComputedStyle(adminPanel).overflowY !== "auto");
+      put("adminListScrollable", !!adminListEl && getComputedStyle(adminListEl).overflowY === "auto");
+      put("adminPanelNoInnerScroll", adminPanel.scrollHeight <= adminPanel.clientHeight + 1);
       put("adminPanelHeightPx", Math.round(adminPanelRect.height));
       put("adminPanelCappedToViewportShare", adminPanelRect.height <= window.innerHeight * 0.5 + 1);
       put("adminPanelNewestNotCovered", !!adminPanelNewest &&
@@ -364,16 +370,27 @@
 
     // ---- 上游拒绝**原样展示**（code + message）：三块各自留痕、互不清空，面板留在原地。
     //      这一档必须在**有权限**时测 —— 入口只对房管存在，身份被撤销时面板会直接收起（见下）。
-    //      issue #5 之后面板里**没有**手动重试入口：重拉 = 关掉再开（⋯ →「房管面板」），
-    //      所以下面这条路径本身就是「重拉」这条路的验收面。
-    var reopenAdmin = async function () {
-      if (byTestId("db-admin-close")) byTestId("db-admin-close").click();
-      await sleep(300);
-      await toggleAdminFromHeader();
+    //      issue #5 之后面板里**没有**手动重试入口；6.16 之后**重开面板也不再整段重读**
+    //      （名单缓存常驻本次会话），所以「重拉」这条路的触发点改为**权限重新就绪**：
+    //      失去权限 → `canAdmin` 转假（面板自动收起、后台维护停）；恢复权限 → `RoomView` 那条
+    //      `[canAdmin, room.room_id]` 的 effect 重跑一次 `loadAdmin`（生产路径，不是替身专供）。
+    var emitAdminIdentity = async function (isAdmin) {
+      window.__setAdmin(isAdmin);
+      window.__emit("danmubox://session", {
+        room_id: 5440, my_medal_level: 0, my_medal_name: "", my_medal_worn: false,
+        my_guard_level: 0, danmaku_length: 40, is_admin: isAdmin
+      });
+      await sleep(350);
+    };
+    var refreshAdmin = async function () {
+      await emitAdminIdentity(false);
+      await emitAdminIdentity(true);
+      if (!byTestId("db-admin-panel")) await toggleAdminFromHeader();
     };
     window.__setAdminFail(true);
-    await reopenAdmin();
-    out.adminReopenRefetches = adminListCallCounts("admin_blacklist_list") >= 2;
+    var blackCallsBeforeRefresh = adminListCallCounts("admin_blacklist_list");
+    await refreshAdmin();
+    out.adminRefreshRefetches = adminListCallCounts("admin_blacklist_list") > blackCallsBeforeRefresh;
     var adminErrCount = {};
     var adminErrRaw = {};
     for (var ae = 0; ae < ADMIN_KINDS.length; ae += 1) {
@@ -391,9 +408,9 @@
     out.adminPanelErrorsIndependent = ADMIN_KINDS.every(function (k) {
       return adminErrCount[k] === 1;
     });
-    // 上游恢复之后「关掉再开」能把三块读回来、错误条随之消失
+    // 上游恢复之后再走一次同样的「权限重新就绪」重拉：三块读回来、错误条随之消失
     window.__setAdminFail(false);
-    await reopenAdmin();
+    await refreshAdmin();
     out.adminPanelErrorClearedAfterRetry = allByTestId("db-admin-error").length === 0;
     var adminAfterRetry = await adminWalk();
     out.adminPanelListsAfterRetry = {
@@ -440,25 +457,41 @@
     adminRows.forEach(function (row) { row.click(); });
     await sleep(300);
     var batchBar = byTestId("db-admin-batch-bar");
-    // ---- item 5 的第 2 排（批量模式才出现）：紧贴第 1 排**正下方**（间距 = 那一排自己的上外边距
-    //      --sp-2 = 8px，不与名单的间距混淆）、仍在**第 1 条芯片之上**；行内三样（全选 /
-    //      已选 N 项 / 批量动作）同一排不换行；第 1 排的主操作按钮没被这一排挤走。
+    // ---- 6.1 / 6.2 / 6.3：批量条**不在列表中间插行**，而是**从面板最底下向上展开一行** ——
+    //      它是 tabpanel 的最后一个子节点（在 `.adminList` **之外**），因此
+    //      ① 不在列表里、在名单之下；② 一直在面板盒内（不把面板撑高、不越界）；
+    //      ③ 名单滚到任意位置它都**始终可见**；④ 行内三样同一排不换行。
+    //      （改前的口径是「第 2 排紧贴第 1 排正下方、仍在第 1 条芯片之上」—— T5 把位置挪到面板底部，
+    //       那两条几何断言属**必然要改**的既有口径。）
     var batchFormRow = byTestId("db-admin-panel").querySelector("input").parentElement;
     var batchFormInput = batchFormRow.querySelector("input");
     var batchFormPrimary = [].slice.call(batchFormRow.querySelectorAll("button")).filter(function (b) {
       return b.getAttribute("data-testid") !== "db-admin-batch";
     })[0];
     var batchSelectAll = byTestId("db-admin-select-all");
-    var batchFirstItem = allByTestId(adminRowTestId("keywords"))[0];
+    var batchListEl = byTestId("db-admin-list");
+    var batchPanelBox = rect(byTestId("db-admin-panel"));
     var batchBarBox = batchBar ? rect(batchBar) : null;
-    var batchGapPx = batchBarBox && batchFormRow
+    out.adminBatchBarGapPx = batchBarBox && batchFormRow
       ? Math.round((batchBarBox.top - rect(batchFormRow).bottom) * 10) / 10 : null;
-    out.adminBatchBarGapPx = batchGapPx;
-    out.adminBatchBarSecondRow = batchGapPx !== null && batchGapPx >= -0.5 && batchGapPx <= 12 &&
-      !!batchFirstItem && batchBarBox.bottom <= rect(batchFirstItem).top + 1 &&
+    out.adminBatchBarBelowList = !!batchBarBox && !!batchListEl &&
+      !batchListEl.contains(batchBar) && batchBarBox.top >= rect(batchListEl).bottom - 1;
+    out.adminBatchBarInsidePanel = !!batchBarBox && batchBarBox.top >= batchPanelBox.top - 1 &&
+      batchBarBox.bottom <= batchPanelBox.bottom + 1;
+    out.adminBatchBarSecondRow = out.adminBatchBarBelowList && out.adminBatchBarInsidePanel &&
       sameRowAs(batchSelectAll, byTestId("db-admin-batch-action")) &&
       sameRowAs(batchFormPrimary, batchFormInput) &&
       rect(batchFormPrimary).top < batchBarBox.top;
+    // 6.2：把名单滚到任意位置（这里滚到底）批量条都**始终可见** —— 它的盒子不随名单滚出去。
+    if (batchListEl) {
+      batchListEl.scrollTop = batchListEl.scrollHeight;
+      await sleep(200);
+      out.adminBatchBarStaysVisibleOnScroll = !!rect(batchBar) &&
+        Math.abs(rect(batchBar).top - batchBarBox.top) < 1 &&
+        rect(batchBar).bottom <= rect(byTestId("db-admin-panel")).bottom + 1;
+      batchListEl.scrollTop = 0;
+      await sleep(150);
+    }
     out.adminBatchBarNoWrap = !!batchBar && getComputedStyle(batchBar).flexWrap === "nowrap";
     // item 4：批量钮是**模式**开关 —— aria-pressed 翻成 true 的同时底色从透明换成强调色填充
     // （强调色的计算值就地取：选中 tab 的下边框色就是 var(--accent)，同一个令牌）

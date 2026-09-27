@@ -320,9 +320,15 @@
     //      开一个 → 其余四个同步都关；收起某一个不影响别人（panelSurvivesTabSwitch 那三条照旧成立）。
     //      礼物栏这一档要先存在它：它由 ui.gift_panel 决定，默认就是开的（上面 gift 那段
     //      最后把两枚开关都还原成默认值，礼物栏因此折叠着在场）。
+    // 「礼物栏算不算一个开着的面板」看它**展开着**（`aria-expanded`）：需求 5.1–5.4 之后
+    // 列表与三枚芯片折叠也挂载，拿 `db-gift-area` 在场与否当开合会恒 +1。
+    var giftDockOpen = function () {
+      var toggle = byTestId("db-gift-toggle");
+      return !!toggle && toggle.getAttribute("aria-expanded") === "true";
+    };
     var openPanelCount = function () {
       return (byTestId("db-panel") ? 1 : 0) + (byTestId("db-admin-panel") ? 1 : 0) +
-        (byTestId("db-gift-area") ? 1 : 0);
+        (giftDockOpen() ? 1 : 0);
     };
     // 房管面板的开/关都只有一条路：⋯ 菜单里那一项（面板内没有开关自己的按钮）
     var toggleAdminFromHeader = async function () {
@@ -336,7 +342,7 @@
     clickTool("表情");
     await sleep(450);
     out.panelExclusiveEmoteClosesAdmin = !!byTestId("db-panel") &&
-      !byTestId("db-admin-panel") && !byTestId("db-gift-area") && openPanelCount() === 1;
+      !byTestId("db-admin-panel") && !giftDockOpen() && openPanelCount() === 1;
     clickTool("短语");
     await sleep(350);
     out.panelExclusivePhraseReplacesEmote = allByTestId("db-panel").length === 1 &&
@@ -350,11 +356,11 @@
     var exclusiveGiftToggle = byTestId("db-gift-toggle");
     if (exclusiveGiftToggle) exclusiveGiftToggle.click();
     await sleep(450);
-    out.panelExclusiveGiftDockClosesPanel = !!byTestId("db-gift-area") &&
+    out.panelExclusiveGiftDockClosesPanel = giftDockOpen() &&
       !byTestId("db-panel") && !byTestId("db-admin-panel") && openPanelCount() === 1;
     await toggleAdminFromHeader();
     out.panelExclusiveAdminClosesGiftDock = !!byTestId("db-admin-panel") &&
-      !byTestId("db-panel") && !byTestId("db-gift-area") && openPanelCount() === 1;
+      !byTestId("db-panel") && !giftDockOpen() && openPanelCount() === 1;
 
     // ---- 上游拒绝**原样展示**（code + message）：三块各自留痕、互不清空，面板留在原地。
     //      这一档必须在**有权限**时测 —— 入口只对房管存在，身份被撤销时面板会直接收起（见下）。

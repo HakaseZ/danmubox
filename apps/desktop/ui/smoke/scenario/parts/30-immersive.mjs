@@ -129,8 +129,10 @@
         ? Math.round((immGift1.height - immGift0.height) * 10) / 10 : null;
       out.immersiveKeepsGiftDock = byTestId("db-gift-dock") !== null && !!immGift0 &&
         !!immGift1 && !!immSplit1 &&
-        // 折叠态（此刻它就是折叠的）在沉浸态里照旧折叠：高度仍然是折叠头那一个数
-        !byTestId("db-gift-area") &&
+        // 折叠态（此刻它就是折叠的）在沉浸态里照旧折叠：高度仍然是总计条那一个数。
+        // 判据走 `aria-expanded` —— 需求 5.1–5.4 之后列表折叠也挂载，`db-gift-area`
+        // 在场与否不再是开合。
+        byTestId("db-gift-toggle").getAttribute("aria-expanded") === "false" &&
         Math.abs(immGift1.height - immGift0.height) < 1 &&
         Math.abs(immGift1.height - immGiftHeadH) < 1 &&
         Math.abs(rect(byTestId("db-chat-scroll")).bottom - immSplit1.top) < 1 &&

@@ -62,6 +62,16 @@ interface AppStore {
    */
   immersive: boolean;
   messages: Message[];
+  /**
+   * 补取到的头像：uid → 头像地址（契约 §5 `Message.face` 的**第二来源**，需求 §三 3.6）。
+   *
+   * 为什么单独一张表而不是回写 `messages`：同一 uid 的消息可能在补取**之后**才到
+   * （同一人连开两档大航海），回写只盖得住当时已经在列表里的那些行；查表则在渲染时求值，
+   * 后到的行自动拿到同一份结论。**空串也是一条结论**（问过了、上游没给）——
+   * 它是「不要再问」的标记，与「还没问过」（键不存在）不是一回事。
+   * 与 uid 一样是进程内、跨房间共用（头像与房间无关）；条数上限即本场出现过的发言人。
+   */
+  faces: Record<number, string>;
   /** 各房间的连接状态（`ConnState` + 一句话详情）。 */
   status: Record<number, { state: ConnState; detail: string }>;
   /** 各房间最近一次的观众数（协议 §10.7）；上游还没给过的一侧为 undefined。 */
@@ -208,6 +218,15 @@ interface AppStore {
   loadFollowed: () => Promise<boolean>;
   loadBalance: () => Promise<void>;
   /**
+   * 给「本该有头像却取不到」的行按 uid 补取头像（需求 §三 3.2 / 3.4 / 3.6）。
+   *
+   * 调用方（`RoomView`）只负责算出候选 uid（`faces.missingFaceUids`）；
+   * **同一 uid 只发一次**由这里收口：已有结论（含空串）、正在途中、或这一批里重复的都不再发。
+   * 失败不重试（命令层把「取不到」定义成空串，不是错误），也不弹错误条 ——
+   * 缺头像不是故障（需求 3.3）。
+   */
+  ensureFaces: (uids: number[]) => void;
+  /**
    * 列表页的**开播状态轮询**（契约 §4）：停在列表页时让状态自己跟上上游。
    *
    * **返回停止函数** —— 进房间页 / 组件卸载就调它停掉；重复调用先停上一轮（幂等）。
@@ -321,6 +340,15 @@ const sendTimers = new Map<number, number>();
  * `pendingSeq` 进程内单调递增、号不复用，因此键永不冲突；退房时随缓冲一起清掉。
  */
 const echoedLocals = new Set<number>();
+
+/**
+ * 正在途中的头像取数（uid）。与 `faces` 的分工：`faces` 是**结论**（含空串），这里是**在途标记**。
+ *
+ * 放在模块级而不是 state 里：它在途期间不该引起任何重渲染，而「同一 uid 只问一次」
+ * 只需要一个进程内的事实。与 `echoedLocals` 同一手法（同为进程内、会话级侧表）。
+ * 失败 / 成功都会把它摘掉 —— 结论落进 `faces`，那里才是「不要再问」的判据。
+ */
+const faceInflight = new Set<number>();
 
 /** 摘掉一条待确认行的定时器（回播确认 / 判失败 / 离开房间都要）。 */
 function clearSendTimer(localId: number) {
@@ -1039,6 +1067,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
   rooms: [],
   immersive: false,
   messages: [],
+  // 头像是按 uid 补取的，与房间无关：跨房间共用一张表，切房不清（清了会重复打上游）。
+  faces: {},
   status: {},
   roomStats: {},
   logs: [],
@@ -1665,6 +1695,30 @@ export const useApp = create<AppStore>((set, get, store) => ({
       set({ balance: await api.walletBalance() });
     } catch (error) {
       set({ error: describeError(error) });
+    }
+  },
+
+  ensureFaces(uids) {
+    const { faces } = get();
+    const wanted = uids.filter(
+      (uid) => uid > 0 && faces[uid] === undefined && !faceInflight.has(uid),
+    );
+    for (const uid of wanted) {
+      faceInflight.add(uid);
+      void api
+        .userFace(uid)
+        .then((face) => {
+          faceInflight.delete(uid);
+          // 空串照样落表：那是「问过了、上游没给」的结论，再问只会白打上游（需求 3.4）。
+          set((state) => ({ faces: { ...state.faces, [uid]: face } }));
+        })
+        .catch(() => {
+          // 命令层不该走到这里（取不到即空串，契约 §7）。真发生了也只当「没这个头像」：
+          // 落一条空串结论，免得同一行每次渲染都重发一次请求。不记 uid（推送用户标识不进
+          // 日志是全仓既有口径），失败原因由 `ipc.ts` 的 `call` 打到控制台。
+          faceInflight.delete(uid);
+          set((state) => ({ faces: { ...state.faces, [uid]: "" } }));
+        });
     }
   },
 

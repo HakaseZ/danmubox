@@ -136,7 +136,7 @@ danmubox/
 | 登出 | `cargo run -p danmubox-cli -- logout [账号名]` | 清空该账号（缺省 = 当前账号）的凭据；账号条目保留 |
 | 账号管理 | `cargo run -p danmubox-cli -- accounts [--use <名字>\|--create\|--remove <名字>]` | 不带参数列出账号（登录状态 + 昵称 / uid）；`--create` 扫码新增；`--use` / `--remove` 切换 / 删除 |
 | 发弹幕 | `cargo run -p danmubox-cli -- send <房间> "内容"` | 需登录；返回 `SendOutcome`（被吞/限流/失败）；`--emote <唯一键>` 发表情弹幕 |
-| 电池 / 关注 / 表情 / 房管（CLI） | `cargo run -p danmubox-cli -- wallet`、`follow`、`emotes <房间>`、`emotes-owned`、`admin-lists <房间>` | 逐项核对上游能力的只读入口；`admin-lists` 需房管身份 |
+| 电池 / 关注 / 表情 / 房管 / 头像（CLI） | `cargo run -p danmubox-cli -- wallet`、`follow`、`emotes <房间>`、`emotes-owned`、`admin-lists <房间>`、`face <uid>` | 逐项核对上游能力的只读入口；`admin-lists` 需房管身份；`face` 打印按 uid 取头像的上游原样结论（`code` / `message` / `data.face`） |
 | 全局参数 | `--config <路径>` | 以上任何子命令都接受，用于指定另一份 `config.toml`（调试 / 多环境并存） |
 | 前端单测 | `cd apps/desktop/ui && node --test src/filtering.test.ts` | 显示层纯逻辑（过滤 / 折叠 / 自动消失）的机制级单测；用 Node ≥ 22.18 的类型擦除直接跑 TS，不需要 vitest（见 [`docs/testing.md`](docs/testing.md) §9） |
 | 桌面端（独立产物） | `cd apps/desktop && ./ui/node_modules/.bin/tauri build --no-bundle` | **推荐**：产出 `target/release/danmubox-desktop`，前端已内嵌，双击即用 |

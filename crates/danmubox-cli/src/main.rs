@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use danmubox_bili::{
-    BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliSender, BiliWallet,
+    BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliProfile, BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
     AuthProvider, DanmakuSender, EmoteProvider, LiveSource, QrState, RoomAdmin, RoomCatalog,
@@ -106,6 +106,11 @@ enum Command {
         /// 房间号 / 短号 / URL
         room: String,
     },
+    /// 只读校准：按 uid 取一次头像（`docs/protocol.md` 附录 A 的「按 uid 取头像」条目）
+    Face {
+        /// 目标用户 uid
+        uid: i64,
+    },
 }
 
 #[tokio::main]
@@ -156,6 +161,31 @@ async fn main() -> Result<()> {
         Command::Emotes { room } => emotes(&store, &room).await?,
         Command::EmotesOwned => emotes_owned(&store).await?,
         Command::AdminLists { room } => admin_lists(&store, &room).await?,
+        Command::Face { uid } => face(&store, uid).await?,
+    }
+    Ok(())
+}
+
+/// 按 uid 取一次头像并打印**上游原样的**结论（只读、不改任何状态）。
+///
+/// 这是 `docs/protocol.md` 附录 A「按 uid 取头像」条目的核对入口：要看的不是
+/// 「有没有头像」，而是端点与签名是否被接受、`code` 到底是多少、`data.face` 是什么形态。
+/// 传输失败 / 非 JSON 应答（例如风控验证页）走 `Err`，**原样打印后即止**，不换参数重试。
+async fn face(store: &Arc<ConfigStore>, uid: i64) -> Result<()> {
+    let profile = BiliProfile::with_store(Arc::clone(store))?;
+    match profile.probe(uid).await {
+        Ok(probe) => {
+            println!(
+                "# 按 uid 取头像：code={} message={:?}",
+                probe.code, probe.message
+            );
+            if probe.face.is_empty() {
+                println!("  data.face：空（上游没给，界面按无头像处理）");
+            } else {
+                println!("  data.face：{}", probe.face);
+            }
+        }
+        Err(err) => println!("# 按 uid 取头像失败（不重试）：{err}"),
     }
     Ok(())
 }

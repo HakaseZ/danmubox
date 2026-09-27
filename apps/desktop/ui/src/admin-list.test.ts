@@ -21,6 +21,7 @@ import {
   emptyAdminMetaRecord,
   invalidateAdminList,
   mergeAdminSlice,
+  reconcileAdminPages,
   type AdminListState,
 } from "./admin-list.ts";
 import type { AdminListSlice, AdminUser } from "./types.ts";
@@ -134,4 +135,19 @@ test("两块名单的初始态各自独立（作废点不会互相串）", () =>
 test("首屏与步长常量是面板与 store 的共同来源（漂移修正）", () => {
   assert.equal(ADMIN_PAGE, 100);
   assert.equal(ADMIN_STEP, 10);
+});
+
+test("重读对账从空基线拼装，上游已删的条目不残留（写后重读 / 静默刷新，6.16）", () => {
+  // 本地旧列表是 [1,2,3,4]，上游重读后实际只剩 [2,3,4,5]（uid=1 被解除禁言删掉了）。
+  // 旧实现用「对旧 items 去重后追加」的 mergeAdminSlice，1 永远留着、5 加进来 → [1,2,3,4,5]。
+  // 修复：重读从空基线（只喂这次取回的页）对账，结果严格等于上游现状。
+  const pages = [
+    slice([user(2), user(3), user(4)], 5, 3, false),
+    slice([user(5)], 5, 4, true),
+  ];
+  const reconciled = reconcileAdminPages(pages, keyOf);
+  assert.equal(reconciled.items.map((u) => u.uid).join(","), "2,3,4,5");
+  assert.equal(reconciled.meta.total, 5);
+  assert.equal(reconciled.meta.done, true);
+  assert.ok(reconciled.items.length <= reconciled.meta.total);
 });

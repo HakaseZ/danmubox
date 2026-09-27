@@ -120,6 +120,26 @@ export function mergeAdminSlice<T>(
 }
 
 /**
+ * 重读对账：把一次重读取回的若干页（已按上游顺序）合并成「当前权威名单」。
+ *
+ * 与 [`mergeAdminSlice`] 的关键区别：**从空基线累加**，因此上游已删除的条目（如刚解除禁言的人）
+ * 不会残留 —— 这正是「写后重读 / 静默刷新」该有的「以远端为准」（需求 6.16）。旧的
+ * `mergeAdminSlice` 是「对旧 items 去重后追加」，重读时永远留着旧条目、删人删不掉，这就是
+ *「房管名单重读合并」要修的点。`store.ts` 的 `fillAdminList` 在重读路径调用本函数，把整段
+ * 取回的页收口成一份名单，**结束时一次性原子替换**旧列表（取数期间旧列表保持可见，不闪空）。
+ */
+export function reconcileAdminPages<T>(
+  pages: readonly AdminListSlice<T>[],
+  keyOf: AdminKeyOf<T>,
+): AdminListState<T> {
+  let state: AdminListState<T> = { items: [], meta: emptyAdminListMeta() };
+  for (const page of pages) {
+    state = mergeAdminSlice(state, page, keyOf);
+  }
+  return state;
+}
+
+/**
  * 名单**首屏**条数。
  *
  * 与 `store.ts` 曾经的 `ADMIN_PAGE` 同源（黑名单实测 `ps=100` 可一页返回 36 条，三块各先拿 100 条）；

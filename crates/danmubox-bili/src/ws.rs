@@ -906,8 +906,9 @@ impl BiliLive {
                                             }
                                             // `ROOM_CHANGE`：同样是「先投消息、再冒泡」——
                                             // 主播改了标题时，界面上挂着的旧标题要原地换掉
-                                            // （issue202609241553 第 6 条）。房间号取载荷里的
-                                            // `data.room_id`（不是连接的这个房间号）。
+                                            // （issue202609241553 第 6 条）。房间号以**连接上下文**
+                                            // 为准（`cmd.rs` 用 `dispatch` 的 `room_id`，不再是载荷里的
+                                            // `data.room_id`——后者可能是短号，与登记表 key 对不上）。
                                             Some(cmd::Dispatch::RoomTitle {
                                                 message,
                                                 room_id,

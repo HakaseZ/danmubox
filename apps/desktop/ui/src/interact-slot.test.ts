@@ -148,3 +148,20 @@ test("非互动消息夹在中间不影响槽位读数（聚合/礼物/大航海
   assert.equal(state.prev?.local_id, first.local_id);
   assert.equal(state.remainingMs, INTERACT_SLOT_LIFE_MS - 100);
 });
+
+test("同毫秒并列：两条 ts 相同的互动只留最新到达的那条，不造退场层（否则两行叠在一起）", () => {
+  const earlier = msg("interact", T0, { local_id: 1 });
+  const later = msg("interact", T0, { local_id: 2 });
+  const state = view([earlier, later], ROOM, T0 + 10);
+  assert.equal(state.latest?.local_id, 2, "同毫秒取最后到达的那条作 latest");
+  assert.equal(state.prev, null, "同毫秒没有时序差，不该出现退场层（避免并列重叠）");
+});
+
+test("同毫秒并列不抢时序：后到者作 latest、不把先到者错当滑出的旧层", () => {
+  const a = msg("interact", T0, { local_id: 10 });
+  const b = msg("interact", T0, { local_id: 11 });
+  // 缓冲里先到 a、后到 b；旧实现会让 a 当 latest、b 当 prev（退场层），接力方向反了。
+  const state = view([a, b], ROOM, T0 + 5);
+  assert.equal(state.latest?.local_id, 11);
+  assert.equal(state.prev, null);
+});

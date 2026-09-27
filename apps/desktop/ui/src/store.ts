@@ -21,6 +21,7 @@ import {
   adminMarkInFlight,
   emptyAdminMetaRecord,
   mergeAdminSlice,
+  reconcileAdminPages,
   type AdminListKind,
   type AdminListMeta,
   type AdminMetaRecord,
@@ -952,11 +953,43 @@ async function fillAdminList(
   gen: number,
   kind: AdminListKind,
   limit: number,
+  reconcile: boolean,
 ): Promise<string | undefined> {
   const read = (offset: number, want: number) =>
     kind === "silent"
       ? api.adminSilentList(roomId, offset, want)
       : api.adminBlacklistList(roomId, offset, want);
+  // 首波（初次进房、该名单尚未取过）= 逐页**追加**，让面板随翻页渐进填充（旧行为）。
+  if (!reconcile) {
+    let offset = 0;
+    let want = limit;
+    for (;;) {
+      if (gen !== adminListGen || store.getState().activeRoomId !== roomId) return undefined;
+      let slice: AdminListSlice<AdminUser>;
+      try {
+        slice = await read(offset, want);
+      } catch (error) {
+        if (gen !== adminListGen) return undefined;
+        const text = describeError(error);
+        store.setState((state) => ({
+          adminMeta: { ...state.adminMeta, [kind]: adminClearInFlight(state.adminMeta[kind]) },
+          adminErrors: { ...state.adminErrors, [kind]: text },
+        }));
+        return text;
+      }
+      if (gen !== adminListGen || store.getState().activeRoomId !== roomId) return undefined;
+      const meta = applyAdminSlice(store, kind, slice);
+      if (meta.done) return undefined;
+      offset = meta.nextOffset;
+      want = ADMIN_STEP;
+    }
+  }
+  // 重读（静默刷新 / 写后重读）走**对账**：先把这次取回的整段页收口成一份名单，结束时
+  // 一次性原子替换旧列表 —— 上游已删除的条目（如刚解除禁言的人）被丢弃，不靠「追加 + 去重」
+  // 永远留着旧条目（旧实现重读只追加拿不到删除，违反 6.16「以远端为准」）。取数期间旧列表
+  // 保持可见（不闪空），最终整块替换，符合「缓存常驻、不触发整段重读」的精神。
+  const pages: AdminListSlice<AdminUser>[] = [];
+  let meta: AdminListMeta = store.getState().adminMeta[kind];
   let offset = 0;
   let want = limit;
   for (;;) {
@@ -968,17 +1001,32 @@ async function fillAdminList(
       if (gen !== adminListGen) return undefined;
       const text = describeError(error);
       store.setState((state) => ({
-        adminMeta: { ...state.adminMeta, [kind]: adminClearInFlight(state.adminMeta[kind]) },
         adminErrors: { ...state.adminErrors, [kind]: text },
       }));
       return text;
     }
     if (gen !== adminListGen || store.getState().activeRoomId !== roomId) return undefined;
-    const meta = applyAdminSlice(store, kind, slice);
-    if (meta.done) return undefined;
+    pages.push(slice);
+    // 仅取这一页的游标 / 终点用于驱动循环（条目留到结尾一次性对账）。
+    meta = mergeAdminSlice({ items: [], meta }, slice, (user) => user.uid).meta;
+    if (meta.done) break;
     offset = meta.nextOffset;
     want = ADMIN_STEP;
   }
+  const reconciled = reconcileAdminPages(pages, (user) => user.uid);
+  // 原子替换：反映上游增删（删人即丢弃旧条目）。
+  if (kind === "silent") {
+    store.setState({
+      adminSilent: reconciled.items,
+      adminMeta: { ...store.getState().adminMeta, silent: reconciled.meta },
+    });
+  } else {
+    store.setState({
+      adminBlacklist: reconciled.items,
+      adminMeta: { ...store.getState().adminMeta, blacklist: reconciled.meta },
+    });
+  }
+  return undefined;
 }
 
 /**
@@ -1895,8 +1943,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
     const silentWant = want(state0.adminSilent.length);
     const blackWant = want(state0.adminBlacklist.length);
 
-    const fillSilent = () => fillAdminList(store, roomId, gen, "silent", silentWant);
-    const fillBlacklist = () => fillAdminList(store, roomId, gen, "blacklist", blackWant);
+    const fillSilent = () =>
+      fillAdminList(store, roomId, gen, "silent", silentWant, !firstWave);
+    const fillBlacklist = () =>
+      fillAdminList(store, roomId, gen, "blacklist", blackWant, !firstWave);
     let keywordsErr: string | undefined;
     const loadKeywords = () =>
       api.adminKeywordsList(roomId).then(

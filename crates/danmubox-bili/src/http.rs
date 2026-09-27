@@ -615,7 +615,13 @@ impl BiliHttp {
             .to_string();
         if !face.is_empty() {
             let mut cache = FACE_CACHE.lock().expect("face cache poisoned");
-            cache.insert(uid, CachedFace { face: face.clone(), fetched_at: Instant::now() });
+            cache.insert(
+                uid,
+                CachedFace {
+                    face: face.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
         }
         Ok(face)
     }
@@ -1418,7 +1424,11 @@ mod tests {
     #[tokio::test]
     async fn user_face_empty_on_non_zero_code() {
         let stub = spawn_stub(
-            &[(200, "application/json", r#"{"code":-404,"message":"not found"}"#)],
+            &[(
+                200,
+                "application/json",
+                r#"{"code":-404,"message":"not found"}"#,
+            )],
             Duration::ZERO,
         );
         let http = BiliHttp::new()

@@ -623,7 +623,11 @@ async fn resolve_face(state: State<'_, AppState>, uid: i64) -> ApiResult<Option<
     }
     let http = BiliHttp::with_store(Arc::clone(&state.store)).map_err(ApiError::from)?;
     // 问不到时按「无头像」处理：返回 `None`，不向上抛错（头像缺失不是故障）。
-    Ok(http.user_face(uid).await.ok().filter(|face| !face.is_empty()))
+    Ok(http
+        .user_face(uid)
+        .await
+        .ok()
+        .filter(|face| !face.is_empty()))
 }
 
 /// 本人在该房间的身份（契约 §7）：粉丝牌 / 大航海 / 是否房管。

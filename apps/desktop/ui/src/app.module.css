@@ -2123,13 +2123,27 @@
   margin-bottom: var(--sp-2);
 }
 
-/* 房管面板（issue #3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表 */
+/* 房管面板（issue #3；结构见需求 6.1–6.3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表。
+   面板本身**不滚**（`overflow: hidden`）：滚动权交给 `.adminList`（`flex: 1 1 auto; min-height: 0`），
+   表单排、错误条与底部向上展开的批量条因此都是**不滚区** —— 名单也不再固定 240px 高（6.3）。
+   口径同 `.phrases` / `.picker` 的「固定行 + 可滚区」，不引入第二套做法。 */
 .adminPanel {
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
   padding: var(--sp-2) var(--sp-3);
   max-height: var(--panel-max-h);
-  overflow-y: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* tabpanel 是面板里**唯一可缩的一块**（`flex: 1 1 auto` + `min-height: 0`）：
+   头部与它下面的批量条都钉住不动，缩的只有名单那一块。 */
+.adminTabPanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 三块列表收成**横向 tab 轨道**（issue 2609132259 #1）：外观与表情分组的轨道同一套
@@ -2185,18 +2199,40 @@
   background: var(--accent);
 }
 
-/* 批量模式的**第 2 排**：全选 / 已选 N 项 / 批量动作。它紧贴第 1 排下方（issue #5 的「两排都贴顶」），
-   也是横向一排 —— 行内三样都不换行，360px 下按内容算得下（§9.1）。 */
+/* 批量动作条（需求 6.1 / 6.2）：**从面板最底下向上展开一行** —— 它是 `.adminTabPanel` 的
+   最后一个子节点（在 `.adminList` **之外**），因此长名单滚到任意位置它都**始终可见**，
+   也不会在列表中间插行、不让界面突然变高。行内三样（全选 / 已选 N 项 / 批量动作）横向一排
+   不换行，360px 下按内容算得下（§9.1）。
+   160ms 滑入：从下方滑上来，读作「向上展开一行」；动效偏好下不播（口径同本仓另几处）。 */
 .adminBatchBar {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin: var(--sp-2) 0 var(--sp-1);
+  margin: var(--sp-2) 0 0;
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--fs-2);
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--r-2);
+  animation: adminBatchIn 160ms ease-out;
+}
+
+@keyframes adminBatchIn {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adminBatchBar {
+    animation: none;
+  }
 }
 
 /* 名字格：放不下时默认**可横滑**（触屏 / 滚轮都能推，滚动条隐藏），
@@ -2267,13 +2303,17 @@
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
 }
 
-/* 名单使用两列等宽网格，每个条目占一格；名单自己滚，头部不会被一起滚走。 */
+/* 名单使用两列等宽网格，每个条目占一格；**名单自己滚**（面板不滚，见 `.adminPanel`），
+   头部与底部的批量条都不会被一起滚走。**不再固定 240px 高**：它在 `.adminTabPanel` 里
+   `flex: 1 1 auto; min-height: 0`，高度由面板限高与同排的表单 / 批量条一起决定 ——
+   面板限高生效时它吸收被压缩的那部分并在内部滚动（6.3）。 */
 .adminList {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-1);
   margin: var(--sp-2) 0 var(--sp-1);
-  max-height: 240px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 

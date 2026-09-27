@@ -379,12 +379,25 @@
         });
         // 三块各自的读取失败开关：__setAdminFail(true) 时**三块一起**拒绝 —— 面板里的错误条
         // 按当前 tab 只渲染一条（issue #1 之后一次只渲染一块），冒烟因此能逐 tab 各断一次。
+        // 两份名单按**契约 §7 的 `AdminListSlice` 形状**返回（`items` / `total` / `next_offset` / `done`）——
+        // 基线这里返回的是**裸数组**，与形状不符（`store` 读 `.items` 会得到 undefined，新断言面因此是空的，
+        // T5 按 6.7 / 6.15 改成分页累加后必须修）。替身各只有一条，首请求即到终点（`done: true`）。
         case "admin_silent_list": return window.__adminFail
           ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
-          : Promise.resolve([{ uid: 900, uname: "被禁言的观众", face: "" }]);
+          : Promise.resolve({
+              items: [{ uid: 900, uname: "被禁言的观众", face: "" }],
+              total: 1,
+              next_offset: 1,
+              done: true
+            });
         case "admin_blacklist_list": return window.__adminFail
           ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
-          : Promise.resolve([{ uid: 901, uname: "黑名单观众", face: "" }]);
+          : Promise.resolve({
+              items: [{ uid: 901, uname: "黑名单观众", face: "" }],
+              total: 1,
+              next_offset: 1,
+              done: true
+            });
         case "admin_keywords_list": return window.__adminFail
           ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
           : Promise.resolve(["刷屏", "广告"]);

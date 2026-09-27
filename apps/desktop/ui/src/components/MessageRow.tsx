@@ -1,6 +1,7 @@
 import { Avatar } from "./Avatar";
 import type { MenuPoint } from "./ContextMenu";
-import { useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { resolveFace } from "../ipc";
 import {
   amountText,
   badgesFor,
@@ -148,12 +149,27 @@ export function MessageRow({
 }: Props) {
   const t = testIdFor(scope);
   const { message, count } = row;
+  // 有效头像：优先用上游带来的 `message.face`；上游没带（舰长 / 部分礼物 / SC，A12 / A13 实测）
+  // 但有 `uid` 时，惰性经 `resolve_face` 按 uid 补一个。空串 / undefined 时 `Avatar` 不画假图。
+  const [resolvedFace, setResolvedFace] = useState<string | undefined>(message.face);
   // 这一行是不是**聚合行**：判据就是 `senders` 在不在。两处产这个字段 ——
   // 弹幕刷屏（`aggregate.ts`）与**低价礼物桶**（`filtering.collapseCheapGiftRows`，
   // 用户 2026-09-22 第 3 条：桶改成与刷屏同一套形态）。聚合行有三处与其它行不同：
   // 头像列画 `senders` 那几张叠着的头像、身份位改印数量（弹幕写「刷屏 ×N」、
   // 礼物桶写「低价礼物 ×N」）、正文里**不再**画 `×N`（数量已经移到身份位，同一个数不出现两次）。
   const aggregated = row.senders !== undefined;
+  useEffect(() => {
+    if (message.face && message.face.length > 0) {
+      setResolvedFace(message.face);
+      return;
+    }
+    // 聚合行头像列画的是 `senders` 那几张（各自带 face），轮不到这一行去补；只补非聚合行。
+    if (!aggregated && message.uid && message.uid !== 0) {
+      resolveFace(message.uid).then((face) => {
+        if (face) setResolvedFace(face);
+      });
+    }
+  }, [message.face, message.uid, aggregated]);
   // 聚合行头像列画的是谁：`senders` 里**有头像**的那几位 —— 上游没给 face 的观众不占位
   // （与单张头像同一条口径：不画假图），错位因此按**实际画出来的张数**算，而不是按 `senders`
   // 的长度（3 位里有 1 位没头像时，两张头像仍只错开一次 30%）。非聚合行是空数组。
@@ -351,7 +367,7 @@ export function MessageRow({
               ))}
             </span>
           ) : (
-            <Avatar url={message.face} name={message.uname} testId={t("avatar")} />
+            <Avatar url={resolvedFace} name={message.uname} testId={t("avatar")} />
           )}
         </span>
       )}

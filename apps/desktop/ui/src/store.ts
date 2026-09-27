@@ -2,7 +2,7 @@
 
 import { create, type StoreApi } from "zustand";
 
-import { api, describeError, subscribeEvents } from "./ipc";
+import { api, describeError, resolveFace, subscribeEvents } from "./ipc";
 // 「哪些消息在列表里」那几条规则住在这个纯模块里（可被 `node --test` 直接钉住，见该文件头）。
 import {
   adoptSessionSnapshot,
@@ -47,6 +47,13 @@ import { isAnchorGate, sendOutcomeText } from "./types";
 
 /** 前端日志只保留的行数（`docs/ipc.md` §8）；消息按 `kind` 分档的显示上限 `KIND_CAPS` 在 `session-messages.ts`。 */
 const LOG_CAP = 200;
+
+/**
+ * 缺头像的消息（舰长 / 部分礼物 / SC，协议 A12 / A13 实测上游不带 `face`，但有稳定 `uid`）
+ * 上屏前按 `uid` 现取头像的最长等待：到了就带头像上屏，超时仍先上屏（头像留空、由
+ * `MessageRow` 兜底惰性补）。只要比一次 `resolve_face` 网络往返略长即可，慢网也不致卡住。
+ */
+const FACE_FETCH_TIMEOUT_MS = 600;
 
 interface AppStore {
   info?: AppInfo;
@@ -1084,6 +1091,34 @@ export const useApp = create<AppStore>((set, get, store) => ({
       if (session.logged_in) void get().loadFollowed();
 
       unsubscribe?.();
+      // 入列（同一条不重复 + 会话内序号只进不退，见 `session-messages.ts` 的 `insertIncoming`）。
+      const appendMessage = (message: Message): void => {
+        const messages = insertIncoming(get().messages, message);
+        if (messages === null) return;
+        set({ messages });
+      };
+      // 舰长 / 部分礼物 / SC 的上游负载不带 `face`（协议 A12 / A13 实测），但有稳定的 `uid`。
+      // 为避免头像「晚一拍弹出来」，先按 `uid` 现取头像、等到了再上屏；最多等
+      // `FACE_FETCH_TIMEOUT_MS`，超时仍先上屏（头像留空，由 `MessageRow` 兜底惰性补）。
+      const holdForFace = (message: Message): void => {
+        let settled = false;
+        const release = (face?: string): void => {
+          if (settled) return;
+          settled = true;
+          appendMessage(face && face.length > 0 ? { ...message, face } : message);
+        };
+        const timer = window.setTimeout(release, FACE_FETCH_TIMEOUT_MS);
+        resolveFace(message.uid)
+          .then((face) => {
+            window.clearTimeout(timer);
+            release(face ?? undefined);
+          })
+          .catch(() => {
+            window.clearTimeout(timer);
+            release();
+          });
+      };
+
       unsubscribe = await subscribeEvents({
         onMessage: (message) => {
           if (message.room_id !== get().activeRoomId) return;
@@ -1114,12 +1149,14 @@ export const useApp = create<AppStore>((set, get, store) => ({
             }));
             return;
           }
-          // 入列的判据（同一条不重复 + 会话内序号只进不退）在 `session-messages.ts` 的
-          // `insertIncoming`；它只保证**同一次会话内**不重复，会话换代（「断开连接」之后
-          // 再「刷新连接」）时号会从 1 重来，那一路由 `refresh` 换列表。
-          const messages = insertIncoming(current, message);
-          if (messages === null) return;
-          set({ messages });
+          // 舰长 / 部分礼物 / SC 的上游负载不带 `face`（协议 A12 / A13 实测），但有稳定的 `uid`。
+          // 为避免头像「晚一拍弹出来」，先按 `uid` 现取头像、等到了再上屏；最多等
+          // `FACE_FETCH_TIMEOUT_MS`，超时仍先上屏（头像留空，由 `MessageRow` 兜底惰性补）。
+          if (message.uid && !(message.face && message.face.length > 0)) {
+            holdForFace(message);
+            return;
+          }
+          appendMessage(message);
         },
         onRoomStats: (event) =>
           set((state) => {

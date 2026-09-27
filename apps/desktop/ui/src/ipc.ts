@@ -194,7 +194,26 @@ export const api = {
 
   prefsGet: () => call<Prefs>("prefs_get"),
   prefsSet: (patch: Partial<Prefs>) => call<Prefs>("prefs_set", { patch }),
+
+  /** 按 uid 现取用户头像（契约 §7 / 协议 §10.6）：大航海 / 部分礼物 / SC 的上游负载不带 face，
+   *  前端对缺头像的行惰性调用；取不到返回 null，按「无头像」处理。 */
+  resolveFace: (uid: number) => call<string | null>("resolve_face", { uid }),
 };
+
+/**
+ * 按 uid 现取头像，按 uid 进程内去重：同一观众在一场直播里多次出现（连买舰长、
+ * 弹幕区与礼物栏各一张）只问一次上游；命中后直接回缓存的 Promise，不重复打。
+ * 失败返回 `null`（界面按「无头像」处理）。
+ */
+const facePromises = new Map<number, Promise<string | null>>();
+export function resolveFace(uid: number): Promise<string | null> {
+  let pending = facePromises.get(uid);
+  if (!pending) {
+    pending = api.resolveFace(uid).catch(() => null);
+    facePromises.set(uid, pending);
+  }
+  return pending;
+}
 
 export interface EventHandlers {
   onMessage?: (message: Message) => void;

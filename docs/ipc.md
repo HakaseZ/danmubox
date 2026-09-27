@@ -98,8 +98,8 @@
 | `accounts_list` | `lib.rs:726` | `emotes_owned` | `lib.rs:606` |
 | `account_qr_start` | `lib.rs:802` | `admin_mute` | `lib.rs:615` |
 | `account_qr_poll` | `lib.rs:832` | `admin_unmute` | `lib.rs:631` |
-| `account_switch` | `lib.rs:736` | `admin_silent_list` | `lib.rs:706` |
-| `account_logout` | `lib.rs:767` | `admin_blacklist_list` | `lib.rs:722` |
+| `account_switch` | `lib.rs:736` | `admin_silent_list` | `lib.rs:699` |
+| `account_logout` | `lib.rs:767` | `admin_blacklist_list` | `lib.rs:714` |
 | `account_remove` | `lib.rs:749` | `admin_blacklist_add` | `lib.rs:655` |
 | `rooms_list` | `lib.rs:216` 同步 | `admin_blacklist_del` | `lib.rs:665` |
 | `rooms_refresh_status` | `lib.rs:238` | `admin_keywords_list` | `lib.rs:675` |
@@ -135,7 +135,7 @@
 | `Emote` / `EmotePackage` | `contract.md` §5（`model.rs:313` / `model.rs:299`） | `emotes_list` / `emotes_owned` 返回 |
 | `FollowedRoom` | `contract.md` §5（`model.rs:345`） | `follow_list` 返回 |
 | `SilentUser` / `BlacklistedUser` | `contract.md` §5（`model.rs:447` / `model.rs:455`） | `admin_silent_list` / `admin_blacklist_list` 的 `items` 元素 |
-| `AdminListSlice<T>` | `lib.rs:699` | `admin_silent_list` / `admin_blacklist_list` 返回：`{ items, total, next_offset, done }` —— `items` = 这一段里的条目、`total` = 上游总数、`next_offset` = **上游口径**的下一次 `offset`（**不是**去重后的列表长度）、`done` = 已到终点（不再打上游）。前端据此决定「还翻不翻」（契约 §7） |
+| `AdminListSlice<T>` | `ports.rs:363-381`（`danmubox_core::ports`，与端口 `RoomAdmin` 的返回同一形状） | `admin_silent_list` / `admin_blacklist_list` 返回：`{ items, total, next_offset, done }` —— `items` = 这一段里的条目、`total` = 上游总数、`next_offset` = **上游口径**的下一次 `offset`（**不是**去重后的列表长度）、`done` = 已到终点（不再打上游）；单次响应体量封顶时 `done` 为假并带回真实游标，由前端后台继续补齐。前端据此决定「还翻不翻」（契约 §7） |
 | `ReportReason` | `contract.md` §5（`model.rs:235`） | `report_reasons` 返回、`chat_report` 参数 |
 | `PrefsSnapshot` | `contract.md` §8（`crates/danmubox-core/src/prefs.rs:103-294`） | `prefs_get` / `prefs_set`；25 键、键名即契约字面（TS 侧类型名 `Prefs`，`apps/desktop/ui/src/types.ts:379`） |
 

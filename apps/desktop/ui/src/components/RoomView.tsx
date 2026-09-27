@@ -919,7 +919,6 @@ export function RoomView({
           <div
             className={styles.chatWrap}
             data-testid="db-chat-wrap"
-            data-interact-slot={prefs["ui.interact_single_slot"] ? "true" : undefined}
             onPointerDown={onChatPointerDown}
             onPointerUp={onChatPointerUp}
             onPointerCancel={onChatPointerCancel}
@@ -932,8 +931,10 @@ export function RoomView({
               onMenu={(message, at) => setMessageMenu({ at, message })}
             />
             {/* 互动/进场消息共用单槽位（ui.interact_single_slot，docs/ui.md §4.8）：
-                浮在弹幕区底部偏左，显示最新一条、下一条快速顶掉上一条，空闲淡出。
-                容器上的 `data-interact-slot` 让 CSS 提前给浮层预留高度（不等第一条到达）；
+                浮在弹幕区底部偏左，显示最新一条、下一条快速顶掉上一条；空闲到点由
+                `InteractSlot` 自己卸载整块（`interact-slot.ts` 的寿命判定）。
+                弹幕区的预留高度**只认「浮层在不在 DOM 里」**（`.chatWrap:has(> .interactSlot)`）：
+                开关开着但还没有互动消息时一点空白都不占，浮层卸载即收回并让弹幕缩回补齐。
                 开关关 = 互动消息**完全不显示**：列表不画、浮层不渲染，预留高度一并收回
                 （由 `filtering.toDisplayRows` 无条件剔除 interact 行 + 这里不渲染浮层共同实现）。 */}
             {prefs["ui.interact_single_slot"] && <InteractSlot />}

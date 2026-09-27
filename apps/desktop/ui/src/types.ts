@@ -672,10 +672,18 @@ export const KIND_LABEL: Record<MessageKind, string> = {
 };
 
 /**
- * 互动槽位（ui.interact_single_slot）浮层在**没有新互动消息**后多久自动淡出（毫秒）。
+ * 互动槽位（ui.interact_single_slot）浮层在**没有新互动消息**后多久开始淡出（毫秒）。
  * 下一条互动到达会重置这个计时，因此连续互动时浮层常驻、逐条接力顶替（docs/ui.md §4.8）。
  */
 export const INTERACT_SLOT_MS = 4000;
+
+/**
+ * 互动槽位淡出的时长（毫秒）：`INTERACT_SLOT_MS` 到点开始淡出，淡完**整块卸载** ——
+ * 两枚相加就是槽位的总寿命（`interact-slot.ts` 的 `INTERACT_SLOT_LIFE_MS`）。
+ * 组件按这对数排卸载定时器、CSS 按同一对数播 `interactSlotFade`，两边同时到点；
+ * 卸载即 `.chatWrap` 的预留归零、弹幕缩回补齐空出的那一段（docs/ui.md §4.8）。
+ */
+export const INTERACT_SLOT_FADE_MS = 300;
 
 /**
  * 互动槽位「新进旧出」的快速顶替过渡时长（毫秒）。新消息自下而上滑入、旧消息同时向上滑出，

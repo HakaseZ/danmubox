@@ -17,15 +17,16 @@ import type { Message, Prefs } from "./types";
  * 单个人在那里已经被压成 5 秒一条 —— 窗口取同一档，聚合里出现的多条就只可能来自
  * **不同的观众**，正是这条需求要的形态（「不同的观众短时间内刷同一个弹幕」）。
  *
- * **滑动**：基准是这一串的**最后一条**，每并进一条就把整个窗口往后刷一次 5 秒 ——
- * 只要这条刷屏还在有人接，它就一直并进同一行，**没有条数上限**（用户：「5 秒内聚合，
- * 每聚合一条重新刷新一次 5 秒，无上限」）。
+ * **滑动**：基准是这一组的**最后并入**的那条（需求 202609271523 §二 2.4），每并进一条就把整个窗口往后
+ * 刷一次 5 秒 —— 只要这条刷屏还在有人接，它就一直并进同一组，**没有条数上限**（用户：
+ * 「5 秒内聚合，每聚合一条重新刷新一次 5 秒，无上限」）。
  *
  * 当初定「非滑动」（锚点 = 第一条、不随后续顺延）的理由是怕「一个人流量不断时这一行
  * 永远闭不了口、行的寿命没有上界」。实际用下来那正是刷屏本来的样子：非滑动会把同一波
  * 刷屏按 5 秒**硬切**成好几串，每串都可能不够 `AGGREGATE_MIN_COUNT` 而一行都不折，
- * `×N` 也被摊成好几个小数 —— 折不出来的聚合等于没有聚合。改回滑动之后，行的收口
- * 交给「下一条换了键 / 超过 5 秒没人再接」，行的寿命由刷屏自己结束，不再人为封顶。
+ * `×N` 也被摊成好几个小数 —— 折不出来的聚合等于没有聚合。改回滑动之后，组的收口
+ * 只由「超过 5 秒没人再接同一条」决定 —— **换键（乃至插进任何别的行）都不再收口**
+ * （需求 202609271523 §二 2.3），组的寿命由刷屏自己结束，不再人为封顶。
  */
 export const AGGREGATE_WINDOW_MS = 5000;
 
@@ -45,8 +46,10 @@ export const AGGREGATE_MIN_COUNT = 3;
  * 聚合行的头像列**画**几位观众的头像（契约 §4）；参与观众多于这个数的，多出来的不画 ——
  * 头像列只回答「是几个人在刷」，不报总数（条数由身份位的 `×N` 说）。
  *
- * 为什么是 3：每人只错开 30% 个头像宽，3 张一共占 1.6 个头像宽（≈ 窄屏 360 下正文可用宽度的
- * 1/6），再多就开始吃正文的宽度；而 3 张已经足够看出「不是同一个人」。
+ * 为什么是 3：每人只错开 34% 个头像宽（每人露 66%，需求 202609271523 §二 2.1；错开量在 `MessageRow` 的
+ * `AVATAR_STACK_OFFSET`，低价礼物桶复用同一个常量，故两族同取一个值 —— 需求 202609271523 §二 2.2），
+ * 3 张一共占 1.68 个头像宽（≈ 窄屏 360 下正文可用宽度的 1/6），再多就开始吃正文的宽度；
+ * 而 3 张已经足够看出「不是同一个人」。
  * 它同时是**向上取整的上限**：`AGGREGATE_MIN_SENDERS`（2）≤ 它，因此收集时收到这个数
  * 就够判定加展示两件事了（见 `sendersOf`）。
  */
@@ -59,7 +62,11 @@ export const AGGREGATE_AVATARS_SHOWN = 3;
 const AGGREGATE_MIN_SENDERS = 2;
 
 /**
- * 这条消息落在哪个**聚合键**上；`null` = 不参与聚合、自己独占一行。
+ * 这条消息落在哪个**聚合键**上；`null` = 不参与聚合、自己独占一行
+ * （礼物 / SC / 大航海 / 互动 / 系统 / 低价礼物桶 / 本地乐观行 / 空正文，需求 202609271523 §二 2.3）。
+ *
+ * 返回 `null` 只是说「这一行不参与聚合」——它**不打断**同键已经累积起来的那一组
+ * （见 `aggregateRows` 的第一趟）。
  *
  * - 只有 `danmaku`：礼物 / SC / 大航海 / 互动 / 系统各有自己的展示形态，合了会吃掉信息；
  * - **本地乐观行**（`local_id < 0`）不参与：刚发出的那条必须自己站一行，
@@ -81,14 +88,16 @@ export function aggregateKey(message: Message): string | null {
 }
 
 /**
- * 一串里出现过的观众：按首次出现顺序去重（契约 §4），最多收 `AGGREGATE_AVATARS_SHOWN` 位 ——
+ * 一组里出现过的观众：按首次出现顺序去重（契约 §4），最多收 `AGGREGATE_AVATARS_SHOWN` 位 ——
  * 判定要两位、展示要三位，收到三位，两件事都不缺了（再多收也没人看，还白扫一遍）。
+ * 入参是**这一组的成员下标**（升序），行本身仍从 `rows` 现取 —— 分组那一趟只记下标，
+ * 不复制行对象。
  */
-function sendersOf(run: DisplayRow[]): SenderRef[] {
+function sendersOf(rows: readonly DisplayRow[], members: readonly number[]): SenderRef[] {
   const limit = Math.max(AGGREGATE_AVATARS_SHOWN, AGGREGATE_MIN_SENDERS);
   const senders: SenderRef[] = [];
-  for (const row of run) {
-    const { uid, uname, face } = row.message;
+  for (const at of members) {
+    const { uid, uname, face } = rows[at].message;
     if (senders.some((sender) => sender.uid === uid)) continue;
     senders.push({ uid, uname, face: face ?? "" });
     if (senders.length >= limit) break;
@@ -96,24 +105,41 @@ function sendersOf(run: DisplayRow[]): SenderRef[] {
   return senders;
 }
 
+/** 一组同键弹幕：成员是它们在入参里的**下标**（升序），`lastTs` 是**最后并入**的那条的时刻。 */
+interface AggregateGroup {
+  members: number[];
+  lastTs: number;
+}
+
 /**
- * 弹幕聚合：把相邻、同键、同窗口内、**够多条且不止一个人**的弹幕折成一行
+ * 弹幕聚合：把**同键、同窗口内、够多条且不止一个人**的弹幕折成一行
  * （`docs/ui.md` §8.4 的第二张表）。
  *
- * 单趟「先收 run、再决定折不折」：
- * - **run** = 相邻 + 同键 + 与**上一条**（run 最后一条）时间差 ≤ `AGGREGATE_WINDOW_MS`
- *   —— 滑动窗口，每并入一条即顺延，**没有条数上限**；
- * - 只有 run 长度 ≥ `AGGREGATE_MIN_COUNT` **且**参与观众去重后 ≥ `AGGREGATE_MIN_SENDERS`
- *   位不同 uid 才折成一行（`message` = run 第一条，`count` = run 长度，
- *   `senders` = 去重后前 `AGGREGATE_AVATARS_SHOWN` 位）；
- * - 否则 run 里每一行**原样逐条输出**（不折的 run 一个对象都不动）。
- * 先收后判的理由：折不折要看**整串**（够不够 3 条、有没有第二位观众），
- * 边收边定就得先假定它会折、判不成立时再把前面几行吐回去 —— 那才是会留下中间态的写法。
+ * 分两趟走 —— 只为「容忍插花」还保住 O(n)（列表是虚拟化的，不能引入 O(n²)）：
+ *
+ * **第一趟：分组。** 只有取到**聚合键**的行参与（`aggregateKey` 返回 `null` 的行 ——
+ * 礼物 / SC / 大航海 / 互动 / 系统 / 低价礼物桶 / 本地乐观行 / 空正文 —— 与**键不同**的
+ * 弹幕一样，**都不打断**同键已经累积起来的那一组，需求 202609271523 §二 2.3）。
+ * 同键的行按「与**这一组最后并入**的那条」的**距离**归组（需求 202609271523 §二 2.4）：
+ * 距离 ≤ `AGGREGATE_WINDOW_MS` 即续窗、每并入一条就把窗口往后刷一次，**没有条数上限**；
+ * 隔得太远就为这个键另起一组 —— **每一组各持自己的计时**，插在中间别的行不参与计时。
+ *
+ * **第二趟：落位。** 折与不折先定下来，再顺着原索引走一遍：**参与聚合且折了的**那一组，
+ * 只在**它首条的原位**出一行（需求 202609271523 §二 2.6：折叠行落首条原位、代表行仍是第一条、
+ * React key 仍是那一条的 `local_id`，因此节点不重建、行不跳位）；**其余每一行** ——
+ * 插花行、以及**未达门槛**那一组的每一个成员 —— 都在自己的位置上**原样输出入参那一行
+ * 对象**（需求 202609271523 §二 2.5：不重排、不复制、不重生成）。
+ *
+ * 折的条件两个都要过：这一组长度 ≥ `AGGREGATE_MIN_COUNT` **且**参与观众按 uid 去重后
+ * ≥ `AGGREGATE_MIN_SENDERS` 位不同 uid（`message` = 组内第一条、`count` = 组内条数、
+ * `senders` = 去重后前 `AGGREGATE_AVATARS_SHOWN` 位）。先收完整组再判的理由没变：
+ * 折不折要看**整组**（够不够 3 条、有没有第二位观众），边收边定就得先假定它会折、
+ * 判不成立时再把前面几行吐回去 —— 那才是会留下中间态的写法。
  *
  * 折出来的那一行**不改身份**：`message` 仍是第一条（头像列的**几张**头像来自 `senders`，
- * 正文 / 时间戳 / React key 都不动，行因此不跳位、节点不重建），只加 `count` 与 `senders`。
- * 注意窗口的基准（**最后**一条）与代表行（**第一**条）是两回事，且是刻意的：
- * 代表行若跟着窗口走到最后一条，React key 每来一条同文本就变一次 ⇒ 行节点重建、行在列表里抖。
+ * 正文 / 时间戳 / React key 都不动），只加 `count` 与 `senders`。注意窗口的基准
+ * （**最后并入**的一条）与代表行（**第一**条）是两回事，且是刻意的：代表行若跟着窗口走到
+ * 最后一条，React key 每来一条同文本就变一次 ⇒ 行节点重建、行在列表里抖。
  *
  * **开关**：`ui.danmaku_aggregate` 关掉即逐条显示（返回入参本身，不复制、不重排）——
  * 与礼物那两枚开关同一条口径：折叠只是显示层的派生，关掉就回到原样。
@@ -123,54 +149,64 @@ function sendersOf(run: DisplayRow[]): SenderRef[] {
 export function aggregateRows(rows: DisplayRow[], prefs: Prefs): DisplayRow[] {
   if (!prefs["ui.danmaku_aggregate"]) return rows;
 
-  const out: DisplayRow[] = [];
-  let run: DisplayRow[] = [];
-  let runKey: string | null = null;
+  // ---- 第一趟：分组。`groupOf[index] < 0` = 这一行不参与聚合（原样留在原位）。
+  const groupOf: number[] = new Array<number>(rows.length).fill(-1);
+  const groups: AggregateGroup[] = [];
+  /** 每个聚合键**当前**还开着的那一组；同键再来的那条若离得太远，就为它另起一组。 */
+  const opened = new Map<string, number>();
 
-  const flush = () => {
-    if (run.length === 0) return;
-    const senders = sendersOf(run);
-    if (run.length >= AGGREGATE_MIN_COUNT && senders.length >= AGGREGATE_MIN_SENDERS) {
-      out.push({ ...run[0], count: run.length, senders });
-    } else {
-      // 不折：这一串逐条照原样（**同一个行对象**，不是副本）—— 门槛没到的刷屏
-      // 与改前逐条渲染完全一样。
-      for (const row of run) out.push(row);
-    }
-    run = [];
-    runKey = null;
-  };
-
-  for (const row of rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
     // 低价礼物桶（`ui.gift_collapse_cheap`）**不参与**：它是另一条合并规则的产品
-    // （T5 的口径：桶行 `cheap === true`、`count`/`amount` 已是整桶合计），别把它再并一次。
+    // （桶行 `cheap === true`、`count`/`amount` 已是整桶合计），别把它再并一次。
     // 桶本来只装 `gift`、`aggregateKey` 对非弹幕已经返回 null —— 这一句是显式的边界，
     // 免得以后桶装得下别的 kind 时悄悄串味。
     const key = row.cheap ? null : aggregateKey(row.message);
-    if (key === null) {
-      // 不参与聚合的行把当前的 run 就地封口（键不同的行天然把链断开），自己也独占一行。
-      flush();
-      out.push(row);
-      continue;
+    if (key === null) continue;
+
+    const current = opened.get(key);
+    if (current !== undefined) {
+      const group = groups[current];
+      // **滑动**：与这一组的**最后并入**的那条比（不是第一条）—— 每并入一条，窗口就整体
+      // 往后刷一次 5 秒，因此只要这条刷屏还有人接，它就一直长在同一组里，不设条数上限。
+      if (Math.abs(row.message.ts - group.lastTs) <= AGGREGATE_WINDOW_MS) {
+        group.members.push(index);
+        group.lastTs = row.message.ts;
+        groupOf[index] = current;
+        continue;
+      }
     }
-    if (run.length === 0) {
-      run = [row];
-      runKey = key;
-      continue;
-    }
-    // **滑动**：与这串的**最后一条**比（不是第一条）—— 每并入一条，窗口就整体往后
-    // 刷一次 5 秒，因此只要这条刷屏还有人接，它就一直长在同一行里，不设条数上限。
-    const joinable =
-      key === runKey &&
-      Math.abs(row.message.ts - run[run.length - 1].message.ts) <= AGGREGATE_WINDOW_MS;
-    if (joinable) {
-      run.push(row);
-      continue;
-    }
-    flush();
-    run = [row];
-    runKey = key;
+    opened.set(key, groups.length);
+    groupOf[index] = groups.length;
+    groups.push({ members: [index], lastTs: row.message.ts });
   }
-  flush();
+
+  // ---- 折与不折先定下来：只对「够条数」的那些组算一眼观众（不够的根本不必扫）。
+  // 算出不到 `AGGREGATE_MIN_SENDERS` 位的那一组就是不折，第二趟按「原样逐条」处理。
+  const sendersByGroup = groups.map((group) =>
+    group.members.length >= AGGREGATE_MIN_COUNT ? sendersOf(rows, group.members) : [],
+  );
+
+  // ---- 第二趟：落位。顺着原索引走：折了的那一组只在**首条原位**出一行，成员不再各自
+  // 出行（插花行留在自己的位置上 ⇒ 原序不变）；其余每一行都原样输出。
+  const out: DisplayRow[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const group = groupOf[index];
+    if (group < 0) {
+      out.push(rows[index]);
+      continue;
+    }
+    const { members } = groups[group];
+    const senders = sendersByGroup[group];
+    if (senders.length < AGGREGATE_MIN_SENDERS) {
+      // 不折：这一组的成员各自在自己的位置上原样出行（这一条就是它自己那一条）。
+      out.push(rows[index]);
+      continue;
+    }
+    // 折：整组只在**首条的原位**出一行，成员里除首条之外的都不再单独出行。
+    if (members[0] === index) {
+      out.push({ ...rows[index], count: members.length, senders });
+    }
+  }
   return out;
 }

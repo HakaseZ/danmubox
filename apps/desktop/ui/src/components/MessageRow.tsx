@@ -159,10 +159,9 @@ export function MessageRow({
   // 礼物桶写「低价礼物 ×N」）、正文里**不再**画 `×N`（数量已经移到身份位，同一个数不出现两次）。
   const aggregated = row.senders !== undefined;
   useEffect(() => {
-    if (message.face && message.face.length > 0) {
-      setResolvedFace(message.face);
-      return;
-    }
+    // 已带 `face`：`useState(message.face)` 初始化时已经拿到了，无需再补——既避免同步
+    // `setState`（oxlint `set-state-in-effect`），也避免每条弹幕都去打一次上游。
+    if (message.face && message.face.length > 0) return;
     // 聚合行头像列画的是 `senders` 那几张（各自带 face），轮不到这一行去补；只补非聚合行。
     if (!aggregated && message.uid && message.uid !== 0) {
       resolveFace(message.uid).then((face) => {

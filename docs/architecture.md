@@ -101,7 +101,7 @@ graph LR
 
 ### 2.2 `danmubox-bili` 模块划分
 
-全部十七个文件（`crates/danmubox-bili/src/`，含 crate 根 `lib.rs`）：
+全部十八个文件（`crates/danmubox-bili/src/`，含 crate 根 `lib.rs`）：
 
 | 模块 | 职责 | 实现的端口 |
 |---|---|---|
@@ -121,12 +121,13 @@ graph LR
 | `admin` | 房管：禁言名单与禁言 / 解禁、黑名单、屏蔽词 | `RoomAdmin` |
 | `follow` | 关注列表与直播状态补齐；返回前调用 `core::model::sort_followed` 排序 | `RoomCatalog` |
 | `wallet` | 电池余额（金瓜子 / 100） | `WalletProvider` |
+| `profile` | **按 uid 取用户资料（当前只取头像）**：`GET x/space/wbi/acc/info`（WBI 签名，取 `data.face`），**取不到即空串**、**进程级缓存 + 单飞**（同一 uid 只问一次上游，非 0 code 不写缓存），另有一个只读校准入口 `probe`（`danmubox-cli face`） | `UserProfile` |
 | `anchor` | **主播侧**（我自己的直播间）：`room_id_by_uid` 找自己直播间 + `get_info` 读标题 / 开播状态 / 分区、改标题、开播（三段式 + app 签名 `anchor.rs:72`）/ 下播；非 0 code 原样带回不赋语义（`anchor.rs:110`），**身份校验那两个码除外** —— 它们在这里转成引导产出 `AnchorGate`（认证页的拼装与 `data.qr` 的读取都只在本模块，`protocol.md` §18.5）。上游知识只在这个模块里（`crates/danmubox-bili/src/anchor.rs:1-40` 的模块文档列了七个端点与「本仓尚未实测」的范围） | `AnchorRoom` |
 | `redact` | 日志与错误文案的**唯一**脱敏出口：`redact()`，占位符 `***`（`redact.rs:20`） | —（被 `http` 等使用） |
 
 ## 3. 端口与适配器（重点）
 
-端口是 core 与 bili 之间**唯一**的接缝：core 只看见 trait 与 `model` 里的领域结构，bili 只负责把上游的原貌翻译成这些结构。端口恰好八个（`ports.rs:87`–`296`）。
+端口是 core 与 bili 之间**唯一**的接缝：core 只看见 trait 与 `model` 里的领域结构，bili 只负责把上游的原貌翻译成这些结构。端口恰好九个（`ports.rs:87`–`335`）。
 
 | 端口（契约 §3） | trait 与方法（`crates/danmubox-core/src/ports.rs`） | 输入 → 输出领域模型 | 实现落点 |
 |---|---|---|---|
@@ -137,7 +138,8 @@ graph LR
 | `EmoteProvider` | trait `:238`；`emotes` `:240`、`owned` `:248` | `room_id` + `RoomSession`（我在该房间的粉丝牌与大航海等级、是否房管）→ `Emote[]`；`owned` → 主站表情 `Emote[]` | `bili::emote` |
 | `RoomAdmin` | trait `:257`；`silent_list(room_id, offset, limit) -> (Vec<SilentUser>, i64)`、`blacklist(room_id, offset, limit) -> (Vec<BlacklistedUser>, i64)` 为**分页增量**接口（翻页 + 限速由 `bili::admin` 负责，见 `admin.rs`）；其余 `mute` / `unmute` / `blacklist_add` / `blacklist_del` / `keywords` / `keyword_add` / `keyword_del` 均为单点写操作 | `room_id`（写操作另带 uid / 词）→ 名单数组或写操作结果 | `bili::admin` |
 | `RoomCatalog` | trait `:288`；`followed` `:290` | 无输入 → `FollowedRoom[]`（`live_status == 1` 置顶由实现内的 `core::model::sort_followed` 完成） | `bili::follow` |
-| `WalletProvider` | trait `:294`；`balance` `:296` | 无输入 → 余额数值 | `bili::wallet` |
+| `WalletProvider` | trait `:313`；`balance` `:315` | 无输入 → 余额数值 | `bili::wallet` |
+| `UserProfile` | trait `:331`；`face_of(uid) -> String` `:334` | `uid` → 头像地址（空串 = 取不到，**没有错误通道**：需求把每一种失败都定义成空串） | `bili::profile` |
 | `AnchorRoom` | trait `:307`；`own` `:310`、`set_title` `:313`、`go_live` `:319`、`end_live` `:322` | 无输入 → `OwnRoom`（`None` = 该账号没有开通直播间）；标题 → 写操作结果；无输入 → `StreamEndpoints`（开播成功）/ `AnchorGate`（开播被身份校验挡住，二选一）/ 写操作结果（下播） | `bili::anchor` |
 
 账号增删只有两条路（**没有** `create_profile` / `remove_profile`）：新增 = `begin_qr(None)` + `poll_qr` 确认时落盘（`ports.rs:103` / `:108`；账号名在确认后按昵称自动生成），删除 = `remove_account`（`ports.rs:120`，不许删最后一个）。
@@ -154,6 +156,7 @@ graph LR
 | `RoomAdmin` | 名单条目（uid、昵称等）与写操作的成败、上游 `code` 原文 | 房管接口路径与参数名、禁言时长取值、黑名单按主播 uid 而非房间号、CSRF 参数 |
 | `RoomCatalog` | `FollowedRoom` 的字段（房间号、昵称、头像、标题、`live_status`、分组名、开播时间） | 关注列表分页、未开播条目的补齐、直播状态字段位置 |
 | `WalletProvider` | 一个数值 | 余额接口与单位换算 |
+| `UserProfile` | 一个 uid 对应的头像地址（取不到即空串，不区分失败原因） | 端点路径、WBI 签名与参数集、响应字段路径（`data.face`）、`http://`→`https://` 的升级、失败缓存策略、取数超时 |
 | `AnchorRoom` | `OwnRoom` 的五个字段（房间号、标题、开播状态、分区 id 与分区名）、`StreamEndpoints` 的三组端点（`addr` / `code`）、`AnchorGate` 的 `kind` 与**上游下发的** `url` / `qr`（core 只见值、不拼装不解析）、写操作的成败与上游 `code` 原文 | 三段式开播的端点与顺序（`click/now` → `getHomePageLiveVersion` → `startLive`）、appkey / appsec 与 app 签名算法、`platform=pc_link`、`csrf` 取自 `bili_jct`、分区名的「父 · 子」拼法、非 0 code 的判定、身份校验那两个码与认证页地址 / `data.qr` 的形态 |
 
 上游改字段下标 / 签名 / 包结构 / 接口路径时，改动收敛为「重写 `bili` 内对应模块 + 调整该端口的映射」；跨层类型是契约 §5 的领域模型，不含上游标识（溯源：REQUIREMENTS.md §3）。

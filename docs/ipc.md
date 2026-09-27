@@ -16,7 +16,7 @@
 | 命令注册 | 全部集中在 `tauri::generate_handler![…]`；命令函数也在同一文件（没有 `commands.rs`） | `apps/desktop/src-tauri/src/lib.rs:1149-1187` |
 | 命令名 | `snake_case`，与 `contract.md` §7 字面一致 | 同上 |
 | 参数名 | Rust 侧 `snake_case`；Tauri 2 把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId` / `query` / `patch` / `upstreamId` 等 camelCase 键 | `apps/desktop/ui/src/ipc.ts:57-162` |
-| 同步 / 异步 | 37 条命令：28 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`（定义行见 §3 的「实现锚点」表）。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` | `lib.rs:198-945` |
+| 同步 / 异步 | 38 条命令：29 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`（定义行见 §3 的「实现锚点」表）。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` | `lib.rs:198-945` |
 | 成功返回 | §3 签名表「返回」列的 JSON 值；`void` = 无返回体 | — |
 | 失败返回 | `invoke` reject，值为 `ApiError { code: string, message: string }`。前端按 `code` 分支；`message` 是给人看的文案（Rust `Display` 或上游原文），**不得**解析它做逻辑，也没有 `detail` 这类嵌套字段 | `lib.rs:29-42` |
 | 错误码 | 八个，见下表；错误对象的集合以此为准，`code` 取自 `core::Error::code()` | `crates/danmubox-core/src/error.rs:8-39` |
@@ -40,7 +40,7 @@
 
 ## 3. 命令签名表
 
-37 条，与 `generate_handler!` 逐条对应；除「说明」列注明同步的命令外均为 `async fn`。命令函数除 `open_url`（只接 `app: tauri::AppHandle`）与 `frontend_log`（无注入参数）外都接收 `State<'_, AppState>`，`chat_send` 另接 `app: tauri::AppHandle`（下表省略这些注入参数）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
+38 条，与 `generate_handler!` 逐条对应；除「说明」列注明同步的命令外均为 `async fn`。命令函数除 `open_url`（只接 `app: tauri::AppHandle`）与 `frontend_log`（无注入参数）外都接收 `State<'_, AppState>`，`chat_send` 另接 `app: tauri::AppHandle`（下表省略这些注入参数）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
 
 | 命令 | 参数 | 返回 | 错误 | 说明 |
 |---|---|---|---|---|
@@ -82,6 +82,7 @@
 | `admin_keywords_del` | `room_id: i64, word: String` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 删除屏蔽词 |
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表（`contract.md` §5）。后端返回前已排序：`live_status == 1` 置顶、其余按 `room_id` 升序（`crates/danmubox-bili/src/follow.rs:377-379`、`crates/danmubox-core/src/model.rs:383-389`）；界面按 `ui.md` §2.2 的展示排序链再次排列 |
 | `wallet_balance` | 无 | `number`（Rust `i64`） | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额（整数）：上游 `data.gold`（金瓜子）按 `gold / 100` 换算成电池（`crates/danmubox-bili/src/wallet.rs:40-49`）；`gold` 缺失或不可解析 → `UPSTREAM_ERROR`。没有包裹类型（口径与端点见 `protocol.md` 附录 A29） |
+| `user_face` | `uid: i64` | `string`（头像地址） | —（**不 reject**） | **按 uid 取头像**（需求 `REQUIREMENTS.md` §三 3.2 / 3.4 / 3.6）：大航海 / V1 礼物 / 缺头像的醒目留言的载荷里没有头像字段（`contract.md` §5 `Message.face`），界面在新到行里惰性补取。**空串 = 取不到**（上游非 0 code / 网络失败 / uid 无效），不是错误——命令层只转发，判据在 `UserProfile` 适配器里（`danmubox-bili/src/profile.rs`）。**同一 uid 只问一次上游**：实现侧有进程级缓存在 `AppState.profile` 上常驻，界面侧 `store.ensureFaces` 另收一道（含在途去重） |
 | `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令。平台实现：macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 各一条系统命令；**Android 走官方 `tauri-plugin-opener`（平台 Intent）**——插件只在 Android 目标声明（`[target.'cfg(target_os = "android")'.dependencies]`，桌面构建依赖图与产物一字不变），由 **Rust 侧**调用、**不进 capability**（`capabilities/default.json` 不需要 `opener:*` 权限）；iOS 等其余平台仍是显式 `Unsupported`（不静默失败）（`lib.rs:488-539`） |
 | `prefs_get` | 无 | `PrefsSnapshot` | `INTERNAL` | `contract.md` §8 全部 25 键的**生效值**（默认值已合并）；未写入过的键返回 `contract.md` §8 默认值。同步命令（`lib.rs:544-547`） |
 | `prefs_set` | `patch: Partial<PrefsSnapshot>`（Rust 侧收 `serde_json::Value`，由 core 校验） | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令（`lib.rs:549-555`） |

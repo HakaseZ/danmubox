@@ -14,6 +14,7 @@ import { MessageList } from "./MessageList";
 import { InteractSlot } from "./InteractSlot";
 import { SplitPanes } from "./SplitPanes";
 import { BACK_PRIORITY, registerBackHandler } from "../back";
+import { missingFaceUids } from "../faces";
 import { LIVE_DOT_CLASS, LIVE_TEXT, liveKindOf } from "../liveKind";
 import { useApp } from "../store";
 import {
@@ -198,6 +199,11 @@ export function RoomView({
   const loadReportReasons = useApp((store) => store.loadReportReasons);
   const openProfile = useApp((store) => store.openProfile);
   const roomStats = useApp((store) => store.roomStats[room.room_id]);
+  // 补取到的头像（uid → 地址）与它的补取入口（需求 §三 3.2 / 3.6）。
+  // 头像只在**行内**用（`MessageRow` 的头像列），但触发那一拍放在这里：
+  // 「哪些行还缺头像」要看**显示行**，而 `MessageRow` 是纯渲染，不许它自己发请求。
+  const faces = useApp((store) => store.faces);
+  const ensureFaces = useApp((store) => store.ensureFaces);
   // 房管权限前置：房管身份来自 `room_session`，主播身份由登录 uid 与房间主播 uid 对上。
   // 拿不到身份时 `is_admin` 为 undefined，且主播 uid 不匹配 → 按**无权限**渲染。
   const isAdmin = useApp((store) => store.roomIdentities[room.room_id]?.is_admin) === true;
@@ -544,6 +550,25 @@ export function RoomView({
     // 这一趟必须重新量一次 —— 否则短标题会带着上一轮的结论回来（ResizeObserver 绑在新节点上，
     // 但 `measure()` 得有人叫第一声）。
   }, [titleText, fontScale, room.room_id, immersive]);
+
+  /* 缺头像的行**就地补取**（需求 §三 3.2 / 3.4 / 3.6）—— 触发点只有一个，就在这里。
+
+     为什么是这一层、而不是 `MessageRow`：行组件是**纯渲染**（它按 `local_id` 做虚拟列表的
+     key，任何「渲染时发请求」的写法都会被虚拟列表的反复挂载/卸载放大成请求风暴）。
+     这一层拿到的是**显示行全集**（`rows` 已经过过滤），候选判定是纯函数
+     （`faces.missingFaceUids`），真正的「同一 uid 只问一次」由 `ensureFaces` 收口。
+
+     **取舍（写在这里，免得以后被当成遗漏）**：候选来自**全集**而不是虚拟窗口内那几行。
+     代价是可能替一条已经滚出视口的行先取一次；收益是「一个 uid 一次」在滚动时不会被
+     反复触发（虚拟窗口每滚一次就是一批新行，按窗口算会把同一 uid 反复送去查表）。
+     数量上也吃得消：只有大航海 / V1 礼物 / 缺头像的 SC 会进候选，且引擎侧还有一层
+     进程级去重（`BiliProfile` 的缓存）。
+
+     依赖里带上 `faces`：每一次补取落表后重算一遍候选，补到的那些自然退出（含空串结论），
+     没有候选时 `ensureFaces` 直接返回 —— 不会自激。 */
+  useEffect(() => {
+    ensureFaces(missingFaceUids(rows, faces));
+  }, [rows, faces, ensureFaces]);
 
   const { chatRows, giftRows, panelAllRows } = splitGiftRows(rows, prefs);
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
@@ -943,6 +968,7 @@ export function RoomView({
             <MessageList
               key={room.room_id}
               rows={chatRows}
+              faces={faces}
               anchorUid={room.anchor_uid}
               prefs={prefs}
               onMenu={(message, at) => setMessageMenu({ at, message })}
@@ -1029,6 +1055,7 @@ export function RoomView({
               <MessageList
                 key={room.room_id}
                 rows={giftRows}
+                faces={faces}
                 anchorUid={room.anchor_uid}
                 prefs={prefs}
                 scope="gift"

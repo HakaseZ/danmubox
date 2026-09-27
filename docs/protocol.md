@@ -392,7 +392,7 @@ fn decode_stream(data, depth):
 |---|---|---|---|
 | `content` | `data.name` + 数量的组合描述 | 面向展示的说明文本 | 待实测校准（A8） |
 | `uid` / `uname` | `data.uid` / `data.uname` | 与 `DANMU_MSG` 用户信息结构不一定同形 | 待实测校准（A8） |
-| `face` | **没有可靠来源 → 留空串** | 字段表里没有头像字段，载荷里也没有可确证的昵称同层头像槽位；没有来源就不猜路径（契约 §5 的 `face`） | 待实测校准（A8） |
+| `face` | 同层探测（`cmd.rs:427` 的三段回退链）→ 探不到就**按 uid 现取** | 字段表里没有头像字段，载荷里也没有可确证的昵称同层头像槽位（A8），因此先按「与本层在读的昵称同层」那几处探一遍（`uinfo.base.face` → `face` → `user_info.face`，见 §10.6 的统一口径）；探不到不是错——`ws.rs` 会按 `uid` 现取一次（≤ 600ms），仍空则先上屏、由界面行内惰性补取。**不许拿别的字段顶替** | 三条路径均未观测到（A8）；取数路径已实测（附录 A 的「按 uid 取头像」条目） |
 | `amount` | `data.price` × 数量，单位为金瓜子 | 无价字段时 `0`，不得猜测；展示换算 §10.2「金额单位」 | 待实测校准（A8） |
 | 连击标识 | 礼物标识 + 连击数的字段组合 | 供会话内连击聚合（见 §12.3） | 待实测校准（A8） |
 | `medal_level` / `medal_name` / `guard_level` | 送礼用户粉丝牌槽位 | 无则 `0` / `""` / `0` | 待实测校准（A4） |
@@ -455,7 +455,7 @@ fn decode_stream(data, depth):
 | `content` | `data.message` | 留言正文 |
 | `amount` | `data.price`（`cmd.rs:509`） | **单位是元**（样本 `30`，正是 ac站 SC 的最低档） |
 | `uid` / `uname` | `data.uid`；`data.uinfo.base.name`（`cmd.rs:503`），回落 `data.user_info.uname` | 昵称两处同名 |
-| `face` | `data.uinfo.base.face` | 与 `uinfo.base.name` **同层**（同一个用户对象）；取不到即空串 |
+| `face` | `data.uinfo.base.face`（**排在第一段**；后面还有两段同层回退，见 §10.6 的统一口径） | 与 `uinfo.base.name` **同层**（同一个用户对象）；三段都取不到才留空串，并由 `ws.rs` 按 uid 现取（≤ 600ms，需求 §三 3.5） |
 | `upstream_id` | `data.id`（`cmd.rs:517-519`） | SC 标识，举报与去重都用得上 |
 | `ts` | `data.ts`（`cmd.rs:487-488`），回落 `data.start_time` | **秒级**，×1000 归一化为毫秒 |
 | `medal_level` / `medal_name` | `data.medal_info.medal_level` / `.medal_name` | — |
@@ -537,7 +537,7 @@ fn decode_stream(data, depth):
 
 ### 10.6 `GUARD_BUY` / `USER_TOAST_MSG`（`kind=guard`）
 
-语义：舰长 / 提督 / 总督的购买与开通播报（`cmd.rs:643-700`）。
+语义：舰长 / 提督 / 总督的购买与开通播报（`cmd.rs:818` `guard()`）。
 
 **同一笔购买上游会发两条载荷**，两条 `price` **语义不同**：
 
@@ -546,17 +546,31 @@ fn decode_stream(data, depth):
 | `GUARD_BUY` | 购买事件 | **标价（原价）** | 舰长恒为 `198000`（= 198 元，1640 笔无一例外）；提督 `1998000` |
 | `USER_TOAST_MSG` | 播报 | **实付** | 舰长 `138000`（连续包月）/ `168000`（单月）/ `198000`（无折扣）；提督 `1998000` / 折后 `1598000` |
 
-**金额只取播报那一份**（`USER_TOAST_MSG.price`，`cmd.rs:672-683`）。`GUARD_BUY.price` 是标价，拿它当金额会把同一笔的原价与实付各统计一次。购买事件在窗口内没等到播报时按 `amount = 0` 放行——契约 §5 的「无法确证时 `0`，不得推算」。
+**金额只取播报那一份**（`USER_TOAST_MSG.price`，`cmd.rs:846-852`）。`GUARD_BUY.price` 是标价，拿它当金额会把同一笔的原价与实付各统计一次。购买事件在窗口内没等到播报时按 `amount = 0` 放行——契约 §5 的「无法确证时 `0`，不得推算」。
 
 | 归一化字段 | 来源（语义槽位） | 说明 | 校准状态 |
 |---|---|---|---|
-| `content` | `data.gift_name`（购买事件）/ `data.role_name`（播报），缺失按等级补名（`cmd.rs:704-710`） | 面向展示的描述：`开通 <名称> ×<num>` | 已实测（A12 / A13） |
-| `guard_level` | `data.guard_level`（`cmd.rs:671`） | `1` 总督 / `2` 提督 / `3` 舰长 | 已实测（A12 / A13） |
+| `content` | `data.gift_name`（购买事件）/ `data.role_name`（播报），缺失按等级补名（`cmd.rs:861-867`） | 面向展示的描述：`开通 <名称> ×<num>` | 已实测（A12 / A13） |
+| `guard_level` | `data.guard_level`（`cmd.rs:840`） | `1` 总督 / `2` 提督 / `3` 舰长 | 已实测（A12 / A13） |
 | `uid` / `uname` | `data.uid` / `data.username` | 两条命令**都给** `username`；实现保留 `uname` / `role_name` 补名兜底链 | 已实测（A12 / A13） |
-| `amount` | **`USER_TOAST_MSG.price`**（实付）；`GUARD_BUY.price` 是标价，**不入本字段**（`cmd.rs:677-683`） | 金瓜子；只有购买事件时为 `0` | 已实测（A12 / A13） |
-| `upstream_id` | `data.payflow_id`（`cmd.rs:684-688`） | 订单号。实测**只有播报有**：`GUARD_BUY` 0/971 条带它，`USER_TOAST_MSG` 971/971 条有 | 已实测（A12 / A13） |
-| `face` | **无来源** | 两条命令的字段表与实测样本都没有头像字段 → `Message.face` 留空串，不猜路径 | 未观测到（A12 / A13） |
-| `ts` | `data.start_time`（秒）（`cmd.rs:654-655`） | 归一化为 UTC 毫秒；两条命令同值 | 已实测（A12 / A13 / A7） |
+| `amount` | **`USER_TOAST_MSG.price`**（实付）；`GUARD_BUY.price` 是标价，**不入本字段**（`cmd.rs:846-852`） | 金瓜子；只有购买事件时为 `0` | 已实测（A12 / A13） |
+| `upstream_id` | `data.payflow_id`（`cmd.rs:853-857`） | 订单号。实测**只有播报有**：`GUARD_BUY` 0/971 条带它，`USER_TOAST_MSG` 971/971 条有 | 已实测（A12 / A13） |
+| `face` | **同层探测 → 按 uid 现取**（`cmd.rs:838`，链路见下） | 两条命令的字段表与实测样本都没有头像字段（A12 / A13），因此先探同层三处、探不到再按 uid 现取（需求 §三 3.1 / 3.2）。**不许拿别的字段顶替** | 同层三条路径**未观测到**；取数路径已实测（附录 A 的「按 uid 取头像」条目） |
+| `ts` | `data.start_time`（秒）（`cmd.rs:820-825`） | 归一化为 UTC 毫秒；两条命令同值 | 已实测（A12 / A13 / A7） |
+
+#### 大航海 / V1 礼物 / SC 的头像：两条来源（规范性，需求 §三 3.1–3.6）
+
+这三类的载荷里**没有**头像字段（A8 / A12 / A13），而界面要求大航海必须有头像（`REQUIREMENTS.md` §八 第 1 条），因此 `Message.face` 有两条来源、按顺序落定：
+
+| 步骤 | 做什么 | 实现 | 校准状态 |
+|---|---|---|---|
+| ① 同层探测 | 在本命令的 `data` 里按 `/uinfo/base/face` → `/face` → `/user_info/face` 取第一个非空（空串不算，继续往后探），地址顺带升级成 `https://`（安全上下文里 `http://` 子资源会被静默拦掉） | `cmd.rs:427`（路径表）、`cmd.rs:445`（`same_layer_face`） | **三条路径都没有在上列命令的样本里观测到**（A8 / A12 / A13）——只探这三处、不新增没见过的层级；取不到**不算错**，进② |
+| ② 按 uid 现取 | 上屏前按 `Message.uid` 现取一次（`GET https://api.bilibili.com/x/space/wbi/acc/info`，WBI 签名，取 `data.face`）：**最多等 600ms**，到位即上屏、带的是现取到的地址 | `ws.rs` 的 `FaceWait` / `queue_message`、`profile.rs`（`UserProfile`） | **已实测**（见附录 A 的「按 uid 取头像」条目） |
+| ③ 超时/取不到 | 600ms 到期或上游非 0 code / 网络失败 → **照常上屏**（`face` 留空串），界面在新到行里行内惰性补取一次（`user_face` IPC） | `ws.rs`（`FACE_WAIT`）、`ui/src/faces.ts`、`ui/src/store.ts`（`ensureFaces`） | 需求 3.3 / 3.6 的口径；界面侧由 `node --test src/faces.test.ts` 钉住 |
+
+**去重（需求 3.4）**：引擎侧 `profile.rs` 的进程级缓存「同一 uid 只问一次上游」，**非 0 code 不写缓存**（下一条消息还能再试）；界面侧 `store.ensureFaces` 对同一 uid 只发一次请求（空串结论同样落表，避免重问）。两侧各自收口，互不依赖。
+
+**不阻塞收包循环**（需求 3.5）：等待走 `ws.rs` 的「头像待补」队列 —— 队头不放行后面的不越过它（保证投递顺序与到达顺序一致），队头的结果到位或到期由 `select!` 的两个分支唤醒；连接收尾时整个队列一并放行。**绝不**在收包路径上 `await` 取数。
 
 噪声过滤与合并：
 
@@ -1139,6 +1153,7 @@ stateDiagram-v2
 | A64 | 举报：是否必需 WBI 签名 | 不带 `w_rid` 的请求是否被拒 | 不带 `w_rid` 发一次举报，记录响应 | **仍未实测**：实现照 `send.rs` 对表单签名（含 `wts` / `w_rid`，`report.rs:147-152`）；参考实现未签名 | 举报请求形态 |
 | A65 | 电池余额：其它上游码语义 | 非 0 `code` 的取值集合 | 复现非 0 code 时记录数值与原始 message | **未实测**：实现只判 `code == 0`，其余报 `UPSTREAM_ERROR` 并保留原始 code（`crates/danmubox-bili/src/wallet.rs:34-40`） | 钱包余额读取 |
 
+| A67 | **按 uid 取头像**（`GET https://api.bilibili.com/x/space/wbi/acc/info`）：端点、参数集、`data.face` 的形态，以及风控码 | ① 端点与参数按社区文档 `bilibili-API-collect` 的 `docs/user/info.md`「用户空间详细信息」一节核对（该节把 `mid` / `w_rid` / `wts` 列为**必要**，`platform` / `web_location` / `token` 列为可选）；② 用**真实登录态**对该端点发**只读**请求 2 次（同一条代码路径、只换 `mid`），记录 `code` / `message` 与 `data.face`；③ 是否回风控码 | 入口：`cargo run -p danmubox-cli -- face <uid>`（只读；`docs/contract.md` §3 `UserProfile`、`AGENT.md` §3 命令表、`README.md` §8）。**实测（2026-09-27，真实登录态，公开测试房间 `1` 的主播 uid + 一个不存在的 uid）**：① **端点成立**——`code=0`、`message="OK"`、`data.face` = `https://i0.hdslb.com/bfs/face/<40 位十六进制>.jpg`（**本身就是 https**，无需升级；升级逻辑照旧保留，见 `asset.rs` 的实测理由）；② **非 0 code 分支**——不存在的 uid 回 **`code=-404`、`message="啥都木有"`**、**无** `data.face`（与文档 §「根对象返回码」的 `-404` 一致），实现按「取不到」处理（`Message.face` 空串），**不赋语义**；③ **未触发风控**：两次都没看到 `-352` 或非 JSON 应答（412 那类），因此**该端点单条查询的频控阈值仍未知**（本实现按「同一 uid 进程级只问一次」+ 失败不缓存兜底，触发风控时按空串降级、不重试）；④ **未逐项记录**：HTTP 状态码（本入口只在**非 JSON 应答**时打印状态与 `content-type`，两次都是 JSON 信封）、以及不带账号 Cookie 时的表现（两次都带）。**参数集**：只送 `mid` + `wts` + `w_rid`（WBI 签名复用既有密钥缓存），**不送**文档标为可选的 `platform` / `web_location` / `token` —— 实测被接受，因此不引入没有证据的常量 | `http.rs`（`EP_ACC_INFO` / `acc_info`）、`profile.rs`（`UserProfile` + 进程级缓存）、`ws.rs`（`FaceWait`）、`user_face` IPC、`faces.ts` |
 | A66 实测进展（2026-09-19） | 主播侧写链路在真实登录态下的实测 | 七个端点是否可通；app 签名是否被接受；`area_v2` 是否就是 `get_info` 的 `data.area_id` | 真实登录态下对自己的直播间跑一遍探针（取状态 → 改标题回原值 → 开播 → 复查 → 下播），**失败即停** | **实测（2026-09-19，真实登录态；目标 = 该账号**自己的**直播间，由 `AnchorRoom::own()` 现取）**：① `room/v2/Room/room_id_by_uid` → `code=0`、`data.room_id` 有值 ✓；② `room/v1/Room/get_info` → `live_status` / `area_id` / `parent_area_name` + `area_name` 齐备 ✓（同一次实测里 `area_v2_id` 为 `null` ✓，故分区只认 `area_id`，与 §18.1 一致）；③ `x/report/click/now` 与 `xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion`（**带 app 签名**）均 `code=0` 并给出 `data.now` / `data.build` / `data.curr_version` ✓ → **app 签名被上游接受** ✓；④ `room/v1/Room/update`（改标题：**不签名**、`csrf` == `csrf_token` == `bili_jct`）实测**成功**：读出原值再写回，标题逐字未变 ✓；⑤ `room/v1/Room/startLive`（三段式的第三段、app 签名、`platform=pc_link`、`area_v2` 取 `get_info` 的 `data.area_id`）**请求被上游接受**（返回的是业务码，不是参数 / 签名错误），结果为 **`60043`**，`msg` =「本次开播需要身份验证，请在关播时点击开播唤起人脸认证」。本仓按纪律**原样带回 `code` 与 `msg`、不赋语义**，且**失败即停、未重试、未换参数** —— 这条实测同时印证了「非 0 code 只透传」的行为 | 开播 / 改标题链路 |
 | A66 未实测（2026-09-19） | 上述链路仍缺的实测面 | — | 完成一次人脸认证后重跑同一探针 | **仍未实测**：① `startLive` 的**成功分支**（`data.rtmp` / `data.protocols[]` 的实际形状）—— 被上游人脸认证挡住，该账号未完成本次开播的身份验证；② `room/v1/Room/stopLive` —— 未曾进入直播态，没走到；③ 人脸认证的另一个码 `60024` 与 `data.qr` 的实际形态；④ 「该账号**没有**开通直播间」时 `room_id_by_uid` 的响应形态（本账号已开通，走的是 `code=0` + `room_id` 有值那一支）；⑤ `60043` 引导用的**认证页地址**（§18.5，取自社区实现 `Zeppelinpp/bilibili-streamer`）——它**不在**本仓实测到的那份响应里，只是需求指定的引导口径，待完成一次真实人脸认证时顺带核对能否唤起。**边界确认**：本次实测未让直播间真的开播（上游拒绝在前），事后只读复查 `live_status` 仍为 `0` | 开播 / 下播链路 |
 | A66-1 | 开播分区列表解析 + `ROOM_CHANGE` 字段形态 | `Area/getList` 的 query（`show_pinyin=1`）与响应 `data[]` **直接数组**路径（父 `id`/`name` + `list[]` 子分区）；`ROOM_CHANGE` 只读 `data.room_id` / `data.title`（**分区不在事件里**） | 真实登录态下对照原始响应复核 | **来自参照实现（未真机回填）**：`show_pinyin=1` 与 `data[]` 数组路径取自 `Zeppelinpp/bilibili-streamer` 的 `get_area_list`；`data.room_id` / `data.title` 取自 `HakaseZ/BiliLiveWatcher` 的 `deal_ROOM_CHANGE`。本仓**未实测**这两条，仅按参照实现构建（AGENT.md §8.7：不得编造未实测字段）。复核时确认：① `getList` 响应是否真的是 `data[]` 而非 `data.list[]`（本仓早期写成 `data.list[]` 会把分区读成空数组、界面降级只读，issue202609241553 第 4 条根因）；② `ROOM_CHANGE` 事件里是否确有 `data.title`（主播改名时）；③ `Area/getList` 的子分区 `id` 实际是 JSON 字符串还是数字（2026-09-24 已按「数字或数字字符串」两段式两种都收，见 §18.1；若实测为字符串，则改前的「只认数字」会把子分区整段丢掉、界面回落成父分区 id，正是 issue202609242158 第 2 条报的 `60009`） | 分区列表 / ROOM_CHANGE |

@@ -423,13 +423,42 @@ fn danmaku(room_id: i64, value: &Value) -> Option<Message> {
     Some(message)
 }
 
+/// 同层头像槽位的探测顺序（见 [`same_layer_face`]）。
+const SAME_LAYER_FACE_PATHS: [&str; 3] = ["/uinfo/base/face", "/face", "/user_info/face"];
+
+/// **载荷自带头像时优先取用**（需求 §三 3.1）：大航海 / V1 礼物 / 醒目留言这三类的载荷里
+/// **没有**观测到头像字段（`docs/protocol.md` A8 / A12 / A13），因此这里只做一件事 ——
+/// 按「**与本层已经在读的昵称同层**」的那几处依次探一遍，取到第一个非空即用。
+///
+/// | 探测路径（相对本命令的 `data`） | 为什么是它 |
+/// |---|---|
+/// | `/uinfo/base/face` | SC 与进场消息的昵称就在这个用户对象层（`uinfo.base.name`，A9 / A14），头像与它同族 |
+/// | `/face` | 与本层已经在读的 `data.uname` / `data.username` **同层**的同名槽位 |
+/// | `/user_info/face` | 与本层兜底读的 `data.user_info.uname`（SC 的实测路径）同层 |
+///
+/// **这三条都没有在上述三类命令的样本里观测到**——它们只是「同层试一下」，**取不到不算错**：
+/// 真正的来源是按 uid 现取（`UserProfile::face_of`，需求 3.2–3.4），本函数只是省一次上游往返。
+/// **不臆造层级**：只探这三处（AGENT.md §8 第 7 条）。
+///
+/// 地址顺带升级成 `https://`（[`crate::asset::secure_url`]）：头像与表情图同族 CDN，
+/// 而安全上下文里 `http://` 子资源会被**静默**拦掉（`asset.rs` 的模块文档记了这条实测）。
+fn same_layer_face(data: &Value) -> String {
+    SAME_LAYER_FACE_PATHS
+        .iter()
+        .filter_map(|path| data.pointer(path).and_then(Value::as_str))
+        // 空串**不是头像**，继续往后探（上游把某个槽位留空是常见形态）。
+        .find(|face| !face.is_empty())
+        .map(crate::asset::secure_url)
+        .unwrap_or_default()
+}
+
 /// 礼物。字段名（礼物名 / 数量 / 金额）待实测校准，暂只取已确认存在的可读文本。
 /// V1 礼物（`SEND_GIFT`）。字段名按社区文档核对（`docs/live/gift.md`）：
 /// `name` 礼物名、`price` 单位为金瓜子（文档记「该值/1000 的单位为元」，即 1 元 = 1000 金瓜子）、
 /// `coin_type` 一般为 `gold`（电池体系）。**尚未观测到真实样本**——实测流量里只出现 `SEND_GIFT_V2`。
 ///
-/// 头像**故意留空**：社区文档的字段表里没有头像，载荷本身也没有可确证的昵称同层头像槽位，
-/// 实测样本又是零条（`docs/protocol.md` 附录 A8）——没有可靠来源就不填（契约 §5 的 `face`）。
+/// 头像：先探同层（[`same_layer_face`]，社区文档的字段表里没有头像、实测样本零条，
+/// 见 `docs/protocol.md` 附录 A8），探不到就留空串，由 `ws.rs` 按 uid 现取（需求 3.1 / 3.2）。
 fn gift(room_id: i64, value: &Value) -> Option<Message> {
     let data = value.get("data")?;
     let mut message = Message::new(room_id, MessageKind::Gift, danmubox_core::now_ms());
@@ -439,6 +468,7 @@ fn gift(room_id: i64, value: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    message.face = same_layer_face(data);
     let num = data.get("num").and_then(Value::as_i64).unwrap_or(1).max(1);
     let name = data
         .get("giftName")
@@ -547,12 +577,10 @@ fn superchat(room_id: i64, value: &Value) -> Option<Message> {
         .to_string();
     // 元。
     message.amount = data.get("price").and_then(Value::as_i64).unwrap_or(0);
-    // 头像与上面那个昵称同层（`uinfo.base`）：同一个用户对象，取不到即空串。
-    message.face = data
-        .pointer("/uinfo/base/face")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    // 头像与上面那个昵称同层（`uinfo.base`）：同一个用户对象。`uinfo.base.face` 这一条
+    // 本轮仍未逐项观测到（A9），因此走统一的三段探测（[`same_layer_face`]）：
+    // 它照旧排在第一，探不到就留空串、由 `ws.rs` 按 uid 现取（需求 3.1 / 3.2）。
+    message.face = same_layer_face(data);
     // SC 标识（样本为数字 id）；举报与去重都用得上。
     message.upstream_id = data
         .get("id")
@@ -784,8 +812,9 @@ pub enum GuardSource {
 /// `USER_TOAST_MSG` **带昵称**（`data.username`，样本 100% 有）与订单号 `payflow_id`；
 /// `GUARD_BUY` **没有** `payflow_id`，因此 `Message.upstream_id` 对购买事件是空串。
 ///
-/// 头像**留空**：两条命令的字段表里都没有头像字段（实测样本同样没有）——没有来源就不填
-/// （`docs/protocol.md` §10.6 的记录与契约 §5 的 `face`）。
+/// 头像：两条命令的字段表与实测样本里**都没有**头像字段（A12 / A13），因此先按
+/// [`same_layer_face`] 同层探一遍（它只是省一次上游往返），探不到就留空串 ——
+/// 由 `ws.rs` 按 uid 现取（需求 3.1 / 3.2；旧口径的「没有来源就不填」由此改写）。
 fn guard(room_id: i64, value: &Value, source: GuardSource) -> Option<Message> {
     let data = value.get("data")?;
     let ts_ms = data
@@ -804,6 +833,9 @@ fn guard(room_id: i64, value: &Value, source: GuardSource) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // 头像：载荷若给了就先用（同层探测，见 `same_layer_face`），取不到留空串 ——
+    // 真正的来源是按 uid 现取（`UserProfile::face_of`），两条路在 `ws.rs` 汇合。
+    message.face = same_layer_face(data);
 
     message.guard_level = data.get("guard_level").and_then(Value::as_i64).unwrap_or(0);
     // 金额只认**实付**：`GUARD_BUY.price` 是标价（原价），拿它当金额就会把同一笔的
@@ -1583,10 +1615,12 @@ mod tests {
         );
     }
 
-    /// V1 礼物与大航海没有可靠的头像来源：这两支必须留空串，不许拿别的字段顶替
-    /// （`docs/protocol.md` §10.2 / §10.6）。
+    /// 载荷**不带**同层头像槽位时，V1 礼物与大航海必须留空串 —— 不许拿别的字段顶替。
+    ///
+    /// 空串是**正常的中间态**（需求 §三 3.1 / 3.2）：`ws.rs` 随后按 uid 现取，
+    /// 取不到才真的没有头像。这里钉的是「本层不臆造」，不是「这一行永远没有头像」。
     #[test]
-    fn gift_v1_and_guard_leave_face_empty() {
+    fn gift_v1_and_guard_leave_face_empty_when_the_payload_has_no_same_layer_slot() {
         let gift = message(
             7,
             &json!({
@@ -1610,6 +1644,80 @@ mod tests {
         .expect("大航海仍要解出来");
         assert_eq!(guard.uname, "开舰长的人");
         assert!(guard.face.is_empty(), "大航海没有头像字段");
+    }
+
+    /// 需求 §三 3.1：载荷**给了**同层头像就先用它，且按 `/uinfo/base/face` →
+    /// `/face` → `/user_info/face` 的顺序取第一个非空（见 `same_layer_face` 的表）。
+    #[test]
+    fn same_layer_face_takes_the_first_non_empty_slot_in_order() {
+        let counters = counters();
+        // 三条都在：取用户对象层那一条（与 SC / 进场的昵称同层）。
+        let all = message(
+            7,
+            &json!({
+                "cmd": "GUARD_BUY",
+                "data": {
+                    "uid": 2, "username": "开舰长的人", "guard_level": 3,
+                    "uinfo": {"base": {"face": "https://i0.hdslb.com/bfs/face/uinfo.png"}},
+                    "face": "https://i0.hdslb.com/bfs/face/flat.png",
+                    "user_info": {"face": "https://i0.hdslb.com/bfs/face/legacy.png"}
+                }
+            }),
+            &counters,
+        )
+        .expect("大航海仍要解出来");
+        assert_eq!(all.face, "https://i0.hdslb.com/bfs/face/uinfo.png");
+
+        // 首选的槽位是空串时**继续往后探**（空串不是头像）。
+        let skip_empty = message(
+            7,
+            &json!({
+                "cmd": "GUARD_BUY",
+                "data": {
+                    "uid": 2, "username": "开舰长的人", "guard_level": 3,
+                    "uinfo": {"base": {"face": ""}},
+                    "user_info": {"face": "https://i0.hdslb.com/bfs/face/legacy.png"}
+                }
+            }),
+            &counters,
+        )
+        .expect("大航海仍要解出来");
+        assert_eq!(skip_empty.face, "https://i0.hdslb.com/bfs/face/legacy.png");
+
+        // 扁平那一层（与本层在读的 `data.uname` 同层）同样成立：V1 礼物。
+        let gift = message(
+            7,
+            &json!({
+                "cmd": "SEND_GIFT",
+                "data": {
+                    "uid": 1, "uname": "送礼的人", "giftName": "辣条", "num": 1, "price": 100,
+                    "face": "https://i0.hdslb.com/bfs/face/flat.png"
+                }
+            }),
+            &counters,
+        )
+        .expect("V1 礼物仍要解出来");
+        assert_eq!(gift.face, "https://i0.hdslb.com/bfs/face/flat.png");
+    }
+
+    /// 同层探到的地址若是 `http://`，必须升级成 `https://`：客户端跑在安全上下文里，
+    /// `http://` 子资源会被**静默**拦掉（`asset.rs` 的模块文档记了这条实测，
+    /// 表现就是「头像一个都没画出来、日志里也没有线索」）。
+    #[test]
+    fn same_layer_face_upgrades_insecure_upstream_urls() {
+        let sc = message(
+            7,
+            &json!({
+                "cmd": "SUPER_CHAT_MESSAGE",
+                "data": {
+                    "message": "留言", "uid": 5, "uprice": 30, "price": 30,
+                    "uinfo": {"base": {"name": "留言的人", "face": "http://i1.hdslb.com/bfs/face/sc.png"}}
+                }
+            }),
+            &counters(),
+        )
+        .expect("SC 仍要解出来");
+        assert_eq!(sc.face, "https://i1.hdslb.com/bfs/face/sc.png");
     }
 
     /// 大航海的两条载荷（`docs/protocol.md` §10.6）：同一笔购买上游拆成

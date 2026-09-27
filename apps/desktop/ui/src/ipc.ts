@@ -162,6 +162,14 @@ export const api = {
     invoke<void>("admin_keywords_del", { roomId, word }),
   followList: () => call<FollowedRoom[]>("follow_list"),
   walletBalance: () => call<number>("wallet_balance"),
+  /**
+   * 按 uid 取头像（契约 §7）：大航海 / V1 礼物 / 缺头像的醒目留言的载荷里没有头像字段，
+   * 界面在新到行里惰性补取（需求 §三 3.2 / 3.4 / 3.6）。
+   *
+   * **空串 = 取不到**（上游非 0 code、网络失败、uid 无效），不是错误 ——
+   * 这条命令不 reject，「同一 uid 只问一次」由 `store.ensureFaces` 收口。
+   */
+  userFace: (uid: number) => call<string>("user_face", { uid }),
 
   // 我的直播间（契约 §7）：房间号一律由后端按账号现取，本层不接受房间号参数。
   // `account` 缺省 = 当前账号，**指定即管理那个账号**——不必先切号（issue202609241553 第 3 条）。

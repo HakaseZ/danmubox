@@ -8,12 +8,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use danmubox_bili::{
-    BiliAdmin, BiliAnchor, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender,
-    BiliWallet,
+    BiliAdmin, BiliAnchor, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliProfile, BiliReporter,
+    BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
     Account, AnchorLiveOutcome, AnchorRoom, AuthProvider, DanmakuReporter, DanmakuSender,
-    EmoteProvider, LiveSource, QrPoll, QrState, RoomAdmin, RoomCatalog, SessionState,
+    EmoteProvider, LiveSource, QrPoll, QrState, RoomAdmin, RoomCatalog, SessionState, UserProfile,
     WalletProvider,
 };
 use danmubox_core::{
@@ -60,6 +60,9 @@ pub struct AppState {
     /// （`account_qr_start` 与 `account_qr_poll` 是两次独立调用），
     /// 所以不能像别的能力那样每条命令新建一个。
     auth: Arc<BiliAuth>,
+    /// 长驻的头像来源（`user_face`）：它内部持**进程级**去重缓存
+    /// （「同一 uid 只问一次上游」，需求 3.4），长驻省掉的是每次调用一个连接池。
+    profile: BiliProfile,
     bus: EventBus,
     counters: Arc<Counters>,
     prefs: Mutex<Prefs>,
@@ -73,6 +76,9 @@ impl AppState {
     pub fn new(store: Arc<ConfigStore>) -> danmubox_core::Result<Self> {
         Ok(Self {
             auth: Arc::new(BiliAuth::new(Arc::clone(&store))?),
+            // 凭据来源挂在 `ConfigStore` 上（`CookieMode::Store`）：切号后无需重建，
+            // 请求实时读当前账号（与其余按 Store 构造的能力同一口径）。
+            profile: BiliProfile::with_store(Arc::clone(&store))?,
             store,
             bus: EventBus::new(BUS_CAPACITY),
             counters: Arc::new(Counters::default()),
@@ -1028,6 +1034,21 @@ async fn wallet_balance(state: State<'_, AppState>) -> ApiResult<i64> {
     wallet.balance().await.map_err(ApiError::from)
 }
 
+/// **按 uid 取头像**（契约 §7）：大航海 / V1 礼物 / 缺头像的醒目留言的载荷里没有头像字段，
+/// 界面在新到行里对这三类做惰性补取（需求 §三 3.2 / 3.6）。
+///
+/// 返回空串 = 取不到（上游非 0 code、网络失败、uid ≤ 0），**不是错误**——命令层只做转发，
+/// 判据在适配器里（`danmubox-bili` 的 `UserProfile`）：需求 3.3 把每一种失败都定义成
+/// 「没有头像」，因此这条命令**不会 reject**（错误码列是空的，见 `docs/ipc.md` §3）。
+///
+/// `profile` 长驻在 `AppState` 里而不是逐次新建：它内部既持 reqwest 客户端，
+/// 也持**进程级**的去重缓存（「同一 uid 只问一次上游」，需求 3.4）——
+/// 逐次新建也能共享那份缓存，但每次都多一个连接池毫无意义。
+#[tauri::command]
+async fn user_face(state: State<'_, AppState>, uid: i64) -> ApiResult<String> {
+    Ok(state.profile.face_of(uid).await)
+}
+
 // ---------------------------------------------------------------- 事件转发
 
 /// 把事件总线上的事件转发给前端（`docs/ipc.md` §4 的五个事件名）。
@@ -1369,6 +1390,7 @@ pub fn run() {
             anchor_live_set,
             follow_list,
             wallet_balance,
+            user_face,
             open_url,
             prefs_get,
             prefs_set,

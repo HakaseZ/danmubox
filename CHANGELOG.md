@@ -28,6 +28,13 @@
 
 ### Added
 
+- **大航海 / 部分礼物 / SC 的头像：按 uid 现取**（2026-09-27，需求 `REQUIREMENTS.md` §三 3.1–3.7）：大航海（`GUARD_BUY` / `USER_TOAST_MSG`）、V1 礼物（`SEND_GIFT`）与缺头像的醒目留言的载荷里**没有头像字段**（旧口径「没有可靠来源 → 一律留空」，`docs/protocol.md` 附录 A8 / A12 / A13 明写），而界面要求大航海必须有头像。现改为**两条来源**：① **同层槽位优先**——只探「与本层已经在读的昵称同层」的 `uinfo.base.face` → `face` → `user_info.face`（`cmd.rs` 的 `same_layer_face`），**不臆造层级**；② 探不到就按 `Message.uid` **现取**——新端口 `UserProfile`（`crates/danmubox-core/src/ports.rs`，**没有错误通道**：需求把每一种失败都定义成空串）+ 适配器 `crates/danmubox-bili/src/profile.rs`（`GET https://api.bilibili.com/x/space/wbi/acc/info`，WBI 签名复用既有密钥缓存，取 `data.face`）。**取不到即空串**（上游非 0 code / 网络失败 / `uid <= 0` 同解，不报错、不阻塞上屏）；**进程级缓存 + 单飞**（同一 uid 只问一次上游，**非 0 code 不写缓存**，下一条消息还能再试）。
+  - **时序**：缺头像的消息进 `ws.rs` 的「头像待补」队列（`FaceWait`）**最多等 600ms**（`FACE_WAIT`）——队头不放行则后面的不越过（保证投递顺序），结果到位或到期由 `select!` 两个分支唤醒，连接收尾整个队列一并放行；**绝不阻塞收包循环**（不在收包路径上 `await`）。超时照常上屏（`face` 留空），由界面在新到行里**行内惰性补取**一次。
+  - **界面**：新增 IPC 命令 `user_face(uid) -> string`（契约 §7；**空串 = 取不到，不 reject**）；`ui/src/faces.ts` 的纯逻辑（`missingFaceUids` / `displayFace`）+ `store.faces` 查表收口「同一 uid 只发一次」与「载荷自带优先」，`RoomView` 在**显示行全集**上算候选并就地补取（不按虚拟窗口算，避免滚动时反复触发）。`Message.face` 的语义由「静态」改为「**可后补**」——**空串不是终态**（只表示「这一条没带、补取还没回来」，界面据此不画假图）。
+  - **CLI**：新增只读校准入口 `cargo run -p danmubox-cli -- face <uid>`，打印上游原样的 `code` / `message` / `data.face`（`AGENT.md` §3、`README.md` §8 已补该命令）。
+  - 规格：`docs/contract.md` §3 / §5 / §7、`docs/ipc.md` §3、`docs/protocol.md` §10.2 / §10.6 与附录 A67、`docs/architecture.md` §2.2 / §3。
+  - **实测状态（照实记，不许升级）**：端点与参数集按社区文档 `bilibili-API-collect` 的 `docs/user/info.md` 核对（只送 `mid` + `wts` + `w_rid`，不送标为可选的 `platform` / `web_location` / `token`）；**2026-09-27 以真实登录态对该端点做只读实测两次**（公开测试房间 `1` 的主播 uid + 一个不存在的 uid）：① `code=0` / `message="OK"` / `data.face` = `https://i0.hdslb.com/bfs/face/<40 位十六进制>.jpg`（**本身就是 https**，升级逻辑照旧保留）；② 不存在的 uid 回 `code=-404` / `message="啥都木有"`、**无** `data.face`。**未触发风控**（两次都是 JSON 信封），故该端点**单条查询的频控阈值仍未知**——本实现按「同一 uid 进程级只问一次」+「失败不缓存」兜底，触发风控时按空串降级、不重试。逐条登记见 `docs/protocol.md` 附录 A67。
+
 - **房管面板 / 礼物栏统计 / 分割条三项改造**（2026-09-26；需求草稿 `docs/draft-20260926-admin-gift-splitter.md`）：
   - **房管面板**：名单改为**每行一项**（行高 40px、勾选槽常驻零跳位、行内横滑 + 仅悬停 / 聚焦行跑马灯）；输入框按钮**三态固定宽**（禁用灰 → 转圈检查中 → 禁言 / 解除禁言）；错误**分两类**（业务拒绝原样 `code+message`，传输 / 风控只给人话、完整原文只进日志）；**增量加载**（先 30 条、滚到底补 10 条）；同步机制去掉 60 秒轮询，改为打开面板后台全量 + 写后重读 + **面板展开每 5 分钟静默刷新**（无按钮、无提示）；`admin_silent_list` / `admin_blacklist_list` 改**分页增量**（`offset` / `limit`，返回 `AdminListSlice<...>`），禁言按页限速翻页，根治一次性翻完 481 条连发几十次 POST 被上游风控挡回 HTTP 412 的根因。
   - **礼物栏统计**：从折叠头拆成**总计条（贴中心、兼拖动热区，文案 `礼物 N条 ¥X`）**与**筛选条（外侧，三枚 `[icon ¥金额]` 芯片切换 `ui.gift_pane_kinds` 并集筛选）**；折叠态只剩总计条；统计链改为**先筛选后汇总**。

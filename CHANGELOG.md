@@ -62,6 +62,7 @@
   - **黑名单 GetBlackList 412 风控**（条目 4，`crates/danmubox-bili/src/admin.rs`）：app-ucenter 只读列表遇 HTTP 412（`text/html` 风控页）时，在 admin 层加**有界重试**（最多 2 次、退避 200ms）与**进程级串行护栏**（三列表不再并发拉取），消除「并发突发」触发的风控；`http.rs` 全局「4xx 不重试 / POST 一律不重试」纪律原样保留。退避时长、重试次数、是否需 app 专属头均**未经实测**，登记 `docs/protocol.md` 附录 A45 补充行为「待实测校准」，不编造取值。
   - **房管批量条底部展开**（条目 5）：批量操作条从「插在表单与列表之间」改为面板**最后一行** `position: sticky; bottom: 0` 从下方滑入（160ms，`prefers-reduced-motion` 下不播），不再造成中间高度突变与焦点丢失。
   - **刷屏头像 66% 露出**（条目 6）：刷屏聚合行头像错位 `0.30 → 0.34`（每位露 2/3），新增独立常量 `AVATAR_STACK_OFFSET_FLOOD`；低价礼物桶保持 `0.30` 不变。
+  - **舰长（大航海）消息补头像**：`cmd.rs` 的 `guard()` 之前按 2026-09-17 样本把 `Message.face` 留空，导致舰长 / 提督 / 总督开通播报不显示头像；现按 `data.face`（兜底 `data.user_info/face`）尝试提取、取不到仍空串（与昵称同层路径、不猜来源，契约 §5 的 `face`）。`GuardMerge` 交付的正是带实付金额的 `USER_TOAST_MSG` 那半，故补头像直接生效；文档同步 `docs/protocol.md` §10.6 / 附录 A12 / A13。
   - 文档同步：`docs/contract.md` §8、`docs/ui.md` §5.4、`docs/protocol.md` 附录 A45 补充。
 
 ### Changed

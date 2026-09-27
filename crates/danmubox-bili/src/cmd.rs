@@ -784,8 +784,9 @@ pub enum GuardSource {
 /// `USER_TOAST_MSG` **带昵称**（`data.username`，样本 100% 有）与订单号 `payflow_id`；
 /// `GUARD_BUY` **没有** `payflow_id`，因此 `Message.upstream_id` 对购买事件是空串。
 ///
-/// 头像**留空**：两条命令的字段表里都没有头像字段（实测样本同样没有）——没有来源就不填
-/// （`docs/protocol.md` §10.6 的记录与契约 §5 的 `face`）。
+/// 头像：与昵称同层（`data.face`，或 `data.user_info/face` 兜底）。2026-09-17 实测样本
+/// （附录 A12 / A13）未见该字段，故取不到即空串、不猜路径；上游若实际带了就取用，
+/// 界面据此画头像（契约 §5 的 `face`）。
 fn guard(room_id: i64, value: &Value, source: GuardSource) -> Option<Message> {
     let data = value.get("data")?;
     let ts_ms = data
@@ -801,6 +802,16 @@ fn guard(room_id: i64, value: &Value, source: GuardSource) -> Option<Message> {
         .get("username")
         .or_else(|| data.get("uname"))
         .or_else(|| data.pointer("/user_info/uname"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    // 头像：与昵称同层（`data.face`，或 `data.user_info/face` 兜底）；取不到即空串。
+    // 2026-09-17 样本（A12 / A13）未见该字段，故此前留空；现按同层路径尝试取用，
+    // 上游确实带了就画头像，没有则保持空串（契约 §5 的 `face`，不猜路径）。
+    message.face = data
+        .get("face")
+        .or_else(|| data.pointer("/user_info/face"))
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
@@ -1609,7 +1620,78 @@ mod tests {
         )
         .expect("大航海仍要解出来");
         assert_eq!(guard.uname, "开舰长的人");
-        assert!(guard.face.is_empty(), "大航海没有头像字段");
+        assert!(
+            guard.face.is_empty(),
+            "大航海无 face 字段时仍留空串（有则取，见下方测试）"
+        );
+    }
+
+    /// 大航海头像按 `data.face`（兜底 `data.user_info/face`）提取；取不到仍空串。
+    /// `GuardMerge` 交付的是 `USER_TOAST_MSG` 那半，故补头像直接生效（issue 260926 舰长头像）。
+    #[test]
+    fn guard_toast_face_is_extracted_and_buy_without_face_stays_empty() {
+        let toast = message(
+            7,
+            &json!({
+                "cmd": "USER_TOAST_MSG",
+                "data": {
+                    "uid": 3, "username": "开舰长的人", "guard_level": 3, "num": 1,
+                    "price": 138000, "payflow_id": "pf", "start_time": 1_775_317_400,
+                    "face": "http://f/guard.png"
+                }
+            }),
+            &counters(),
+        )
+        .expect("播报仍要解出来");
+        assert_eq!(toast.kind, MessageKind::Guard);
+        assert_eq!(toast.face, "http://f/guard.png", "头像取自 data.face");
+
+        let buy = message(
+            7,
+            &json!({
+                "cmd": "GUARD_BUY",
+                "data": {"uid": 3, "username": "开舰长的人", "guard_level": 3, "price": 198000}
+            }),
+            &counters(),
+        )
+        .expect("购买事件仍要解出来");
+        assert!(buy.face.is_empty(), "无 face 字段时留空串");
+    }
+
+    /// `GuardMerge` 交付的播报带 face：合并后投出的那一条头像来自播报载荷。
+    #[test]
+    fn guard_merge_delivers_toast_face() {
+        let c = counters();
+        let mut merge = GuardMerge::with_window(Duration::from_secs(5));
+        let now = Instant::now();
+
+        let (buy, source) = guard_event(
+            7,
+            &json!({
+                "cmd": "GUARD_BUY",
+                "data": {"uid": 4, "username": "开舰长的人", "guard_level": 3, "price": 198000, "start_time": 1_775_317_500}
+            }),
+            &c,
+        );
+        assert!(merge.absorb(now, buy, source).is_none(), "购买事件先压着");
+
+        let (toast, source) = guard_event(
+            7,
+            &json!({
+                "cmd": "USER_TOAST_MSG",
+                "data": {
+                    "uid": 4, "username": "开舰长的人", "guard_level": 3, "num": 1,
+                    "price": 138000, "payflow_id": "pf2", "start_time": 1_775_317_500,
+                    "face": "http://f/guard2.png"
+                }
+            }),
+            &c,
+        );
+        let delivered = merge.absorb(now, toast, source).expect("播报投出");
+        assert_eq!(
+            delivered.face, "http://f/guard2.png",
+            "合并交付的播报带头像"
+        );
     }
 
     /// 大航海的两条载荷（`docs/protocol.md` §10.6）：同一笔购买上游拆成

@@ -65,9 +65,21 @@
       byTestId("db-panes").getAttribute("data-gift") === "on";
     out.splitterHitAreaPx = Math.round(splitBox0.height * 10) / 10;
     out.splitterHitAreaAtLeast8 = splitBox0.height >= 8;
-    // 默认顺序：弹幕在上、礼物在下（契约 §8 的默认值 = 与改前一致的那个形态）
+    // 默认顺序：弹幕在上、礼物在下（契约 §8 的默认值 = 与改前一致的那个形态）。
+    // **2026-09-27 判据校准**：分割条现在**浮起**（`margin-block: -4px`，不占布局高度，
+    // 见 app.module.css 的 `.splitter`），它在布局上已经不「夹」在两栏之间 —— 而是**叠在交界之上**，
+    // 所以「礼物在下」不能再用「分割条盒子整体落在两栏之间」判（新几何下那个条件恒不成立，
+    // 与顺序无关）。真判据是「礼物栏顶边就是交界」—— 交界 = 分割条的**中线**（那条线也画在那儿）。
     out.splitterDefaultOrderGiftBelow =
-      danmakuBox0.bottom <= splitBox0.top + 1 && splitBox0.bottom <= giftBox0.top + 1;
+      Math.abs(danmakuBox0.bottom - splitterMid()) < 1 &&
+      Math.abs(giftBox0.top - splitterMid()) < 1 &&
+      giftBox0.top > danmakuBox0.top &&
+      window.__prefs["ui.gift_pane_on_top"] === false;
+    out.splitterDefaultBoxesPx = {
+      danmaku: [Math.round(danmakuBox0.top * 10) / 10, Math.round(danmakuBox0.bottom * 10) / 10],
+      splitter: [Math.round(splitBox0.top * 10) / 10, Math.round(splitBox0.bottom * 10) / 10],
+      gift: [Math.round(giftBox0.top * 10) / 10, Math.round(giftBox0.bottom * 10) / 10],
+    };
     // 折叠态：礼物栏只有总计条那么高（单轴模型里它就是「份额被压到下限以下 + 这一栏裁剪」
     // 的样子 —— 高度由最小高度兜住，不是份额驱动的）
     out.splitterCollapsedGiftIsHeadHeight = giftExpandedNow() === "false" &&
@@ -231,8 +243,21 @@
     var upSplit = rect(byTestId("db-pane-splitter"));
     out.splitterMinRowHeightPx = Math.round(minRow * 10) / 10;
     out.splitterExtremeUpKeepsThreeRows = upDanmaku.height >= 3 * minRow - 8;
+    // 「拖到极限也不溢出」：**两栏高度之和 = 分区高度**（允许 1px 取整误差）。
+    // **2026-09-27 判据校准**：分割条现在**不占布局高度**（`margin-block: -4px` 上下各让掉自身一半，
+    // 自己的 8px 与两块负 margin 正好抵掉），所以正确的等式是**两栏**之和 —— 旧写法把分割条的
+    // 8px 也算进去，恒多出一个热区的高度（实测 8.0），量的是「热区占不占位」而不是「溢不溢出」。
+    // 与此同时多钉一条：两栏与分割条本身都仍落在分区盒子里（它只是被允许重叠，不是跑到外面去）。
+    out.splitterExtremeUpPaneSumPx = {
+      danmaku: Math.round(upDanmaku.height * 10) / 10,
+      gift: Math.round(upGift.height * 10) / 10,
+      splitter: Math.round(upSplit.height * 10) / 10,
+      panes: Math.round(panesBox1.height * 10) / 10,
+    };
     out.splitterExtremeUpNoOverflow =
-      Math.abs(upGift.height + upSplit.height + upDanmaku.height - panesBox1.height) <= 1;
+      Math.abs(upGift.height + upDanmaku.height - panesBox1.height) <= 1 &&
+      upSplit.top >= panesBox1.top - 1 && upSplit.bottom <= panesBox1.bottom + 1 &&
+      upDanmaku.top >= panesBox1.top - 1 && upGift.bottom <= panesBox1.bottom + 1;
     out.splitterExtremeUpClampedRatio = window.__prefs["ui.gift_pane_ratio"] === 0.9;
     // 份额停在 0.9（在下限之上）⇒ 松手也不动开合，仍是展开
     out.splitterExtremeUpStaysExpanded = giftExpandedNow() === "true";
@@ -310,9 +335,20 @@
     var afterSwapGift = rect(byTestId("db-pane-gift"));
     var afterSwapSplit = rect(byTestId("db-pane-splitter"));
     var afterSwapDanmaku = rect(byTestId("db-pane-danmaku"));
+    // 两栏真的换了上下：礼物栏在上面、弹幕区在下面，交界处仍是分割条的**中线**
+    // （同一处口径见上面的 `splitterDefaultOrderGiftBelow`：热区浮起之后它不再夹在两栏之间，
+    // 「礼物在上」因此不能用「分割条盒子整体落在两栏之间」判 —— 那个写法在新几何下与顺序无关）。
+    var afterSwapMid = afterSwapSplit.top + afterSwapSplit.height / 2;
+    out.swapAfterBoxesPx = {
+      gift: [Math.round(afterSwapGift.top * 10) / 10, Math.round(afterSwapGift.bottom * 10) / 10],
+      splitter: [Math.round(afterSwapSplit.top * 10) / 10, Math.round(afterSwapSplit.bottom * 10) / 10],
+      danmaku: [Math.round(afterSwapDanmaku.top * 10) / 10, Math.round(afterSwapDanmaku.bottom * 10) / 10],
+      mid: Math.round(afterSwapMid * 10) / 10,
+    };
     out.swapByLongPress = window.__prefs["ui.gift_pane_on_top"] === true &&
-      afterSwapGift.bottom <= afterSwapSplit.top + 1 &&
-      afterSwapSplit.bottom <= afterSwapDanmaku.top + 1;
+      Math.abs(afterSwapGift.bottom - afterSwapMid) < 1 &&
+      Math.abs(afterSwapDanmaku.top - afterSwapMid) < 1 &&
+      afterSwapGift.top < afterSwapDanmaku.top;
     // 换位**不改比例**：礼物栏高度一个像素都不变，只是挪到了上面（契约 §8 / ui.md §5.4 的口径）
     out.swapKeepsRatio = window.__prefs["ui.gift_pane_ratio"] === ratioBeforeSwap &&
       Math.abs(afterSwapGift.height - giftHeightBeforeSwap) <= 2;

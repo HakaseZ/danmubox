@@ -49,6 +49,12 @@
     await sleep(900);
     out.cheapGiftFreshRoomActive = cheapActiveRoomId() === String(CHEAP_ROOM);
 
+    // 总计条与三格的串都由页面的格式器拼（`yuanText`：
+    // `¥` + `toLocaleString(undefined, { maximumFractionDigits: 3 })`），这里跟着**同一套**格式器
+    // 生成期望值，不手写千分位（分组位数随浏览器 locale 变，断言不该把它写死）。
+    var yuan = function (n) { return n.toLocaleString(undefined, { maximumFractionDigits: 3 }); };
+    // 总计条的期望串：`礼物 ${条数}条 ¥${金额}`（RoomView 的 `giftTotalText`，未开筛选时带金额）。
+    var totalLine = function (count, amount) { return "礼物 " + count + "条 ¥" + yuan(amount); };
     var cheapPush = function (kind, content, amount, extra) {
       window.__emit("danmubox://message", window.__mk(kind, content, false,
         Object.assign({ room_id: CHEAP_ROOM, amount: amount }, extra || {})));
@@ -58,13 +64,29 @@
       var el = byTestId("db-pane-gift");
       return el ? el.innerText : "";
     };
+    // **2026-09-27 钩子校准**：本批的单轴模型（需求 5.1–5.4）把礼物栏重做成
+    // 「总计条 / 列表 / 筛选条」三段常驻，`db-gift-summary`（旧那条整串分组汇总）与
+    // `db-gift-dock`（旧的整块礼物栏）两枚钩子在 `src/` 里已 0 次出现。它们现在的着落：
+    //   · 旧的**整串汇总** → 拆成「总计条 `db-gift-total-text`（三族合计）」+
+    //     「筛选条三格 `db-gift-chip[data-kind]`（每族各自的条数与金额，`title` 上逐字可读）」；
+    //   · 旧的**整块礼物栏** → `db-gift-pane`（栏内那一段，盒子与 `db-pane-gift` 同宽高）；
+    //   · 旧的**开合** → `db-gift-toggle` 的 `aria-expanded`（条本身不是按钮，见 docs/ui.md §5.4）。
     var cheapSummary = function () {
-      var el = byTestId("db-gift-summary");
+      var el = byTestId("db-gift-total-text");
       return el ? el.innerText.trim() : null;
     };
-    var cheapDockText = function () {
-      var el = byTestId("db-gift-dock");
-      return el ? el.innerText : "";
+    // 某一族的口径（`gift` / `superchat` / `guard`）：`title` = `${族名} ${条数} 条 · ${金额}（点击筛选）`。
+    // 它与总计条是**两条数据链**（三格走**筛前**全集 `panelAllRows`、总计条走**筛后** `giftRows`），
+    // 因此把一个数同时钉在两处，比改前从句号和括号里抠字串更硬。
+    var cheapChipTitle = function (kind) {
+      var chip = allByTestId("db-gift-chip").filter(function (c) {
+        return c.getAttribute("data-kind") === kind;
+      })[0];
+      return chip ? chip.getAttribute("title") : null;
+    };
+    var cheapKindText = function (kind) {
+      var t = cheapChipTitle(kind);
+      return t === null ? "" : t;
     };
     var cheapPanelOpen = function () { return !!byTestId("db-panel"); };
     var cheapSetPanel = async function (open) {
@@ -74,14 +96,16 @@
       }
       return cheapPanelOpen() === open;
     };
-    // 礼物栏折叠头的开合走 aria-expanded（它本来就是这枚按钮的语义钩子，礼物栏票沿用）
+    // 礼物栏的开合走 `db-gift-toggle` 的 `aria-expanded`：这枚小箭头才是开合入口
+    // （总计条 `db-gift-total` 本身不是按钮，需求 4.4；旧的 `db-gift-dock` 钩子已随本批移除）。
     var cheapPaneExpanded = function () {
-      var dock = byTestId("db-gift-dock");
-      return !!dock && dock.getAttribute("aria-expanded") === "true";
+      var toggle = byTestId("db-gift-toggle");
+      return !!toggle && toggle.getAttribute("aria-expanded") === "true";
     };
     var cheapSetPane = async function (open) {
-      if (cheapPaneExpanded() !== open && byTestId("db-gift-dock")) {
-        byTestId("db-gift-dock").click();
+      var toggle = byTestId("db-gift-toggle");
+      if (cheapPaneExpanded() !== open && toggle) {
+        toggle.click();
         await sleep(500);
       }
       return cheapPaneExpanded() === open;
@@ -120,7 +144,8 @@
       cheapPaneText().indexOf("投喂 铅笔") >= 0 &&
       cheapPaneText().indexOf("投喂 铅笔屑") >= 0 &&
       cheapPaneText().indexOf("投喂 橡皮") >= 0 &&
-      cheapSummary() === "本场 礼物 3 · 0.3 元";
+      // 三条各归各：总计条 = 礼物这一族 3 条 · 0.3 元（此刻只有礼物族，三格与总计条同一个数）。
+      cheapSummary() === totalLine(3, 0.3);
     await cheapSetPanel(true);
     out.cheapGiftFoldToggled = setGiftSwitch("折叠低价礼物", true);
     await sleep(400);
@@ -157,8 +182,10 @@
       cheapPaneText().indexOf("投喂 铅笔屑") >= 0 &&
       cheapPaneText().indexOf("投喂 橡皮") >= 0;
     out.cheapGiftExcludeChangesStats =
-      out.cheapGiftSummaryAfterExclude === "本场 礼物 1 · 0.11 元" &&
-      cheapDockText().indexOf("（1）") >= 0 &&
+      out.cheapGiftSummaryAfterExclude === totalLine(1, 0.11) &&
+      // 第二条证据来自**另一条数据链**（筛选条那格 = 筛前口径的礼物族）：
+      // 0.09 / 0.10 两条低价礼物被剔出统计后，这一族只剩 0.11 元那一条。
+      cheapKindText("gift").indexOf("礼物 1 条 · ¥" + yuan(0.11)) >= 0 &&
       out.cheapGiftSummaryAfterExclude !== out.cheapGiftSummaryBeforeFold;
 
     // ---- ④ 边界：0 元（上游没给价）不是低价、SC 与大航海两边都不进这枚键的口径。
@@ -172,13 +199,24 @@
     await sleep(800);
     await cheapSetPane(true);
     out.cheapGiftSummaryBoundary = cheapSummary();
+    out.cheapGiftSummaryBoundaryChips = ["gift", "superchat", "guard"].map(cheapKindText);
+    // 三个判据，分别钉住总数、礼物族的条数与另外两族：
+    //   ① 总计条 = 三族合计（2 + 1 + 1 = 4 条，0.11 + 30 + 138 = 168.11 元）；
+    //   ② 礼物族那一格 = **2 条**（0.11 元那条 + 没给价那条）—— 这正是「0 元不算低价」的边界：
+    //      若把 0 当低价，它会被一并剔掉、这一族只剩 1 条；
+    //   ③ SC 与 大航海 两格各 1 条、金额原样，不受这枚键影响。
     out.cheapGiftZeroPriceNotCheap =
-      out.cheapGiftSummaryBoundary === "本场 礼物 2 · 0.11 元 / SC 1 · 30 元 / 大航海 1 · 138 元";
-    var cheapScGuardTail = function (txt) {
-      var at = txt ? txt.indexOf("SC ") : -1;
-      return at >= 0 ? txt.slice(at) : null;
+      out.cheapGiftSummaryBoundary === totalLine(4, 168.11) &&
+      cheapKindText("gift").indexOf("礼物 2 条 · ¥" + yuan(0.11)) >= 0 &&
+      cheapKindText("superchat").indexOf("SC 1 条 · ¥" + yuan(30)) >= 0 &&
+      cheapKindText("guard").indexOf("大航海 1 条 · ¥" + yuan(138)) >= 0;
+    // SC / 大航海两边都不进这枚键的口径：三格里那两串与上一步（只开剔除）逐字相同。
+    // 旧写法是从整串汇总里 `slice` 出尾巴的那一段（「SC 1 · 30 元 / 大航海 1 · 138 元」）；
+    // 单轴模型之后串已经不在一起了，尾巴因此改从**两格**上读。
+    var cheapScGuardTail = function () {
+      return [cheapKindText("superchat"), cheapKindText("guard")].join(" | ");
     };
-    var cheapScGuardExcludeOnly = cheapScGuardTail(out.cheapGiftSummaryBoundary);
+    var cheapScGuardExcludeOnly = cheapScGuardTail();
     // 两枚都开：统计口径与「只开剔除」逐字相同（折叠不改统计），SC / 大航海两组也逐字相同。
     await cheapSetPanel(true);
     var cheapFoldOnAgain = setGiftSwitch("折叠低价礼物", true);
@@ -188,8 +226,10 @@
     out.cheapGiftBothOnSummary = cheapSummary();
     out.cheapGiftBothOnStatsUnchanged = cheapFoldOnAgain &&
       cheapSummary() === out.cheapGiftSummaryBoundary;
-    out.cheapGiftScGuardUntouched = cheapScGuardExcludeOnly === "SC 1 · 30 元 / 大航海 1 · 138 元" &&
-      cheapScGuardTail(cheapSummary()) === cheapScGuardExcludeOnly;
+    out.cheapGiftScGuardUntouched =
+      cheapKindText("superchat").indexOf("SC 1 条 · ¥" + yuan(30)) >= 0 &&
+      cheapKindText("guard").indexOf("大航海 1 条 · ¥" + yuan(138)) >= 0 &&
+      cheapScGuardTail() === cheapScGuardExcludeOnly;
 
     // ---- 收尾：两枚开关恢复默认（false）、面板收起、回到原来的房间
     await cheapSetPanel(true);
@@ -281,7 +321,9 @@
         cheapPaneText().indexOf("0.09 元") >= 0 &&
         cheapPaneText().indexOf("0.1 元") >= 0 &&
         cheapPaneText().indexOf("0.11 元") >= 0 &&
-        out.switchScopeSummaryBefore === "本场 礼物 3 · 0.3 元";
+        // 统计：总计条三族合计那一串（此刻本场只有礼物族 3 条 · 0.3 元）。
+        out.switchScopeSummaryBefore === totalLine(3, 0.3) &&
+        cheapKindText("gift").indexOf("礼物 3 条 · ¥" + yuan(0.3)) >= 0;
 
       // ---- ② 折叠开：**两个区域都折**（弹幕区少一行、桶行带 ×2；礼物栏条目 3 → 2）
       out.switchScopeFoldToggled = (await ssToggle("折叠低价礼物", true)) &&
@@ -344,14 +386,17 @@
         ssChatRowsWith("投喂 铅笔屑").length === 1 && ssChatRowsWith("投喂 橡皮").length === 1 &&
         cheapRowCount() === out.switchScopeGiftRowsBefore;
       out.switchScopeExcludeTouchesStatsOnly = out.switchScopeExcludeKeepsPanes &&
-        ssExcludeSummary === "本场 礼物 1 · 0.11 元" &&
-        cheapDockText().indexOf("（1）") >= 0;
+        ssExcludeSummary === totalLine(1, 0.11) &&
+        // 换一条数据链再钉一次（筛选条那格 = 筛前口径的礼物族）：低价两条被剔出统计后只剩 0.11 元那条。
+        cheapKindText("gift").indexOf("礼物 1 条 · ¥" + yuan(0.11)) >= 0 &&
+        ssExcludeSummary !== out.switchScopeSummaryBefore;
 
       // ---- ⑤ 剔除关回去：统计逐字回到原串（头部 N 一起回来）
       out.switchScopeExcludeOff = (await ssToggle("剔除低价礼物统计", false)) &&
         window.__prefs["ui.gift_exclude_cheap_stats"] === false;
+      // 关回去 ⇒ 统计逐字复原（头部那个「N 条」跟着一起回来）：两处口径各自回归原值。
       out.switchScopeExcludeRestoresStats = cheapSummary() === out.switchScopeSummaryBefore &&
-        cheapDockText().indexOf("（3）") >= 0;
+        cheapKindText("gift").indexOf("礼物 3 条 · ¥" + yuan(0.3)) >= 0;
 
       // ---- 收尾：两枚低价礼物开关回到契约 §8 的默认值、回到原来的房间（下一段从房间页开始量）
       out.switchScopeDefaultsRestored = window.__prefs["ui.gift_collapse_cheap"] === false &&

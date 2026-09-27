@@ -63,6 +63,7 @@
   - **房管批量条底部常驻可见**（条目 5）：批量操作条从「插在表单与列表之间」改为面板**最后一行**从下方滑入（160ms，`prefers-reduced-motion` 下不播），不再造成中间高度突变与焦点丢失；面板改为纵向 flex 列、只有名单内部滚动，批量条改用 flex 钉在底部**始终可见**（替代原先脆弱的 `position: sticky`，修掉 CodeRabbit 指出的长名单滚走后批量条被移出视口的问题）。
   - **刷屏头像 66% 露出**（条目 6）：刷屏聚合行头像错位 `0.30 → 0.34`（每位露 2/3），新增独立常量 `AVATAR_STACK_OFFSET_FLOOD`；低价礼物桶保持 `0.30` 不变。
   - **舰长（大航海）消息补头像**：`cmd.rs` 的 `guard()` 之前按 2026-09-17 样本把 `Message.face` 留空，导致舰长 / 提督 / 总督开通播报不显示头像；现按 `data.face`（兜底 `data.user_info/face`）尝试提取、取不到仍空串（与昵称同层路径、不猜来源，契约 §5 的 `face`）。`GuardMerge` 交付的正是带实付金额的 `USER_TOAST_MSG` 那半，故补头像直接生效；文档同步 `docs/protocol.md` §10.6 / 附录 A12 / A13。
+  - **舰长头像改由 `resolve_face` 按 uid 现取（条目 7，issue 260926 后续）**：条目 6 的 `data.face` 同层尝试在 2026-09-17 实测样本（A12 / A13，1680 笔）里**从未取到**——上游 `GUARD_BUY` / `USER_TOAST_MSG` 负载确实不带 `face`，但 `uid` 稳定可得；故新增后端命令 `resolve_face`（`x/space/acc/info`，进程级 6h 缓存）按 `uid` 现取头像，前端 `store.ts` 对「有 uid 无 face」的消息先等头像到位（≤ `FACE_FETCH_TIMEOUT_MS = 600ms`）再入可见列表，避免头像晚一拍弹出；超时仍上屏、由 `MessageRow` 惰性兜底。协议 §10.6 / 附录 A13、契约 §7 同步。
   - 文档同步：`docs/contract.md` §8、`docs/ui.md` §5.4、`docs/protocol.md` 附录 A45 补充。
 
 ### Changed

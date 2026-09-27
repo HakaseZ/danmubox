@@ -2,7 +2,8 @@
 //!
 //! 对应 `docs/protocol.md` §2.1、§8.2 与 `docs/auth.md` §3、§4、§5。
 
-use std::sync::LazyLock;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use danmubox_core::{Error, Result, Room};
@@ -36,6 +37,11 @@ pub const EP_QR_GENERATE: &str =
     "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
 /// 扫码登录：轮询扫码状态。
 pub const EP_QR_POLL: &str = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll";
+
+/// 按 uid 查用户头像（契约 §7 `resolve_face` / 协议 §10.6）：大航海 / 部分礼物 / SC 的上游负载
+/// **不带 `face`**（A12 / A13 实测，1680 笔样本无一例外），但 `uid` 稳定可得
+/// （A12 / A13 已实测），因此改由这里按 `uid` 现取。公开接口、无需登录。
+const EP_SPACE_ACC_INFO: &str = "https://api.bilibili.com/x/space/acc/info";
 
 /// `buvid3` 在 Cookie 与 WS 认证包里的键名。
 const BUVID3: &str = "buvid3";
@@ -164,6 +170,24 @@ impl CachedWbiKeys {
 static WBI_KEY_CACHE: LazyLock<tokio::sync::Mutex<Option<CachedWbiKeys>>> =
     LazyLock::new(|| tokio::sync::Mutex::new(None));
 
+/// 头像缓存时长：头像很少改，且同一观众可能在一场直播里多次出现（连买舰长 / 弹幕区与礼物栏各一张），
+/// 缓存避免重复打上游。
+const FACE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// 一份缓存的头像与它的新鲜度依据。
+struct CachedFace {
+    face: String,
+    fetched_at: Instant,
+}
+
+/// 进程内共享的「`uid` → 头像」缓存（`user_face`）。
+///
+/// 与 [`WBI_KEY_CACHE`] 同理：桌面端每次发送都新建 `BiliHttp`，缓存放实例字段等于没缓存，
+/// 所以必须是进程级静态槽位。头像与账号无关（公开接口），一个槽位即可。
+/// 用 `std::sync::Mutex`：临界区只做 O(1) 查表 / 插入，绝不持有跨 `await`。
+static FACE_CACHE: LazyLock<Mutex<HashMap<i64, CachedFace>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// ac站 HTTP 客户端。Cookie 只在进程内传递，绝不写日志。
 #[derive(Clone)]
 pub struct BiliHttp {
@@ -176,6 +200,8 @@ pub struct BiliHttp {
     /// `getRoomPlayInfo` 端点。生产恒为 `EP_ROOM_PLAY_INFO`；测试指到本地桩服务器以**计数请求**
     /// （列表页的定期刷新靠它对每个房间只打一次，见 `room_live_status`）。
     play_info_url: String,
+    /// `x/space/acc/info` 端点。生产恒为 `EP_SPACE_ACC_INFO`；测试指到本地桩服务器以计数请求。
+    space_acc_url: String,
 }
 
 impl BiliHttp {
@@ -211,6 +237,7 @@ impl BiliHttp {
             nav_url: EP_NAV.to_string(),
             danmu_info_url: EP_DANMU_INFO.to_string(),
             play_info_url: EP_ROOM_PLAY_INFO.to_string(),
+            space_acc_url: EP_SPACE_ACC_INFO.to_string(),
         })
     }
 
@@ -232,6 +259,13 @@ impl BiliHttp {
     #[cfg(test)]
     fn with_play_info_url(mut self, url: String) -> Self {
         self.play_info_url = url;
+        self
+    }
+
+    /// 仅测试：把 `x/space/acc/info` 指到本地桩服务器（生产恒为 `EP_SPACE_ACC_INFO`）。
+    #[cfg(test)]
+    fn with_space_acc_url(mut self, url: String) -> Self {
+        self.space_acc_url = url;
         self
     }
 
@@ -539,6 +573,53 @@ impl BiliHttp {
     /// 上游 `code != 0`（未登录，典型是 `-101`）或取不到昵称 → `None`；
     /// 传输 / 解析失败 → `Err`。调用方按「未登录」与「没问到」区别对待：
     /// 前者是凭据失效，后者不该改变本地结论。
+    /// 按 uid 查用户头像（`x/space/acc/info`，契约 §7 `resolve_face` / 协议 §10.6）。
+    ///
+    /// 大航海（`GUARD_BUY` / `USER_TOAST_MSG`）与部分礼物 / SC 的上游负载**不带 `face`**
+    /// （A12 / A13 实测，1680 笔样本无一例外），但 `uid` 稳定可得（A12 / A13 已实测），
+    /// 因此改由这里按 `uid` 现取。该端点是公开接口、无需登录，失败（上游故障 / 无此用户）
+    /// 一律返回空串 —— 界面按「无头像」处理，绝不臆造。
+    ///
+    /// 头像很少改、且同一观众在一场直播里可能多次出现（连买舰长、弹幕区与礼物栏各一张），
+    /// 进程级缓存避免重复打上游（`FACE_TTL`）。
+    pub async fn user_face(&self, uid: i64) -> Result<String> {
+        if uid <= 0 {
+            return Err(Error::BadRequest("uid 非法".into()));
+        }
+        // 命中进程级缓存：直接回，不再打上游。
+        {
+            let cache = FACE_CACHE.lock().expect("face cache poisoned");
+            if let Some(cached) = cache.get(&uid) {
+                if cached.fetched_at.elapsed() < FACE_TTL {
+                    return Ok(cached.face.clone());
+                }
+            }
+        }
+        let url = format!("{}?mid={}", self.space_acc_url, uid);
+        let value = self
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| upstream("space/acc/info", e))?
+            .json::<Value>()
+            .await
+            .map_err(|e| upstream("space/acc/info decode", e))?;
+        if value.get("code").and_then(Value::as_i64) != Some(0) {
+            // 非 0 code（如 -404 / -400）：按「问不到」，不缓存、返回空串。
+            return Ok(String::new());
+        }
+        let face = value
+            .pointer("/data/face")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if !face.is_empty() {
+            let mut cache = FACE_CACHE.lock().expect("face cache poisoned");
+            cache.insert(uid, CachedFace { face: face.clone(), fetched_at: Instant::now() });
+        }
+        Ok(face)
+    }
+
     pub async fn nav_identity(&self, cookie: Option<&str>) -> Result<Option<NavIdentity>> {
         let value = self
             .get_with_cookie(EP_NAV, cookie.map(str::to_string))
@@ -1312,6 +1393,46 @@ mod tests {
         assert_eq!(error.code(), "UPSTREAM_ERROR");
         assert!(error.to_string().contains("HTTP 502"), "{error}");
         assert_eq!(stub.hits.load(Ordering::SeqCst), 2, "最多两次");
+    }
+
+    /// 按 uid 查头像：命中 `data.face`，且同 uid 只问一次上游（进程级缓存）。
+    #[tokio::test]
+    async fn user_face_reads_data_face_and_caches() {
+        let body = r#"{"code":0,"data":{"mid":7654321,"face":"https://i0.hdslb.com/face/abc.jpg","name":"某人"}}"#;
+        let stub = spawn_stub(&[(200, "application/json", body)], Duration::ZERO);
+        let http = BiliHttp::new()
+            .unwrap()
+            .with_space_acc_url(stub.base.clone());
+        let face = http.user_face(7654321).await.expect("查头像");
+        assert_eq!(face, "https://i0.hdslb.com/face/abc.jpg");
+        // 第二次命中进程级缓存，不再打上游。
+        let _ = http.user_face(7654321).await.unwrap();
+        assert_eq!(
+            stub.hits.load(Ordering::SeqCst),
+            1,
+            "同一 uid 只该问一次上游"
+        );
+    }
+
+    /// 上游非 0 code（无此用户等）：按「问不到」返回空串，且不缓存（下次仍会实问）。
+    #[tokio::test]
+    async fn user_face_empty_on_non_zero_code() {
+        let stub = spawn_stub(
+            &[(200, "application/json", r#"{"code":-404,"message":"not found"}"#)],
+            Duration::ZERO,
+        );
+        let http = BiliHttp::new()
+            .unwrap()
+            .with_space_acc_url(stub.base.clone());
+        let face = http.user_face(7654322).await.expect("查头像");
+        assert_eq!(face, "", "非 0 code 按无头像处理");
+        // 非 0 code 不写缓存，下一次仍是一次新请求（不是从缓存里取空串）。
+        let _ = http.user_face(7654322).await.unwrap();
+        assert_eq!(
+            stub.hits.load(Ordering::SeqCst),
+            2,
+            "非 0 code 不缓存，下次仍实问"
+        );
     }
 
     /// POST **一律不重试**：请求可能已经生效，重试就会重复发弹幕 / 重复禁言。

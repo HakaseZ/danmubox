@@ -806,9 +806,11 @@ fn guard(room_id: i64, value: &Value, source: GuardSource) -> Option<Message> {
         .unwrap_or_default()
         .to_string();
 
-    // 头像：与昵称同层（`data.face`，或 `data.user_info/face` 兜底）；取不到即空串。
-    // 2026-09-17 样本（A12 / A13）未见该字段，故此前留空；现按同层路径尝试取用，
-    // 上游确实带了就画头像，没有则保持空串（契约 §5 的 `face`，不猜路径）。
+    // 头像：与昵称同层（`data.face`，或 `data.user_info/face` 兜底）先试；
+    // 2026-09-17 样本（A12 / A13，1680 笔）该字段确实缺，ws 路径取不到即空串。
+    // 上游缺 face 已由实测钉死，因此界面层改由 `resolve_face` IPC 按 `uid` 经
+    // `x/space/acc/info` 现取（契约 §7 / `protocol.md` §10.6）—— 这里只负责把
+    // ws 若带来的那份接住，绝不臆造（契约 §5 的 `face`）。
     message.face = data
         .get("face")
         .or_else(|| data.pointer("/user_info/face"))

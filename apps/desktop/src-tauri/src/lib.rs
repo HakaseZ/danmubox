@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use danmubox_bili::{
-    BiliAdmin, BiliAnchor, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender,
-    BiliWallet,
+    BiliAdmin, BiliAnchor, BiliAuth, BiliEmotes, BiliFollow, BiliHttp, BiliLive, BiliReporter,
+    BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
     Account, AnchorLiveOutcome, AnchorRoom, AuthProvider, DanmakuReporter, DanmakuSender,
@@ -608,6 +608,22 @@ fn prefs_set(state: State<'_, AppState>, patch: serde_json::Value) -> ApiResult<
     prefs.set_patch(&patch).map_err(ApiError::from)?;
     prefs.save(&prefs_path()).map_err(ApiError::from)?;
     Ok(prefs.effective())
+}
+
+/// 按 uid 现取用户头像（契约 §7 / 协议 §10.6）：大航海 / 部分礼物 / SC 的上游负载**不带 `face`**
+/// （A12 / A13 实测，1680 笔样本无一例外），但 `uid` 稳定可得，因此由前端对缺头像的行
+/// 惰性调用本命令、经 `x/space/acc/info` 补头像。
+///
+/// 问不到（上游故障 / 无此用户 / uid 非法）一律返回 `None`——前端按「无头像」处理，
+/// 不向上抛错（头像缺失不是故障）。
+#[tauri::command]
+async fn resolve_face(state: State<'_, AppState>, uid: i64) -> ApiResult<Option<String>> {
+    if uid <= 0 {
+        return Ok(None);
+    }
+    let http = BiliHttp::with_store(Arc::clone(&state.store)).map_err(ApiError::from)?;
+    // 问不到时按「无头像」处理：返回 `None`，不向上抛错（头像缺失不是故障）。
+    Ok(http.user_face(uid).await.ok().filter(|face| !face.is_empty()))
 }
 
 /// 本人在该房间的身份（契约 §7）：粉丝牌 / 大航海 / 是否房管。
@@ -1372,6 +1388,7 @@ pub fn run() {
             open_url,
             prefs_get,
             prefs_set,
+            resolve_face,
             frontend_log
         ])
         .run(tauri::generate_context!())

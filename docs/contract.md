@@ -445,6 +445,7 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持（`lib.rs:493-542`） |
 | `prefs_get` | 读偏好生效值全集（默认值已合并，见 §8） |
 | `prefs_set` | 写偏好补丁；未知键或非法值 → `BAD_REQUEST`，成功返回合并后的生效值全集 |
+| `resolve_face` | 按 `uid` 现取用户头像（`x/space/acc/info`）：大航海 / 部分礼物 / SC 的上游负载不带 `face`（协议 A12 / A13 实测），但 `uid` 稳定可得，前端对缺头像的行惰性调用；取不到返回 `null`，按「无头像」处理（协议 §10.6） |
 | `frontend_log` | 前端控制台桥上报：`level` 为 `error` / `warn`（其余按 debug），`target = "danmubox::ui"`。页面 `console.error` / `console.warn` 与未捕获错误经它并入 Rust 侧同一份日志；同一告警 1 秒内只上报一次，防「渲染 → 告警 → 日志 → 重渲染」反馈环（`DANMUBOX_LOG` 见 §4） |
 
 Rust → Frontend 事件（`lib.rs:480`、`lib.rs:874-934`、`lib.rs:1144`）：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。

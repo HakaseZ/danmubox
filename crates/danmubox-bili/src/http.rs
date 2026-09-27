@@ -164,6 +164,20 @@ impl CachedWbiKeys {
 static WBI_KEY_CACHE: LazyLock<tokio::sync::Mutex<Option<CachedWbiKeys>>> =
     LazyLock::new(|| tokio::sync::Mutex::new(None));
 
+/// 幂等 `GET` 遇到 HTTP 412（上游风控）时的**有界**退避重试次数上限。
+///
+/// **未实测**：上限与下面的退避基数都是保守起点，真机上的风控阈值尚未验证；实测后按
+/// `docs/protocol.md` 附录 A45 回填（`AGENT.md` §8 第 7 条）。只作用于
+/// [`BiliHttp::get_with_cookies_backoff`]，`post_form` 一律不重试（6.6）。
+const GET_412_MAX_RETRIES: u32 = 2;
+
+/// 412 退避的基数：第 n 次重试前等 `基数 × 2^(n-1)`。
+#[cfg(not(test))]
+const GET_412_BACKOFF_BASE: Duration = Duration::from_millis(500);
+/// 测试里把退避缩到毫秒级，避免每个用例白等秒级。
+#[cfg(test)]
+const GET_412_BACKOFF_BASE: Duration = Duration::from_millis(1);
+
 /// ac站 HTTP 客户端。Cookie 只在进程内传递，绝不写日志。
 #[derive(Clone)]
 pub struct BiliHttp {
@@ -297,8 +311,38 @@ impl BiliHttp {
     ///
     /// 本函数只发 **GET**——幂等、只读，重试不会产生副作用，所以重试**不可能重复发弹幕**：
     /// 发弹幕走 [`Self::post_form`]，那里一律不重试。
+    ///
+    /// HTTP 412 的**有界退避**是另一条通道，见 [`Self::get_with_cookies_backoff`]：
+    /// 只有明确需要它的调用方（首波全量取回之后的黑名单取数）才走那条。
     pub async fn get_with_cookies(&self, url: &str) -> Result<(Value, Vec<(String, String)>)> {
+        self.get_json_with_cookies(url, false).await
+    }
+
+    /// 幂等 `GET`，且对 **HTTP 412**（上游风控）做**有界退避**重试（6.4 / 6.6）。
+    ///
+    /// 只落在**幂等 `GET`** 上（`AGENT.md` §8 第 16 条 / 6.6）：写操作走 [`Self::post_form`]，
+    /// 那里一律不重试。调用方按 6.4 的时序分段启用 —— **首波全量取回之后**才用本函数
+    /// （黑名单走的就是它，见 `admin.rs`）。
+    ///
+    /// 退避序列与重试上限**未实测**（见 [`GET_412_MAX_RETRIES`] / [`GET_412_BACKOFF_BASE`]）。
+    pub async fn get_with_cookies_backoff(
+        &self,
+        url: &str,
+    ) -> Result<(Value, Vec<(String, String)>)> {
+        self.get_json_with_cookies(url, true).await
+    }
+
+    /// [`Self::get_with_cookies`] / [`Self::get_with_cookies_backoff`] 的共同实现。
+    ///
+    /// `retry_412` = 是否对 HTTP 412 做有界退避。其余行为（瞬时非 JSON 重试一次、
+    /// 4xx 立即失败、错误文案）两条路径完全一致。
+    async fn get_json_with_cookies(
+        &self,
+        url: &str,
+        retry_412: bool,
+    ) -> Result<(Value, Vec<(String, String)>)> {
         let mut attempt = 0;
+        let mut backoff = 0u32;
         loop {
             attempt += 1;
             let response = self
@@ -315,6 +359,22 @@ impl BiliHttp {
                 .map_err(|e| upstream("读取响应失败", e))?;
             match serde_json::from_slice::<Value>(&body) {
                 Ok(value) => return Ok((value, cookies)),
+                Err(_)
+                    if status == StatusCode::PRECONDITION_FAILED
+                        && retry_412
+                        && backoff < GET_412_MAX_RETRIES =>
+                {
+                    // 412 是上游的风控拒绝：退避后再问，不问满上限不收口（有界）。
+                    backoff += 1;
+                    let delay = GET_412_BACKOFF_BASE * 2u32.pow(backoff - 1);
+                    tracing::debug!(
+                        target: "danmubox_bili::http",
+                        attempt = backoff,
+                        delay_ms = delay.as_millis(),
+                        "GET 命中 412 风控，退避后重试"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
                 Err(_) if attempt == 1 && !status.is_client_error() => {
                     log_request("GET", url, Some(status.as_u16()));
                 }
@@ -329,6 +389,27 @@ impl BiliHttp {
                 }
             }
         }
+    }
+
+    /// **只读探针**（`docs/protocol.md` 附录 A36 的补充实测）：发一次 GET，原样返回
+    /// `HTTP 状态` / `content-type` / 响应体字节，**不做 JSON 解码、不解析业务 code、不重试**。
+    ///
+    /// 与 [`Self::get_with_cookies`] 的区别正在于此：它要回答的是「这个端点收不收 GET、
+    /// 回了什么」，因此不能把非 JSON 的应答当成错误吞掉。**只读**：唯一调用方是 CLI 的
+    /// `admin-lists --probe-silent-get`，不参与任何写路径。
+    pub async fn probe_get(&self, url: &str) -> Result<(u16, String, Vec<u8>)> {
+        let response = self
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| upstream("探针 GET", e))?;
+        let status = response.status().as_u16();
+        let content_type = header_text(response.headers(), CONTENT_TYPE);
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| upstream("探针读取响应", e))?;
+        Ok((status, content_type, body.to_vec()))
     }
 
     /// `buvid3` / `buvid4`：`getDanmuInfo` 的必需 Cookie。
@@ -1518,5 +1599,87 @@ mod tests {
         let head = body_head(long.as_bytes(), 128);
         assert!(head.ends_with('…'), "截断了就要有标记：{head}");
         assert_eq!(head.trim_end_matches('…').len(), 128, "超出部分不许带上");
+    }
+
+    /// 6.4：幂等 `GET` 命中 HTTP 412 时**退避重试**；上游放行后照常返回。
+    #[tokio::test]
+    async fn http_412_get_backoff_recovers_on_retry() {
+        let stub = spawn_stub(
+            &[
+                (412, "text/html", "<html>412 风控页</html>"),
+                (200, "application/json", r#"{"code":0,"data":{}}"#),
+            ],
+            Duration::ZERO,
+        );
+        let (value, _) = BiliHttp::new()
+            .unwrap()
+            .get_with_cookies_backoff(&format!("{}/x", stub.base))
+            .await
+            .expect("退避一次后上游放行");
+
+        assert_eq!(value["code"], 0);
+        assert_eq!(stub.hits.load(Ordering::SeqCst), 2, "退避一次后再问");
+    }
+
+    /// 6.4：退避**有界** —— 一直是 412 时必须收口，不会没完没了地打上游。
+    #[tokio::test]
+    async fn http_412_get_backoff_is_bounded() {
+        let stub = spawn_stub(
+            &[(412, "text/html", "<html>412 风控页</html>")],
+            Duration::ZERO,
+        );
+        let error = BiliHttp::new()
+            .unwrap()
+            .get_with_cookies_backoff(&format!("{}/x", stub.base))
+            .await
+            .expect_err("一直是 412 时必须收口");
+
+        assert_eq!(error.code(), "UPSTREAM_ERROR");
+        assert!(error.to_string().contains("HTTP 412"), "{error}");
+        assert_eq!(
+            stub.hits.load(Ordering::SeqCst),
+            1 + GET_412_MAX_RETRIES as usize,
+            "退避重试次数有上限"
+        );
+    }
+
+    /// 6.6：412 退避**只对显式走退避通道的 GET**。默认的 `get_with_cookies` 与 `post_form`
+    /// 都只发一次（前者的护栏是 `non_json_get_names_endpoint_status_and_body_head`，
+    /// 后者的护栏是 `post_form_never_retries_and_redacts_reflected_credentials`）。
+    #[tokio::test]
+    async fn http_412_does_not_retry_without_the_backoff_channel() {
+        let stub = spawn_stub(
+            &[(412, "text/html", "<html>412 风控页</html>")],
+            Duration::ZERO,
+        );
+        BiliHttp::new()
+            .unwrap()
+            .get_with_cookies(&format!("{}/x", stub.base))
+            .await
+            .expect_err("412 的 HTML 不是 JSON");
+        assert_eq!(
+            stub.hits.load(Ordering::SeqCst),
+            1,
+            "没走退避通道的 GET 不许重试"
+        );
+    }
+
+    /// 只读探针：原样带回 HTTP 状态 / `content-type` / 响应体，不做 JSON 解码、不重试。
+    #[tokio::test]
+    async fn probe_get_returns_status_content_type_and_body_without_decoding() {
+        let stub = spawn_stub(
+            &[(412, "text/html", "<html>probe 探针</html>")],
+            Duration::ZERO,
+        );
+        let (status, content_type, body) = BiliHttp::new()
+            .unwrap()
+            .probe_get(&format!("{}/xlive/x", stub.base))
+            .await
+            .expect("探针不解析业务 code，412 也是「拿到了响应」");
+
+        assert_eq!(status, 412);
+        assert_eq!(content_type, "text/html");
+        assert!(String::from_utf8_lossy(&body).contains("probe 探针"));
+        assert_eq!(stub.hits.load(Ordering::SeqCst), 1, "探针只发一次");
     }
 }

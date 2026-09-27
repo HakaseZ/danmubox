@@ -455,7 +455,7 @@ fn decode_stream(data, depth):
 | `content` | `data.message` | 留言正文 |
 | `amount` | `data.price`（`cmd.rs:509`） | **单位是元**（样本 `30`，正是 ac站 SC 的最低档） |
 | `uid` / `uname` | `data.uid`；`data.uinfo.base.name`（`cmd.rs:503`），回落 `data.user_info.uname` | 昵称两处同名 |
-| `face` | `data.uinfo.base.face`（**排在第一段**；后面还有两段同层回退，见 §10.6 的统一口径） | 与 `uinfo.base.name` **同层**（同一个用户对象）；三段都取不到才留空串，并由 `ws.rs` 按 uid 现取（≤ 600ms，需求 §三 3.5） |
+| `face` | `data.uinfo.base.face`（**排在第一段**；后面还有两段同层回退，见 §10.6 的统一口径） | 与 `uinfo.base.name` **同层**（同一个用户对象）；三段都取不到才留空串，并由 `ws.rs` 按 uid 现取（≤ 600ms，REQUIREMENTS.md §2.7） |
 | `upstream_id` | `data.id`（`cmd.rs:517-519`） | SC 标识，举报与去重都用得上 |
 | `ts` | `data.ts`（`cmd.rs:487-488`），回落 `data.start_time` | **秒级**，×1000 归一化为毫秒 |
 | `medal_level` / `medal_name` | `data.medal_info.medal_level` / `.medal_name` | — |
@@ -555,22 +555,22 @@ fn decode_stream(data, depth):
 | `uid` / `uname` | `data.uid` / `data.username` | 两条命令**都给** `username`；实现保留 `uname` / `role_name` 补名兜底链 | 已实测（A12 / A13） |
 | `amount` | **`USER_TOAST_MSG.price`**（实付）；`GUARD_BUY.price` 是标价，**不入本字段**（`cmd.rs:846-852`） | 金瓜子；只有购买事件时为 `0` | 已实测（A12 / A13） |
 | `upstream_id` | `data.payflow_id`（`cmd.rs:853-857`） | 订单号。实测**只有播报有**：`GUARD_BUY` 0/971 条带它，`USER_TOAST_MSG` 971/971 条有 | 已实测（A12 / A13） |
-| `face` | **同层探测 → 按 uid 现取**（`cmd.rs:838`，链路见下） | 两条命令的字段表与实测样本都没有头像字段（A12 / A13），因此先探同层三处、探不到再按 uid 现取（需求 §三 3.1 / 3.2）。**不许拿别的字段顶替** | 同层三条路径**未观测到**；取数路径已实测（附录 A 的「按 uid 取头像」条目） |
+| `face` | **同层探测 → 按 uid 现取**（`cmd.rs:838`，链路见下） | 两条命令的字段表与实测样本都没有头像字段（A12 / A13），因此先探同层三处、探不到再按 uid 现取（REQUIREMENTS.md §2.7）。**不许拿别的字段顶替** | 同层三条路径**未观测到**；取数路径已实测（附录 A 的「按 uid 取头像」条目） |
 | `ts` | `data.start_time`（秒）（`cmd.rs:820-825`） | 归一化为 UTC 毫秒；两条命令同值 | 已实测（A12 / A13 / A7） |
 
-#### 大航海 / V1 礼物 / SC 的头像：两条来源（规范性，需求 §三 3.1–3.6）
+#### 大航海 / V1 礼物 / SC 的头像：两条来源（规范性，REQUIREMENTS.md §2.7）
 
-这三类的载荷里**没有**头像字段（A8 / A12 / A13），而界面要求大航海必须有头像（`REQUIREMENTS.md` §八 第 1 条），因此 `Message.face` 有两条来源、按顺序落定：
+这三类的载荷里**没有**头像字段（A8 / A12 / A13），而界面要求大航海必须有头像（`REQUIREMENTS.md` §2.7），因此 `Message.face` 有两条来源、按顺序落定：
 
 | 步骤 | 做什么 | 实现 | 校准状态 |
 |---|---|---|---|
 | ① 同层探测 | 在本命令的 `data` 里按 `/uinfo/base/face` → `/face` → `/user_info/face` 取第一个非空（空串不算，继续往后探），地址顺带升级成 `https://`（安全上下文里 `http://` 子资源会被静默拦掉） | `cmd.rs:427`（路径表）、`cmd.rs:445`（`same_layer_face`） | **三条路径都没有在上列命令的样本里观测到**（A8 / A12 / A13）——只探这三处、不新增没见过的层级；取不到**不算错**，进② |
 | ② 按 uid 现取 | 上屏前按 `Message.uid` 现取一次（`GET https://api.bilibili.com/x/space/wbi/acc/info`，WBI 签名，取 `data.face`）：**最多等 600ms**，到位即上屏、带的是现取到的地址 | `ws.rs` 的 `FaceWait` / `queue_message`、`profile.rs`（`UserProfile`） | **已实测**（见附录 A 的「按 uid 取头像」条目） |
-| ③ 超时/取不到 | 600ms 到期或上游非 0 code / 网络失败 → **照常上屏**（`face` 留空串），界面在新到行里行内惰性补取一次（`user_face` IPC） | `ws.rs`（`FACE_WAIT`）、`ui/src/faces.ts`、`ui/src/store.ts`（`ensureFaces`） | 需求 3.3 / 3.6 的口径；界面侧由 `node --test src/faces.test.ts` 钉住 |
+| ③ 超时/取不到 | 600ms 到期或上游非 0 code / 网络失败 → **照常上屏**（`face` 留空串），界面在新到行里行内惰性补取一次（`user_face` IPC） | `ws.rs`（`FACE_WAIT`）、`ui/src/faces.ts`、`ui/src/store.ts`（`ensureFaces`） | REQUIREMENTS.md §2.7 的口径；界面侧由 `node --test src/faces.test.ts` 钉住 |
 
-**去重（需求 3.4）**：引擎侧 `profile.rs` 的进程级缓存「同一 uid 只问一次上游」，**非 0 code 不写缓存**（下一条消息还能再试）；界面侧 `store.ensureFaces` 对同一 uid 只发一次请求（空串结论同样落表，避免重问）。两侧各自收口，互不依赖。
+**去重（REQUIREMENTS.md §2.7）**：引擎侧 `profile.rs` 的进程级缓存「同一 uid 只问一次上游」，**非 0 code 不写缓存**（下一条消息还能再试）；界面侧 `store.ensureFaces` 对同一 uid 只发一次请求（空串结论同样落表，避免重问）。两侧各自收口，互不依赖。
 
-**不阻塞收包循环**（需求 3.5）：等待走 `ws.rs` 的「头像待补」队列 —— 队头不放行后面的不越过它（保证投递顺序与到达顺序一致），队头的结果到位或到期由 `select!` 的两个分支唤醒；连接收尾时整个队列一并放行。**绝不**在收包路径上 `await` 取数。
+**不阻塞收包循环**（REQUIREMENTS.md §2.7）：等待走 `ws.rs` 的「头像待补」队列 —— 队头不放行后面的不越过它（保证投递顺序与到达顺序一致），队头的结果到位或到期由 `select!` 的两个分支唤醒；连接收尾时整个队列一并放行。**绝不**在收包路径上 `await` 取数。
 
 噪声过滤与合并：
 

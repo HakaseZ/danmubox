@@ -61,7 +61,7 @@ danmubox/
 | `EmoteProvider` | 按身份加载表情包库（`emotes(room_id, session)`）；`owned()` 取主站「我的表情」（未登录时为上游免费表情包）（`ports.rs:238-249`） |
 | `RoomCatalog` | 关注列表（`followed()`；定义见 `ports.rs:308-311`） |
 | `WalletProvider` | 电池余额（`ports.rs:314-317`） |
-| `UserProfile` | **按 uid 取用户资料 —— 当前只取头像**（`ports.rs:333-336`）：`face_of(uid) -> String`（`String` 不是 `Result`：需求把每一种失败都定义成同一个结果，见下）。大航海 / V1 礼物 / 缺头像的 SC 的载荷里**没有头像字段**（§5 `Message.face`、`protocol.md` §10.6 与附录 A），界面又要求大航海必须有头像（`REQUIREMENTS.md` §三 3.1–3.6、§八 第 1 条），因此只能按 `Message.uid` 现取。**取不到即空串**（需求 3.3）：上游非 0 code、网络失败、`uid <= 0` 三种情形**同解**——不报错、不阻塞上屏，界面按「无头像」渲染；实现内做**进程级去重与缓存**（同一 uid 只问一次上游，需求 3.4），**非 0 code 不写缓存** |
+| `UserProfile` | **按 uid 取用户资料 —— 当前只取头像**（`ports.rs:333-336`）：`face_of(uid) -> String`（`String` 不是 `Result`：需求把每一种失败都定义成同一个结果，见下）。大航海 / V1 礼物 / 缺头像的 SC 的载荷里**没有头像字段**（§5 `Message.face`、`protocol.md` §10.6 与附录 A），界面又要求大航海必须有头像（`REQUIREMENTS.md` §2.7），因此只能按 `Message.uid` 现取。**取不到即空串**（REQUIREMENTS.md §2.7）：上游非 0 code、网络失败、`uid <= 0` 三种情形**同解**——不报错、不阻塞上屏，界面按「无头像」渲染；实现内做**进程级去重与缓存**（同一 uid 只问一次上游，REQUIREMENTS.md §2.7），**非 0 code 不写缓存** |
 | `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查（`ports.rs:257-305`）。仅房管可用；上游非 0 code 原样带回、不赋语义。`silent_list` / `blacklist` 为**分页增量**接口（`(room_id, offset, limit)`）：适配器内部翻页 + 限速（禁言每页 10 条），一次性翻完整份名单会连发几十次 POST 被上游风控挡回 HTTP 412。返回形状与 §7 的 `AdminListSlice` 同形（`items` / `total` / `next_offset` / `done`）——带出**上游口径的下一游标**与终点标记，单次响应体量封顶时由前端后台继续补齐 |
 | `AnchorRoom` | **我自己的直播间**（主播视角，`ports.rs:349-372`）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此不渲染按钮）、`set_title()` 改标题、`set_area(area_v2)` 改分区（**独立写入口**，不必等到开播，issue202609241553 第 4 条）、`go_live(area_v2)` 开播（`area_v2: Option<i64>`：缺省沿用直播间当前 `area_id`；`Some(<=0)` 判 `BAD_REQUEST`；否则作为开播分区覆盖；成功返回 §5 `StreamEndpoints`；**被上游身份校验挡住**时返回 §5 `AnchorGate`）、`end_live()` 下播、`area_list()` 取两级分区树（§5 `AnchorArea`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作 + 取分区全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只作用于 `account` 指定的账号自己的直播间（缺省当前账号）**——「作用于哪个账号」在构造期由 `BiliAnchor::new_for(account)` 决定，**不进端口签名**；**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义**。**唯一的例外是 `AnchorGate`**：它承载的是「上游在响应里明说了该怎么继续」的那两个码（实测 `60043`、社区实现观察到的 `60024`，见 `protocol.md` §18.5），产出的是**引导**而不是判定——原 `code` / `msg` 一个字不改地一起带回，其余非 0 code 仍然不赋语义 |
 
@@ -85,7 +85,7 @@ danmubox/
 | 发弹幕节流 | 同房间最小间隔 2s；相同内容 5s 内去重 | `crates/danmubox-bili/src/send.rs:20`、`send.rs:22` |
 | 列表页开播状态刷新 | **30 秒**，仅在**房间列表页可见**时进行 | `apps/desktop/ui/src/store.ts:528` |
 | 列表页刷新失败退避 | 失败一次后按 `60 → 120 → 240` 秒翻倍、`240` 秒封顶（成功即复位；正常周期仍是 30 秒），上一拍没回来不发下一拍 | `apps/desktop/ui/src/store.ts:572-582` |
-| 缺头像消息的上屏等待上限 | **600 ms**（`FACE_WAIT`，`REQUIREMENTS.md` §三 3.5 给的硬上限）：大航海 / V1 礼物 / 缺头像的 SC 先压住等头像，**到期照常上屏**（`face` 留空串，界面那头行内惰性补取，需求 3.6）。按到达顺序放行：队头不放行后面的不越过它，因此队头最多把后面压 600ms | `crates/danmubox-bili/src/ws.rs`（`FACE_WAIT`） |
+| 缺头像消息的上屏等待上限 | **600 ms**（`FACE_WAIT`，`REQUIREMENTS.md` §2.7 给的硬上限）：大航海 / V1 礼物 / 缺头像的 SC 先压住等头像，**到期照常上屏**（`face` 留空串，界面那头行内惰性补取，REQUIREMENTS.md §2.7）。按到达顺序放行：队头不放行后面的不越过它，因此队头最多把后面压 600ms | `crates/danmubox-bili/src/ws.rs`（`FACE_WAIT`） |
 | 按 uid 取头像的超时 | **3 秒**（`FACE_FETCH_TIMEOUT`）：与上面那条不是同一件事——它是**取数本身**的上限（缓存锁在取数期间持着，一次挂住的请求会让后面所有 uid 排队，而 reqwest 客户端本体的 15s 太长）。超时即空串，不写缓存 | `crates/danmubox-bili/src/profile.rs`（`FACE_FETCH_TIMEOUT`） |
 | 弹幕聚合窗口 | **5000 ms**（`AGGREGATE_WINDOW_MS`）；与**上一条**（这一串的最后一条）比，**滑动**：每并入一条即把窗口往后刷一次 5 秒，**无条数上限** | `apps/desktop/ui/src/aggregate.ts:23` |
 | 弹幕聚合折叠门槛 | **3 条**（`AGGREGATE_MIN_COUNT`）；不够这一数的一串逐条原样显示 | `apps/desktop/ui/src/aggregate.ts:43` |
@@ -225,7 +225,7 @@ sessdata = ""
 | `reply_type_enum` | i64 | 上游回复类型枚举（实时 `extra.reply_type_enum`，历史 `reply.reply_type_enum`）。官方枚举 `{0: NO_REPLY, 1: NORMAL_REPLY, 2: MATCH_REPLY}`，但实测只有 `0`/`1` 出现、且与 `reply_mid` 是否非 0 完全同构——**不得**用它区分「纯 @」与「回复」（`protocol.md` A40） |
 | `show_reply` | bool | 上游 `show_reply`。实测在**所有**样本（含毫无回复关系的）里都是 `true`，不是判别式，仅供渲染与校准 |
 | `reply_uname_color` | string | 被 @ 者名字的颜色；无关系时为空串 |
-| `face` | string | 发言者头像 URL，**两条来源**：① **载荷自带的**——弹幕（含历史条目）取 `info[0][15].user.base.face`；礼物 V2 取 pb 顶层 `face`（`protocol.md` §10.2）；互动/进场取 pb `UserInfo.base.face` 或 JSON `data.uinfo.base.face`（`protocol.md` §10.4）；**SC / V1 礼物 / 大航海**按同层槽位探测（`uinfo.base.face` → `face` → `user_info.face`，`protocol.md` §10.6）；② **按 uid 现取的**（需求 §三 3.2）——大航海 / V1 礼物 / 缺头像的 SC 的载荷里没有头像字段，这类消息在上屏前按 `uid` 现取一次（≤ `FACE_WAIT` 600ms，届时仍空则先上屏、由界面行内惰性补取，需求 3.5 / 3.6）；实现见 §3 `UserProfile`、`protocol.md` 附录 A 的「按 uid 取头像」条目。**空串不是终态**：它表示「这一条载荷没带、补取也还没回来」，界面据此不画头像（不画假图）；引擎与界面两侧都对同一 uid 去重（进程级缓存 / 界面查表），失败不重试 |
+| `face` | string | 发言者头像 URL，**两条来源**：① **载荷自带的**——弹幕（含历史条目）取 `info[0][15].user.base.face`；礼物 V2 取 pb 顶层 `face`（`protocol.md` §10.2）；互动/进场取 pb `UserInfo.base.face` 或 JSON `data.uinfo.base.face`（`protocol.md` §10.4）；**SC / V1 礼物 / 大航海**按同层槽位探测（`uinfo.base.face` → `face` → `user_info.face`，`protocol.md` §10.6）；② **按 uid 现取的**（REQUIREMENTS.md §2.7）——大航海 / V1 礼物 / 缺头像的 SC 的载荷里没有头像字段，这类消息在上屏前按 `uid` 现取一次（≤ `FACE_WAIT` 600ms，届时仍空则先上屏、由界面行内惰性补取，REQUIREMENTS.md §2.7）；实现见 §3 `UserProfile`、`protocol.md` 附录 A 的「按 uid 取头像」条目。**空串不是终态**：它表示「这一条载荷没带、补取也还没回来」，界面据此不画头像（不画假图）；引擎与界面两侧都对同一 uid 去重（进程级缓存 / 界面查表），失败不重试 |
 | `medal_color_start` | string | 粉丝牌起始色（上游 `user.medal.v2_medal_color_start`），带 alpha 的 CSS 十六进制串（如 `#3FB4F699`）；无牌/缺失为空串（`protocol.md` A37） |
 | `medal_color_end` | string | 同上（`v2_medal_color_end`） |
 | `medal_color_border` | string | 同上（`v2_medal_color_border`） |
@@ -454,7 +454,7 @@ Frontend → Rust 命令（`invoke`）。**43 条**命令，与 `apps/desktop/sr
 | `admin_keywords_del` | 删除屏蔽词 |
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令；取数口径见 §5） |
 | `wallet_balance` | 电池余额 |
-| `user_face` | **按 uid 取头像**（`uid: i64` → 头像地址）；大航海 / V1 礼物 / 缺头像的 SC 在行内惰性补取（§3 `UserProfile`、§5 `Message.face`）。**空串 = 取不到**（上游非 0 code / 网络失败 / uid 无效），**不是错误**（需求 §三 3.3）：命令不 reject。「同一 uid 只问一次」由调用方（界面 store）与实现（进程级缓存）各自收口 |
+| `user_face` | **按 uid 取头像**（`uid: i64` → 头像地址）；大航海 / V1 礼物 / 缺头像的 SC 在行内惰性补取（§3 `UserProfile`、§5 `Message.face`）。**空串 = 取不到**（上游非 0 code / 网络失败 / uid 无效），**不是错误**（REQUIREMENTS.md §2.7）：命令不 reject。「同一 uid 只问一次」由调用方（界面 store）与实现（进程级缓存）各自收口 |
 | `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持（`lib.rs:555-604`） |
 | `prefs_get` | 读偏好生效值全集（默认值已合并，见 §8） |
 | `prefs_set` | 写偏好补丁；未知键或非法值 → `BAD_REQUEST`，成功返回合并后的生效值全集 |

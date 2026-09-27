@@ -68,7 +68,10 @@ function InteractSlotInner({ latest, prev }: { latest: Message; prev?: Message }
         }
         onAnimationEnd={(event) => {
           // 仅自身这条「生命周期」动画结束才判定空闲；行内进/退场动画会冒泡上来，凭动画名过滤。
-          if (event.animationName === "interactSlotLife") setIdle(true);
+          // CSS Modules 会把 @keyframes 名哈希成 `_interactSlotLife_<hash>_<n>`（实测产物），
+          // `event.animationName` 因此永远不等于字面量 "interactSlotLife" —— 必须按子串判
+          // （issue 271100：等值比较导致 idle 永不成立、槽位永不卸载、弹幕区预留高度永不收回）。
+          if (event.animationName.includes("interactSlotLife")) setIdle(true);
         }}
       >
         {prev && (

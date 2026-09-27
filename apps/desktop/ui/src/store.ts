@@ -821,6 +821,27 @@ const ADMIN_FULL_THROTTLE_MS = 30_000;
 const adminFullAt: Record<number, number> = {};
 
 /**
+ * 「补一段」的分页账本（issue 271100）：名单的 onScroll 在贴底时**每个滚动事件**都会
+ * 触发一次 `loadAdminMore`，不加锁的话并发的那几趟都会读到同一个**还没更新**的起点 ——
+ * 同一页被反复 append，名单无上限且全是相同条目（用户实测的回归）。
+ *
+ * 三本账各管一件事：
+ * - `inFlight`：一趟「补一段」进行中就不再发起下一趟（滚动事件风暴被压成一趟一趟串行）；
+ * - `exhausted`：上游已翻完（起点 ≥ `total` 或上游返回空段），继续滚**不再打上游**；
+ * - `cursor`：**上游口径**的消费水位（已从上游取回的条数）。不能拿列表长度当水位：
+ *   append 前按 uid 去重后列表会变短，拿它当 offset 会把同一段重复取回来、且永远翻不完。
+ */
+const adminMore: Record<string, { inFlight: boolean; exhausted: boolean; cursor: number }> = {};
+
+/** 分页账本的键：同一房间同一块（禁言 / 黑名单）各自一本。 */
+const adminKey = (roomId: number, tab: "silent" | "blacklist") => `${roomId}:${tab}`;
+
+/** 房管名单作废（切房 / 关房 / 移除 / 断开）时清账本：列表清了，水位跟着作废。 */
+const resetAdminPaging = () => {
+  for (const key of Object.keys(adminMore)) delete adminMore[key];
+};
+
+/**
  * 房管三块列表的**静默刷新周期**。
  *
  * 改前是 60 秒 —— 用户 2026-09-26 判定「不对」：房管面板不是高频功能，
@@ -1279,6 +1300,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
       await api.roomsRemove(roomId);
       if (get().activeRoomId === roomId) {
         clearRoomTimers();
+        // 名单作废：分页账本（水位 / 终点 / 在途锁）一并清掉（issue 271100）。
+        resetAdminPaging();
         set((state) => ({
           activeRoomId: undefined,
           messages: [],
@@ -1312,6 +1335,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
     // 「不留陈旧身份」由另外两件事兜住：① 结束会话的路径各自删掉该房间的身份（关标签 /
     // 移除房间 / 断开连接 / 换人）；② 会话重建时 core 重取身份并经 `danmubox://session`
     // 覆盖（`session.rs`），界面另在进房与打开房管入口时各读一次。
+    // 名单清空时分页账本一并清（issue 271100）。
+    resetAdminPaging();
     set({
       activeRoomId: roomId,
       messages: [],
@@ -1336,6 +1361,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   closeRoom() {
     clearRoomTimers();
+    // 名单清空：分页账本（水位 / 终点 / 在途锁）一并清（issue 271100）。
+    resetAdminPaging();
     set((state) => ({
       activeRoomId: undefined,
       // 离开房间页即离开沉浸态：这枚标志是房间页的界面状态，不跟着房间活到下一次进来
@@ -1395,6 +1422,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
           ? { adminSilent: [], adminBlacklist: [], adminKeywords: [], adminErrors: {} }
           : {}),
       }));
+      // 断开 = 会话结束，名单作废：分页账本（水位 / 终点 / 在途锁）一并清（issue 271100）。
+      resetAdminPaging();
       const rooms = await reloadRooms();
       if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
     } catch (error) {
@@ -1765,30 +1794,71 @@ export const useApp = create<AppStore>((set, get, store) => ({
       adminKeywords: keywords ?? state.adminKeywords,
       adminErrors: errors,
     }));
+    // 整段重读（offset=0）之后对齐分页账本：水位 = 本次实际取回的条数，
+    // 「上游翻完」按 total 判定 —— 翻完后再滚到底不再打上游（issue 271100）。
+    for (const tab of ["silent", "blacklist"] as const) {
+      const slice = tab === "silent" ? silent : blacklist;
+      if (slice === undefined) continue; // 这一块失败：账本保持原样（旧水位仍可用）
+      adminMore[adminKey(roomId, tab)] = {
+        inFlight: false,
+        exhausted:
+          slice.items.length === 0 ||
+          (slice.total > 0 && slice.items.length >= slice.total),
+        cursor: slice.items.length,
+      };
+    }
     return ok;
   },
 
   async loadAdminMore(roomId, tab) {
     // 屏蔽词上游没有分页（一次给完），这里不动上游 —— 它走前端切片。
     if (tab === "keywords") return;
-    const offset =
-      tab === "silent" ? get().adminSilent.length : get().adminBlacklist.length;
+    // 并发锁 + 终点判定（issue 271100）：onScroll 贴底时每个滚动事件都会进来，
+    // 不锁的话并发几趟读到同一个没更新的起点，同一页被反复 append。
+    // 已翻完（exhausted）同样直接返回 —— 滚动事件风暴不该变成上游请求风暴。
+    const key = adminKey(roomId, tab);
+    const book =
+      adminMore[key] ??
+      (adminMore[key] = {
+        inFlight: false,
+        exhausted: false,
+        // 账本缺席（面板没经 loadAdmin 就滚了）时拿列表长度兜底当起点。
+        cursor: tab === "silent" ? get().adminSilent.length : get().adminBlacklist.length,
+      });
+    if (book.inFlight || book.exhausted) return;
+    book.inFlight = true;
     try {
+      const offset = book.cursor;
       const slice =
         tab === "silent"
           ? await api.adminSilentList(roomId, offset, ADMIN_STEP)
           : await api.adminBlacklistList(roomId, offset, ADMIN_STEP);
       if (get().activeRoomId !== roomId) return;
-      set((state) =>
-        tab === "silent"
-          ? { adminSilent: [...state.adminSilent, ...slice.items] }
-          : { adminBlacklist: [...state.adminBlacklist, ...slice.items] },
-      );
+      // 水位按**上游口径**前移（去重前后都一样）：拿去重后的列表长度当起点会把
+      // 同一段反复取回来。翻到头（空段或越过 total）就记账「翻完了」。
+      book.cursor = offset + slice.items.length;
+      book.exhausted =
+        slice.items.length === 0 ||
+        (slice.total > 0 && book.cursor >= slice.total);
+      if (slice.items.length === 0) return;
+      // 按 uid 去重再 append：上游两页之间名单可能变化（新禁言插队），分页窗口会
+      // 挪动、同一个人可能出现在两页里 —— 不去重就是用户看到的「全是相同的内容」。
+      set((state) => {
+        const current = tab === "silent" ? state.adminSilent : state.adminBlacklist;
+        const seen = new Set(current.map((user) => user.uid));
+        const fresh = slice.items.filter((user) => !seen.has(user.uid));
+        if (fresh.length === 0) return {};
+        return tab === "silent"
+          ? { adminSilent: [...current, ...fresh] }
+          : { adminBlacklist: [...current, ...fresh] };
+      });
     } catch (error) {
-      // 补一段失败**不**清掉已经加载的整段，只留痕。
+      // 补一段失败**不**清掉已经加载的整段，只留痕；失败不算「翻完」，下次滚动可重试。
       set((state) => ({
         adminErrors: { ...state.adminErrors, [tab]: describeError(error) },
       }));
+    } finally {
+      book.inFlight = false;
     }
   },
 

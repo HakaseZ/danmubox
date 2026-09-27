@@ -295,13 +295,18 @@ impl RoomAdmin for BiliAdmin {
         }
         let csrf = self.csrf()?;
         let mut out: Vec<SilentUser> = Vec::new();
-        let mut total: i64;
+        let mut total = 0i64;
         // `ps` 是**页码**、每页固定 10 条，所以 `offset` 要拆成
         // 「跳到第几页」+「页内再跳几条」。
         let mut page = offset / SILENT_PAGE_SIZE + 1;
         let mut skip = (offset % SILENT_PAGE_SIZE) as usize;
         let mut fetched = 0i64;
         loop {
+            // 起点已越过总数：再翻也是空页，直接收口（issue 271100：否则会空翻到
+            // `MAX_PAGES`，每轮还 `sleep(PAGE_GAP)`，末尾白白卡 ~MAX_PAGES*200ms）。
+            if total > 0 && (page - 1) * SILENT_PAGE_SIZE >= total {
+                break;
+            }
             let value = self
                 .post(
                     EP_SILENT_LIST,
@@ -393,12 +398,17 @@ impl RoomAdmin for BiliAdmin {
         }
         let anchor_uid = self.anchor_uid(room_id).await?;
         let mut out: Vec<BlacklistedUser> = Vec::new();
-        let mut total: i64;
+        let mut total = 0i64;
         // `pn` 是页码、`ps` 是页条数（这里是真的条数，与禁言那个 `ps` 不同名同义）。
         let mut page = offset / BLACK_PAGE_SIZE + 1;
         let mut skip = (offset % BLACK_PAGE_SIZE) as usize;
         let mut fetched = 0i64;
         loop {
+            // 起点已越过总数：再翻也是空页，直接收口（issue 271100：否则会空翻到
+            // `MAX_PAGES`，每轮还 `sleep(PAGE_GAP)`，末尾白白卡 ~MAX_PAGES*200ms）。
+            if total > 0 && (page - 1) * BLACK_PAGE_SIZE >= total {
+                break;
+            }
             let value = self
                 .get(
                     EP_BLACK_LIST,

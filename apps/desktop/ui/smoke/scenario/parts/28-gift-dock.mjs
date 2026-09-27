@@ -49,8 +49,10 @@
     out.giftDockNoCrossUnitSum = giftSummary.indexOf(yuan(1168.7)) < 0 &&
       giftSummary.indexOf("1168.7") < 0 && giftSummary.indexOf("139.73") < 0 &&
       giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("140730") < 0;
-    // db-gift-total 是礼物栏的**总计条**（data-pane-head，折叠态唯一一行；issue #8 之后由折叠头演变而来），不再是「容器里装着一枚按钮」
-    dock.click();
+    // db-gift-total 是礼物栏的**总计条**（data-pane-head，折叠态唯一一行；issue #8 之后由折叠头演变而来），
+    // 它**不是**开合入口（c37b4f9 起：开合只绑在右端那枚 db-gift-toggle 小箭头上），所以展开要 click 箭头，
+    // 不能点总计条本身（点了没反应 → db-gift-area 一直为 null，下面的读数会整段炸）。
+    byTestId("db-gift-toggle").click();
     await sleep(300);
     out.giftDockExpands = !!byTestId("db-gift-area");
     out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;

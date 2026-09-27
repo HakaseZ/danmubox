@@ -66,6 +66,11 @@
   - **舰长头像改由 `resolve_face` 按 uid 现取（条目 7，issue 260926 后续）**：条目 6 的 `data.face` 同层尝试在 2026-09-17 实测样本（A12 / A13，1680 笔）里**从未取到**——上游 `GUARD_BUY` / `USER_TOAST_MSG` 负载确实不带 `face`，但 `uid` 稳定可得；故新增后端命令 `resolve_face`（`x/space/acc/info`，进程级 6h 缓存）按 `uid` 现取头像，前端 `store.ts` 对「有 uid 无 face」的消息先等头像到位（≤ `FACE_FETCH_TIMEOUT_MS = 600ms`）再入可见列表，避免头像晚一拍弹出；超时仍上屏、由 `MessageRow` 惰性兜底。协议 §10.6 / 附录 A13、契约 §7 同步。
   - 文档同步：`docs/contract.md` §8、`docs/ui.md` §5.4、`docs/protocol.md` 附录 A45 补充。
 
+- **issue 202609271100：`issue 202609262335` 回归核查与补缺**（2026-09-27，需求随用户对话）：对 `262335` 的改动做回归核查，确认 4 个实测问题的真实根因并补齐。
+  - **黑名单 / 禁言列表加载不全 + 反复加载重复无上限（第 1 / 2 条）**：前端 `store.loadAdminMore` 原无「在途锁」与「已到末尾」判定，滚动事件风暴下多次并发都读到同一个未更新的 `offset`，同一页被反复 append ⇒ 列表出现重复、无上限。现引入模块级「分页账本」（`inFlight` 在途锁、`exhausted` 上游口径终点标记、按 `uid` 去重）：滚到底不再打上游、并发被压成串行、重复项被去重；名单作废点（移除房间 / 切房 / 关房 / 断开）同步清账本。后端 `admin.rs` 的 `blacklist` / `silent_list` 在「起点已越过总数」时**立即收口**，不再空翻到 `MAX_PAGES`（每轮还 `sleep(200ms)`，末尾白白卡 ~12s）；前端越界时直接以 `limit = 0` 请求（后端立即 `(空, total)` 返回）。
+  - **进场互动消息高度不缩回（第 3 条）**：根因是 CSS Modules 把 `@keyframes interactSlotLife` 哈希成 `_interactSlotLife_<hash>_<n>`，而 `InteractSlot.onAnimationEnd` 拿字面量 `"interactSlotLife"` 等值比较 —— **永远不相等** ⇒ `setIdle(true)` 永不触发 ⇒ 槽位永不卸载 ⇒ 弹幕区预留高度（`.chatWrap:has(> .interactSlot)`）永不收回 ⇒ 弹幕永不回填。改为按子串 `includes("interactSlotLife")` 判定。
+  - **礼物栏开合设计澄清（第 4 条）**：明确「**只有小箭头开合** + **拖动分割线自由展开/收起**」两者共用同一条单轴几何（`ratio` 份额 + `giftCollapsed` 布尔；拖动全程只改可视份额、松手才决定开合，与 `262335` 那条修复一致）—— 这一条从最初就是统一模型，并非两条独立逻辑。`c37b4f9` 把开合入口从「总计条整条」收到「右端小箭头」后，冒烟 `28-gift-dock.mjs` 仍在点总计条展开 ⇒ `db-gift-area` 一直为 null ⇒ 该段 `querySelectorAll` 对 null 抛错、整场场景中断、连带 `34-split-panes.mjs`（拖拽）没跑。现把展开入口改回点 `db-gift-toggle` 小箭头，与「只有箭头能开合」的设计对齐；`34` 段验证拖动展开 / 收起 / 到极限均成立。
+
 ### Changed
 
 - **刷屏弹幕聚合容忍中间插花**（2026-09-27，issue 260926 后续）：`aggregateRows` 不再要求同键弹幕**连续**——中间插任何别的行（不同文本弹幕、礼物 / SC / 大航海 / 互动 / 系统、本地乐观行、空正文、低价礼物桶）都不参与聚合、也**不打断**某一键的累积；同键的一组够 `AGGREGATE_MIN_COUNT = 3` 条且去重后 ≥ `AGGREGATE_MIN_SENDERS = 2` 位不同 uid 仍折成一行（代表行用第一条，折叠行落在首条原位，插花的成员不再逐条重排）。窗口仍是 5 秒滑动窗口（锚点 = 该组最后并入的那条同键消息，与相邻同键比）。`ui.danmaku_aggregate` 开关口径不变。规格同步 `docs/ui.md` §8.4、`docs/contract.md` §4；改写 / 新增 `aggregate.test.ts` 用例覆盖「异文本与本地乐观行插在中间不阻止折叠」。

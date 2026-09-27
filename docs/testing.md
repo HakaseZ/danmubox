@@ -222,19 +222,21 @@ graph TD
 
 前端测试用 `vitest` 加 jsdom 环境，mock `@tauri-apps/api` 的 `invoke` 与 `listen`；事件名断言覆盖契约 §7 的 `danmubox://message` / `danmubox://room` / `danmubox://session` / `danmubox://status` / `danmubox://send` / `danmubox://room_stats` / `danmubox://log`。
 
-**现状**：仓库里**还没有** vitest（`apps/desktop/ui/package.json` 的 devDependencies 里没有它），F-01…F-11 里依赖 jsdom / RTL 的那几档仍是规划。已落地的前端单测是显示层纯逻辑的三份，用 **Node 自带的 `node --test` + 类型擦除**直接跑，不需要任何新依赖：
+**现状**：仓库里**还没有** vitest（`apps/desktop/ui/package.json` 的 devDependencies 里没有它），F-01…F-11 里依赖 jsdom / RTL 的那几档仍是规划。已落地的前端单测是显示层纯逻辑的四份，用 **Node 自带的 `node --test` + 类型擦除**直接跑，不需要任何新依赖：
 
 | 文件 | 被测模块 | 覆盖 |
 |---|---|---|
 | `apps/desktop/ui/src/aggregate.test.ts` | `aggregate.ts` | 弹幕聚合的纯逻辑（10 条）：折叠门槛（同键 + 窗口内至少 3 条、去重后至少 2 位不同观众）、窗口 5000 ms 且**滑动**（基准是上一条，每并入一条刷新一次，**无条数上限**，含「长蔓延」用例）、归一化正文与表情弹幕按 `emoticon_unique` 同键、空正文与本地乐观行不参与、关掉 `ui.danmaku_aggregate` 即原样返回入参 |
 | `apps/desktop/ui/src/filtering.test.ts` | `filtering.ts` | 过滤 / 折叠 / 互动浮层那一族（低价礼物两枚开关对两个区域都生效、四种机制都可逆且不丢内容） |
 | `apps/desktop/ui/src/session-messages.test.ts` | `session-messages.ts` | 会话换代后的消息列表规则（同一条只入列一次、`history_query` 快照落地、会话重建后新消息不再被 `local_id` 判丢） |
+| `apps/desktop/ui/src/admin-list.test.ts` | `admin-list.ts` | 房管名单分页的纯逻辑（8 条，需求 §六 6.7 / 6.8 / 6.9 / 6.11 / 6.13）：水位按**上游口径**的 `next_offset`（与去重后的列表长度分离）、按 uid 去重且列表有界、在途锁（在途 / 已到终点都不许再打上游、落地即复位）、终点判定（上游 `done` / 下一游标越过 `total` / 原地打转三种收口）、作废点整体清回初始态、两块名单状态互相独立、首屏与步长常量共用一处 |
 
 ```bash
 cd apps/desktop/ui
 node --test src/aggregate.test.ts
 node --test src/filtering.test.ts
 node --test src/session-messages.test.ts
+node --test src/admin-list.test.ts
 node --test --test-name-pattern "两个区域" src/filtering.test.ts   # 只跑某几条
 ```
 

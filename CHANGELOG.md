@@ -140,6 +140,10 @@
 
 - **冒烟场景 `switchScopeChatPaneFolds` / `switchScopeBothPanesFold` 恒红（2026-09-24）**：这两条是**场景落后于实现**，不是界面 bug —— 2026-09-22 第 3 条把低价礼物桶改成与刷屏聚合**同一套形态**后，桶行的 ×N 从正文那格 `db-msg-count` 移到**身份位** `db-msg-spam`（写「低价礼物 ×N」），聚合行正文里那格 ×N **不再画**（`MessageRow`：`aggregated` 时不渲染 `db-msg-count`，同一个数不在一行里出现两次）；而 `smoke/scenario/parts/35-cheap-gift.mjs` 仍在查 `db-msg-count`，于是恒红（`switchScopeGiftPaneFolds` 只查行数与金额，所以它一直是绿的）。现按实现改正：弹幕区判 `db-msg-spam` 含「低价礼物 ×2」、并新增 `switchScopeBucketNoInlineCount` 钉住「桶行正文里没有 ×N」；礼物栏同款补一条 `db-gift-spam`（两处同一个形状，`docs/ui.md` §5.3）。**冒烟已跑**：Chromium 与 WebKit 两个引擎 × 深浅两档 × 宽窄两档**全绿**（各 4236 项快照 / 56 张截图，零失败）。
 
+### Deferred
+
+- **issue 2609262335：前端只读列表串行化（已知后续，本 PR 不做）**：`apps/desktop/ui/src/store.ts` 的 `loadAdmin`（约 1703–1720 行）当前用 `Promise.all` 并发拉取 `adminSilentList` / `adminBlacklistList` / `adminKeywordsList` 三块只读列表；面板打开瞬间的并发突发正是 A45「412 风控页」的触发路径。bili 层 `LISTS_GUARD` 进程级串行护栏已从源头消除并发（功能安全），但前端改 `Promise.all` → 顺序 `await` 可进一步消除「首条之后排队等前面翻页完成」的等待感，属**独立前端体验优化项**，不在本 PR 范围，待后续单独处理（用户 2026-09-27 明确要求先记下、暂不做）。
+
 ## [0.2.0] - 2026-09-17
 
 本版汇总自 `0.1.0`（2026-09-11，仅文档基线、不含源码）以来的**全部交付**：阶段 1–4、三端出包（macOS `.dmg` / Windows NSIS 安装器 + MSI + 免安装 exe / Android 已签名 release APK）、GitHub Actions CI（`check` / `artifacts` / `artifacts-windows`），以及 `2609162141` / `2609162056` / `2609171849` 三批需求（含 P125–P131）与更早几批已并入的改动。

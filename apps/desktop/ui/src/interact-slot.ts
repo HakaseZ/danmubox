@@ -55,16 +55,28 @@ export function interactSlotSelection(
   for (const message of messages) {
     if (message.room_id !== roomId) continue;
     if (message.kind !== "interact") continue;
-    if (latest === null || message.ts > latest.ts) {
+    if (latest === null) {
+      latest = message;
+    } else if (message.ts > latest.ts) {
+      // 严格更新：更新的一条到达 → 旧 latest 降级为退场层（接力动画）。
       prev = latest;
       latest = message;
+    } else if (message.ts === latest.ts) {
+      // 同毫秒并列：没有时序差，画不出「新进旧出」接力 —— 只保留**最新到达**的那一条
+      // 作 latest（文案取后者），不抢时序、也不造退场层。否则两条同 ts 会分别进
+      // `latest` / `prev` 两行叠在一起（「并列」），且后到的反而被当成滑出的旧层。
+      latest = message;
     } else if (prev === null || message.ts > prev.ts) {
+      // 严格更旧：仅在它比当前退场层还新（且仍比 latest 旧）时才成为退场层。
       prev = message;
     }
   }
   if (latest === null) return { latest: null, prev: null };
-  // 退场层只在这条被顶掉的那一刻**还在屏幕上**才画：`latest` 到点前它自己必须也还在寿命内。
-  if (prev !== null && latest.ts - prev.ts >= INTERACT_SLOT_LIFE_MS) prev = null;
+  // 退场层只在这条被顶掉的那一刻**还在屏幕上**才画：`latest` 到点前它自己必须也还在寿命内；
+  // 同毫秒的并列项不该当退场层（上面已经不会进来了，这里再兜底）。
+  if (prev !== null && (prev.ts >= latest.ts || latest.ts - prev.ts >= INTERACT_SLOT_LIFE_MS)) {
+    prev = null;
+  }
   return { latest, prev };
 }
 

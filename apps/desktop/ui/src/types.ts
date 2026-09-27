@@ -206,13 +206,21 @@ export type AdminTab = "silent" | "blacklist" | "keywords";
 /**
  * 房管名单的**一段**（契约 §7）：`admin_silent_list` / `admin_blacklist_list` 的返回形状。
  *
- * `items` = 本次新增的条目（不含调用方已有的那一段），`total` = 上游总数 ——
- * 前端据此决定「还翻不翻」。改前一次返回整份名单，禁言那份每页只有 10 条，
- * 一个真实房间要连发 49 次 POST 并被风控挡回 412，因此改成分段取。
+ * - `items` = 本次这一段里的条目（不含调用方已有的那一段），前端按 uid 去重后追加（6.8）。
+ * - `total` = 上游总数。
+ * - `next_offset` = **上游口径**的「下一次要的 offset」（**不是**去重后的列表长度，6.7）；
+ *   前端据此继续补齐，直到 `done`。
+ * - `done === true` = 已到终点，不再打上游（6.9 / 6.13）。
+ *
+ * 改前一次返回整份名单，禁言那份每页只有 10 条，一个真实房间要连发 49 次 POST
+ * 并被风控挡回 412，因此改成分段取；`next_offset` / `done` 是「封顶不得让条目永久取不到」
+ * （6.15）的收口字段 —— 单次响应体量封顶 + 带回下一游标，由前端后台继续补齐。
  */
 export interface AdminListSlice<T> {
   items: T[];
   total: number;
+  next_offset: number;
+  done: boolean;
 }
 
 /**

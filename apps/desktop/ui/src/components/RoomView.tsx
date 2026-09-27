@@ -253,9 +253,10 @@ export function RoomView({
       setPanel(null);
       setGiftOpen(false);
     }
-    // 打开时顺手重取身份与三块列表：以远端为准（身份 / 名单都可能刚变过）。
+    // 打开时顺手重取**身份**（它可能刚变过）；**名单不再整段重读**（6.16）：
+    // 名单缓存在本次会话内常驻，重开面板直接复用、由进房后的后台轮询（见下面的 effect）静默维护 ——
+    // 重开就重读会让请求频率反而更高。
     void loadRoomIdentity(room.room_id);
-    if (next) void loadAdmin(room.room_id);
   };
 
   const toggleGiftDock = () => {
@@ -465,13 +466,14 @@ export function RoomView({
     setAdminConfirm(null);
   }, [canAdmin]);
 
-  // 房管面板展开期间的静默轮询（issue202609242158 第 8 条 A2）：面板开着才跑、收起即停
-  // （卸载 / 切房由 effect 清理停掉）。打开面板时 `toggleAdminPanel` 已同步重拉过一次，
-  // 因此首拍按周期排。
+  // 房管名单的**后台静默维护**（issue202609242158 第 8 条 A2；口径见需求 6.16）：
+  // **房间打开且有权限期间**一直跑（不再绑定「面板展开」——关掉面板也继续维护，名单缓存常驻、
+  // 重开面板直接复用），失去权限 / 切房 / 卸载由 effect 清理停掉。
+  // 进房预载走下面的 `canAdmin` effect，因此首拍按周期排，不再重复一次首拉。
   useEffect(() => {
-    if (!adminOpen) return;
+    if (!canAdmin) return;
     return startAdminPolling(room.room_id);
-  }, [adminOpen, room.room_id, startAdminPolling]);
+  }, [canAdmin, room.room_id, startAdminPolling]);
 
   useEffect(() => {
     if (loggedIn) void loadBalance();
@@ -497,7 +499,8 @@ export function RoomView({
   // 房管数据**进房就加载**（用户 2026-09-13 第 4 条：「连接到有房管权限的直播间时就加载好
   // 房管的数据」）：身份是**异步到的**（`room_session` 一次 + 事件更新），所以 `canAdmin`
   // 必须在依赖里 —— 没有它，进房那一帧身份还是 false，这一批数据就永远不会被拉。
-  // 打开面板时再静默重拉一次（见 `toggleAdminPanel`），保证看到的是新鲜的。
+  // 这一趟就是 6.14 的**首波**（三条只读列表并发取全）；之后由上面的后台轮询静默维护，
+  // 重开面板直接复用缓存、不再整段重读（6.16）。
   useEffect(() => {
     if (!canAdmin) return;
     void loadAdmin(room.room_id);

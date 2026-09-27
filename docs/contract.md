@@ -50,20 +50,20 @@ danmubox/
 - 所有 ac站相关的 URL、字段名、下标、签名、二维码流程、protobuf schema 一律只出现在 `danmubox-bili`。
 - 逆向或协议变更时，只改 `danmubox-bili`，`core` 与 `ui` 不动。
 
-端口定义见 `crates/danmubox-core/src/ports.rs`。各端口职责：
+端口定义见 `crates/danmubox-core/src/ports.rs`（**十个** trait，`ports.rs:87`–`372`）。各端口职责：
 
 | 端口 | 职责（方法名以 `ports.rs` 为准） |
 |---|---|
 | `AuthProvider` | 登录态、账号列表、扫码流程、账号切换 / 登出 / 删除、buvid3（`ports.rs:87`）。账号名规则 `[A-Za-z0-9_-]{1,32}`，两端空白收敛，非法 → `BAD_REQUEST`（`crates/danmubox-core/src/config.rs:139-165`）；删最后一个账号 → `BAD_REQUEST`、账号不存在 → `NOT_FOUND`（`config.rs:319-330`），删当前项则 `active_profile` 切到剩余条目（`config.rs:328-340`） |
-| `LiveSource` | 房间解析、建立/断开连接、事件流；`room_identity(room_id) -> RoomSession`（本人在该房间的身份，取自官方进房接口；未登录返回全零身份而不报错）；`live_status(room_id) -> i32`（只读一次开播状态，**不做**昵称标题那一跳：列表页的定期刷新逐房间走它，§4）；`recent(room_id)` 取进场回填（§4.3）（`ports.rs:124-152`） |
-| `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5）。`emote: Option<&EmoteToken>` 非空时发送**表情弹幕**；`reply: Option<&ReplyTarget>` 非空时带上 @ / 回复字段（见 `protocol.md` §11.6）（`ports.rs:213-227`） |
+| `LiveSource` | 房间解析、建立/断开连接、事件流；`room_identity(room_id) -> RoomSession`（本人在该房间的身份，取自官方进房接口；未登录返回全零身份而不报错）；`live_status(room_id) -> i32`（只读一次开播状态，**不做**昵称标题那一跳：列表页的定期刷新逐房间走它，§4）；`recent(room_id)` 取进场回填（§4.3）（`ports.rs:124-153`） |
+| `DanmakuSender` | 发送弹幕（含被吞状态归一化）；返回 `SendReport`（见 §5）。`emote: Option<&EmoteToken>` 非空时发送**表情弹幕**；`reply: Option<&ReplyTarget>` 非空时带上 @ / 回复字段（见 `protocol.md` §11.6）（`ports.rs:213-226`） |
 | `DanmakuReporter` | 举报弹幕；`reasons()` 取上游固定理由清单（官方客户端按文案反查 `reason_id` 后与文案一起上报）（`ports.rs:229-235`） |
 | `EmoteProvider` | 按身份加载表情包库（`emotes(room_id, session)`）；`owned()` 取主站「我的表情」（未登录时为上游免费表情包）（`ports.rs:238-249`） |
-| `RoomCatalog` | 关注列表（`followed()`；定义见 `ports.rs:288-291`） |
-| `WalletProvider` | 电池余额（`ports.rs:313-316`） |
-| `UserProfile` | **按 uid 取用户资料 —— 当前只取头像**（`ports.rs:318-335`）：`face_of(uid) -> String`（`String` 不是 `Result`：需求把每一种失败都定义成同一个结果，见下）。大航海 / V1 礼物 / 缺头像的 SC 的载荷里**没有头像字段**（§5 `Message.face`、`protocol.md` §10.6 与附录 A），界面又要求大航海必须有头像（`REQUIREMENTS.md` §三 3.1–3.6、§八 第 1 条），因此只能按 `Message.uid` 现取。**取不到即空串**（需求 3.3）：上游非 0 code、网络失败、`uid <= 0` 三种情形**同解**——不报错、不阻塞上屏，界面按「无头像」渲染；实现内做**进程级去重与缓存**（同一 uid 只问一次上游，需求 3.4），**非 0 code 不写缓存** |
-| `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查（`ports.rs:257-298`）。仅房管可用；上游非 0 code 原样带回、不赋语义。`silent_list` / `blacklist` 为**分页增量**接口（`(room_id, offset, limit)`）：适配器内部翻页 + 限速（禁言每页 10 条），一次性翻完整份名单会连发几十次 POST 被上游风控挡回 HTTP 412。返回形状与 §7 的 `AdminListSlice` 同形（`items` / `total` / `next_offset` / `done`）——带出**上游口径的下一游标**与终点标记，单次响应体量封顶时由前端后台继续补齐 |
-| `AnchorRoom` | **我自己的直播间**（主播视角）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此不渲染按钮）、`set_title()` 改标题、`set_area(area_v2)` 改分区（**独立写入口**，不必等到开播，issue202609241553 第 4 条）、`go_live(area_v2)` 开播（`area_v2: Option<i64>`：缺省沿用直播间当前 `area_id`；`Some(<=0)` 判 `BAD_REQUEST`；否则作为开播分区覆盖；成功返回 §5 `StreamEndpoints`；**被上游身份校验挡住**时返回 §5 `AnchorGate`）、`end_live()` 下播、`area_list()` 取两级分区树（§5 `AnchorArea`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作 + 取分区全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只作用于 `account` 指定的账号自己的直播间（缺省当前账号）**——「作用于哪个账号」在构造期由 `BiliAnchor::new_for(account)` 决定，**不进端口签名**；**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义**。**唯一的例外是 `AnchorGate`**：它承载的是「上游在响应里明说了该怎么继续」的那两个码（实测 `60043`、社区实现观察到的 `60024`，见 `protocol.md` §18.5），产出的是**引导**而不是判定——原 `code` / `msg` 一个字不改地一起带回，其余非 0 code 仍然不赋语义 |
+| `RoomCatalog` | 关注列表（`followed()`；定义见 `ports.rs:308-311`） |
+| `WalletProvider` | 电池余额（`ports.rs:314-317`） |
+| `UserProfile` | **按 uid 取用户资料 —— 当前只取头像**（`ports.rs:333-336`）：`face_of(uid) -> String`（`String` 不是 `Result`：需求把每一种失败都定义成同一个结果，见下）。大航海 / V1 礼物 / 缺头像的 SC 的载荷里**没有头像字段**（§5 `Message.face`、`protocol.md` §10.6 与附录 A），界面又要求大航海必须有头像（`REQUIREMENTS.md` §三 3.1–3.6、§八 第 1 条），因此只能按 `Message.uid` 现取。**取不到即空串**（需求 3.3）：上游非 0 code、网络失败、`uid <= 0` 三种情形**同解**——不报错、不阻塞上屏，界面按「无头像」渲染；实现内做**进程级去重与缓存**（同一 uid 只问一次上游，需求 3.4），**非 0 code 不写缓存** |
+| `RoomAdmin` | 直播间管理：禁言/解除、黑名单增删查、屏蔽词增删查（`ports.rs:257-305`）。仅房管可用；上游非 0 code 原样带回、不赋语义。`silent_list` / `blacklist` 为**分页增量**接口（`(room_id, offset, limit)`）：适配器内部翻页 + 限速（禁言每页 10 条），一次性翻完整份名单会连发几十次 POST 被上游风控挡回 HTTP 412。返回形状与 §7 的 `AdminListSlice` 同形（`items` / `total` / `next_offset` / `done`）——带出**上游口径的下一游标**与终点标记，单次响应体量封顶时由前端后台继续补齐 |
+| `AnchorRoom` | **我自己的直播间**（主播视角，`ports.rs:349-372`）：`own()` 取该账号自己的直播间（**没开通返回 `None`，不是错误**，界面据此不渲染按钮）、`set_title()` 改标题、`set_area(area_v2)` 改分区（**独立写入口**，不必等到开播，issue202609241553 第 4 条）、`go_live(area_v2)` 开播（`area_v2: Option<i64>`：缺省沿用直播间当前 `area_id`；`Some(<=0)` 判 `BAD_REQUEST`；否则作为开播分区覆盖；成功返回 §5 `StreamEndpoints`；**被上游身份校验挡住**时返回 §5 `AnchorGate`）、`end_live()` 下播、`area_list()` 取两级分区树（§5 `AnchorArea`）。与 `LiveSource` 的**分工**：后者是「**看别人的**房间」（只读，游客也可用，见 §6），这里是「**管自己的**房间」——三件写操作 + 取分区全落在这里。**写操作纪律**（`AGENT.md` §8.14–16）：写操作**只作用于 `account` 指定的账号自己的直播间（缺省当前账号）**——「作用于哪个账号」在构造期由 `BiliAnchor::new_for(account)` 决定，**不进端口签名**；**失败即停**——不换房间、不换账号、不换参数重试；上游非 0 code **原样带回、不赋语义**。**唯一的例外是 `AnchorGate`**：它承载的是「上游在响应里明说了该怎么继续」的那两个码（实测 `60043`、社区实现观察到的 `60024`，见 `protocol.md` §18.5），产出的是**引导**而不是判定——原 `code` / `msg` 一个字不改地一起带回，其余非 0 code 仍然不赋语义 |
 
 **架构约束**：`core` 的端口与事件总线**不得假设消费方是 UI**，新能力一律经端口暴露，不得直接写进 Tauri 命令层。本期不定义任何 MCP 工具、协议或端点。
 
@@ -242,7 +242,7 @@ sessdata = ""
 **界面自造的行（乐观渲染）**：发送弹幕时界面会**先**在列表末尾插一条自己的行，它带三个**只在界面内存里存在**的东西：`local_id` 取**负数**（真实 `local_id` 恒为正，因此永不碰撞）、UI 专用字段 `send_state`（`unconfirmed` / `rejected` 两档，缺省 = 正常行，包括刚插入、还在等回执的那条）与 `send_reason`（被拒时那句话）。它们**不在本契约内**：后端不产生、不解析、`history_query` 也不会返回。
 上游回播到达时那一行**不被换掉**：字段换成上游那条、**`local_id` 的负号照旧保留**（React key 不变 ⇒ DOM 节点不重建、看不出回播），`send_state` 只在发送没成时才存在（`docs/ui.md` §4.4）。
 
-**收包侧区分不了「纯 @」与「回复」**：收包载荷里**没有任何指回被回复弹幕的 id**（`extra` 的键已全量枚举，发送侧用的 `replay_dmid` 在收包侧**不存在**）。因此「这条回复了哪条弹幕」在客户端**无法恢复**；界面一律渲染 `回复 @昵称`。**能准确区分的只有我们自己发出的那条**：发送时 `reply.dmid` 非空 = 回复某条、为空 = 纯 @（`crates/danmubox-core/src/ports.rs:205-211`）。
+**收包侧区分不了「纯 @」与「回复」**：收包载荷里**没有任何指回被回复弹幕的 id**（`extra` 的键已全量枚举，发送侧用的 `replay_dmid` 在收包侧**不存在**）。因此「这条回复了哪条弹幕」在客户端**无法恢复**；界面一律渲染 `回复 @昵称`。**能准确区分的只有我们自己发出的那条**：发送时 `reply.dmid` 非空 = 回复某条、为空 = 纯 @（`crates/danmubox-core/src/ports.rs:207-209`）。
 
 **徽标（REQUIREMENTS.md 需求）**：主播 = `uid == Room.anchor_uid` 派生（`model.rs:264`）；房管 = `Message.is_admin`；大航海 = `Message.guard_level`（`1` 总督 / `2` 提督 / `3` 舰长）。`is_anchor` 不设独立字段——能推导就不存。
 
@@ -403,7 +403,7 @@ sessdata = ""
 
 ## 7. Tauri IPC（规范性）
 
-Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/src/lib.rs` 的 `generate_handler!`（`lib.rs:1149-1187`）一一对应；签名、载荷类型与错误码见 [`ipc.md`](ipc.md) §3。
+Frontend → Rust 命令（`invoke`）。**43 条**命令，与 `apps/desktop/src-tauri/src/lib.rs` 的 `generate_handler!`（`lib.rs:1345-1389`）一一对应；签名、载荷类型与错误码见 [`ipc.md`](ipc.md) §3。
 
 | 命令 | 用途 |
 |---|---|
@@ -421,7 +421,7 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `anchor_area_set` | 改**某账号自己直播间**的分区（`area_v2: i64`；`account?`，缺省当前）。**独立写入口**（issue202609241553 第 4 条）：不必等到开播就能改；`area_v2` 是**子分区 id**（`<= 0` 由实现侧拒 `BAD_REQUEST`），与 `anchor_live_set` 的 `area_v2` 同口径；成功返回 §5 `OwnRoom`（界面就地换分区名，不猜上游怎么改的）。写操作：**只作用于 `account` 指定账号自己的直播间**；失败即停、不重试 |
 | `anchor_live_set` | 开播 / 下播（`live: bool`，`area_v2: Option<i64>`；`account?`，缺省当前）。开播成功返回 §5 `StreamEndpoints`（含**推流码**）；**被上游身份校验挡住**时返回 §5 `AnchorGate`（引导 + 原始 `code` / `msg`，命令层另附离线编码的 `qr_svg`，见 §5）；下播返回 `null`。`area_v2` 缺省沿用直播间当前 `area_id`（即上次开播分区），`Some` 则为界面所选子分区；上游没给分区（`area_id <= 0` 且无 `area_v2`）就不发开播请求（`UPSTREAM_ERROR`）。其余上游非 0 code **原样带回、不赋语义**。**认证完成后由用户再点一次开播**：不轮询、不自动重试（写操作「失败即停」） |
 | `rooms_list` | 已登记房间：`RoomView`（= §5 `Room` + 连接态 + 当前会话缓冲条数） |
-| `rooms_refresh_status` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，§4）：按真实 `room_id` 逐个只读上游一次，把最新的 `live_status` 落到登记表并返回最新的 `RoomView` 列表。**只动 `live_status`**（标题 / 昵称另有来源）；单个房间失败只跳过它，**全部失败才报错**（前端据此退避）（`lib.rs:238-289`） |
+| `rooms_refresh_status` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，§4）：按真实 `room_id` 逐个只读上游一次，把最新的 `live_status` 落到登记表并返回最新的 `RoomView` 列表。**只动 `live_status`**（标题 / 昵称另有来源）；单个房间失败只跳过它，**全部失败才报错**（前端据此退避）（`lib.rs:300-351`） |
 | `rooms_add` | 解析房间号 / 短号 / URL 并登记；**不建立连接** |
 | `rooms_remove` | 移除房间；有会话则先关闭（会话缓冲随会话销毁） |
 | `rooms_connect` | 建立房内会话。**幂等**：已有会话时原样返回，同一房间不得并存两份连接 |
@@ -429,7 +429,7 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `rooms_reconnect` | 房间内「刷新」：会话还在（连接中 / 退避中 / 已连接）→ 原地重连，**不清缓冲**，仍属同一次会话；会话已不在（点过断开，或移除后又加回）→ 当场重建一次会话，等价重新进房、缓冲从空开始（两档口径见 §4.3） |
 | `history_query` | 查**当前房内会话**的缓冲（`limit` / `after` / `before` / `kinds` / `uid` / `q`）；`limit` 缺省 **500**（与 `ipc.md` §3 同）、`0` 表示不截断；无会话返回空数组 |
 | `room_session` | 该房间**当前会话**里的本人身份（`RoomSession`）。无活跃会话（未连接 / 已关闭）→ 返回全零身份而**不报错**；身份在会话建立时并发取一次并缓存，同时经 `danmubox://session` 推送。界面据此决定房管入口是否出现（`is_admin` 不为 `true` 时该入口不渲染，`ui.md` §4.9） |
-| `chat_send` | 发弹幕（`color` / `emote` / `reply` 可选；`emote` 非空即表情弹幕，`protocol.md` §11.4）。返回 `ChatSendResult { room_id, content, outcome, detail? }`（`lib.rs:110`）：`outcome` 是 §5 `SendOutcome` 归一化结论，`detail` 是上游 `message` + `code` 拼的一行、仅 `outcome != ok` 时出现。**界面不等这条命令才画**——返回只用于校验与修正，乐观渲染与对账见 [`ipc.md`](ipc.md) §7 |
+| `chat_send` | 发弹幕（`color` / `emote` / `reply` 可选；`emote` 非空即表情弹幕，`protocol.md` §11.4）。返回 `ChatSendResult { room_id, content, outcome, detail? }`（`lib.rs:119`）：`outcome` 是 §5 `SendOutcome` 归一化结论，`detail` 是上游 `message` + `code` 拼的一行、仅 `outcome != ok` 时出现。**界面不等这条命令才画**——返回只用于校验与修正，乐观渲染与对账见 [`ipc.md`](ipc.md) §7 |
 | `chat_report` | 举报一条弹幕，理由取自 `report_reasons` 的清单 |
 | `report_reasons` | 举报理由清单（每次向上游 `dMReport/ForReason` 现取，条数以上游为准） |
 | `emotes_list` | 按**真实会话身份**加载表情包库（上游据此下发可用包；传零身份会缺粉丝牌与大航海那几包） |
@@ -439,7 +439,7 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `admin_silent_list` | 直播间禁言名单的**一段**（`AdminListSlice<SilentUser>` = `{ items, total, next_offset, done }`；入参 `offset` = 本次起点、`limit` = 本次最多再拿几条）——房管功能做完整所需，官方面板也有这一栏 |
 | `admin_blacklist_list` | 直播间黑名单的**一段**（`AdminListSlice<BlacklistedUser>`，语义同上）。内部按 `anchor_id` 寻址（上游不吃房间号） |
 
-`AdminListSlice<T>` 的四项（§7，前端按它消费，`docs/ipc.md` §3.1）：
+`AdminListSlice<T>` 的四项（`ports.rs:395-400`，前端按它消费，`docs/ipc.md` §3.1）：
 
 | 字段 | 语义 |
 |---|---|
@@ -455,12 +455,12 @@ Frontend → Rust 命令（`invoke`）。命令名与 `apps/desktop/src-tauri/sr
 | `follow_list` | 关注列表（**每次实时拉取**，不设单独的刷新命令；取数口径见 §5） |
 | `wallet_balance` | 电池余额 |
 | `user_face` | **按 uid 取头像**（`uid: i64` → 头像地址）；大航海 / V1 礼物 / 缺头像的 SC 在行内惰性补取（§3 `UserProfile`、§5 `Message.face`）。**空串 = 取不到**（上游非 0 code / 网络失败 / uid 无效），**不是错误**（需求 §三 3.3）：命令不 reject。「同一 uid 只问一次」由调用方（界面 store）与实现（进程级缓存）各自收口 |
-| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持（`lib.rs:493-542`） |
+| `open_url` | 用系统浏览器打开链接（点昵称跳用户主页）；仅接受 `http(s)`。平台支持：macOS / Windows / Linux 各一条系统命令；**Android 经平台 Intent**（官方 `tauri-plugin-opener`，只在 Android 目标声明、由 Rust 侧调用、不进 capability）；iOS 等其余平台显式返回不支持（`lib.rs:555-604`） |
 | `prefs_get` | 读偏好生效值全集（默认值已合并，见 §8） |
 | `prefs_set` | 写偏好补丁；未知键或非法值 → `BAD_REQUEST`，成功返回合并后的生效值全集 |
 | `frontend_log` | 前端控制台桥上报：`level` 为 `error` / `warn`（其余按 debug），`target = "danmubox::ui"`。页面 `console.error` / `console.warn` 与未捕获错误经它并入 Rust 侧同一份日志；同一告警 1 秒内只上报一次，防「渲染 → 告警 → 日志 → 重渲染」反馈环（`DANMUBOX_LOG` 见 §4） |
 
-Rust → Frontend 事件（`lib.rs:480`、`lib.rs:874-934`、`lib.rs:1144`）：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
+Rust → Frontend 事件（`lib.rs:542`、`lib.rs:1049-1130`、`lib.rs:1338-1342`）：`danmubox://message` `danmubox://room` `danmubox://session` `danmubox://status` `danmubox://send` `danmubox://room_stats` `danmubox://log`。
 
 `danmubox://session` 的载荷是 §5 的 `RoomSession`（房内身份，带 `is_admin`）——**登录态不经这个事件**，它由 `session_status` 命令现取（脱敏对象，带 `logged_in`）；事件与命令的分工见 [`ipc.md`](ipc.md) §4。
 
@@ -485,7 +485,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | `ui.gift_pane_on_top` | boolean | `false` | — | 礼物栏与弹幕区**上下分区**的顺序：`false` = 弹幕在上、礼物在下（默认，与改前一致）；`true` = 礼物在上。分区、分割条与长按换位见 [`ui.md`](ui.md) §5.4 |
 | `ui.gift_pane_ratio` | number | `0.25` | 0.10–0.90 | 礼物栏占**共享分区**高度的份额（默认 1/4 = 礼物 : 弹幕 = 1 : 3）；与它在上面还是下面**无关**（换位不改比例）。落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 它的总计条、弹幕区 ≥ 3 行），因此存的是**指针意图**——同一窗口尺寸下重开必然得到同一画面。**折叠态不在这枚键里**：折叠 = 份额被压到下限以下 + 那一栏按最小高度裁剪，是界面瞬态（[`ui.md`](ui.md) §5.4） |
 | `ui.gift_pane_kinds` | string[] | `[]`（空 = 全显示） | 六种 kind 的子集；界面只渲染礼物 / SC / 大航海三族 | **礼物栏内**按 kind 筛选：空数组 = 全显示，选中 N 项 = 只显示这 N 项的**并集**。**只作用于礼物栏**——弹幕区有自己的 `filter.kinds`，两枚互不串味。类型与 `filter.kinds` 同为 `KindArr`，写进礼物三族以外的 kind 是**无效果**而不是非法值。纯派生、不改缓冲：它改的是礼物栏的条目与统计（统计链 = **先筛选、后汇总**），弹幕流那一份一个像素都不动。见 [`ui.md`](ui.md) §5.3 |
-| `ui.gift_collapse_cheap` | boolean | `false` | — | 把单个价值 ≤ 0.1 元（= 100 金瓜子）的礼物合并成**一条**（`false` = 默认，一条一行不变）。**两个区域都生效**：弹幕区与礼物栏**各折一次**（同一份判据、同一种桶形状）；SC / 大航海不在其列。折叠是**纯派生**——原始消息一条不动，关掉即逐条复原。门槛、落点判据与合并行的形状见 [`ui.md`](ui.md) §5.3「低价礼物桶」。桶行的形态**与弹幕刷屏同一套**（带 `senders`：头像列 30% 错位堆叠前 3 位赠送者、身份位印数量、不再逐个显示用户名，用户 2026-09-22 第 3 条），`MessageRow` 不区分来源地渲染 |
+| `ui.gift_collapse_cheap` | boolean | `false` | — | 把单个价值 ≤ 0.1 元（= 100 金瓜子）的礼物合并成**一条**（`false` = 默认，一条一行不变）。**两个区域都生效**：弹幕区与礼物栏**各折一次**（同一份判据、同一种桶形状）；SC / 大航海不在其列。折叠是**纯派生**——原始消息一条不动，关掉即逐条复原。门槛、落点判据与合并行的形状见 [`ui.md`](ui.md) §5.3「低价礼物桶」。桶行的形态**与弹幕刷屏同一套**（带 `senders`：头像列 34% 错位堆叠前 3 位赠送者、身份位印数量、不再逐个显示用户名，用户 2026-09-22 第 3 条；错开量就是 `MessageRow` 的 `AVATAR_STACK_OFFSET = 0.34`，两族共用一枚常量），`MessageRow` 不区分来源地渲染 |
 | `ui.gift_exclude_cheap_stats` | boolean | `false` | — | 把 ≤ 0.1 元的礼物从**折叠汇总 / 统计**里剔除（`false` = 默认，统计与展示一致）。**只改统计**：这些礼物作为消息的展示（礼物栏条目、弹幕区的行）不受影响。统计面只有**礼物栏总计条**那一处（弹幕区没有统计面）——这张键**出现在哪就管到哪**，见 [`ui.md`](ui.md) §5.3「剔除的口径」 |
 | `ui.interact_single_slot` | boolean | `true` | — | 互动/进场消息**看不看**的唯一开关（仿官方网页直播间的「互动消息」条）。`true` = 互动消息**不进弹幕列表**（不逐行堆叠、挤占空间），改在弹幕区底部浮层显示**最新一条**，下一条到来时快速顶掉上一条，空闲片刻自动淡出、**淡完即整块卸载**；**弹幕区底部为它预留一段高度**（= 气泡自身高度，且**只在浮层真的在 DOM 里时才留**），浮层落在预留区里、压不到任何一行，卸载后预留归零、弹幕缩回补齐。`false` = 互动消息**完全不显示**（列表不画、浮层也不画），预留高度一并收回。纯派生、不改缓冲：消息始终留在会话缓冲里，开关拨回去即按同样顺序回来。见 [`ui.md`](ui.md) §4.8 |
 | `ui.danmaku_aggregate` | boolean | `true` | — | 同一条弹幕被不同观众在窗口内重复发送时折成一行（`×N` + 头像堆叠；规则与常量见 §4）。`false` = 逐条原样显示。**默认 `true` = 保留现有行为**——聚合本来就是现有效果，这枚键只是把它变成可关的开关（与 `ui.gift_collapse_cheap` 那两枚相反：它们默认 `false`，因为会改变现有效果）。与「不丢内容」同一口径：折叠**只是显示层的派生**，原始消息一条不动，关掉即逐条复原 |
@@ -536,7 +536,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 
 | REQUIREMENTS.md 小节 | 契约内承载位置 |
 |---|---|
-| §2.1 看弹幕 | §5（`Message` 全字段、`RoomStats`）、§6（`LIVE` / `PREPARING` → `live_status`；昵称与标题取自 `getH5InfoByRoom`）、§7 `rooms_refresh_status` / `danmubox://room` / `danmubox://room_stats`、§8 `filter.kinds` / `ui.interact_single_slot` / `ui.show_timestamp`；进场回填与显示一致性见 §4.3、§5 `is_history`；跨观众聚合的常量与判据见 §4、开关见 §8 `ui.danmaku_aggregate` |
+| §2.1 看弹幕 | §5（`Message` 全字段、`RoomStats`）、§6（`LIVE` / `PREPARING` → `live_status`；昵称与标题取自 `getH5InfoByRoom`）、§7 `rooms_refresh_status` / `danmubox://room` / `danmubox://room_stats`、§8 `filter.kinds` / `ui.interact_single_slot` / `ui.show_timestamp`；进场回填与显示一致性见 §4.3、§5 `is_history`；跨观众聚合的常量与判据见 §4、开关见 §8 `ui.danmaku_aggregate`；大航海 / V1 礼物 / 缺头像 SC 的头像**按 uid 现取**见 §3 `UserProfile`、§4 常量 `FACE_WAIT = 600 ms`、§5 `Message.face` 的第②条来源、§7 `user_face`（协议与实测见 `protocol.md` §10.6 与附录 A8 / A12 / A13） |
 | §2.2 发弹幕 | §3 `DanmakuSender` / `WalletProvider` / `EmoteProvider`、§5 `Emote` / `EmoteRef` / `SendOutcome` / `RoomSession.danmaku_length`、§7 `chat_send` / `emotes_list` / `emotes_owned` / `wallet_balance`、§8 `composer.phrases`；输入草稿见 §4.3 |
 | §2.3 身份与徽标 | §5 徽标说明 / `guard_level` / `medal_guard_level` / `RoomSession.my_medal_level` / `Message.face`、§7 `open_url`、§8 `ui.show_timestamp` |
 | §2.4 举报 | §3 `DanmakuReporter`（含 `reasons()`）、§5 `upstream_id`、§7 `chat_report` / `report_reasons` |
@@ -545,7 +545,7 @@ IPC 载荷即 §5 的 snake_case 结构，前端 store 内部转 camelCase。
 | §2.7 礼物 | §5 `amount` / `combo_id` / 「金额单位」（含大航海取实付）、§8 `ui.gift_in_danmaku` / `ui.gift_panel` / `ui.gift_pane_on_top` / `ui.gift_pane_ratio` / `ui.gift_collapse_cheap` / `ui.gift_exclude_cheap_stats`（含「不丢内容（硬口径）」）、§4.3 礼物三档 |
 | §2.8 展示与过滤 | §8 `ui.theme` / `ui.font_scale` / `ui.show_timestamp` / `filter.uids` / `filter.kinds` / `filter.medal_level_min`；`Message.face` 见 §5；筛选面板标题等纯视觉项落 `ui.md` 与组件层 |
 | §2.9 数据 | §4.3（会话生命周期、六档上限、礼物三档、**前端 `KIND_CAPS` 按 `kind` 分档的保险层**）、§8 六枚 `history.buffer_rows_*` |
-| §2.10 房管 | §3 `RoomAdmin`、§5 `SilentUser` / `BlacklistedUser` / `RoomSession.is_admin`、§7 `admin_*` |
+| §2.10 房管 | §3 `RoomAdmin`（`silent_list` / `blacklist` 为**分页增量**，水位按上游口径）、§5 `SilentUser` / `BlacklistedUser` / `RoomSession.is_admin`、§7 `admin_*` 与 `AdminListSlice<T>` 的 `items` / `total` / `next_offset` / `done` 四项；名单的**维护时机**（房间打开且有权限期间始终维护、名单常驻本次会话）、批量条位置与面板结构落 [`ui.md`](ui.md) §4.9 |
 | §2.11 界面与布局 | 契约内只承载共享约定：§8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`（共享分区、分割条、长按换位）、§5 `Room.anchor_uname`（不露房间号）；其余在 `ui.md` 与组件层 |
 | §2.12 连接与保活 | §2（Android 保活例外）、§4 `DANMUBOX_LOG`、§6（心跳、重连退避与认证失败口径） |
 | §2.13 已删除 | §8 键表不含透明度键与 `filter.keywords*`；§4.1 无「手填 Cookie」导入入口；§4.3 无「最近发送记录」；`composer.phrases` 只承载用户自建短语 |

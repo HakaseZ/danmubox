@@ -13,10 +13,10 @@
 
 | 项 | 约定 | 锚点 |
 |---|---|---|
-| 命令注册 | 全部集中在 `tauri::generate_handler![…]`；命令函数也在同一文件（没有 `commands.rs`） | `apps/desktop/src-tauri/src/lib.rs:1149-1187` |
+| 命令注册 | 全部集中在 `tauri::generate_handler![…]`；命令函数也在同一文件（没有 `commands.rs`） | `apps/desktop/src-tauri/src/lib.rs:1345-1389` |
 | 命令名 | `snake_case`，与 `contract.md` §7 字面一致 | 同上 |
 | 参数名 | Rust 侧 `snake_case`；Tauri 2 把参数名转成 **camelCase** 暴露给 JS，因此前端 `invoke` 传 `roomId` / `query` / `patch` / `upstreamId` 等 camelCase 键 | `apps/desktop/ui/src/ipc.ts:57-162` |
-| 同步 / 异步 | 38 条命令：29 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`（定义行见 §3 的「实现锚点」表）。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` | `lib.rs:198-945` |
+| 同步 / 异步 | 43 条命令：34 条 `async fn`，9 条同步 `fn`——`app_info` / `rooms_list` / `rooms_reconnect` / `history_query` / `room_session` / `open_url` / `prefs_get` / `prefs_set` / `frontend_log`（定义行见 §3 的「实现锚点」表）。同步命令跑在**主线程**上，任何需要 Tokio runtime 的动作都必须显式取句柄（`tauri::async_runtime::handle()`），不得用 `Handle::current()` | `lib.rs:260-1141` |
 | 成功返回 | §3 签名表「返回」列的 JSON 值；`void` = 无返回体 | — |
 | 失败返回 | `invoke` reject，值为 `ApiError { code: string, message: string }`。前端按 `code` 分支；`message` 是给人看的文案（Rust `Display` 或上游原文），**不得**解析它做逻辑，也没有 `detail` 这类嵌套字段 | `lib.rs:29-42` |
 | 错误码 | 八个，见下表；错误对象的集合以此为准，`code` 取自 `core::Error::code()` | `crates/danmubox-core/src/error.rs:8-39` |
@@ -40,15 +40,15 @@
 
 ## 3. 命令签名表
 
-38 条，与 `generate_handler!` 逐条对应；除「说明」列注明同步的命令外均为 `async fn`。命令函数除 `open_url`（只接 `app: tauri::AppHandle`）与 `frontend_log`（无注入参数）外都接收 `State<'_, AppState>`，`chat_send` 另接 `app: tauri::AppHandle`（下表省略这些注入参数）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
+43 条，与 `generate_handler!` 逐条对应；除「说明」列注明同步的命令外均为 `async fn`。命令函数除 `open_url`（只接 `app: tauri::AppHandle`）与 `frontend_log`（无注入参数）外都接收 `State<'_, AppState>`，`chat_send` 另接 `app: tauri::AppHandle`（下表省略这些注入参数）。「错误」列是实现里可能出现的错误码（由 `core::Error` 归一化映射）；前端只按 `code` 分支。
 
 | 命令 | 参数 | 返回 | 错误 | 说明 |
 |---|---|---|---|---|
 | `app_info` | 无 | `AppInfo` | — | 版本、数据目录、`config.toml` 路径、是否登录；不含任何凭据。同步命令 |
 | `session_status` | 无 | `SessionState` | `INTERNAL` | 未登录时 `logged_in=false`、`uid=0`、`nickname=""`；`active_profile` 是当前生效的 profile 名 |
 | `accounts_list` | 无 | `Account[]` | `INTERNAL` | 列出全部账号（`contract.md` §5 `Account`）；游客态不是账号，没有凭据就没有条目 |
-| `account_qr_start` | `target: Option<String>` | `QrStart` | `BAD_REQUEST` `INTERNAL` | 不带 `target` = **新增账号**（确认后按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并写明覆盖哪个账号）。后端校验 `target` 并把它与 `key` 一起记住，确认时据此决定覆盖对象（`crates/danmubox-bili/src/auth.rs:298-331`）；`target` 不出现在 `QrStart` 返回里，界面另行补记用于展示。二维码由后端离线渲染成 SVG（`lib.rs:816-819`） |
-| `account_qr_poll` | `key: String` | `QrPoll` | `NOT_FOUND` `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`（`QrState`）；确认那一次凭据已落盘、账号已存在，`account` 非空；未确认时 `account` 为 `null`。确认（或当前账号已变）时各房间以新凭据重连（`lib.rs:832-840`） |
+| `account_qr_start` | `target: Option<String>` | `QrStart` | `BAD_REQUEST` `INTERNAL` | 不带 `target` = **新增账号**（确认后按昵称自动命名，**不覆盖任何已有凭据**）；带 = 给该账号**重新登录**（**覆盖**其凭据，界面必须二次确认并写明覆盖哪个账号）。后端校验 `target` 并把它与 `key` 一起记住，确认时据此决定覆盖对象（`crates/danmubox-bili/src/auth.rs:298-331`）；`target` 不出现在 `QrStart` 返回里，界面另行补记用于展示。二维码由后端离线渲染成 SVG（`lib.rs:976-979`） |
+| `account_qr_poll` | `key: String` | `QrPoll` | `NOT_FOUND` `INTERNAL` | `state` ∈ `pending` / `scanned` / `confirmed` / `expired`（`QrState`）；确认那一次凭据已落盘、账号已存在，`account` 非空；未确认时 `account` 为 `null`。确认（或当前账号已变）时各房间以新凭据重连（`lib.rs:995-997`） |
 | `anchor_room` | `account?: String` | `OwnRoom \| null` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | **某账号自己的直播间**（`contract.md` §5 `OwnRoom`）：`account` 缺省 = 当前账号，**指定即管理那个账号**（issue202609241553 第 3 条）。标题、开播状态、当前分区。**没有开通直播间 → `null`**（不是错误）——界面据此**不渲染那行的「我的直播间」按钮**（第 2 条）。判据**只有一条**：`code == 0` 且 `data.room_id` 缺失 / ≤ 0 → `null`；**非 0 `code` 一律是上游错误**（原样带回、不赋语义），不拿它推「没开通」。游客 → `NOT_LOGGED_IN`（`crates/danmubox-bili/src/anchor.rs:132`） |
 | `anchor_title_set` | `account?: String`、`title: String` | `OwnRoom` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 改**某账号自己直播间**的标题（上游 `room/v1/Room/update`，`platform=pc_link`）。空标题不发请求、直接 `BAD_REQUEST`。**成功返回 §5 `OwnRoom`**：`title` 以**本次请求值**（trim 后）为准 —— `get_info` 有服务端缓存、紧接着的重读可能仍是旧标题；其余字段取重读（`contract.md` §7）。写操作纪律：**只作用在 `account` 指定账号自己的直播间**，**失败即停不重试**（`AGENT.md` §8.14–16） |
 | `anchor_area_list` | `account?: String` | `AnchorArea[]` | `UPSTREAM_ERROR` `INTERNAL` | 开播分区树（§5 `AnchorArea`，两级：父 → 子），用于界面分区选择；`account` 只决定走哪份凭据，分区本身为公开数据，**不登录也可**。其余上游非 0 code 原样带回、不赋语义 |
@@ -58,20 +58,20 @@
 | `account_logout` | `name: Option<String>` | `SessionState` | `NOT_FOUND` `INTERNAL` | 清掉该账号（缺省 = 当前）的凭据；条目保留、`logged_in=false`（退回游客态） |
 | `account_remove` | `name: String` | `SessionState` | `BAD_REQUEST` `NOT_FOUND` `INTERNAL` | 删除账号；不许删最后一个；删当前项自动切走 |
 | `rooms_list` | 无 | `RoomView[]` | — | 已登记房间 + 当前连接状态 + 当前会话缓冲条数。同步命令 |
-| `rooms_refresh_status` | 无 | `RoomView[]` | `UPSTREAM_ERROR` `INTERNAL` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，`contract.md` §4）：逐个房间只读上游一次 `getRoomPlayInfo`（游客同样成立），把最新的 `live_status` 落进登记表，返回同一份 `RoomView[]` 形状（前端按与 `rooms_list` 相同的口径落地）。**只动 `live_status`**，不碰标题 / 昵称 / 连接态。逐个房间**并发**取，单个失败只记日志并跳过它；**一个都没成功**（且有房间要问）→ `UPSTREAM_ERROR`（前端据此退避，断网时不会每 30 秒打一次）。没有已登记房间时不发任何请求，直接返回空数组（`lib.rs:238-285`） |
+| `rooms_refresh_status` | 无 | `RoomView[]` | `UPSTREAM_ERROR` `INTERNAL` | **定期刷新已登记房间的开播状态**（列表页那 30 秒一拍，`contract.md` §4）：逐个房间只读上游一次 `getRoomPlayInfo`（游客同样成立），把最新的 `live_status` 落进登记表，返回同一份 `RoomView[]` 形状（前端按与 `rooms_list` 相同的口径落地）。**只动 `live_status`**，不碰标题 / 昵称 / 连接态。逐个房间**并发**取，单个失败只记日志并跳过它；**一个都没成功**（且有房间要问）→ `UPSTREAM_ERROR`（前端据此退避，断网时不会每 30 秒打一次）。没有已登记房间时不发任何请求，直接返回空数组（`lib.rs:300-351`） |
 | `rooms_add` | `input: String` | `RoomView` | `BAD_REQUEST` `UPSTREAM_ERROR` `INTERNAL` | `input` 为短号/URL/房间号；解析不出即 `BAD_REQUEST`。只登记，不建连 |
 | `rooms_remove` | `room_id: i64` | `void` | `INTERNAL` | 移除并断连、取消 supervisor，同时**结束会话并销毁缓冲** |
 | `rooms_connect` | `room_id: i64` | `void` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 建立会话：创建 supervisor、创建会话缓冲、开始收包。幂等：已连接时直接 `Ok`。**连接态不在返回值里**——看 `danmubox://status` 或重拉 `rooms_list` |
 | `rooms_disconnect` | `room_id: i64` | `void` | — | 断开并**结束会话、清空缓冲**。幂等：未连接时也 `Ok` |
 | `rooms_reconnect` | `room_id: i64` | `void` | `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 房间内「刷新」：会话还在（连接中/退避中/已连接）→ 只终止当前连接并立即重连，**不清空缓冲、不结束会话**；会话已结束（断连过、或房间被移除后又加回来）→ **重建一次会话**（全新会话、缓冲从空开始，等价重新进房），因此断连之后这颗键不是死键。同步命令 |
 | `history_query` | `room_id: i64, query: HistoryQueryDto` | `Message[]`（snake_case） | `BAD_REQUEST` | 只查**当前房内会话缓冲**（`contract.md` §4.3）；无活跃会话（缓冲已销毁）时返回空数组，不报错。过滤后按 **`local_id` 升序**返回、取最后 `limit` 条（`crates/danmubox-core/src/session.rs:287-299`）。不跨会话、不回放、不导出。同步命令 |
-| `chat_send` | `room_id: i64, content: String, color: Option<i64>, emote: Option<EmoteToken>, reply: Option<ReplyTarget>` | `ChatSendResult` | `BAD_REQUEST` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | 发弹幕。`emote` 非空 = **表情弹幕**（`emoticon_unique` + 尺寸等整份信息，此时 `content` 只用于日志与节流判重）；`reply` = @ 或回复某条（`mid` + `uname`，回复某条时带 `dmid` = 被回复弹幕的 `upstream_id`）。`color` 缺省 16777215（`crates/danmubox-bili/src/send.rs:226`），**原样透传不做范围校验**；上游 `mode=1`（普通弹幕）由实现内部固定，**不作为参数暴露**。**唯一要避免的是 `color=0`**（上游参数层直接拒绝）。本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发。返回的同一份对象再作为 `danmubox://send` 发一次（`lib.rs:452-481`） |
+| `chat_send` | `room_id: i64, content: String, color: Option<i64>, emote: Option<EmoteToken>, reply: Option<ReplyTarget>` | `ChatSendResult` | `BAD_REQUEST` `NOT_LOGGED_IN` `RATE_LIMITED` `UPSTREAM_ERROR` `INTERNAL` | 发弹幕。`emote` 非空 = **表情弹幕**（`emoticon_unique` + 尺寸等整份信息，此时 `content` 只用于日志与节流判重）；`reply` = @ 或回复某条（`mid` + `uname`，回复某条时带 `dmid` = 被回复弹幕的 `upstream_id`）。`color` 缺省 16777215（`crates/danmubox-bili/src/send.rs:226`），**原样透传不做范围校验**；上游 `mode=1`（普通弹幕）由实现内部固定，**不作为参数暴露**。**唯一要避免的是 `color=0`**（上游参数层直接拒绝）。本地节流命中 → `RATE_LIMITED`（不发起请求）；已发出的请求结果一律经 `SendOutcome` 返回，被吞不重发。返回的同一份对象再作为 `danmubox://send` 发一次（`lib.rs:514-544`） |
 | `chat_report` | `message: Message, reason: ReportReason` | `void` | `BAD_REQUEST` `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 举报一条弹幕。`message` 取列表里那一条（实现读它的 `upstream_id` / `uid` / `content`；**`upstream_id` 必需**，为空 → `BAD_REQUEST`）；`reason` 来自 `report_reasons`（同时上报文案与 `id`）。前端签名见 `apps/desktop/ui/src/ipc.ts` 的 `chatReport(message, reason)` |
 | `report_reasons` | 无 | `ReportReason[]` | `UPSTREAM_ERROR` `INTERNAL` | 举报理由清单：请求上游 `dMReport/ForReason` 并解析 `data.data[]`，每项 `ReportReason { id, reason }`（`contract.md` §5）。**条数由上游决定**，不是本地硬编码清单；不要求登录 |
 | `emotes_list` | `room_id: i64` | `Emote[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 按**真实会话身份**（取自会话缓存）加载表情包库：无牌/有牌/房管/大航海看到的面板不同；无活跃会话时退回零身份。未登录即 `NOT_LOGGED_IN`（`crates/danmubox-bili/src/emote.rs:365-370`）。`Emote.locked` 由上游 `perm` 派生，`true` = 当前身份用不了（界面置灰，不隐藏） |
-| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`contract.md` §5 `RoomSession`）。无活跃会话 → 全零身份而**不报错**（`lib.rs:565-577`）；界面据此决定房管入口**是否出现**（`is_admin` 不为 `true` 时该入口不渲染；拿不到身份即按无权限处理，不靠试错，`ui.md` §4.9）与**输入区的字数上限**（`danmaku_length` 实测 = 40，缺省回落 20；`0` = 还没取到）。同步命令 |
+| `room_session` | `room_id: i64` | `RoomSession` | — | 该房间**当前会话**里的本人身份（`contract.md` §5 `RoomSession`）。无活跃会话 → 全零身份而**不报错**（`lib.rs:627-639`）；界面据此决定房管入口**是否出现**（`is_admin` 不为 `true` 时该入口不渲染；拿不到身份即按无权限处理，不靠试错，`ui.md` §4.9）与**输入区的字数上限**（`danmaku_length` 实测 = 40，缺省回落 20；`0` = 还没取到）。同步命令 |
 | `emotes_owned` | 无 | `Emote[]` | `UPSTREAM_ERROR` `INTERNAL` | 主站「我的表情」：用户**拥有**的表情包（`upower_` 家族）。`package_kind="owned"`、`room_id=0`、唯一键 = `"upower_" + 表情 text`（`crates/danmubox-bili/src/emote.rs:67-69`）；未登录时上游退化为免费表情包，因此**不报** `NOT_LOGGED_IN`（`emote.rs:398-401`） |
-| `admin_mute` | `room_id: i64, uid: i64, hour: i64, msg: Option<String>` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数（`lib.rs:611-627`）。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
+| `admin_mute` | `room_id: i64, uid: i64, hour: i64, msg: Option<String>` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 禁言：`hour` 为 `-1` 永久 / `0` 本场直播 / 其余为小时数（`lib.rs:677-689`）。仅房管可用；**非 0 code 原样带回**（不赋语义），非房管时通常得到上游的权限错误码 |
 | `admin_unmute` | `room_id: i64, uid: i64` | `void` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 解除禁言 |
 | `admin_silent_list` | `room_id: i64, offset: i64, limit: i64` | `AdminListSlice<SilentUser>` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 当前禁言名单的**一段**（只读，增量加载用）：`offset` = 本次起点、`limit` = 本次最多再拿几条，返回 `{ items, total, next_offset, done }`（`AdminListSlice` 见 §3.1，条目形状见 `contract.md` §5）。**前端按 `next_offset` 续翻、按 `done` 收口**——不用去重后的列表长度当水位；单次响应体量封顶时 `done` 为假并带回下一游标，由前端后台继续补齐（封顶因此不让条目永久取不到）。翻页 + 限速由适配器负责——一次翻完整份名单会连发几十次 POST 被上游风控挡回 HTTP 412 |
 | `admin_blacklist_list` | `room_id: i64, offset: i64, limit: i64` | `AdminListSlice<BlacklistedUser>` | `NOT_LOGGED_IN` `ROOM_NOT_FOUND` `UPSTREAM_ERROR` `INTERNAL` | 黑名单的**一段**（只读，增量加载）；语义与上同。内部把 `roomId` 解析成主播 uid 后按 `anchor_id` 寻址——上游这个接口不吃房间号 |
@@ -83,38 +83,41 @@
 | `follow_list` | 无 | `FollowedRoom[]` | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 关注列表（`contract.md` §5）。后端返回前已排序：`live_status == 1` 置顶、其余按 `room_id` 升序（`crates/danmubox-bili/src/follow.rs:377-379`、`crates/danmubox-core/src/model.rs:383-389`）；界面按 `ui.md` §2.2 的展示排序链再次排列 |
 | `wallet_balance` | 无 | `number`（Rust `i64`） | `NOT_LOGGED_IN` `UPSTREAM_ERROR` `INTERNAL` | 电池余额（整数）：上游 `data.gold`（金瓜子）按 `gold / 100` 换算成电池（`crates/danmubox-bili/src/wallet.rs:40-49`）；`gold` 缺失或不可解析 → `UPSTREAM_ERROR`。没有包裹类型（口径与端点见 `protocol.md` 附录 A29） |
 | `user_face` | `uid: i64` | `string`（头像地址） | —（**不 reject**） | **按 uid 取头像**（需求 `REQUIREMENTS.md` §三 3.2 / 3.4 / 3.6）：大航海 / V1 礼物 / 缺头像的醒目留言的载荷里没有头像字段（`contract.md` §5 `Message.face`），界面在新到行里惰性补取。**空串 = 取不到**（上游非 0 code / 网络失败 / uid 无效），不是错误——命令层只转发，判据在 `UserProfile` 适配器里（`danmubox-bili/src/profile.rs`）。**同一 uid 只问一次上游**：实现侧有进程级缓存在 `AppState.profile` 上常驻，界面侧 `store.ensureFaces` 另收一道（含在途去重） |
-| `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令。平台实现：macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 各一条系统命令；**Android 走官方 `tauri-plugin-opener`（平台 Intent）**——插件只在 Android 目标声明（`[target.'cfg(target_os = "android")'.dependencies]`，桌面构建依赖图与产物一字不变），由 **Rust 侧**调用、**不进 capability**（`capabilities/default.json` 不需要 `opener:*` 权限）；iOS 等其余平台仍是显式 `Unsupported`（不静默失败）（`lib.rs:488-539`） |
-| `prefs_get` | 无 | `PrefsSnapshot` | `INTERNAL` | `contract.md` §8 全部 25 键的**生效值**（默认值已合并）；未写入过的键返回 `contract.md` §8 默认值。同步命令（`lib.rs:544-547`） |
-| `prefs_set` | `patch: Partial<PrefsSnapshot>`（Rust 侧收 `serde_json::Value`，由 core 校验） | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令（`lib.rs:549-555`） |
-| `frontend_log` | `level: String, message: String` | `void` | — | **前端 → 后端的内部命令**，不是给业务代码用的：控制台桥把 `console.error` / `console.warn` 与未捕获错误转发过来，写进 `tracing` 日志（`target = "danmubox::ui"`，`level` ∈ `error` / `warn`，其它值降级为 debug）。同步命令，永不失败（`lib.rs:938-945`）。详见 §4.1 |
+| `open_url` | `url: String` | `void` | `BAD_REQUEST` `UPSTREAM_ERROR` | 用系统默认浏览器打开链接（点昵称跳用户主页）。**只放行 `http://` / `https://`**，否则 `BAD_REQUEST`；未能启动浏览器（含当前平台没有实现）→ `UPSTREAM_ERROR`。同步命令。平台实现：macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 各一条系统命令；**Android 走官方 `tauri-plugin-opener`（平台 Intent）**——插件只在 Android 目标声明（`[target.'cfg(target_os = "android")'.dependencies]`，桌面构建依赖图与产物一字不变），由 **Rust 侧**调用、**不进 capability**（`capabilities/default.json` 不需要 `opener:*` 权限）；iOS 等其余平台仍是显式 `Unsupported`（不静默失败）（`lib.rs:555-604`） |
+| `prefs_get` | 无 | `PrefsSnapshot` | `INTERNAL` | `contract.md` §8 全部 25 键的**生效值**（默认值已合并）；未写入过的键返回 `contract.md` §8 默认值。同步命令（`lib.rs:607-609`） |
+| `prefs_set` | `patch: Partial<PrefsSnapshot>`（Rust 侧收 `serde_json::Value`，由 core 校验） | `PrefsSnapshot`（合并后的生效值**全集**） | `BAD_REQUEST` `INTERNAL` | 未知键或非法值 → `BAD_REQUEST`，整批拒绝；成功返回与 `prefs_get` 同形。同步命令（`lib.rs:612-617`） |
+| `frontend_log` | `level: String, message: String` | `void` | — | **前端 → 后端的内部命令**，不是给业务代码用的：控制台桥把 `console.error` / `console.warn` 与未捕获错误转发过来，写进 `tracing` 日志（`target = "danmubox::ui"`，`level` ∈ `error` / `warn`，其它值降级为 debug）。同步命令，永不失败（`lib.rs:1135-1141`）。详见 §4.1 |
 
 `prefs_set` 接受部分补丁（只提交要改的键），返回合并后的全量生效值。
 
-**实现锚点**（`#[tauri::command]` 函数定义行；「同步」= 同步 `fn`，其余为 `async fn`）：
+**实现锚点**（43 条，与 `generate_handler!` 同一集合；行号取 `fn` / `async fn` 所在行，即 `#[tauri::command]` 的下一行；「同步」= 同步 `fn`，其余为 `async fn`）：
 
 | 命令 | 定义 | 命令 | 定义 |
 |---|---|---|---|
-| `app_info` | `lib.rs:199` 同步 | `emotes_list` | `lib.rs:580` |
-| `session_status` | `lib.rs:211` | `room_session` | `lib.rs:565` 同步 |
-| `accounts_list` | `lib.rs:726` | `emotes_owned` | `lib.rs:606` |
-| `account_qr_start` | `lib.rs:802` | `admin_mute` | `lib.rs:615` |
-| `account_qr_poll` | `lib.rs:832` | `admin_unmute` | `lib.rs:631` |
-| `account_switch` | `lib.rs:736` | `admin_silent_list` | `lib.rs:699` |
-| `account_logout` | `lib.rs:767` | `admin_blacklist_list` | `lib.rs:714` |
-| `account_remove` | `lib.rs:749` | `admin_blacklist_add` | `lib.rs:655` |
-| `rooms_list` | `lib.rs:216` 同步 | `admin_blacklist_del` | `lib.rs:665` |
-| `rooms_refresh_status` | `lib.rs:238` | `admin_keywords_list` | `lib.rs:675` |
-| `rooms_add` | `lib.rs:293` | `admin_keywords_add` | `lib.rs:682` |
-| `rooms_remove` | `lib.rs:310` | `admin_keywords_del` | `lib.rs:696` |
-| `rooms_connect` | `lib.rs:324` | `follow_list` | `lib.rs:857` |
-| `rooms_disconnect` | `lib.rs:380` | `wallet_balance` | `lib.rs:863` |
-| `rooms_reconnect` | `lib.rs:395` 同步 | `open_url` | `lib.rs:493` 同步 |
-| `history_query` | `lib.rs:438` 同步 | `prefs_get` | `lib.rs:545` 同步 |
-| `chat_send` | `lib.rs:452` | `prefs_set` | `lib.rs:550` 同步 |
-| `chat_report` | `lib.rs:709` | `frontend_log` | `lib.rs:939` 同步 |
-| `report_reasons` | `lib.rs:851` | — | — |
+| `app_info` | `lib.rs:261` 同步 | `session_status` | `lib.rs:273` |
+| `accounts_list` | `lib.rs:886` | `account_switch` | `lib.rs:896` |
+| `account_remove` | `lib.rs:909` | `account_logout` | `lib.rs:927` |
+| `account_qr_start` | `lib.rs:962` | `account_qr_poll` | `lib.rs:992` |
+| `anchor_room` | `lib.rs:794` | `anchor_title_set` | `lib.rs:806` |
+| `anchor_area_list` | `lib.rs:819` | `anchor_area_set` | `lib.rs:832` |
+| `anchor_live_set` | `lib.rs:848` | `rooms_list` | `lib.rs:278` 同步 |
+| `rooms_refresh_status` | `lib.rs:300` | `rooms_add` | `lib.rs:355` |
+| `rooms_remove` | `lib.rs:372` | `rooms_connect` | `lib.rs:386` |
+| `rooms_disconnect` | `lib.rs:442` | `rooms_reconnect` | `lib.rs:457` 同步 |
+| `history_query` | `lib.rs:500` 同步 | `room_session` | `lib.rs:627` 同步 |
+| `chat_send` | `lib.rs:514` | `chat_report` | `lib.rs:869` |
+| `report_reasons` | `lib.rs:1011` | `emotes_list` | `lib.rs:642` |
+| `emotes_owned` | `lib.rs:668` | `admin_mute` | `lib.rs:677` |
+| `admin_unmute` | `lib.rs:693` | `admin_silent_list` | `lib.rs:705` |
+| `admin_blacklist_list` | `lib.rs:720` | `admin_blacklist_add` | `lib.rs:735` |
+| `admin_blacklist_del` | `lib.rs:745` | `admin_keywords_list` | `lib.rs:755` |
+| `admin_keywords_add` | `lib.rs:762` | `admin_keywords_del` | `lib.rs:776` |
+| `follow_list` | `lib.rs:1017` | `wallet_balance` | `lib.rs:1023` |
+| `user_face` | `lib.rs:1039` | `open_url` | `lib.rs:555` 同步 |
+| `prefs_get` | `lib.rs:607` 同步 | `prefs_set` | `lib.rs:612` 同步 |
+| `frontend_log` | `lib.rs:1135` 同步 | — | — |
 
-注册顺序另见 `generate_handler!`（`lib.rs:1149-1187`）。
+注册顺序另见 `generate_handler!`（`lib.rs:1345-1389`）。
 
 ### 3.1 载荷类型
 

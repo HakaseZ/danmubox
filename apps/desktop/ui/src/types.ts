@@ -468,7 +468,7 @@ export interface Prefs {
    *
    * 判据与形态全在 `aggregate.ts`（issue 202609211940 第 3 条）：**≥ 3 条**同键、同 5 秒窗口、
    * 参与观众去重后 **≥ 2 位不同 uid** 才折；折出来的那一行头像列画前 3 位观众的头像
-   * （错位 30% 堆叠），身份行改画「刷屏 ×N」，**一个用户名都不出现**。关掉即逐条显示
+   * （错位 34% 堆叠，`MessageRow` 的 `AVATAR_STACK_OFFSET`），身份行改画「刷屏 ×N」，**一个用户名都不出现**。关掉即逐条显示
    * （纯派生，不改缓冲，见 `docs/ui.md` §8.4）。
    */
   "ui.danmaku_aggregate": boolean;

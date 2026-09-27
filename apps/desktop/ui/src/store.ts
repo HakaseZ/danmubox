@@ -231,6 +231,13 @@ interface AppStore {
    * —— 已经翻到 80 条就不会被打回 30 条。屏蔽词上游没有分页，一次给完。
    */
   loadAdmin: (roomId: number, limit?: number) => Promise<boolean>;
+  /**
+   * 进房即**全量**预拉（替代 `loadAdmin` 的「每块首屏 100 条」）：把每块切成若干 `ADMIN_PAGE`
+   * 的块，**一次性并行**打出去（首波覆盖 `ADMIN_FULL_CAP_CHUNKS` 块），后端串行翻页的 200ms/页
+   * 被并行摊平 —— 取 600 条约一个波次 ≈ 2 秒（详见 `loadAdminFull`）。返回这批有没有全拿齐。
+   * 后台静默轮询仍走 `loadAdmin`（保留已加载水位、且慢，避免触发限制）；这里是「开房那一下的快」。
+   */
+  loadAdminFull: (roomId: number) => Promise<boolean>;
   /** 名单滚到底再补一段（`ADMIN_STEP` = 10 条）。屏蔽词是前端切片，不调上游。 */
   loadAdminMore: (roomId: number, tab: AdminTab) => Promise<void>;
   /**
@@ -808,6 +815,14 @@ async function runAnchorPoll(store: StoreApi<AppStore>, account: string, gen: nu
 const ADMIN_PAGE = 100;
 /** 名单滚到底一次补多少条。 */
 const ADMIN_STEP = 10;
+/**
+ * 进房全量预拉（`loadAdminFull`）的块大小：与 `ADMIN_PAGE` 同值，便于按 offset 归并、
+ * 且单块后端翻页数固定（禁言 100/10 = 10 页 ≈ 2 秒）。一整波把多块**并行**打出去，
+ * 串行翻页的耗时就被并发摊平了。
+ */
+const ADMIN_FULL_CHUNK = ADMIN_PAGE;
+/** 首波并行覆盖的块数：覆盖到 `ADMIN_FULL_CHUNK * 此值` 条（600）。更大的列表走第二波（少数）。 */
+const ADMIN_FULL_CAP_CHUNKS = 6;
 /**
  * 「取全量」时的条数上限（安全阀）。
  *
@@ -1818,6 +1833,74 @@ export const useApp = create<AppStore>((set, get, store) => ({
         exhausted:
           slice.items.length === 0 ||
           (slice.total > 0 && slice.items.length >= slice.total),
+        cursor: slice.items.length,
+      };
+    }
+    return ok;
+  },
+
+  async loadAdminFull(roomId) {
+    // 与 `loadAdmin` 同款世代号：作废在途分页响应、被换房 / 新一轮取代即丢弃（评审口径）。
+    const gen = ++adminPagingGen;
+    const errors: AppStore["adminErrors"] = {};
+    /**
+     * 一块的**并行全量**拉：首波把 `ADMIN_FULL_CAP_CHUNKS` 个 `ADMIN_FULL_CHUNK` 块一次性
+     * 打出去，后端串行翻页的 200ms/页被并发摊平 —— 取 600 条也只是一个波次 ≈ 2 秒
+     * （用户 2026-09-27：进房就要在 3 秒内全量加载好）。offset 0 那块带回 `total`，
+     * 据此裁掉超界项；空块 / 超界块后端立刻收口，几乎零耗时。
+     */
+    const fetchBlock = async (
+      kind: "silent" | "blacklist",
+    ): Promise<{ items: AdminUser[]; total: number } | null> => {
+      const apiFn =
+        kind === "silent" ? api.adminSilentList : api.adminBlacklistList;
+      const offsets: number[] = [];
+      for (let off = 0; off < ADMIN_FULL_CAP_CHUNKS * ADMIN_FULL_CHUNK; off += ADMIN_FULL_CHUNK) {
+        offsets.push(off);
+      }
+      const slices = await Promise.all(
+        offsets.map((off) => apiFn(roomId, off, ADMIN_FULL_CHUNK).catch(() => null)),
+      );
+      // 被换房 / 新一轮取代：这一批作废（评审）。
+      if (gen !== adminPagingGen) return null;
+      const first = slices[0];
+      if (!first) {
+        errors[kind] = describeError(new Error("admin list request failed"));
+        return null;
+      }
+      const total = first.total;
+      // offsets 升序、每块内部有序 ⇒ 直接拼接即全局有序。
+      let items: AdminUser[] = [];
+      for (const slice of slices) if (slice) items = items.concat(slice.items);
+      const trimmed = total > 0 ? items.slice(0, total) : items;
+      return { items: trimmed, total };
+    };
+
+    const [silent, blacklist, keywords] = await Promise.all([
+      fetchBlock("silent"),
+      fetchBlock("blacklist"),
+      api.adminKeywordsList(roomId).catch((error: unknown) => {
+        errors.keywords = describeError(error);
+        return null;
+      }),
+    ]);
+    // 落地复核（审计 P69）：await 期间切了房间就丢弃这一批；被新一轮取代也丢弃。
+    if (gen !== adminPagingGen) return true;
+    if (get().activeRoomId !== roomId) return true;
+    const ok = Object.keys(errors).length === 0;
+    set((state) => ({
+      adminSilent: silent?.items ?? state.adminSilent,
+      adminBlacklist: blacklist?.items ?? state.adminBlacklist,
+      adminKeywords: keywords ?? state.adminKeywords,
+      adminErrors: errors,
+    }));
+    // 全量已取：账本标记 exhausted（滚到底不再打上游），水位 = 实际条数。
+    for (const tab of ["silent", "blacklist"] as const) {
+      const slice = tab === "silent" ? silent : blacklist;
+      if (slice === null) continue; // 这一块失败：账本保持原样
+      adminMore[adminKey(roomId, tab)] = {
+        inFlight: false,
+        exhausted: true,
         cursor: slice.items.length,
       };
     }

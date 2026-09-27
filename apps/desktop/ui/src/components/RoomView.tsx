@@ -212,6 +212,7 @@ export function RoomView({
   const adminBusy = useApp((store) => store.adminBusy);
   const loadRoomIdentity = useApp((store) => store.loadRoomIdentity);
   const loadAdmin = useApp((store) => store.loadAdmin);
+  const loadAdminFull = useApp((store) => store.loadAdminFull);
   const runAdmin = useApp((store) => store.runAdmin);
   const startAdminPolling = useApp((store) => store.startAdminPolling);
   // 面板按钮三态的「检查」与名单滚到底的「补一段」：都在 store 里（分页 + 限速 + 节流）。
@@ -465,13 +466,14 @@ export function RoomView({
     setAdminConfirm(null);
   }, [canAdmin]);
 
-  // 房管面板展开期间的静默轮询（issue202609242158 第 8 条 A2）：面板开着才跑、收起即停
-  // （卸载 / 切房由 effect 清理停掉）。打开面板时 `toggleAdminPanel` 已同步重拉过一次，
-  // 因此首拍按周期排。
+  // 房管面板展开期间的静默轮询（issue202609242158 第 8 条 A2）：**房间开着、且本人有房管 /
+  // 主播权限时就始终在跑**（面板关着也跑 —— 用户 2026-09-27：清单要在房间打开时始终后台维护），
+  // 收起面板不再停轮询；卸载 / 切房 / 失去权限由 effect 清理停掉。打开面板时 `toggleAdminPanel`
+  // 已同步重拉过一次，因此首拍按周期排。
   useEffect(() => {
-    if (!adminOpen) return;
+    if (!canAdmin) return;
     return startAdminPolling(room.room_id);
-  }, [adminOpen, room.room_id, startAdminPolling]);
+  }, [canAdmin, room.room_id, startAdminPolling]);
 
   useEffect(() => {
     if (loggedIn) void loadBalance();
@@ -494,14 +496,16 @@ export function RoomView({
     if (loggedIn) void loadRoomIdentity(room.room_id);
   }, [loggedIn, loadRoomIdentity, room.room_id]);
 
-  // 房管数据**进房就加载**（用户 2026-09-13 第 4 条：「连接到有房管权限的直播间时就加载好
-  // 房管的数据」）：身份是**异步到的**（`room_session` 一次 + 事件更新），所以 `canAdmin`
-  // 必须在依赖里 —— 没有它，进房那一帧身份还是 false，这一批数据就永远不会被拉。
-  // 打开面板时再静默重拉一次（见 `toggleAdminPanel`），保证看到的是新鲜的。
+  // 房管数据**进房就全量加载**（用户 2026-09-13 第 4 条「连接到有房管权限的直播间时就加载好
+  // 房管的数据」+ 2026-09-27「3 秒内全量」）：身份是**异步到的**（`room_session` 一次 +
+  // 事件更新），所以 `canAdmin` 必须在依赖里 —— 没有它，进房那一帧身份还是 false，这一批数据
+  // 就永远不会被拉。`loadAdminFull` 把三块并行分块一次性取回（≥600 条也一个波次 ≈2 秒），
+  // 不再像 `loadAdmin` 那样只取首屏 100 条、要滚到底才补。打开面板时 `toggleAdminPanel`
+  // 仍静默重拉一次（以远端为准）。
   useEffect(() => {
     if (!canAdmin) return;
-    void loadAdmin(room.room_id);
-  }, [canAdmin, loadAdmin, room.room_id]);
+    void loadAdminFull(room.room_id);
+  }, [canAdmin, loadAdminFull, room.room_id]);
 
   useEffect(() => {
     if (reportTarget) void loadReportReasons();

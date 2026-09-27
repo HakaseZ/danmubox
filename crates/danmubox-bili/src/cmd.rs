@@ -197,19 +197,19 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
                         // `LIVE` / `PREPARING` 另带开播状态（协议 §10.7 的侧路）：
                         // 界面靠它把房间头 / 标签页 / 列表卡片的状态点在原地换掉，不必重连重刷。
                         status_update = *live;
-                        // `ROOM_CHANGE` 另带新标题：两个字段齐了才冒泡，缺一个就只当系统消息。
+                        // `ROOM_CHANGE` 另带新标题：连上来的房间改了标题，把新标题冒泡给界面。
+                        // 房间号**以连接上下文 `room_id` 为准**（`dispatch` 的入参），不取载荷里的
+                        // `data.room_id`：后者在不同版本可能是短号，与登记表（`rooms.meta` 按真实
+                        // 房间号建键）对不上会静默丢更新——已连接房间改标题时弹幕界面/主界面标题
+                        // 不刷新正是这个根因。标题仍只认 `data.title`（分区不在事件里）。
                         if *name == "ROOM_CHANGE" {
-                            let changed_room = value
-                                .pointer("/data/room_id")
-                                .and_then(Value::as_i64)
-                                .unwrap_or_default();
                             let title = value
                                 .pointer("/data/title")
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_string();
-                            if changed_room > 0 && !title.is_empty() {
-                                title_update = Some((changed_room, title));
+                            if room_id > 0 && !title.is_empty() {
+                                title_update = Some((room_id, title));
                             }
                         }
                         Some(m)
@@ -2398,9 +2398,11 @@ mod tests {
             title,
         } = dispatched
         else {
-            panic!("ROOM_CHANGE 带 room_id/title 必须产 RoomTitle");
+            panic!("ROOM_CHANGE 带 title 必须产 RoomTitle");
         };
-        assert_eq!(room_id, 777);
+        // 房间号以**连接上下文**为准（= `dispatch` 的 `room_id`，这里是 1），不取载荷里的
+        // `data.room_id`：后者可能是短号，与登记表 key 对不上会静默丢更新。
+        assert_eq!(room_id, 1);
         assert_eq!(title, "新标题");
         assert_eq!(message.kind, MessageKind::System);
         assert_eq!(message.content, "标题或分区变更");

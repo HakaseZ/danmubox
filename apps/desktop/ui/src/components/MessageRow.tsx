@@ -67,11 +67,15 @@ interface Props {
 const testIdFor = (scope: "msg" | "gift") => (part: string) => `db-${scope}-${part}`;
 
 /**
- * 聚合行头像列里，后一张头像相对前一张**向右错开**多少（头像宽的倍数）：0.3 ⇒ 每人只露 70%，
- * 3 张一共占 1.6 个头像宽（issue 202609211940 第 3 条：「错位30%堆叠」）。
- * 只有它一个数字，宽度与每一张的 `left` 都从它现算（见下面的 `avatarCol`）。
+ * 聚合行头像列里，后一张头像相对前一张**向右错开**多少（头像宽的倍数）：0.34 ⇒ 每人只露 66%，
+ * 3 张一共占 1.68 个头像宽。
+ *
+ * 错开量从 0.3（露 70%）收到 0.34 是需求 202609271523 §二 2.1 定的：**每个头像露出 66%（2/3）**。
+ * 它只有**一个**数字，宽度与每一张的 `left` 都从它现算（见下面的 `avatarCol`），
+ * 因此低价礼物桶（`filtering.collapseCheapGiftRows` 产出的桶行也带 `senders`）走的是同一套
+ * 渲染 ⇒ 两族自动同取这一个值，不会各自漂移（需求 202609271523 §二 2.2：除错开量外其余口径不变）。
  */
-const AVATAR_STACK_OFFSET = 0.3;
+const AVATAR_STACK_OFFSET = 0.34;
 
 /* ------------------------------------------------------------------ 选中态 */
 
@@ -149,7 +153,7 @@ export function MessageRow({
   const aggregated = row.senders !== undefined;
   // 聚合行头像列画的是谁：`senders` 里**有头像**的那几位 —— 上游没给 face 的观众不占位
   // （与单张头像同一条口径：不画假图），错位因此按**实际画出来的张数**算，而不是按 `senders`
-  // 的长度（3 位里有 1 位没头像时，两张头像仍只错开一次 30%）。非聚合行是空数组。
+  // 的长度（3 位里有 1 位没头像时，两张头像仍只错开一次 34%）。非聚合行是空数组。
   const stackedFaces = row.senders?.filter((sender) => sender.face.length > 0) ?? [];
   const badges = badgesFor(message, anchorUid);
   const medal = medalColors(message);
@@ -309,9 +313,9 @@ export function MessageRow({
         // 否则这一行的身份簇 / 正文会整体左移，逐行对不齐（issue #8）。
         // 它钉在**首行盒**上（高度 = 行盒高、内部居中），不随折行掉到行的中间。
         // **聚合行**（issue 202609211940 第 3 条）在这里画 `senders` 那几张头像：
-        // 沿 X 轴依次向右错开 `AVATAR_STACK_OFFSET`（头像宽的 30%）、后一张压在前一张上，
+        // 沿 X 轴依次向右错开 `AVATAR_STACK_OFFSET`（头像宽的 34%）、后一张压在前一张上，
         // 最左那张在最上层（`z-index` 递减）；列宽随之变宽（`.avatarColStack`），
-        // 宽 = 头像宽 + (张数 - 1) × 30%、高 = 头像宽，两张与每一张的 `left` 都从实际张数现算。
+        // 宽 = 头像宽 + (张数 - 1) × 34%、高 = 头像宽，几张与每一张的 `left` 都从实际张数现算。
         <span
           className={`${styles.avatarCol} ${aggregated ? styles.avatarColStack : ""}`}
           data-testid={t("avatar-col")}

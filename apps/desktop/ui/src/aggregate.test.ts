@@ -5,8 +5,10 @@
 //
 // 为什么单独测这一层：刷屏折叠的几条判据**都没法从界面上「看着像对」推出来** ——
 // 「够几条才折」（`AGGREGATE_MIN_COUNT`）、「是不是不止一个人在刷」（两位不同 uid）、
-// 「窗口是**滑动**的（与上一条比，每并入一条刷新一次）」、「关掉开关就逐条显示」。它们同时决定行数、头像列画几张
-// 头像、身份位印什么，因此在这里逐条钉住（`docs/ui.md` §8.4 第二张表、契约 §4）。
+// 「窗口是**滑动**的（锚定这一串里**最后并入**的那条，每并入一条刷新一次）」、
+// 「中间插进别的行**不断链**」、「折叠行落**首条原位**、未达门槛的那一串**一行都不动**」、
+// 「关掉开关就逐条显示」。它们同时决定行数、头像列画几张头像、身份位印什么，
+// 因此在这里逐条钉住（`docs/ui.md` §8.4 第二张表、契约 §4）。
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -226,7 +228,7 @@ test("折叠不改入参：那一串消息一个字段都没动，折出来的�
   assert.notEqual(folded[0], list[0], "折出来的行是新对象（`count` / `senders` 只活在它上面）");
 });
 
-test("只有弹幕参与：礼物 / 互动 / 系统各行独占一行，也不把两边的弹幕串起来", () => {
+test("插花不打断：礼物 / 互动 / 系统夹在同键弹幕中间，同键仍累积到门槛并折成一行", () => {
   const talk = spam(3);
   // 同一批正文的礼物 / 互动 / 系统：`aggregateKey` 对非弹幕一律返回 null。
   const others = (["gift", "interact", "system"] as const).flatMap((kind, kindIndex) =>
@@ -240,24 +242,103 @@ test("只有弹幕参与：礼物 / 互动 / 系统各行独占一行，也不�
     ),
   );
 
-  // 中间隔着三行非弹幕 ⇒ 前后各一串两条，两串都不够门槛 ⇒ 一条都不折。
-  const out = aggregateRows(rowsOf([...talk.slice(0, 2), ...others, ...talk.slice(2)]), prefs());
-  assert.equal(out.length, 2 + others.length + 1);
-  assert.ok(out.every((item) => item.senders === undefined), "非弹幕不聚合，也不参与邻居的聚合");
+  // 三行非弹幕插在**第三条弹幕之前**：改前每一条都在这里 `flush()` 断链，
+  // 前后各一串两条 ⇒ 两串都不够门槛、一条都不折（那正是这条用例改前钉住的旧语义，现已反转）。
+  const interleaved = rowsOf([...talk.slice(0, 2), ...others, ...talk.slice(2)]);
+  const out = aggregateRows(interleaved, prefs());
+
+  assert.equal(out.length, 1 + others.length, "三条同键并成一行，三行非弹幕各占一行");
+  assert.equal(out[0].message, talk[0], "折叠行落在首条原位（三行插花都在它后面）");
+  assert.equal(out[0].count, 3, "插花不参与计数，也不打断计数");
+  // 插花行原样、原序：同一个行对象，位置就在折叠行之后（不重排）。
+  others.forEach((message, index) => {
+    assert.equal(out[1 + index], interleaved[2 + index], `${index + 1} 行插花留在原位`);
+    assert.equal(out[1 + index].message, message);
+    assert.equal(out[1 + index].senders, undefined, "非弹幕自己不聚合");
+  });
 
   // 非弹幕自己再怎么重复也不折（这里只有它们自己）。
   const onlyOthers = aggregateRows(rowsOf(others), prefs());
   assert.equal(onlyOthers.length, others.length, "礼物 / 互动 / 系统一条一行（形态各不相同）");
 });
 
-test("本地乐观行与空正文不参与：本地那条自己站一行，也把两边的弹幕串隔开", () => {
+test("键不同的弹幕也不打断：交错刷的两串各按自己的窗口累积（够门槛的折、不够的原样）", () => {
+  const jia = [0, 1, 2].map((index) =>
+    msg("交错甲", { ts: T0 + index * 300, uid: 300 + index, uname: `甲${index}` }),
+  );
+  const yi = [0, 1].map((index) =>
+    msg("交错乙", { ts: T0 + index * 300 + 100, uid: 400 + index, uname: `乙${index}` }),
+  );
+  // 交错成 甲 乙 甲 乙 甲：改前每一条都被下一条**键不同**的弹幕断链 ⇒ 一行都不折。
+  const list = rowsOf([jia[0], yi[0], jia[1], yi[1], jia[2]]);
+  const out = aggregateRows(list, prefs());
+
+  assert.equal(out.length, 3, "甲那一串折成一行；乙只有两条 ⇒ 逐条原样（两行）");
+  assert.equal(out[0].message, jia[0], "折叠行落在甲的首条原位");
+  assert.equal(out[0].count, 3);
+  assert.equal(out[1], list[1], "乙的两条是**同一批行对象**、留在原位（一个都不动）");
+  assert.equal(out[2], list[3]);
+});
+
+test("未达门槛的那一串一行都不动：插花不重排、不复制，成员留在原位", () => {
+  const pair = spam(2);
+  const other = msg("别的文本");
+  const gift = msg("刷屏样本", { kind: "gift" });
+  const list = rowsOf([pair[0], other, pair[1], gift]);
+
+  const out = aggregateRows(list, prefs());
+
+  assert.equal(out.length, 4, "两条不够门槛：一行都不折");
+  assert.ok(
+    out.every((item, index) => item === list[index]),
+    "**同一批行对象**、**原序**逐条输出 —— 两条同键的成员也没有被收到首条那一格去",
+  );
+});
+
+test("窗口锚定「最后并入」的那条：插花不参与计时，续窗从最后并入的那条往后算", () => {
+  const first = msg("续窗样本", { ts: T0, uid: 701, uname: "续窗一号" });
+  const second = msg("续窗样本", { ts: T0 + AGGREGATE_WINDOW_MS - 100, uid: 702, uname: "续窗二号" });
+  // 两条之后插一行**键不同**的弹幕：它不参与聚合，也不参与计时。
+  const other = msg("插花文本", { ts: T0 + AGGREGATE_WINDOW_MS, uid: 703, uname: "插花一号" });
+  // 锚点是**最后并入**的那条（second）：离它正好一个窗口 ⇒ 仍在窗口内（≤ 而非 <）。
+  const edge = msg("续窗样本", { ts: second.ts + AGGREGATE_WINDOW_MS, uid: 704, uname: "续窗三号" });
+  // 再晚 1ms 的那条：离**上一条同键的**已超过一个窗口 ⇒ 为这个键另起一串、只有一条 ⇒ 不折。
+  const late = msg("续窗样本", {
+    ts: edge.ts + AGGREGATE_WINDOW_MS + 1,
+    uid: 705,
+    uname: "续窗四号",
+  });
+
+  const list = rowsOf([first, second, other, edge, late]);
+  const out = aggregateRows(list, prefs());
+
+  assert.equal(out.length, 3, "折一行 + 插花一行 + 迟到那条一行");
+  assert.equal(out[0].message, first, "代表行仍是这一串的第一条");
+  assert.equal(out[0].count, 3, "first / second / edge 落在同一个窗口串里（插花不算断链）");
+  assert.deepEqual(
+    out[0].senders?.map((sender) => sender.uid),
+    [701, 702, 704],
+  );
+  assert.equal(out[1], list[2], "插花那条原样留在原位");
+  assert.equal(out[2].message, late, "迟到那条离上一条同键的超过一个窗口 ⇒ 另起一串");
+  assert.equal(out[2].senders, undefined, "新串只有一条 ⇒ 原样输出，不折");
+});
+
+test("本地乐观行与空正文不参与：本地那条自己站一行，但不再把同键的弹幕串隔开", () => {
   const before = spam(2);
   const optimistic = msg("刷屏样本", { local_id: -1, uid: 999, uname: "我" });
   const after = spam(2);
-  const out = aggregateRows(rowsOf([...before, optimistic, ...after]), prefs());
+  const list = rowsOf([...before, optimistic, ...after]);
+  const out = aggregateRows(list, prefs());
 
-  assert.equal(out.length, 5, "本地那条不许被折进别人的行里，也不许把前后两串连起来");
-  assert.ok(out.every((item) => item.senders === undefined));
+  // 改前本地那条会把前后两串隔开（两串各两条 ⇒ 都不够门槛 ⇒ 三行）；
+  // 现在四行同键并成一行，本地那条自己站一行、原样留在原位。
+  assert.equal(out.length, 2, "四行同键弹幕并成一行；本地那条自己一行");
+  assert.equal(out[0].message, before[0], "折叠行落在首条原位");
+  assert.equal(out[0].count, 4, "本地乐观行不计数");
+  assert.equal(out[1], list[2], "本地那条**原样**留在原位（不被折进别人的行里）");
+  assert.equal(out[1].senders, undefined);
+  assert.equal(out[1].count, 1, "它还是它自己那一条（不是被复制或被改写过的）");
 
   const empty = [0, 1, 2].map((index) => msg("", { ts: T0 + index * 100, uid: 500 + index }));
   const blanks = aggregateRows(rowsOf(empty), prefs());

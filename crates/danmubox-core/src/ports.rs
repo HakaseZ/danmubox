@@ -315,6 +315,25 @@ pub trait WalletProvider: Send + Sync {
     async fn balance(&self) -> Result<i64>;
 }
 
+/// 按 uid 取用户资料 —— 当前只取头像（`docs/contract.md` §3 / §5 `Message.face`）。
+///
+/// 为什么需要它：大航海与 V1 礼物（以及缺头像的醒目留言）的**载荷里没有头像字段**
+/// （`docs/protocol.md` §10.6 / §10.2 / 附录 A12 / A13 / A8），而界面要求大航海必须有头像
+/// （`REQUIREMENTS.md` §三 3.1–3.6、§八 第 1 条），因此只能按 `Message.uid` 现取。
+///
+/// **取不到即空串**（需求 3.3）：上游非 0 code、网络失败、`uid <= 0` 三种情形对调用方**同解**——
+/// 都按「没有头像」处理，不报错、不阻塞上屏。这也正是本端口**唯一没有错误通道**的原因：
+/// 留一个永不 `Err` 的 `Result` 只会是假分支（`AGENT.md` §8 第 8 条），
+/// 失败原因由实现在 `tracing` 里记录。
+///
+/// **同一 uid 只问一次上游**（需求 3.4）：实现内做进程级缓存与在途合并；
+/// **上游非 0 code 不写缓存**，因此下一条消息还能再试。
+#[async_trait]
+pub trait UserProfile: Send + Sync {
+    /// 该 uid 的头像地址；取不到为空串（语义见 trait 说明）。
+    async fn face_of(&self, uid: i64) -> String;
+}
+
 /// 我自己的直播间（主播视角，`docs/contract.md` §3）。
 ///
 /// 与 `LiveSource` 的分工：后者是「看别人的房间」（只读，游客也可用），

@@ -29,6 +29,13 @@ const EP_ROOM_PLAY_INFO: &str =
 const EP_ROOM_H5_INFO: &str =
     "https://api.live.bilibili.com/xlive/web-room/v1/index/getH5InfoByRoom";
 const EP_DANMU_INFO: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
+/// 按 uid 取用户资料（**WBI 签名**变体）：大航海 / V1 礼物 / 缺头像的 SC 的头像来源。
+///
+/// 端点与字段路径只在 `docs/protocol.md` 附录 A 的「按 uid 取头像」条目一处登记；
+/// 本常量是它在代码里的**唯一**落点，口径要调（换端点 / 换路径）只改这里与 `profile.rs`。
+/// 请求形态（`mid` + `wts` + `w_rid`）按社区文档 `bilibili-API-collect` 的
+/// `docs/user/info.md`「用户空间详细信息」一节核对，**本仓尚未实测**（附录 A 记了核对方法）。
+const EP_ACC_INFO: &str = "https://api.bilibili.com/x/space/wbi/acc/info";
 const EP_WEB_HEARTBEAT: &str =
     "https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat";
 /// 扫码登录：生成二维码。
@@ -176,6 +183,9 @@ pub struct BiliHttp {
     /// `getRoomPlayInfo` 端点。生产恒为 `EP_ROOM_PLAY_INFO`；测试指到本地桩服务器以**计数请求**
     /// （列表页的定期刷新靠它对每个房间只打一次，见 `room_live_status`）。
     play_info_url: String,
+    /// 按 uid 取资料的端点。生产恒为 `EP_ACC_INFO`；测试指到本地桩服务器以**计数请求**
+    /// （「同一 uid 只问一次上游」与「非 0 code 不写缓存」两条判据都由它计数）。
+    acc_info_url: String,
 }
 
 impl BiliHttp {
@@ -211,13 +221,24 @@ impl BiliHttp {
             nav_url: EP_NAV.to_string(),
             danmu_info_url: EP_DANMU_INFO.to_string(),
             play_info_url: EP_ROOM_PLAY_INFO.to_string(),
+            acc_info_url: EP_ACC_INFO.to_string(),
         })
     }
 
     /// 仅测试：把 `nav` 指到本地桩服务器，用于计数请求（生产恒为 `EP_NAV`）。
+    ///
+    /// `pub(crate)`：`profile.rs` 的用例也要把 WBI 那一跳桩住（取资料前必先取密钥），
+    /// 两处桩的是**同一个**进程级 WBI 密钥缓存，因此共用一个串行锁（见 `CACHE_TEST_LOCK`）。
     #[cfg(test)]
-    fn with_nav_url(mut self, url: String) -> Self {
+    pub(crate) fn with_nav_url(mut self, url: String) -> Self {
         self.nav_url = url;
+        self
+    }
+
+    /// 仅测试：把「按 uid 取资料」指到本地桩服务器（生产恒为 `EP_ACC_INFO`）。
+    #[cfg(test)]
+    pub(crate) fn with_acc_info_url(mut self, url: String) -> Self {
+        self.acc_info_url = url;
         self
     }
 
@@ -491,6 +512,37 @@ impl BiliHttp {
             ));
         }
         Ok(DanmuInfo { token, hosts })
+    }
+
+    /// 按 uid 取用户资料的**原始响应**（`EP_ACC_INFO`，WBI 签名变体）。
+    ///
+    /// 只做「签名 + 发一次 GET + 解析成 JSON」，**不解释 `code`**：非 0 code（实测口径见附录 A
+    /// 的按 uid 取头像条目）在调用方那侧一律按「取不到」处理（需求 3.3 的取不到即空串），
+    /// 因此本函数只把原始信封交给 [`crate::profile`]。
+    ///
+    /// 请求形态：`mid` + `wts` + `w_rid`（签名复用 [`Self::wbi_keys`] 的进程级缓存与
+    /// `crate::wbi::signed_query`）。社区文档 `bilibili-API-collect` 的 `docs/user/info.md`
+    /// 把这三个参数列为**必要**，其余（`platform` / `web_location` / `token`）列为可选——
+    /// **不送可选参数**：没有实测证据表明它们必需，凭空的常量只会变成下一处要校准的东西。
+    ///
+    /// Cookie：走本客户端的 Cookie 来源（登录态即账号 Cookie，其中通常已含登录时落盘的
+    /// `buvid3`）。**不额外补 `buvid3`**：那需要一个本层不持有的状态源（长连接的 `buvid3`
+    /// 由 `ws.rs` 单独申请并只存在那里），而文档记的「部分 IP 需要它」尚未在本仓实测到。
+    pub(crate) async fn acc_info(&self, uid: i64) -> Result<Value> {
+        let (img_key, sub_key) = self.wbi_keys().await?;
+        let mixin = wbi::mixin_key(&img_key, &sub_key);
+        let params = vec![
+            ("mid".to_string(), uid.to_string()),
+            ("wts".to_string(), unix_seconds().to_string()),
+        ];
+        let query = wbi::signed_query(&params, &mixin);
+        self.get(&format!("{}?{query}", self.acc_info_url))
+            .send()
+            .await
+            .map_err(|e| upstream("x/space/wbi/acc/info", e))?
+            .json::<Value>()
+            .await
+            .map_err(|e| upstream("x/space/wbi/acc/info decode", e))
     }
 
     /// 上游 HTTP 心跳：每 60 秒一次，缺它长连接会被判死（`docs/protocol.md` §8.2）。
@@ -859,11 +911,142 @@ fn map_room_play_info(play: &Value, h5: &Value, input: &str) -> Result<Room> {
     })
 }
 
+/// 缓存是**进程级**静态槽位（`WBI_KEY_CACHE`），碰它的测试必须串行，
+/// 否则互相清空 / 互相喂桩数据会互相打架。
+///
+/// 用异步锁而不是 `std::sync::Mutex`：这几个测试要跨 `await` 持锁，
+/// 持 `std` 的锁等 IO 会被 clippy 的 `await_holding_lock` 拦下（也确实会阻塞运行时线程）。
+///
+/// 放在文件级而不是 `mod tests` 里：`profile.rs` 的用例同样要走 WBI 那一跳
+/// （取资料前必先取密钥），桩的又是**同一个**静态槽位 —— 两处共用一个锁才串行得起来。
+#[cfg(test)]
+pub(crate) static CACHE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// 仅测试：清空进程级 WBI 密钥缓存（与 [`CACHE_TEST_LOCK`] 成对使用）。
+#[cfg(test)]
+pub(crate) async fn reset_wbi_cache() {
+    *WBI_KEY_CACHE.lock().await = None;
+}
+
+/// 仅测试的本地桩服务器与合成夹具。
+///
+/// 放在 `pub(crate)` 的文件级模块里（而不是 `mod tests` 内）：`profile.rs` 的用例同样要
+/// 桩住「WBI 密钥那一跳 + 取资料那一跳」，两处必须是对**同一份实现**的桩，
+/// 否则「同一 uid 只问一次上游」这类计数断言会各自看到不同的东西。
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /// 合成（非真实）的 `nav` 响应：两个 32 位十六进制 key，形状与实测一致。
+    pub(crate) const NAV_OK: &str = r#"{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/0123456789abcdef0123456789abcdef.png","sub_url":"https://i0.hdslb.com/bfs/wbi/fedcba9876543210fedcba9876543210.png"}}}"#;
+
+    /// 本地桩服务器：按顺序回放 `responses`（最后一份复用）。
+    ///
+    /// `base` 是**基址**（调用方自己拼路径，因此任意端点都能桩住）；`hits` 是收到的请求数；
+    /// `headers` 是每个请求的**原始请求头**（从请求行起的整块文本），用于断言
+    /// 「只有一个 `Cookie` 头」这类**线上形态**——只测拼串函数的表驱动测试看不出
+    /// `RequestBuilder::header` 的 append 语义；也能按请求行区分**打到哪个路径**的请求
+    /// （`profile.rs` 靠它把 `nav` 与取资料两次请求分开计数）。
+    pub(crate) struct Stub {
+        pub(crate) base: String,
+        pub(crate) hits: Arc<AtomicUsize>,
+        pub(crate) headers: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Stub {
+        /// 打到 `path`（请求行里的路径前缀）上的请求数。
+        pub(crate) fn hits_on(&self, path: &str) -> usize {
+            let needle = format!("GET {path}");
+            self.headers
+                .lock()
+                .expect("桩请求头")
+                .iter()
+                .filter(|block| block.contains(&needle))
+                .count()
+        }
+    }
+
+    pub(crate) fn spawn_stub(responses: &[(u16, &str, &str)], delay: Duration) -> Stub {
+        use std::io::{BufRead, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定本地桩");
+        let address = listener.local_addr().expect("本地桩地址");
+        let queue: Arc<Mutex<Vec<(u16, String, String)>>> = Arc::new(Mutex::new(
+            responses
+                .iter()
+                .map(|(status, content_type, body)| {
+                    (*status, content_type.to_string(), body.to_string())
+                })
+                .collect(),
+        ));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&hits);
+        let headers: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&headers);
+
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                // 读到请求头结束再回，避免在客户端发完请求前抢跑（reqwest 会报 broken pipe）。
+                let mut reader = std::io::BufReader::new(stream.try_clone().expect("克隆桩连接"));
+                let mut line = String::new();
+                let mut block = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if line == "\r\n" => break,
+                        Ok(_) => block.push_str(&line),
+                    }
+                }
+                captured.lock().expect("桩请求头").push(block);
+                counter.fetch_add(1, Ordering::SeqCst);
+                let (status, content_type, body) = {
+                    let mut queue = queue.lock().expect("桩队列");
+                    if queue.len() > 1 {
+                        queue.remove(0)
+                    } else {
+                        queue.first().cloned().unwrap_or_default()
+                    }
+                };
+                std::thread::sleep(delay);
+                let head = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        Stub {
+            base: format!("http://{address}"),
+            hits,
+            headers,
+        }
+    }
+
+    /// 本地 `nav` 桩服务器：按顺序回放 `bodies`（最后一份复用）。
+    pub(crate) fn spawn_nav_stub(bodies: &[&str], delay: Duration) -> Stub {
+        let responses: Vec<(u16, &str, &str)> = bodies
+            .iter()
+            .map(|body| (200u16, "application/json", *body))
+            .collect();
+        let mut stub = spawn_stub(&responses, delay);
+        stub.base = format!("{}/nav", stub.base);
+        stub
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use crate::http::test_support::{spawn_nav_stub, spawn_stub, NAV_OK};
+    use std::sync::atomic::Ordering;
 
     /// 真实载荷夹具（只读抓取，2026-09-12）：公开测试房间 `1`（真实 `room_id` 5440）。
     ///
@@ -1029,103 +1212,8 @@ mod tests {
         assert_eq!(stem(""), "");
     }
 
-    /// 合成（非真实）的 `nav` 响应：两个 32 位十六进制 key，形状与实测一致。
-    const NAV_OK: &str = r#"{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/0123456789abcdef0123456789abcdef.png","sub_url":"https://i0.hdslb.com/bfs/wbi/fedcba9876543210fedcba9876543210.png"}}}"#;
-
     /// 合成（非真实）的 `getDanmuInfo` 成功响应：`token` + `host_list`。
     const DANMU_INFO_OK: &str = r#"{"code":0,"data":{"token":"tok","host_list":[{"host":"a.example","port":2243,"wss_port":443,"ws_port":2244}]}}"#;
-
-    /// 缓存是**进程级**静态槽位（`WBI_KEY_CACHE`），碰它的测试必须串行，
-    /// 否则互相清空 / 互相喂桩数据会互相打架。
-    ///
-    /// 用异步锁而不是 `std::sync::Mutex`：这几个测试要跨 `await` 持锁，
-    /// 持 `std` 的锁等 IO 会被 clippy 的 `await_holding_lock` 拦下（也确实会阻塞运行时线程）。
-    static CACHE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-        LazyLock::new(|| tokio::sync::Mutex::new(()));
-
-    /// 本地桩服务器：按顺序回放 `responses`（最后一份复用）。
-    ///
-    /// `base` 是**基址**（调用方自己拼路径，因此任意端点都能桩住）；`hits` 是收到的请求数；
-    /// `headers` 是每个请求的**原始请求头**（从请求行起的整块文本），用于断言
-    /// 「只有一个 `Cookie` 头」这类**线上形态**——只测拼串函数的表驱动测试看不出
-    /// `RequestBuilder::header` 的 append 语义。
-    struct Stub {
-        base: String,
-        hits: Arc<AtomicUsize>,
-        headers: Arc<Mutex<Vec<String>>>,
-    }
-
-    fn spawn_stub(responses: &[(u16, &str, &str)], delay: Duration) -> Stub {
-        use std::io::{BufRead, Write};
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定本地桩");
-        let address = listener.local_addr().expect("本地桩地址");
-        let queue: Arc<Mutex<Vec<(u16, String, String)>>> = Arc::new(Mutex::new(
-            responses
-                .iter()
-                .map(|(status, content_type, body)| {
-                    (*status, content_type.to_string(), body.to_string())
-                })
-                .collect(),
-        ));
-        let hits = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&hits);
-        let headers: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let captured = Arc::clone(&headers);
-
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { break };
-                // 读到请求头结束再回，避免在客户端发完请求前抢跑（reqwest 会报 broken pipe）。
-                let mut reader = std::io::BufReader::new(stream.try_clone().expect("克隆桩连接"));
-                let mut line = String::new();
-                let mut block = String::new();
-                loop {
-                    line.clear();
-                    match reader.read_line(&mut line) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) if line == "\r\n" => break,
-                        Ok(_) => block.push_str(&line),
-                    }
-                }
-                captured.lock().expect("桩请求头").push(block);
-                counter.fetch_add(1, Ordering::SeqCst);
-                let (status, content_type, body) = {
-                    let mut queue = queue.lock().expect("桩队列");
-                    if queue.len() > 1 {
-                        queue.remove(0)
-                    } else {
-                        queue.first().cloned().unwrap_or_default()
-                    }
-                };
-                std::thread::sleep(delay);
-                let head = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(head.as_bytes());
-                let _ = stream.write_all(body.as_bytes());
-                let _ = stream.flush();
-            }
-        });
-
-        Stub {
-            base: format!("http://{address}"),
-            hits,
-            headers,
-        }
-    }
-
-    /// 本地 `nav` 桩服务器：按顺序回放 `bodies`（最后一份复用）。
-    fn spawn_nav_stub(bodies: &[&str], delay: Duration) -> Stub {
-        let responses: Vec<(u16, &str, &str)> = bodies
-            .iter()
-            .map(|body| (200u16, "application/json", *body))
-            .collect();
-        let mut stub = spawn_stub(&responses, delay);
-        stub.base = format!("{}/nav", stub.base);
-        stub
-    }
 
     /// 原始请求头里名为 `Cookie` 的行的**值**（按行取，不做任何合并）。
     fn cookie_lines(raw: &str) -> Vec<String> {
@@ -1136,10 +1224,6 @@ mod tests {
                     .then(|| value.trim().to_string())
             })
             .collect()
-    }
-
-    async fn reset_wbi_cache() {
-        *WBI_KEY_CACHE.lock().await = None;
     }
 
     /// 回归护栏（`docs/auth.md` §4.3）：连续两次取 WBI 密钥只该打一次 `nav`。

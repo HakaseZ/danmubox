@@ -302,9 +302,11 @@ impl RoomAdmin for BiliAdmin {
         let mut skip = (offset % SILENT_PAGE_SIZE) as usize;
         let mut fetched = 0i64;
         loop {
-            // 起点已越过总数：再翻也是空页，直接收口（issue 271100：否则会空翻到
-            // `MAX_PAGES`，每轮还 `sleep(PAGE_GAP)`，末尾白白卡 ~MAX_PAGES*200ms）。
-            if total > 0 && (page - 1) * SILENT_PAGE_SIZE >= total {
+            // 翻页停止条件（issue 271100 + CodeRabbit 评审）：首请求（`fetched` 尚为 0）
+            // 必定放行；此后一旦「下一页起点 ≥ 总数」即收口 —— `total` 为 0 时首请求取回
+            // 空段、下一轮这里直接停，不再空翻到 `MAX_PAGES`（每轮还 `sleep(PAGE_GAP)`，
+            // 末尾白白卡 ~MAX_PAGES*200ms）。
+            if fetched > 0 && (page - 1) * SILENT_PAGE_SIZE >= total {
                 break;
             }
             let value = self
@@ -404,9 +406,11 @@ impl RoomAdmin for BiliAdmin {
         let mut skip = (offset % BLACK_PAGE_SIZE) as usize;
         let mut fetched = 0i64;
         loop {
-            // 起点已越过总数：再翻也是空页，直接收口（issue 271100：否则会空翻到
-            // `MAX_PAGES`，每轮还 `sleep(PAGE_GAP)`，末尾白白卡 ~MAX_PAGES*200ms）。
-            if total > 0 && (page - 1) * BLACK_PAGE_SIZE >= total {
+            // 翻页停止条件（issue 271100 + CodeRabbit 评审）：首请求（`fetched` 尚为 0）
+            // 必定放行；此后一旦「下一页起点 ≥ 总数」即收口 —— `total` 为 0 时首请求取回
+            // 空段、下一轮这里直接停，不再空翻到 `MAX_PAGES`（每轮还 `sleep(PAGE_GAP)`，
+            // 末尾白白卡 ~MAX_PAGES*200ms）。
+            if fetched > 0 && (page - 1) * BLACK_PAGE_SIZE >= total {
                 break;
             }
             let value = self

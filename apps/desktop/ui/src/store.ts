@@ -836,8 +836,17 @@ const adminMore: Record<string, { inFlight: boolean; exhausted: boolean; cursor:
 /** 分页账本的键：同一房间同一块（禁言 / 黑名单）各自一本。 */
 const adminKey = (roomId: number, tab: "silent" | "blacklist") => `${roomId}:${tab}`;
 
-/** 房管名单作废（切房 / 关房 / 移除 / 断开）时清账本：列表清了，水位跟着作废。 */
+/**
+ * 分页账本「世代号」（issue 271100 CodeRabbit 评审）：换房 / 关房 / 移除 / 断开，以及
+ * `loadAdmin` 整段重读，都会让在途的分页响应作废 —— 否则旧房间旧响应的那一批会混进
+ * 新房间新列表（或把刚重读出来的整段盖掉）。每次账本重置 / 重读发起时 +1，`loadAdmin`
+ * 与 `loadAdminMore` 发起时捕获当前值，回包时若已不等就丢弃、不落地。
+ */
+let adminPagingGen = 0;
+
+/** 房管名单作废（切房 / 关房 / 移除 / 断开）时清账本：列表清了，水位跟着作废；并推进世代号。 */
 const resetAdminPaging = () => {
+  adminPagingGen += 1;
   for (const key of Object.keys(adminMore)) delete adminMore[key];
 };
 
@@ -1760,6 +1769,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   async loadAdmin(roomId, limit) {
+    // 作废任何在途的 loadAdminMore（评审：重读时别让挂起的「补一段」把刚重读出来的整段
+    // 又盖掉 / 重复 append）；本函数自己的三块响应也按 `gen` 复核，被新一轮取代即丢弃。
+    const gen = ++adminPagingGen;
     // 三块各自失败各自留痕：一块挂了不该把另外两块的列表也清空。
     const errors: AppStore["adminErrors"] = {};
     // **保留已加载水位**：重读（5 分钟静默刷新 / 写后重读）按「手上已有多少条」取，
@@ -1787,6 +1799,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
     // 落地复核（审计 P69）：三块是「当前房间」的会话级单例，await 期间切了房间就丢弃这一批
     // —— A 打开面板后立刻切 B，B 的面板不该显示 A 的名单。丢弃不算失败，交回 true。
     if (get().activeRoomId !== roomId) return true;
+    // 被新一轮（换房 / 又一次重读）取代：这一批作废（评审）。
+    if (gen !== adminPagingGen) return true;
     const ok = Object.keys(errors).length === 0;
     set((state) => ({
       adminSilent: silent?.items ?? state.adminSilent,
@@ -1813,6 +1827,9 @@ export const useApp = create<AppStore>((set, get, store) => ({
   async loadAdminMore(roomId, tab) {
     // 屏蔽词上游没有分页（一次给完），这里不动上游 —— 它走前端切片。
     if (tab === "keywords") return;
+    // 发起时捕获世代号：账本一旦重置（换房 / 关房 / 重读）或新一轮发起，回包即作废
+    // （评审：旧响应不许混进新列表 / 把刚重读整段盖掉）。
+    const gen = adminPagingGen;
     // 并发锁 + 终点判定（issue 271100）：onScroll 贴底时每个滚动事件都会进来，
     // 不锁的话并发几趟读到同一个没更新的起点，同一页被反复 append。
     // 已翻完（exhausted）同样直接返回 —— 滚动事件风暴不该变成上游请求风暴。
@@ -1833,7 +1850,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
         tab === "silent"
           ? await api.adminSilentList(roomId, offset, ADMIN_STEP)
           : await api.adminBlacklistList(roomId, offset, ADMIN_STEP);
-      if (get().activeRoomId !== roomId) return;
+      // 被换房 / 重读 / 新滚动取代：丢弃这一批，别落地（评审）。
+      if (gen !== adminPagingGen || get().activeRoomId !== roomId) return;
       // 水位按**上游口径**前移（去重前后都一样）：拿去重后的列表长度当起点会把
       // 同一段反复取回来。翻到头（空段或越过 total）就记账「翻完了」。
       book.cursor = offset + slice.items.length;

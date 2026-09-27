@@ -70,6 +70,7 @@
   - **黑名单 / 禁言列表加载不全 + 反复加载重复无上限（第 1 / 2 条）**：前端 `store.loadAdminMore` 原无「在途锁」与「已到末尾」判定，滚动事件风暴下多次并发都读到同一个未更新的 `offset`，同一页被反复 append ⇒ 列表出现重复、无上限。现引入模块级「分页账本」（`inFlight` 在途锁、`exhausted` 上游口径终点标记、按 `uid` 去重）：滚到底不再打上游、并发被压成串行、重复项被去重；名单作废点（移除房间 / 切房 / 关房 / 断开）同步清账本。后端 `admin.rs` 的 `blacklist` / `silent_list` 在「起点已越过总数」时**立即收口**，不再空翻到 `MAX_PAGES`（每轮还 `sleep(200ms)`，末尾白白卡 ~12s）；前端越界时直接以 `limit = 0` 请求（后端立即 `(空, total)` 返回）。
   - **进场互动消息高度不缩回（第 3 条）**：根因是 CSS Modules 把 `@keyframes interactSlotLife` 哈希成 `_interactSlotLife_<hash>_<n>`，而 `InteractSlot.onAnimationEnd` 拿字面量 `"interactSlotLife"` 等值比较 —— **永远不相等** ⇒ `setIdle(true)` 永不触发 ⇒ 槽位永不卸载 ⇒ 弹幕区预留高度（`.chatWrap:has(> .interactSlot)`）永不收回 ⇒ 弹幕永不回填。改为按子串 `includes("interactSlotLife")` 判定。
   - **礼物栏开合设计澄清（第 4 条）**：明确「**只有小箭头开合** + **拖动分割线自由展开/收起**」两者共用同一条单轴几何（`ratio` 份额 + `giftCollapsed` 布尔；拖动全程只改可视份额、松手才决定开合，与 `262335` 那条修复一致）—— 这一条从最初就是统一模型，并非两条独立逻辑。`c37b4f9` 把开合入口从「总计条整条」收到「右端小箭头」后，冒烟 `28-gift-dock.mjs` 仍在点总计条展开 ⇒ `db-gift-area` 一直为 null ⇒ 该段 `querySelectorAll` 对 null 抛错、整场场景中断、连带 `34-split-panes.mjs`（拖拽）没跑。现把展开入口改回点 `db-gift-toggle` 小箭头，与「只有箭头能开合」的设计对齐；`34` 段验证拖动展开 / 收起 / 到极限均成立。
+  - **评审修正（CodeRabbit）**：分页账本加 `adminPagingGen` 世代号，换房 / 关房 / 移除 / 断开以及 `loadAdmin` 整段重读时推进它，`loadAdmin` / `loadAdminMore` 发起时捕获、回包时若已不等即丢弃 —— 旧房间旧响应不再混进新列表、也不被整段重读覆盖；后端 `admin.rs` 的 `blacklist` / `silent_list` 分页停止条件改以 `fetched` 判定（首请求必放行，下一页起点 ≥ `total`、含 `total = 0` 即停），与「起点越过总数即收口」同义但更稳。
 
 ### Changed
 

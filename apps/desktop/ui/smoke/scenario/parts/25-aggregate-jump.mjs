@@ -1,5 +1,5 @@
 // 场景块：刷屏弹幕聚合、阅读位置、回到最新、我的表情
-//   刷屏弹幕聚合（**3 条以上 + 两位不同观众**才折：身份位印「刷屏 ×N」、头像列错位 30% 堆叠前 3 位、
+//   刷屏弹幕聚合（**3 条以上 + 两位不同观众**才折：身份位印「刷屏 ×N」、头像列错位 34% 堆叠前 3 位、
 //   窗口**滑动**（每并入一条刷新一次 5 秒、无条数上限）、关掉开关逐条显示）
 //   面板展开改可视高度时正在看的位置不被弹走；「回到最新」是圆形图标钮（下箭头、与返回键同源几何）
 //   emotes 主站「我的表情」分组可见、能选中、发出去带的是唯一键
@@ -9,11 +9,11 @@
     // ---- 刷屏弹幕聚合（issue 202609211940 第 3 条，docs/ui.md §8.4 第二条、契约 §4 的四条常量）：
     //      **3 条以上**同键、同一个**滑动**的 5 秒窗口（基准是这一串的**最后一条**，每并入一条
     //      就把窗口往后刷一次 5 秒，**没有条数上限**）、参与观众去重后 **≥ 2 位不同 uid** 才折成一行：
-    //      头像列画前 3 位观众的头像（沿 X 轴依次错开 30% 个头像宽、后一张压在前一张上、
+    //      头像列画前 3 位观众的头像（沿 X 轴依次错开 34% 个头像宽、后一张压在前一张上、
     //      **最左那张在最上层**），身份位改印「刷屏 ×N」且**一个用户名都不出现**
     //      （db-msg-name / db-msg-badges 都不画），行内那一格 db-msg-count 也不再画
     //      （数量已经在身份位）。五条读数：
-    //      ① 同文本 + 3 位不同观众（窗口内）→ **一行**、「刷屏 ×3」、堆叠 3 张头像（错位 30%、
+    //      ① 同文本 + 3 位不同观众（窗口内）→ **一行**、「刷屏 ×3」、堆叠 3 张头像（错位 34%、
     //         z-index 递减）、身份位没有用户名 / 徽标、行内没有 ×N；
     //      ② **不同文本** → 两行（聚合只认同一个键），且照旧画昵称（正面对照）；
     //      ③ 同文本、每 4 秒一条连发三条（首尾跨 8 秒 > 一个窗口）→ **一行**「刷屏 ×3」
@@ -102,13 +102,14 @@
         aggTrioRow.querySelector('[data-testid="db-msg-badges"]') === null &&
         // 数量只在身份位出现一次（行内那一格不画）
         aggCellOf(aggTrioRow, "db-msg-count") === null;
-      // 头像列：3 张、每个错开 30% 个头像宽、容器宽 = 头像宽 × 1.6、高 = 头像宽、最左那张在最上层
+      // 头像列：3 张、每个错开 34% 个头像宽（每人露 66%）、容器宽 = 头像宽 × 1.68、高 = 头像宽、
+      // 最左那张在最上层
       out.aggregateSameTextAvatars = aggStack !== null && aggStackFaces.length === 3 &&
         aggStackBox.height > 0 && Math.abs(aggStackBox.height - aggFaceW) < 0.6 &&
-        Math.abs(aggStackBox.width - aggFaceW * 1.6) < 1 &&
+        Math.abs(aggStackBox.width - aggFaceW * 1.68) < 1 &&
         Math.abs(aggOffsets[0]) < 0.6 &&
-        Math.abs(aggOffsets[1] - aggFaceW * 0.3) < 1 &&
-        Math.abs(aggOffsets[2] - aggFaceW * 0.6) < 1 &&
+        Math.abs(aggOffsets[1] - aggFaceW * 0.34) < 1 &&
+        Math.abs(aggOffsets[2] - aggFaceW * 0.68) < 1 &&
         aggZOrder[0] > aggZOrder[1] && aggZOrder[1] > aggZOrder[2];
       snap();
       // ② 不同文本：两条各占一行，都不是聚合行（没有「刷屏 ×N」、没有堆叠层，昵称照旧画）
@@ -142,7 +143,8 @@
         // 后面那条离上一条 6 秒 ⇒ 另起一串：只有一条、不折（没有「刷屏 ×N」，昵称照旧）
         aggWindowRows[1].querySelector('[data-testid="db-msg-spam"]') === null &&
         aggCellOf(aggWindowRows[1], "db-msg-name") !== null;
-      // ④ 三位观众里有一位没头像：头像列只画两张（不画假图），错位也只错开一次
+      // ④ 三位观众里有一位没头像：头像列只画两张（不画假图），错位也因此只错开一次
+      //    —— 容器宽 = 头像宽 × (1 + 34%)，按**实画张数**算（不是按 senders 的长度）
       aggPush("聚合样本戊", 71009, "聚合九号", Date.now(), FACE_512);
       aggPush("聚合样本戊", 71010, "聚合十号", Date.now() + 50, "");
       aggPush("聚合样本戊", 71011, "聚合十一号", Date.now() + 100, FACE_512);
@@ -154,7 +156,7 @@
         ? [].slice.call(aggBareStack.querySelectorAll('[data-testid="db-msg-avatar"]')) : [];
       var aggBareW = aggBareFaces.length > 0 ? rect(aggBareFaces[0]).width : 0;
       out.aggregateEmptyFaceNoSlot = aggBareRows.length === 1 && aggBareFaces.length === 2 &&
-        aggBareStack !== null && Math.abs(rect(aggBareStack).width - aggBareW * 1.3) < 1;
+        aggBareStack !== null && Math.abs(rect(aggBareStack).width - aggBareW * 1.34) < 1;
       snap();
       // ⑤ 关掉开关（ui.danmaku_aggregate）：同样三条**逐条显示** —— 一行都不是聚合行，
       //    昵称照旧回来；点回来又折成一行（纯派生，不丢内容）。

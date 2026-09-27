@@ -132,11 +132,16 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         ),
         spec("ui.gift_panel", Ty::Bool, json!(true), None, None, None),
         // 礼物栏与弹幕区**共享一块上下分区**时的顺序与份额（issue #8，用户 2026-09-16）：
-        // 默认 `false` / `0.35` 是改前的形态（礼物在下、弹幕吃掉绝大部分高度）。
+        // 顺序默认 `false`（礼物在下、弹幕在上，与改前一致）；份额默认 `0.25`
+        // = 礼物 : 弹幕 = **1 : 3**（需求 2026-09-27 第 4.1 条：默认展开份额为整个区域的 1/4）。
         // 两者都只在 `ui.gift_panel` 为真时有意义；关掉那一枚时共享区域退化为弹幕区全高。
         // 比例的含义 = 礼物栏占**共享分区**高度的份额，与它在上还是在下无关（换位不改比例）；
-        // 落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 其折叠头 / 弹幕区 ≥ 3 行），
+        // 落到像素时再被两栏的最小高度夹一次（礼物栏 ≥ 其总计条 / 弹幕区 ≥ 3 行），
         // 因此这里存的是**指针意图**而不是实测像素 —— 同一窗口尺寸下重开必然得到同一画面。
+        // **折叠态不在这一枚键里**：折叠 = 份额被压到下限以下（有效份额 0）+ 这一栏按最小高度
+        // 裁剪，是界面的瞬态（`ui.md` §5.4），落盘的一直是「展开时的指针意图」。
+        // 前端那一侧的兜底常量在 `apps/desktop/ui/src/pane-split.ts`（`PANE_RATIO_DEFAULT`）——
+        // 改这里必须两处一起改（另见 `docs/contract.md` §8、`docs/ui.md` §5.4）。
         spec(
             "ui.gift_pane_on_top",
             Ty::Bool,
@@ -148,7 +153,7 @@ static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec(
             "ui.gift_pane_ratio",
             Ty::Num,
-            json!(0.35),
+            json!(0.25),
             Some(0.10),
             Some(0.90),
             None,
@@ -686,7 +691,11 @@ mod tests {
             json!(false),
             "默认礼物在下、弹幕在上（与改前一致，契约 §8）"
         );
-        assert_eq!(prefs.get("ui.gift_pane_ratio").unwrap(), json!(0.35));
+        assert_eq!(
+            prefs.get("ui.gift_pane_ratio").unwrap(),
+            json!(0.25),
+            "默认份额 1/4 = 礼物 : 弹幕 = 1 : 3（需求 4.1，契约 §8）"
+        );
         assert_eq!(
             prefs.get("ui.gift_collapse_cheap").unwrap(),
             json!(false),
@@ -788,7 +797,7 @@ mod tests {
             // 共享分区的两枚键（契约 §8）：顺序只能是布尔、份额只能是 0.10–0.90 的数
             json!({ "ui.gift_pane_on_top": "yes" }),
             json!({ "ui.gift_pane_on_top": 1 }),
-            json!({ "ui.gift_pane_ratio": "0.35" }),
+            json!({ "ui.gift_pane_ratio": "0.25" }),
             json!({ "ui.gift_pane_ratio": 0.0 }),
             json!({ "ui.gift_pane_ratio": 1.0 }),
             json!({ "ui.gift_pane_ratio": 1.5 }),
@@ -818,11 +827,11 @@ mod tests {
     /// 文件里被手写坏的值按非法值忽略、回落到默认（契约 §4.2：只忽略、不炸）。
     #[test]
     fn split_pane_prefs_bounds_and_file_fallback() {
-        for ok in [0.10, 0.35, 0.90] {
+        for ok in [0.10, 0.25, 0.90] {
             let mut prefs = Prefs::new();
             prefs
                 .set_patch(&json!({ "ui.gift_pane_ratio": ok }))
-                .unwrap_or_else(|e| panic!("0.35 档里 {ok} 应被接受：{e}"));
+                .unwrap_or_else(|e| panic!("默认 0.25 档里 {ok} 应被接受：{e}"));
             assert_eq!(prefs.get("ui.gift_pane_ratio").unwrap(), json!(ok));
         }
 
@@ -848,7 +857,7 @@ mod tests {
         );
         assert_eq!(
             loaded.get("ui.gift_pane_ratio").unwrap(),
-            json!(0.35),
+            json!(0.25),
             "越界的份额回落默认值"
         );
         assert!(

@@ -14,6 +14,7 @@ import { MessageList } from "./MessageList";
 import { InteractSlot } from "./InteractSlot";
 import { SplitPanes } from "./SplitPanes";
 import { BACK_PRIORITY, registerBackHandler } from "../back";
+import { missingFaceUids } from "../faces";
 import { LIVE_DOT_CLASS, LIVE_TEXT, liveKindOf } from "../liveKind";
 import { useApp } from "../store";
 import {
@@ -147,6 +148,8 @@ export function RoomView({
   const [headerMenu, setHeaderMenu] = useState<MenuPoint | null>(null);
   const [messageMenu, setMessageMenu] = useState<{ at: MenuPoint; message: Message } | null>(null);
   const [reportTarget, setReportTarget] = useState<Message>();
+  // 礼物栏开合：**只决定份额与裁剪**（需求 5.1–5.4，单轴模型），不决定挂载 ——
+  // 列表与三枚芯片常驻在场。本页的临时状态，切房间时复位（见下面那条 effect）。
   const [giftOpen, setGiftOpen] = useState(false);
   // 输入区的三个弹出面板（表情 / 短语 / 筛选）：状态**提到这里**，因为互斥的对手
   // 是房管面板与独立礼物栏（用户 2026-09-13 第 4 条：五个面板同时最多开一个）。
@@ -196,6 +199,11 @@ export function RoomView({
   const loadReportReasons = useApp((store) => store.loadReportReasons);
   const openProfile = useApp((store) => store.openProfile);
   const roomStats = useApp((store) => store.roomStats[room.room_id]);
+  // 补取到的头像（uid → 地址）与它的补取入口（需求 §三 3.2 / 3.6）。
+  // 头像只在**行内**用（`MessageRow` 的头像列），但触发那一拍放在这里：
+  // 「哪些行还缺头像」要看**显示行**，而 `MessageRow` 是纯渲染，不许它自己发请求。
+  const faces = useApp((store) => store.faces);
+  const ensureFaces = useApp((store) => store.ensureFaces);
   // 房管权限前置：房管身份来自 `room_session`，主播身份由登录 uid 与房间主播 uid 对上。
   // 拿不到身份时 `is_admin` 为 undefined，且主播 uid 不匹配 → 按**无权限**渲染。
   const isAdmin = useApp((store) => store.roomIdentities[room.room_id]?.is_admin) === true;
@@ -253,9 +261,10 @@ export function RoomView({
       setPanel(null);
       setGiftOpen(false);
     }
-    // 打开时顺手重取身份与三块列表：以远端为准（身份 / 名单都可能刚变过）。
+    // 打开时顺手重取**身份**（它可能刚变过）；**名单不再整段重读**（6.16）：
+    // 名单缓存在本次会话内常驻，重开面板直接复用、由进房后的后台轮询（见下面的 effect）静默维护 ——
+    // 重开就重读会让请求频率反而更高。
     void loadRoomIdentity(room.room_id);
-    if (next) void loadAdmin(room.room_id);
   };
 
   const toggleGiftDock = () => {
@@ -330,9 +339,10 @@ export function RoomView({
   }, [immersive]);
 
   /**
-   * 展开礼物栏（**只开、不关**）：点折叠头那条路走 `toggleGiftDock`（它能收），
-   * 这里给拖动分割条用 —— 礼物栏折叠着时它只有折叠头那么高，份额驱动不了它，
-   * 所以「拖开」这一下与点「展开」同源：同一套互斥（五者最多开一个）也照旧。
+   * 展开礼物栏（**只开、不关**）：点小箭头那条路走 `toggleGiftDock`（它能收），
+   * 这里给拖动分割条用 —— 它由 `SplitPanes` 在**松手**时按那份份额调一次（需求 4.2）：
+   * 折叠态下这一栏只有总计条那么高，拖动就是「把这一栏拖开」，与点「展开」同一条路，
+   * 同一套互斥（五者最多开一个）也照旧。
    */
   const openGiftDock = useCallback(() => {
     setGiftOpen(true);
@@ -342,8 +352,8 @@ export function RoomView({
   }, []);
 
   /**
-   * 收起礼物栏（**只收、不开**）：点折叠头那条路走 `toggleGiftDock`（它能开），
-   * 这里给拖动分割条用 —— 把份额压到下限就是「把这一栏拖没」（需求 2026-09-26），
+   * 收起礼物栏（**只收、不开**）：点小箭头那条路走 `toggleGiftDock`（它能开），
+   * 这里给拖动分割条用 —— **松手**时份额被压到下限就是「把这一栏拖没」（需求 4.2/4.3），
    * 与点「收起」同源；收起改的只是**折叠态**，份额该落盘还是落盘（`SplitPanes` 松手照写）。
    */
   const closeGiftDock = useCallback(() => {
@@ -444,6 +454,9 @@ export function RoomView({
     setMessageMenu(null);
     setReportTarget(undefined);
     setReasonId("");
+    // 礼物栏回到折叠。**注意它不再等于「礼物列表不在场上」**（需求 5.3：列表与三枚芯片
+    // 常驻，折叠只是份额与裁剪）—— 那一份列表的本地状态因此改用 `key={room.room_id}` 复位，
+    // 不能像改前那样指望「折叠 = 卸载」顺带把它清掉。
     setGiftOpen(false);
     setPanel(null);
     setAdminOpen(false);
@@ -465,13 +478,14 @@ export function RoomView({
     setAdminConfirm(null);
   }, [canAdmin]);
 
-  // 房管面板展开期间的静默轮询（issue202609242158 第 8 条 A2）：面板开着才跑、收起即停
-  // （卸载 / 切房由 effect 清理停掉）。打开面板时 `toggleAdminPanel` 已同步重拉过一次，
-  // 因此首拍按周期排。
+  // 房管名单的**后台静默维护**（issue202609242158 第 8 条 A2；口径见需求 6.16）：
+  // **房间打开且有权限期间**一直跑（不再绑定「面板展开」——关掉面板也继续维护，名单缓存常驻、
+  // 重开面板直接复用），失去权限 / 切房 / 卸载由 effect 清理停掉。
+  // 进房预载走下面的 `canAdmin` effect，因此首拍按周期排，不再重复一次首拉。
   useEffect(() => {
-    if (!adminOpen) return;
+    if (!canAdmin) return;
     return startAdminPolling(room.room_id);
-  }, [adminOpen, room.room_id, startAdminPolling]);
+  }, [canAdmin, room.room_id, startAdminPolling]);
 
   useEffect(() => {
     if (loggedIn) void loadBalance();
@@ -497,7 +511,8 @@ export function RoomView({
   // 房管数据**进房就加载**（用户 2026-09-13 第 4 条：「连接到有房管权限的直播间时就加载好
   // 房管的数据」）：身份是**异步到的**（`room_session` 一次 + 事件更新），所以 `canAdmin`
   // 必须在依赖里 —— 没有它，进房那一帧身份还是 false，这一批数据就永远不会被拉。
-  // 打开面板时再静默重拉一次（见 `toggleAdminPanel`），保证看到的是新鲜的。
+  // 这一趟就是 6.14 的**首波**（三条只读列表并发取全）；之后由上面的后台轮询静默维护，
+  // 重开面板直接复用缓存、不再整段重读（6.16）。
   useEffect(() => {
     if (!canAdmin) return;
     void loadAdmin(room.room_id);
@@ -539,6 +554,25 @@ export function RoomView({
     // 但 `measure()` 得有人叫第一声）。
   }, [titleText, fontScale, room.room_id, immersive]);
 
+  /* 缺头像的行**就地补取**（需求 §三 3.2 / 3.4 / 3.6）—— 触发点只有一个，就在这里。
+
+     为什么是这一层、而不是 `MessageRow`：行组件是**纯渲染**（它按 `local_id` 做虚拟列表的
+     key，任何「渲染时发请求」的写法都会被虚拟列表的反复挂载/卸载放大成请求风暴）。
+     这一层拿到的是**显示行全集**（`rows` 已经过过滤），候选判定是纯函数
+     （`faces.missingFaceUids`），真正的「同一 uid 只问一次」由 `ensureFaces` 收口。
+
+     **取舍（写在这里，免得以后被当成遗漏）**：候选来自**全集**而不是虚拟窗口内那几行。
+     代价是可能替一条已经滚出视口的行先取一次；收益是「一个 uid 一次」在滚动时不会被
+     反复触发（虚拟窗口每滚一次就是一批新行，按窗口算会把同一 uid 反复送去查表）。
+     数量上也吃得消：只有大航海 / V1 礼物 / 缺头像的 SC 会进候选，且引擎侧还有一层
+     进程级去重（`BiliProfile` 的缓存）。
+
+     依赖里带上 `faces`：每一次补取落表后重算一遍候选，补到的那些自然退出（含空串结论），
+     没有候选时 `ensureFaces` 直接返回 —— 不会自激。 */
+  useEffect(() => {
+    ensureFaces(missingFaceUids(rows, faces));
+  }, [rows, faces, ensureFaces]);
+
   const { chatRows, giftRows, panelAllRows } = splitGiftRows(rows, prefs);
   // 独立礼物栏是否存在由 `ui.gift_panel` 单独决定（弹幕流那一头由 `ui.gift_in_danmaku` 管，
   // 见 splitGiftRows）；折叠态是它自己的本地状态，与偏好无关。
@@ -558,7 +592,7 @@ export function RoomView({
   };
 
   /**
-   * 独立礼物栏折叠态的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**。
+   * 独立礼物栏的按 kind 汇总（docs/ui.md §5.3）：礼物 / SC / 大航海**各自一组**，两处各一份。
    *
    * **单位已统一为元**（2026-09-16，契约 §5「金额单位」）：`amountText` 把礼物 / 大航海的
    * 金瓜子按 `÷1000` 换算，SC 的原值本来就是元 —— 三组因此**同单位**，先前那条
@@ -566,23 +600,31 @@ export function RoomView({
    * 由用户拍板，本轮不改结构（docs/ui.md §5.3）。
    *
    * 条数取连击折叠后的**次数之和**（`DisplayRow.count`），金额取折叠后累加的 `message.amount`
-   * —— 与 `toDisplayRows` 同源，不另立一套口径。空组不出现（没有 SC 就不显示 SC 那一格）。
+   * —— 与 `toDisplayRows` 同源，不另立一套口径。
    *
    * 输入是 `giftStatRows(giftRows, prefs)` 而不是 `giftRows`：`ui.gift_exclude_cheap_stats`
-   * 打开时低价礼物整条桶**不进统计**（issue 2609162056 第 4 条）。这枚键只改这一处的口径 ——
-   * 礼物栏的条目由 `giftRows` 渲染，与它无关；「礼物 / SC（N）」那个 N 也跟着这里走
-   * （它数的就是这份汇总的条数，不是礼物栏的行数）。
+   * 打开时低价礼物整条桶**不进统计**（issue 2609162056 第 4 条）。这枚键只改这两处的口径 ——
+   * 礼物栏的条目由 `giftRows` 渲染，与它无关。
    *
-   * **两个口径，别混**（需求 2026-09-26）：
+   * **两个口径，别混**：
    * - **总计条 = 先筛选后汇总**：`giftStat` 走筛后的 `giftRows`，所以筛选一变它就跟着变；
-   * - **三格 = 未筛选口径常驻展示**：`giftKindStat` 走筛前的 `panelAllRows`，本场该族有数据
-   *   那一格就一直在 —— 否则选中某族之后其余两族条数归零、被 `count > 0` 滤掉而**按钮消失**，
-   *   看着就成了「三选一」的互斥筛选（三族其实是并集，见 `toggleGiftKind`）。
+   * - **三格 = 未筛选口径、恒三格**：`giftKindStat` 走筛前的 `panelAllRows`，且**三格都在**
+   *   （需求 5.1 / 5.2）—— 本场没数据的那一格只灰显、不消失。改前选中某族之后其余两族
+   *   条数归零、被 `count > 0` 滤掉而**按钮消失**，看着就成了「三选一」的互斥筛选
+   *   （三族其实是并集，见 `toggleGiftKind`），本场没见过的族更是连入口都没有。
    */
   const giftStat = giftStatRows(giftRows, prefs);
   /** 筛选条那三格的统计源：**筛前**全集（三族都在，格子因此常驻）。 */
   const giftKindStat = giftStatRows(panelAllRows, prefs);
-  /** 三族各自的条数与金额（**筛选条**那三个格）。空组不出现。 */
+  /**
+   * 三族各自的条数与金额（**筛选条**那三个格）：**恒为 `GIFT_KINDS` 三格**
+   * （礼物 / SC / 大航海，需求 5.1）—— 进房即渲染，不依赖「本场先收到该族的第一条消息」，
+   * 因此这里**不过滤**（改前那条 `.filter((group) => group.present)` 会把本场没数据的格子
+   * 整个摘掉，于是「三选一」的错觉之外还多一个「有的族根本没有入口」）。
+   *
+   * `present` 只驱动**灰显**（需求 5.2，落 `data-empty`）：没有数据的那一格照旧常驻、
+   * 照旧可点（点击只切 `ui.gift_pane_kinds`）。
+   */
   const giftGroups = GIFT_KINDS.map((kind) => {
     const group = giftKindStat.filter((row) => row.message.kind === kind);
     return {
@@ -594,12 +636,12 @@ export function RoomView({
         (sum, row) => sum + amountYuan(row.message.amount, row.message.kind),
         0,
       ),
-      // 这一格**出不出**看本场有没有这一族（`panelAllRows`），**不看统计数**：
-      // `ui.gift_exclude_cheap_stats` 会把某一族的统计剔成 0，格子若跟着消失，
-      // 用户就点不掉已经选中的那一族筛选（筛选条上连入口都没了）。
+      // 本场有没有这一族看 `panelAllRows`（**筛前**），**不看统计数**：
+      // `ui.gift_exclude_cheap_stats` 会把某一族的统计剔成 0，格子若跟着灰掉，
+      // 看着就成了「这一族没数据」，其实只是统计口径剔掉了低价礼物。
       present: panelAllRows.some((row) => row.message.kind === kind),
     };
-  }).filter((group) => group.present);
+  });
 
   /** 三族合计（**总计条**）。筛后口径 —— 统计链是「先筛选、后汇总」。 */
   const giftTotalCount = giftStat.reduce((sum, row) => sum + row.count, 0);
@@ -903,6 +945,9 @@ export function RoomView({
           中间一条可拖动的分割条（热区 ≥ 8px）；长按任一栏 0.5s 拖拽换位。
           两栏的高度比例与上下顺序都落 prefs，重开应用保持；`ui.gift_panel` 关掉时
           共享区域退化为弹幕区全高、分割条不渲染（见 SplitPanes）。
+          **礼物栏的开合只是一个开关位**（需求 5.1–5.4，单轴模型）：`giftOpen` 只决定份额
+          （折叠 = 压到下限以下）与这一栏的裁剪，**不决定挂载** —— 列表与三枚芯片常驻，
+          拖动分割线也能改它（`onExpand` / `onCollapse` 与点右端那枚小箭头同一条路）。
           唯一的生长区从「弹幕列表」变成「这一块」：面板 / 房管面板 / 输入区展开时挤的是它。
           **沉浸模式（issue #1）只收标题栏、房间标签条与输入区**，所以这一块在沉浸态里照旧在场；
           双击落点仍是弹幕那一栏（`.chatWrap`，见下），礼物栏上的双击与它无关。 */}
@@ -919,7 +964,6 @@ export function RoomView({
           <div
             className={styles.chatWrap}
             data-testid="db-chat-wrap"
-            data-interact-slot={prefs["ui.interact_single_slot"] ? "true" : undefined}
             onPointerDown={onChatPointerDown}
             onPointerUp={onChatPointerUp}
             onPointerCancel={onChatPointerCancel}
@@ -927,13 +971,16 @@ export function RoomView({
             <MessageList
               key={room.room_id}
               rows={chatRows}
+              faces={faces}
               anchorUid={room.anchor_uid}
               prefs={prefs}
               onMenu={(message, at) => setMessageMenu({ at, message })}
             />
             {/* 互动/进场消息共用单槽位（ui.interact_single_slot，docs/ui.md §4.8）：
-                浮在弹幕区底部偏左，显示最新一条、下一条快速顶掉上一条，空闲淡出。
-                容器上的 `data-interact-slot` 让 CSS 提前给浮层预留高度（不等第一条到达）；
+                浮在弹幕区底部偏左，显示最新一条、下一条快速顶掉上一条；空闲到点由
+                `InteractSlot` 自己卸载整块（`interact-slot.ts` 的寿命判定）。
+                弹幕区的预留高度**只认「浮层在不在 DOM 里」**（`.chatWrap:has(> .interactSlot)`）：
+                开关开着但还没有互动消息时一点空白都不占，浮层卸载即收回并让弹幕缩回补齐。
                 开关关 = 互动消息**完全不显示**：列表不画、浮层不渲染，预留高度一并收回
                 （由 `filtering.toDisplayRows` 无条件剔除 interact 行 + 这里不渲染浮层共同实现）。 */}
             {prefs["ui.interact_single_slot"] && <InteractSlot />}
@@ -946,7 +993,8 @@ export function RoomView({
            滚动位置与虚拟列表状态是**另一份实例**，两边互不影响。
            是否出现由 `ui.gift_panel` 决定（管弹幕流那一头的是 `ui.gift_in_danmaku`，
            两枚各自独立：都开 = 默认形态，同一批消息两处都渲染）。
-           折叠头带 `data-pane-head`：它是**这一栏的最小高度**（SplitPanes 实测）。
+           总计条带 `data-pane-head`：它是**这一栏的最小高度**（SplitPanes 实测，写进
+           `--gift-min-h`），折叠态看得见的就只有它。
            空态文案在 `empty` 上（判据「哪一套行算本场」留在调用方）。 */
         gift={
           giftPanel ? (
@@ -956,16 +1004,18 @@ export function RoomView({
                不搬节点：列表的滚动位置与虚拟列表状态不受礼物栏在上在下影响。
                ⚠ 不能指望外层 `.panes` 的 `column-reverse` 把这里也翻过来：它只翻两栏。
 
-               总计条带 `data-pane-head`：折叠态它是唯一一条，也就是这一栏的最小高度
-               （SplitPanes 实测它写进 `--gift-min-h`）。展开态**没有**折叠头 ——
-               「收起」的入口就是总计条右端那枚图标。 */
+               三段**都常驻**（需求 5.1 / 5.3）：折叠时这一栏只有总计条那么高，列表与筛选条
+               落在 `.paneGift` 的裁剪区外（`overflow: hidden`），展开即呈现（需求 5.4）。
+               「收起」的入口是总计条右端那枚图标（另一条路是拖动分割线，见 SplitPanes）。 */
             <div
               className={styles.giftPane}
               data-testid="db-gift-pane"
               data-on-top={giftPaneOnTop ? "true" : undefined}
             >
-              {/* 总计条：贴中心；**它就是拖动热区**（需求 2026-09-26，见 SplitPanes）。
-                  文案 `礼物 12条 ¥1,168.7`；开启筛选后只给条数（金额已在筛选条上分列）。 */}
+              {/* 总计条：贴中心、折叠态唯一看得见的一条；**它就是拖动热区**（见 SplitPanes）。
+                  文案 `礼物 12条 ¥1,168.7`；开启筛选后只给条数（金额已在筛选条上分列）。
+                  **它自己不是开合入口**（需求 4.4）：条上没有 onClick —— 开合走右端那枚小箭头
+                  与拖动分割线两条路，热区那 8px 因此不用跟一条「整条可点」抢手势。 */}
               <div className={styles.giftPaneTotal} data-testid="db-gift-total" data-pane-head>
                 <span className={styles.giftPaneTotalText} data-testid="db-gift-total-text">
                   {giftTotalText}
@@ -1000,50 +1050,57 @@ export function RoomView({
                   </svg>
                 </button>
               </div>
-              {giftOpen && (
-                <MessageList
-                  rows={giftRows}
-                  anchorUid={room.anchor_uid}
-                  prefs={prefs}
-                  scope="gift"
-                  empty={giftRows.length === 0 ? "本场还没有礼物" : undefined}
-                  onMenu={(message, at) => setMessageMenu({ at, message })}
-                />
-              )}
-              {/* 筛选条：**远离**中心的外侧。三格 = 三族的分类金额，点击切换筛选
-                  （不选 = 全显示，选多项 = 并集，契约 §8 `ui.gift_pane_kinds`）。
-                  放在外侧是为了不与热区抢点击 —— 热区会吞掉它覆盖的那 8px。 */}
-              {giftOpen && (
-                <div className={styles.giftPaneFilter} data-testid="db-gift-filter">
-                  {giftGroups.map((group) => {
-                    const on = giftPaneKinds.includes(group.kind);
-                    return (
-                      <button
-                        key={group.kind}
-                        type="button"
-                        className={styles.giftPaneChip}
-                        data-testid="db-gift-chip"
-                        data-kind={group.kind}
-                        aria-pressed={on}
-                        title={`${group.label} ${group.count} 条${
-                          group.yuan > 0 ? ` · ${yuanText(group.yuan)}` : ""
-                        }（点击筛选）`}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => toggleGiftKind(group.kind)}
-                      >
-                        <img
-                          className={styles.giftPaneIcon}
-                          src={GIFT_ICON[group.kind]}
-                          alt=""
-                          width={16}
-                          height={16}
-                        />
-                        <span>{group.yuan > 0 ? yuanText(group.yuan) : `${group.count} 条`}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              {/* 列表**常驻**（需求 5.3）：不再随礼物栏开合挂载 / 卸载 —— 折叠只是把份额压到
+                  下限以下、这一栏按最小高度裁剪，列表照旧在场上（在裁剪区外看不见）。
+                  因此展开不需要重新挂载、也不需要重新请求，拉开的瞬间就呈现（需求 5.4）。
+                  `key` 与弹幕区那一份同一个理由：换房时整份实例重来（本地状态复位那条 effect
+                  改的只是 `giftOpen`，列表不再靠卸载复位了）。 */}
+              <MessageList
+                key={room.room_id}
+                rows={giftRows}
+                faces={faces}
+                anchorUid={room.anchor_uid}
+                prefs={prefs}
+                scope="gift"
+                empty={giftRows.length === 0 ? "本场还没有礼物" : undefined}
+                onMenu={(message, at) => setMessageMenu({ at, message })}
+              />
+              {/* 筛选条：**远离**中心的外侧，**同样常驻**（需求 5.1 / 5.3）——
+                  三格恒为礼物 / SC / 大航海，进房即渲染，不等「本场先收到该族的第一条消息」，
+                  也不随礼物栏开合挂载 / 卸载。点击切换筛选（不选 = 全显示，选多项 = 并集，
+                  契约 §8 `ui.gift_pane_kinds`）；本场没有那一族时只灰显（`data-empty`，
+                  需求 5.2），**照旧可点**。放在外侧是为了不与热区抢点击 ——
+                  热区会吞掉它覆盖的那 8px。 */}
+              <div className={styles.giftPaneFilter} data-testid="db-gift-filter">
+                {giftGroups.map((group) => {
+                  const on = giftPaneKinds.includes(group.kind);
+                  return (
+                    <button
+                      key={group.kind}
+                      type="button"
+                      className={styles.giftPaneChip}
+                      data-testid="db-gift-chip"
+                      data-kind={group.kind}
+                      data-empty={group.present ? undefined : "true"}
+                      aria-pressed={on}
+                      title={`${group.label} ${group.count} 条${
+                        group.yuan > 0 ? ` · ${yuanText(group.yuan)}` : ""
+                      }（点击筛选）`}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => toggleGiftKind(group.kind)}
+                    >
+                      <img
+                        className={styles.giftPaneIcon}
+                        src={GIFT_ICON[group.kind]}
+                        alt=""
+                        width={16}
+                        height={16}
+                      />
+                      <span>{group.yuan > 0 ? yuanText(group.yuan) : `${group.count} 条`}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           ) : null
         }

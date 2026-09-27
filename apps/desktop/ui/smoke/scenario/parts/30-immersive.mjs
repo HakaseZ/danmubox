@@ -75,7 +75,7 @@
       await sleep(700);
       out.immersivePadRows = rows().length;
       var immChat0 = rect(byTestId("db-chat-scroll"));
-      var immGift0 = rect(byTestId("db-gift-dock"));
+      var immGift0 = rect(byTestId("db-gift-pane"));
       var immTabs0 = rect(byTestId("db-room-tabs"));
       var immHeader0 = rect(byTestId("db-room-header"));
       // 输入区整块的高度**直接量输入区这一块**（RoomView 的 shell 里它是被收起的三块之一）。
@@ -104,7 +104,7 @@
       // ② 双击弹幕区 → 进沉浸模式（鼠标指针）
       await immDoubleTap(byTestId("db-chat-scroll"), immTapX, immTapY, "mouse");
       var immChat1 = rect(byTestId("db-chat-scroll"));
-      var immGift1 = rect(byTestId("db-gift-dock"));
+      var immGift1 = rect(byTestId("db-gift-pane"));
       out.immersiveEnterOnChatDoubleTap = immAttr() === "true";
       out.immersiveHidesHeader = immHeader0 !== null &&
         byTestId("db-room-header") === null && byTestId("db-live-dot-box") === null;
@@ -121,20 +121,35 @@
         immComposerH > 0 && Math.abs(out.immersiveChatGrewPx -
           (immTabs0.height + immHeader0.height + immComposerH)) < 1.5;
       // 礼物 / SC 栏留在场上、高度一点没变；它与弹幕区之间**只隔着那条分割条**
-      // （弹幕区拿走收起腾出的全部高度，没有别的块被挤错）。旧写法要求「弹幕区底边紧贴礼物栏顶边」，
-      // 同样是上下分区之前的结构 —— 折叠态下礼物栏在弹幕区正下方，中间那一条 8px 就是分割条
-      // （实测 8.0），所以相邻性改成「弹幕区底边 = 分割条顶边、礼物栏顶边 = 分割条底边」。
+      // （弹幕区拿走收起腾出的全部高度，没有别的块被挤错）。相邻性的三种写法：
+      //   ① 上下分区之前：「弹幕区底边紧贴礼物栏顶边」；
+      //   ② 上下分区之后、热区还占布局高度：中间的 8px 就是分割条（实测 8.0）；
+      //   ③ **本批之后**（热区浮起，负 margin 让它不再占布局高度）：分割条是叠在两栏交界**之上**
+      //      的一块，交界处现在是它的**中线** —— 判据改成「弹幕区底边 = 中线 = 礼物栏顶边」。
+      // `db-gift-dock` 这枚钩子随本批的单轴模型消失（礼物栏现在是 `db-gift-pane`），同行替换。
       var immSplit1 = rect(byTestId("db-pane-splitter"));
+      var immSplitMid = immSplit1 ? immSplit1.top + immSplit1.height / 2 : null;
+      out.immersiveSplitterBoxPx = immSplit1
+        ? [Math.round(immSplit1.top * 10) / 10, Math.round(immSplit1.bottom * 10) / 10] : null;
+      out.immersiveSplitterMidPx = immSplitMid === null
+        ? null : Math.round(immSplitMid * 10) / 10;
+      out.immersiveGiftPaneBoxPx = immGift1
+        ? [Math.round(immGift1.top * 10) / 10, Math.round(immGift1.bottom * 10) / 10] : null;
+      out.immersiveChatBottomPx = rect(byTestId("db-chat-scroll"))
+        ? Math.round(rect(byTestId("db-chat-scroll")).bottom * 10) / 10 : null;
       out.immersiveGiftHeightDeltaPx = immGift0 && immGift1
         ? Math.round((immGift1.height - immGift0.height) * 10) / 10 : null;
-      out.immersiveKeepsGiftDock = byTestId("db-gift-dock") !== null && !!immGift0 &&
-        !!immGift1 && !!immSplit1 &&
-        // 折叠态（此刻它就是折叠的）在沉浸态里照旧折叠：高度仍然是折叠头那一个数
-        !byTestId("db-gift-area") &&
+      out.immersiveKeepsGiftDock = byTestId("db-gift-pane") !== null && !!immGift0 &&
+        !!immGift1 && immSplitMid !== null &&
+        // 折叠态（此刻它就是折叠的）在沉浸态里照旧折叠：高度仍然是总计条那一个数。
+        // 判据走 `aria-expanded` —— 需求 5.1–5.4 之后列表折叠也挂载，`db-gift-area`
+        // 在场与否不再是开合。
+        byTestId("db-gift-toggle").getAttribute("aria-expanded") === "false" &&
         Math.abs(immGift1.height - immGift0.height) < 1 &&
         Math.abs(immGift1.height - immGiftHeadH) < 1 &&
-        Math.abs(rect(byTestId("db-chat-scroll")).bottom - immSplit1.top) < 1 &&
-        Math.abs(immGift1.top - immSplit1.bottom) < 1;
+        // 相邻性：弹幕区底边与礼物栏顶边都落在分割条的中线上（两栏之间只有那一条 1px 的线）。
+        Math.abs(rect(byTestId("db-chat-scroll")).bottom - immSplitMid) < 1 &&
+        Math.abs(immGift1.top - immSplitMid) < 1;
       snap();
       // ③ 沉浸态里照样能往上翻历史、「回到最新」跟着出现、点了又贴底（虚拟列表重新量高）
       var immScroll = byTestId("db-chat-scroll");

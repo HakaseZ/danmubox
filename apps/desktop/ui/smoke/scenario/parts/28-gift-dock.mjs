@@ -26,7 +26,11 @@
     out.giftDockInSharedRegion = !!dock && !!composer && !!panesEl && panesEl.contains(dock) &&
       (byTestId("db-pane-danmaku").compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
       (dock.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-    out.giftDockCollapsed = !!dock && !byTestId("db-gift-area");
+    // 开合态读总计条右端那枚小箭头的 `aria-expanded`（`docs/ui.md` §5.3 的钩子表）：
+    // 需求 5.1–5.4 之后礼物**列表与三枚芯片折叠也挂载**，`db-gift-area` 在场与否不再是开合。
+    var foldToggleEl = byTestId("db-gift-toggle");
+    out.giftDockCollapsed = !!dock && !!foldToggleEl &&
+      foldToggleEl.getAttribute("aria-expanded") === "false";
     out.giftDockFullWidth = !!dock && Math.abs(rect(dock).width - document.body.clientWidth) < 2;
     // 窄屏：折叠条只占一行，弹幕列表不被它挤掉
     put("giftDockCompact", !!dock && rect(dock).height <= 56);
@@ -37,22 +41,49 @@
     // amountText 的格式化是 toLocaleString(undefined, { maximumFractionDigits: 3 })：
     // 整数元不带小数（138 元），非整数保留必要小数（0.1 元）。断言跟着它走。
     var yuan = function (n) { return n.toLocaleString(undefined, { maximumFractionDigits: 3 }); };
-    var giftSummary = (byTestId("db-gift-summary") || {}).innerText || "";
+    // **2026-09-27 钩子校准**：改前那一条整串汇总挂在 `db-gift-summary` 上
+    // （「本场 礼物 3 · 0.7 元 / SC 2 · 1,030 元 / 大航海 1 · 138 元」）。本批的单轴模型
+    // （需求 5.1–5.4）把它**拆成两处**，`src/` 里已经没有 `db-gift-summary` 这枚钩子了：
+    //   · **总计条** `db-gift-total-text` = 三族压成一个合计：`礼物 6条 ¥1,168.7`（**筛后**口径）；
+    //   · **筛选条三格** `db-gift-chip[data-kind]` = 每族各自的条数与金额（`title` 上逐字可读，
+    //     **未筛选**口径、恒三格）。
+    // 因此「按 kind 分组」在**三格**上判、「跨组合计」在**总计条**上判 —— 两件旧事各自有新的着落。
+    var giftSummary = (byTestId("db-gift-total-text") || {}).innerText || "";
+    giftSummary = giftSummary.trim();
     out.giftDockSummaryText = giftSummary;
-    out.giftDockSummaryGroupedByKind =
-      giftSummary.indexOf("礼物 3 · " + yuan(0.7) + " 元") >= 0 &&
-      giftSummary.indexOf("SC 2 · " + yuan(1030) + " 元") >= 0 &&
-      giftSummary.indexOf("大航海 1 · " + yuan(138) + " 元") >= 0;
-    // 汇总不许自己另算一个总数：按 kind 分组的明细之外没有第二条合计。
-    // 两个「不是分组明细」的候选值都不许出现——① 三组元值相加 0.7 + 1030 + 138 = 1168.7；
-    // ② 把 SC 的元当金瓜子与另两组直接相加（139730 金瓜子）或换算后（139.73 元）。
-    out.giftDockNoCrossUnitSum = giftSummary.indexOf(yuan(1168.7)) < 0 &&
-      giftSummary.indexOf("1168.7") < 0 && giftSummary.indexOf("139.73") < 0 &&
-      giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("140730") < 0;
-    // db-gift-total 是礼物栏的**总计条**（data-pane-head，折叠态唯一一行；issue #8 之后由折叠头演变而来），不再是「容器里装着一枚按钮」
-    dock.click();
+    var giftChipOf = function (kind) {
+      return allByTestId("db-gift-chip").filter(function (chip) {
+        return chip.getAttribute("data-kind") === kind;
+      })[0] || null;
+    };
+    var giftChipTitle = function (kind) {
+      var chip = giftChipOf(kind);
+      return chip ? chip.getAttribute("title") : null;
+    };
+    out.giftDockChipCount = allByTestId("db-gift-chip").length;
+    out.giftDockChipTitles = ["gift", "superchat", "guard"].map(giftChipTitle);
+    // 三组各报各的合计：条数与金额都在那一格的 `title` 上
+    // （`${族名} ${条数} 条 · ${金额}（点击筛选）`，见 RoomView 的 `giftGroups`）；
+    // 三组逐字各自对齐，串了族或对不上数字都会在这里失败。
+    out.giftDockSummaryGroupedByKind = out.giftDockChipCount === 3 &&
+      (giftChipTitle("gift") || "").indexOf("礼物 3 条 · ¥" + yuan(0.7)) >= 0 &&
+      (giftChipTitle("superchat") || "").indexOf("SC 2 条 · ¥" + yuan(1030)) >= 0 &&
+      (giftChipTitle("guard") || "").indexOf("大航海 1 条 · ¥" + yuan(138)) >= 0;
+    // 总计条 = 三族**元值**相加的那一个数（0.7 + 1030 + 138 = 1168.7；6 条 = 3 + 2 + 1，
+    // 连击那两条折叠成一行、计数仍是 2 次）。三族单位已于 2026-09-16 统一为元
+    // （`RoomView` 的注释与 `docs/ui.md` §5.3），旧红线「不许出现跨组合计」因此**失效**：
+    // 单位统一之后它就是对的值，把它当 bug 反而放跑了真正的错 —— **把某一族的原值当元**
+    // （礼物 / 大航海是金瓜子、SC 本来就是元）会算出 139,730 或 139.73，一句都不许出现。
+    out.giftDockTotalTextIsYuanSum = giftSummary === "礼物 " + num(6) + "条 ¥" + yuan(1168.7);
+    out.giftDockTotalHasNoRawCoinSum = giftSummary.indexOf(yuan(139730)) < 0 &&
+      giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("139.73") < 0 &&
+      giftSummary.indexOf("140730") < 0;
+    // db-gift-total 是礼物栏的**总计条**（data-pane-head，折叠态唯一一行；issue #8 之后由
+    // 折叠头演变而来），它**本身不是按钮、也不参与开合**（需求 4.4）——展开 / 收起的入口是
+    // 它右端那枚小箭头 `db-gift-toggle`（见 docs/ui.md §5.3）。所以展开要点那枚箭头。
+    byTestId("db-gift-toggle").click();
     await sleep(300);
-    out.giftDockExpands = !!byTestId("db-gift-area");
+    out.giftDockExpands = byTestId("db-gift-toggle").getAttribute("aria-expanded") === "true";
     out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;
     // ---- 一条一行：折叠后的行数（连击那两条合成 1 行）就是礼物栏的行数 —— 改前那段
     //      「金额排行 + 内容详情」的两段式结构已随 2609152029 第 5 条删掉。
@@ -455,8 +486,12 @@
     // ---- issue 2609171849 #4 第 3 点：**上下分区的分界线**（用户原话：「分割独立礼物栏的那个
     //      横折叠区域，弄点横线或者虚线之类的（类似于折叠屏分屏的那个提示），而且现在 2 区间
     //      没有任何边界，有点不便于区分区域」）。改前那条线借的是 --border 发丝线：深色下对
-    //      底色 1.56:1、浅色下 1.02:1 —— 用户的「没有任何边界」就是它。现在画在分割条自己的顶边上
-    //      （**虚线** + --fold-line），对比度两套主题都 ≥ 3:1（图形要素的达标线）。
+    //      底色 1.56:1、浅色下 1.02:1 —— 用户的「没有任何边界」就是它。
+    //      **2026-09-27 判据校准**：线现在是 `.splitter::before` 的一条**居中实线** —— **背景**画
+    //      出来（`background: var(--fold-line)` + `height: 1px` + `left/right: 0`），不再是改前那条
+    //      贴在热区顶边的 `border-top` 虚线；热区本身也**浮起**了（负 margin，不占布局高度）。
+    //      度量随之从「边框样式 / 边框色」换成「背景色 / 背景图 / 厚度 / 横贯宽度」，落在两栏之间的
+    //      判据从「分割条盒子夹在中间」换成「分割条**中线** = 两栏交界」（详见下面那一行）。
     //      整块包一层（try/catch + foldLineBlockRan）；准入前提是礼物栏开着
     //      （ui.gift_panel 为真、分割条在场），判据直接记进快照（条件 ②）。
     var foldLineBlockRan = false;
@@ -469,13 +504,27 @@
     out.foldLinePrecondition = !!splitEl && window.__prefs["ui.gift_panel"] === true;
     // 线画在 `.splitter::before`（居中实线 1px，见 docs/ui.md §5.4）：分割条本身不再带边框。
     var splitPseudo = splitEl ? getComputedStyle(splitEl, "::before") : null;
-    out.foldLineIsSolid = !!splitPseudo && splitPseudo.borderTopStyle === "solid" &&
-      parseFloat(splitPseudo.borderTopWidth) >= 1;
+    out.foldLinePaint = splitPseudo ? {
+      background: splitPseudo.backgroundColor,
+      backgroundImage: splitPseudo.backgroundImage,
+      height: splitPseudo.height,
+      width: splitPseudo.width,
+    } : null;
+    // 「实线」在新画法里的等价判据：一条**纯色填充**的 1px 横条 —— 背景色有值、
+    // `background-image` 为 `none`（不是渐变 / 不是重复图案冒充的虚线）、厚度 ≥ 1px、
+    // 宽度横贯整个热区。比改前只查 `border-top` 更严：多钉了「整条横贯」这一条。
+    out.foldLineIsSolid = !!splitPseudo && !!splitBox &&
+      splitPseudo.backgroundColor === cssColorOf("--fold-line") &&
+      splitPseudo.backgroundImage === "none" &&
+      parseFloat(splitPseudo.height) >= 1 &&
+      parseFloat(splitPseudo.width) >= splitBox.width - 1;
     out.foldLineWidthPx = splitPseudo
-      ? Math.round(parseFloat(splitPseudo.borderTopWidth) * 10) / 10 : null;
+      ? Math.round(parseFloat(splitPseudo.height) * 10) / 10 : null;
+    out.foldLineSpanPx = splitPseudo ? Math.round(parseFloat(splitPseudo.width) * 10) / 10 : null;
     // 线的颜色 = 令牌值（令牌真的被消费了，不是写死的色值）
-    out.foldLineUsesToken = !!splitPseudo && splitPseudo.borderTopColor === cssColorOf("--fold-line");
-    out.foldLineColor = splitPseudo ? splitPseudo.borderTopColor : null;
+    out.foldLineUsesToken = !!splitPseudo &&
+      splitPseudo.backgroundColor === cssColorOf("--fold-line");
+    out.foldLineColor = splitPseudo ? splitPseudo.backgroundColor : null;
     // 可见性：线的颜色对画布 ≥ 3:1（与「正文对背景 ≥ 4.5:1」同一套 WCAG 算式）。
     // 反面对照 foldLineOldBorderContrast 是改前那条线（--border）的读数，两套主题都 < 1.6:1。
     out.foldLineContrastOnCanvas = contrastRatio(
@@ -483,12 +532,29 @@
     out.foldLineContrastPx = contrastRatio(cssColorOf("--fold-line"), cssColorOf("--bg"));
     out.foldLineOldBorderContrast = contrastRatio(
       cssColorOf("--border"), cssColorOf("--bg"));
-    // 它真的落在两个区间**之间**（礼物栏在上还是在下都成立：分割条在 DOM 里恒在两栏之间）
-    out.foldLineSeparatesPanes = !!splitBox && !!paneDanmakuBox && !!paneGiftBox &&
-      ((Math.abs(splitBox.top - paneDanmakuBox.bottom) < 1 &&
-        Math.abs(splitBox.bottom - paneGiftBox.top) < 1) ||
-       (Math.abs(splitBox.top - paneGiftBox.bottom) < 1 &&
-        Math.abs(splitBox.bottom - paneDanmakuBox.top) < 1));
+    // 它真的落在两个区间**之间**（礼物栏在上还是在下都成立：分割条在 DOM 里恒在两栏之间）。
+    // **2026-09-27 判据校准**：热区浮起之后（`margin-block: -4px`，见 app.module.css 的 `.splitter`）
+    // 分割条**不再夹在两栏的中间**，它是叠在两栏交界**之上**的一块：真正的交界是它的**中线**
+    // （也正是那条线（`::before`）所在的位置）。因此判据从「分割条顶边贴弹幕区底边、底边贴礼物栏顶边」
+    // 改成「**中线** = 上面那一栏的底边 = 下面那一栏的顶边」—— 礼物栏在上 / 在下都成立。
+    // 旧写法在新几何下恒为假（两侧各差半个热区 = 4px），它量的其实是热区高度、不是顺序。
+    var foldLineAtBoundary = function () {
+      if (!splitBox || !paneDanmakuBox || !paneGiftBox) return false;
+      var mid = splitBox.top + splitBox.height / 2;
+      return (Math.abs(paneDanmakuBox.bottom - mid) < 1 &&
+        Math.abs(paneGiftBox.top - mid) < 1) ||
+       (Math.abs(paneGiftBox.bottom - mid) < 1 &&
+        Math.abs(paneDanmakuBox.top - mid) < 1);
+    };
+    var foldMid = splitBox ? splitBox.top + splitBox.height / 2 : null;
+    out.foldLineMidPx = foldMid === null ? null : Math.round(foldMid * 10) / 10;
+    // 读数（单位 px）：两栏各自的上下边与那条中线的差 —— 红的时候一眼看出是差半块热区还是真错位。
+    out.foldLineEdgesPx = splitBox && paneDanmakuBox && paneGiftBox ? {
+      danmaku: [Math.round(paneDanmakuBox.top * 10) / 10, Math.round(paneDanmakuBox.bottom * 10) / 10],
+      gift: [Math.round(paneGiftBox.top * 10) / 10, Math.round(paneGiftBox.bottom * 10) / 10],
+      splitter: [Math.round(splitBox.top * 10) / 10, Math.round(splitBox.bottom * 10) / 10],
+    } : null;
+    out.foldLineSeparatesPanes = foldLineAtBoundary();
     // `.splitter::before` 即分界线本身（居中实线），不是叠着画、也不是删掉
     out.foldLineDrawnByPseudo = !!splitEl && getComputedStyle(splitEl, "::before").content !== "none";
     snap();
@@ -529,7 +595,11 @@
     // 展开/收起入口是它右端的 db-gift-toggle（见 docs/ui.md §5.3）。
     byTestId("db-gift-toggle").click();
     await sleep(350);
-    out.giftPanelOnlyRendersAllRows = allByTestId("db-gift-row").length === 5;
+    // 展开态下五行全在（需求 5.3 之后列表折叠也挂载，所以前面那半句必须带上：
+    // 不然这条断言在折叠态下也会绿，等于什么都没量到）。
+    out.giftPanelOnlyRendersAllRows =
+      byTestId("db-gift-toggle").getAttribute("aria-expanded") === "true" &&
+      allByTestId("db-gift-row").length === 5;
     // 回到默认（两枚都开）：同样先开面板再点开关；开面板那一下已经把展开的礼物栏收起来了，
     // 因此这里不再点多一次（连点会把礼物栏又展开，下一段的「默认形态」就不是折叠态了）。
     // 后面几段（面板互斥 / 多标签）因此跑在**默认形态**上：筛选面板开着、礼物栏折叠着。
@@ -537,7 +607,10 @@
     await sleep(300);
     out.giftSwitchBothBackOn = setGiftSwitch("弹幕包含礼物", true);
     await sleep(350);
-    out.giftRestoredToDefault = !!byTestId("db-gift-total") && !byTestId("db-gift-area") &&
+    // 默认形态 = 折叠（`aria-expanded="false"`，不是「列表不在场」——需求 5.1–5.4 之后
+    // 列表折叠也挂载）
+    out.giftRestoredToDefault = !!byTestId("db-gift-total") &&
+      byTestId("db-gift-toggle").getAttribute("aria-expanded") === "false" &&
       !!rowWith("投喂 小心心") && window.__prefs["ui.gift_in_danmaku"] === true &&
       window.__prefs["ui.gift_panel"] === true;
     snap();

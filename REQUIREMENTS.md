@@ -31,7 +31,9 @@
 - 系统通知（开播 / 下播 / 标题变更 / 公告）默认**关闭**，勾上「系统」才显示（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `filter.kinds`
 - 弹幕里的文字表情（`[dog]` 这类）要画出来：正文整条就是一个 token 的已修，token 夹在句中的仍按原文显示（部分落地，见 CHANGELOG）— 落点 `contract.md` §5 `Message.emote`、`protocol.md` A42
 - 弹幕里要看得见 @ 关系：正文里的 `@昵称` 就地高亮（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §5 `reply_to_uid`
-- 不同的观众短时间内刷**同一个弹幕**时做聚合：**至少 3 条**且**至少两位不同 uid** 才折成一行；折后头像列画前三位发言者的头像（沿 X 轴各错开 30% 堆叠），身份位（原来的用户名与身份牌位置）改印**刷屏数量**、不再显示每个用户的用户名；新增 `ui.danmaku_aggregate` 开关，关掉即逐条原样显示（用户反馈已落地，见 CHANGELOG）— 落点 `docs/contract.md` §4 / §8、`apps/desktop/ui/src/aggregate.ts`
+- 不同的观众短时间内刷**同一个弹幕**时做聚合：**至少 3 条**且**至少两位不同 uid** 才折成一行；折后头像列画前三位发言者的头像（沿 X 轴各错开 **34%** 堆叠，即每人**露出 66%**），身份位（原来的用户名与身份牌位置）改印**刷屏数量**、不再显示每个用户的用户名；新增 `ui.danmaku_aggregate` 开关，关掉即逐条原样显示（用户反馈已落地，见 CHANGELOG）— 落点 `docs/contract.md` §4 / §8、`apps/desktop/ui/src/aggregate.ts`
+- 刷屏聚合要**容忍中间插花**：礼物 / SC / 大航海 / 互动 / 系统 / 本地乐观行 / 空正文，以及**键不同**的弹幕，都**既不参与聚合、也不打断**同键已经累积起来的那一串（用户 2026-09-27）— 落点 `apps/desktop/ui/src/aggregate.ts`、`docs/ui.md` §8.4
+- 聚合窗口锚定该组**最后并入**的那条同键消息（相邻两条同键落在 5 秒内即续窗、**无条数上限**）；未达门槛的那一组**一行都不动**（不重排、不复制）；折叠行落在**首条原位**、代表行仍是第一条（用户 2026-09-27）— 落点 `apps/desktop/ui/src/aggregate.ts`
 
 ### 2.2 发弹幕
 
@@ -100,7 +102,11 @@
 - 连击聚合展示 — 落点 `contract.md` §5、`filtering.toDisplayRows`
 - 独立礼物栏与弹幕内容区**共享同一个区域**，中间由分割条上下隔开，可以拖动分割条调整分割比例；长按某一区域可以开启拖动，拖到另一个区域上可以互相调换上下的位置（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `ui.gift_pane_on_top` / `ui.gift_pane_ratio`
 - 辅助功能增加一个**折叠低价礼物**（单个价值小于等于 0.1）的选项（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `ui.gift_collapse_cheap`
-- 低价礼物**折叠后改成刷屏那套形态**：沿用 `ui.gift_collapse_cheap` 这枚开关（**不新增偏好键**），**弹幕区与礼物栏两栏都改** —— 头像列按 30% 错位堆叠**前 3 位**赠送者的头像、身份位改印**数量**，**不再逐个显示用户名**；整桶金额合计照旧参与统计（`giftStatRows` 靠 `cheap` 标记剔除统计的口径不变）（用户 2026-09-22 反馈）— 落点 `contract.md` §8 `ui.gift_collapse_cheap`、`ui.md` §5.3 / §8.4
+- 低价礼物**折叠后改成刷屏那套形态**：沿用 `ui.gift_collapse_cheap` 这枚开关（**不新增偏好键**），**弹幕区与礼物栏两栏都改** —— 头像列按 **34%** 错位堆叠（每人**露出 66%**）**前 3 位**赠送者的头像、身份位改印**数量**，**不再逐个显示用户名**；整桶金额合计照旧参与统计（`giftStatRows` 靠 `cheap` 标记剔除统计的口径不变）（用户 2026-09-22 反馈）— 落点 `contract.md` §8 `ui.gift_collapse_cheap`、`ui.md` §5.3 / §8.4
+- 大航海（舰长 / 提督 / 总督）消息**必须有头像**：先按载荷同层字段取，取不到则**按 uid 现取**（`x/space/wbi/acc/info`）；**取不到即空串**、按「无头像」处理，不报错也不阻塞上屏；同一 uid 只问一次（进程级去重与缓存，非 0 code 不写缓存）；缺头像的消息**最多等 600 ms** 再上屏，到期照常上屏、由界面行内惰性补取（用户 2026-09-27）— 落点 `contract.md` §3 `UserProfile` / §4 `FACE_WAIT` / §5 `Message.face` / §7 `user_face`、`protocol.md` A67
+- 礼物栏**默认展开份额为整个区域的 1/4**（礼物 : 弹幕 = **1 : 3**）（用户 2026-09-27）— 落点 `contract.md` §8 `ui.gift_pane_ratio`、`ui.md` §5.4
+- 礼物栏开合只有两条路：右端**小箭头**与**拖动分割线**；拖动**全程只改可视份额、松手才判开合**（不得出现「拖到一半被识别成已收起、之后拖不动」）；总计条本身不参与开合（用户 2026-09-27）— 落点 `apps/desktop/ui/src/components/SplitPanes.tsx`、`ui.md` §5.4
+- 礼物栏内三枚分类筛选（礼物 / 舰长 / SC）**进房即常驻渲染**：不依赖「本场先收到该族的第一条消息」，也不等展开礼物栏才加载；本场没有该族数据时**只灰显**、照旧可点（用户 2026-09-27）— 落点 `apps/desktop/ui/src/components/RoomView.tsx`、`ui.md` §5.3
 - 辅助功能增加一个**剔除低价礼物统计**（单个价值小于等于 0.1）的选项（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8 `ui.gift_exclude_cheap_stats`
 - 折叠低价礼物和剔除低价礼物统计对 **2 个区域都生效**；所有剔除、折叠、隐藏、自动消失**都不会丢掉相应内容**，把开关关掉后要能恢复原样（用户反馈已落地，见 CHANGELOG）— 落点 `contract.md` §8「不丢内容（硬口径）」、§4.3
 
@@ -141,6 +147,9 @@
 - 房管面板批量按钮挪到下面的层级，与输入框和添加按钮全部置顶，重新设计排布格式，不要竖着排版（用户反馈已落地，见 CHANGELOG）— 落点 `apps/desktop/ui/src/components/AdminPanel.tsx`
 - 我同时可以打开房管面板和下面三个面板，这有点太影响布局了：**同时只允许打开一个面板**（用户反馈已落地，见 CHANGELOG）— 落点 `apps/desktop/ui/src/components/RoomView.tsx`
 - 房管面板报 `upstream error: 响应解析失败: error decoding response body（UPSTREAM_ERROR）`：要能看出是哪个端点、什么状态、什么内容（用户反馈已落地，见 CHANGELOG）— 落点 `protocol.md` A45
+- 批量管理行**从面板最底部向上展开一行**（不在列表中间插行），名单滚到任意位置时都可见；**面板本身不滚、只有名单内部滚动**，名单不再固定高度（用户 2026-09-27）— 落点 `apps/desktop/ui/src/components/AdminPanel.tsx`、`ui.md` §4.9
+- 名单分页水位按**上游口径**（不是去重后的列表长度），按 uid 去重后追加；「补一段」要有**在途锁**与**终点判定**；换房 / 重读作废在途响应；名单**在本次会话内常驻**，收起面板不丢、重开面板不整段重读（用户 2026-09-27）— 落点 `contract.md` §7 `AdminListSlice`、`apps/desktop/ui/src/admin-list.ts`
+- 进房且有权限时名单**先并发取全**（优先于任何限速 / 串行约束），取全之后才施加串行限速与 412 有界退避重试；**只对幂等 `GET` 例外重试，`POST` 一律不重试**（用户 2026-09-27）— 落点 `protocol.md` A36 / A45、`crates/danmubox-bili/src/admin.rs`
 
 ### 2.11 界面与布局
 

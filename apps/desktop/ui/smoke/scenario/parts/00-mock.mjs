@@ -45,10 +45,11 @@
     // 弹幕区为浮层留一段预留高度）；不勾 = 互动消息**完全不显示**。它同时就是这一类的总开关，
     // 替身里必须与 prefs_get 同形，界面才量得到「默认开」这件事。
     "ui.interact_single_slot": true,
-    // 共享分区的顺序与份额（issue #8，契约 §8 新增的两枚键）：默认「礼物在下、份额 0.35」。
+    // 共享分区的顺序与份额（issue #8，契约 §8 的两枚键）：默认「礼物在下、份额 0.25」
+    // （= 礼物 : 弹幕 = 1 : 3，需求 4.1；与 prefs.rs 的默认值、pane-split.ts 的兜底常量同值）。
     // 替身里必须与 prefs_get 同形（真实命令返回的是**合并过默认值的全集**），否则界面拿到的
     // 是 undefined、断言也就量不到「默认值」这件事。
-    "ui.gift_pane_on_top": false, "ui.gift_pane_ratio": 0.35,
+    "ui.gift_pane_on_top": false, "ui.gift_pane_ratio": 0.25,
     // 礼物栏内按 kind 筛选（契约 §8）：**默认空数组 = 全显示**，界面只渲染礼物 / SC / 大航海
     // 三族。替身里必须与 prefs_get 同形，界面才量得到「默认全显示」这件事。
     "ui.gift_pane_kinds": [],
@@ -379,12 +380,25 @@
         });
         // 三块各自的读取失败开关：__setAdminFail(true) 时**三块一起**拒绝 —— 面板里的错误条
         // 按当前 tab 只渲染一条（issue #1 之后一次只渲染一块），冒烟因此能逐 tab 各断一次。
+        // 两份名单按**契约 §7 的 `AdminListSlice` 形状**返回（`items` / `total` / `next_offset` / `done`）——
+        // 基线这里返回的是**裸数组**，与形状不符（`store` 读 `.items` 会得到 undefined，新断言面因此是空的，
+        // T5 按 6.7 / 6.15 改成分页累加后必须修）。替身各只有一条，首请求即到终点（`done: true`）。
         case "admin_silent_list": return window.__adminFail
           ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
-          : Promise.resolve([{ uid: 900, uname: "被禁言的观众", face: "" }]);
+          : Promise.resolve({
+              items: [{ uid: 900, uname: "被禁言的观众", face: "" }],
+              total: 1,
+              next_offset: 1,
+              done: true
+            });
         case "admin_blacklist_list": return window.__adminFail
           ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
-          : Promise.resolve([{ uid: 901, uname: "黑名单观众", face: "" }]);
+          : Promise.resolve({
+              items: [{ uid: 901, uname: "黑名单观众", face: "" }],
+              total: 1,
+              next_offset: 1,
+              done: true
+            });
         case "admin_keywords_list": return window.__adminFail
           ? Promise.reject({ code: "UPSTREAM_ERROR", message: "不是管理员（code 100004）" })
           : Promise.resolve(["刷屏", "广告"]);

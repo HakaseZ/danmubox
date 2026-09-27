@@ -86,7 +86,7 @@ Rust 侧四个 crate（`core` / `bili` / `cli` / `desktop`）与前端均已落�
 | 账号列表 / 切号 / 增删（CLI） | `cargo run -p danmubox-cli -- accounts [--use <名字>] [--create] [--remove <名字>]` |
 | 登出（CLI） | `cargo run -p danmubox-cli -- logout [账号名]`（缺省 = 当前账号；账号条目保留） |
 | 发弹幕（CLI） | `cargo run -p danmubox-cli -- send <房间> "内容"`（需登录；`--emote <唯一键>` 发表情弹幕） |
-| 只读核对（CLI） | `cargo run -p danmubox-cli -- wallet` / `follow` / `emotes <房间>` / `emotes-owned` / `admin-lists <房间>` |
+| 只读核对（CLI） | `cargo run -p danmubox-cli -- wallet` / `follow` / `emotes <房间>` / `emotes-owned` / `admin-lists <房间>` / `face <uid>`（`admin-lists` 的 `--probe-silent-get` = 只对禁言列表端点发**一次 GET** 的只读探针，见 `docs/protocol.md` 附录 A36-1） |
 | 指定另一份配置 | 任何 CLI 子命令加 `--config <路径>`（全局参数） |
 | 前端依赖安装 | `npm --prefix apps/desktop/ui install` |
 | 前端类型检查 + 构建 | `npm --prefix apps/desktop/ui run build`（= `tsc -b && vite build`） |

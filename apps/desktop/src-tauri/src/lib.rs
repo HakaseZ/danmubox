@@ -8,13 +8,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use danmubox_bili::{
-    BiliAdmin, BiliAnchor, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliReporter, BiliSender,
-    BiliWallet,
+    BiliAdmin, BiliAnchor, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliProfile, BiliReporter,
+    BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
-    Account, AnchorLiveOutcome, AnchorRoom, AuthProvider, DanmakuReporter, DanmakuSender,
-    EmoteProvider, LiveSource, QrPoll, QrState, RoomAdmin, RoomCatalog, SessionState,
-    WalletProvider,
+    Account, AdminListSlice, AnchorLiveOutcome, AnchorRoom, AuthProvider, DanmakuReporter,
+    DanmakuSender, EmoteProvider, LiveSource, QrPoll, QrState, RoomAdmin, RoomCatalog,
+    SessionState, UserProfile, WalletProvider,
 };
 use danmubox_core::{
     config_path, data_dir, prefs_path, AnchorArea, AnchorGate, AnchorGateKind, BlacklistedUser,
@@ -60,6 +60,9 @@ pub struct AppState {
     /// （`account_qr_start` 与 `account_qr_poll` 是两次独立调用），
     /// 所以不能像别的能力那样每条命令新建一个。
     auth: Arc<BiliAuth>,
+    /// 长驻的头像来源（`user_face`）：它内部持**进程级**去重缓存
+    /// （「同一 uid 只问一次上游」，需求 3.4），长驻省掉的是每次调用一个连接池。
+    profile: BiliProfile,
     bus: EventBus,
     counters: Arc<Counters>,
     prefs: Mutex<Prefs>,
@@ -73,6 +76,9 @@ impl AppState {
     pub fn new(store: Arc<ConfigStore>) -> danmubox_core::Result<Self> {
         Ok(Self {
             auth: Arc::new(BiliAuth::new(Arc::clone(&store))?),
+            // 凭据来源挂在 `ConfigStore` 上（`CookieMode::Store`）：切号后无需重建，
+            // 请求实时读当前账号（与其余按 Store 构造的能力同一口径）。
+            profile: BiliProfile::with_store(Arc::clone(&store))?,
             store,
             bus: EventBus::new(BUS_CAPACITY),
             counters: Arc::new(Counters::default()),
@@ -689,19 +695,12 @@ async fn admin_unmute(state: State<'_, AppState>, room_id: i64, uid: i64) -> Api
     admin.unmute(room_id, uid).await.map_err(ApiError::from)
 }
 
-/// 名单的一段（契约 §7）：**增量加载**用。
-///
-/// `items` = 本次新增的条目（不含调用方已有的那一段），`total` = 上游总数。
-/// 改前一次返回整份名单：禁言那份每页只有 10 条，一个真实房间要连发 49 次 POST，
-/// 会被上游风控挡回 HTTP 412 的验证页 —— 分页 + 限速是那个 412 的正解。
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-struct AdminListSlice<T> {
-    items: Vec<T>,
-    total: i64,
-}
-
 /// 禁言名单的一段（契约 §7）。只读，非房管时上游 code 原样带回。
+///
+/// 返回 `AdminListSlice<SilentUser>` = `{ items, total, next_offset, done }`（定义在
+/// `danmubox_core::ports`，与端口 `RoomAdmin::silent_list` 同一形状）—— `next_offset` 是
+/// **上游口径**的下一游标，`done` 是终点标记；单次响应体量封顶时 `done` 为假并带回真实游标，
+/// 由前端后台继续补齐（6.13 / 6.15）。
 #[tauri::command]
 async fn admin_silent_list(
     state: State<'_, AppState>,
@@ -710,14 +709,13 @@ async fn admin_silent_list(
     limit: i64,
 ) -> ApiResult<AdminListSlice<SilentUser>> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let (items, total) = admin
+    admin
         .silent_list(room_id, offset, limit)
         .await
-        .map_err(ApiError::from)?;
-    Ok(AdminListSlice { items, total })
+        .map_err(ApiError::from)
 }
 
-/// 房间黑名单的一段（契约 §7）。
+/// 房间黑名单的一段（契约 §7）。语义与 `admin_silent_list` 相同。
 #[tauri::command]
 async fn admin_blacklist_list(
     state: State<'_, AppState>,
@@ -726,11 +724,10 @@ async fn admin_blacklist_list(
     limit: i64,
 ) -> ApiResult<AdminListSlice<BlacklistedUser>> {
     let admin = BiliAdmin::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
-    let (items, total) = admin
+    admin
         .blacklist(room_id, offset, limit)
         .await
-        .map_err(ApiError::from)?;
-    Ok(AdminListSlice { items, total })
+        .map_err(ApiError::from)
 }
 
 /// 加入黑名单（契约 §7）。
@@ -1026,6 +1023,21 @@ async fn follow_list(state: State<'_, AppState>) -> ApiResult<Vec<FollowedRoom>>
 async fn wallet_balance(state: State<'_, AppState>) -> ApiResult<i64> {
     let wallet = BiliWallet::new(Arc::clone(&state.store)).map_err(ApiError::from)?;
     wallet.balance().await.map_err(ApiError::from)
+}
+
+/// **按 uid 取头像**（契约 §7）：大航海 / V1 礼物 / 缺头像的醒目留言的载荷里没有头像字段，
+/// 界面在新到行里对这三类做惰性补取（需求 §三 3.2 / 3.6）。
+///
+/// 返回空串 = 取不到（上游非 0 code、网络失败、uid ≤ 0），**不是错误**——命令层只做转发，
+/// 判据在适配器里（`danmubox-bili` 的 `UserProfile`）：需求 3.3 把每一种失败都定义成
+/// 「没有头像」，因此这条命令**不会 reject**（错误码列是空的，见 `docs/ipc.md` §3）。
+///
+/// `profile` 长驻在 `AppState` 里而不是逐次新建：它内部既持 reqwest 客户端，
+/// 也持**进程级**的去重缓存（「同一 uid 只问一次上游」，需求 3.4）——
+/// 逐次新建也能共享那份缓存，但每次都多一个连接池毫无意义。
+#[tauri::command]
+async fn user_face(state: State<'_, AppState>, uid: i64) -> ApiResult<String> {
+    Ok(state.profile.face_of(uid).await)
 }
 
 // ---------------------------------------------------------------- 事件转发
@@ -1369,6 +1381,7 @@ pub fn run() {
             anchor_live_set,
             follow_list,
             wallet_balance,
+            user_face,
             open_url,
             prefs_get,
             prefs_set,

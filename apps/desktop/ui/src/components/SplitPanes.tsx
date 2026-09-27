@@ -11,24 +11,39 @@ import {
 } from "react";
 
 import styles from "../app.module.css";
+import {
+  clampPaneRatio,
+  PANE_COLLAPSED_SHARE,
+  PANE_RATIO_DEFAULT,
+  PANE_RATIO_MAX,
+  PANE_RATIO_MIN,
+  paneFoldAfterDrag,
+  paneGrowOf,
+  paneKeyboardStep,
+  roundPaneRatio,
+} from "../pane-split";
 
 /**
  * 一块**上下分区**：两栏（弹幕区 / 礼物栏）共享高度，中间一条可拖动的分割条，
  * 长按任一栏 0.5s 可以把两栏上下换位（issue #8，用户 2026-09-16）。
  *
- * 三条口径（`docs/ui.md` §5.4 与实现同源，改这里先改那里）：
+ * 四条口径（`docs/ui.md` §5.4 与实现同源，改这里先改那里；纯逻辑在 `src/pane-split.ts`）：
  *
  * 1. **份额**（`ratio`）= 礼物栏占分区高度的比例，与它在上面还是下面无关。
  *    两栏都是 `flex-basis: 0` + `flex-grow: <份额>`，所以容器高度怎么变比例都成立；
- *    两栏各自的**最小高度**（礼物栏 ≥ 它的折叠头、弹幕区 ≥ 3 行）由 CSS 兜住 ——
+ *    两栏各自的**最小高度**（礼物栏 ≥ 它的总计条、弹幕区 ≥ 3 行）由 CSS 兜住 ——
  *    夹到极限时由浏览器就地分配，窗口从宽拖到 360px 也仍然成立。
  * 2. **DOM 顺序恒为「弹幕 → 分割条 → 礼物栏」**，上下位置只由 `flex-direction`
  *    （`column` / `column-reverse`）决定：换位因此**不搬节点** —— 弹幕列表的滚动位置、
  *    虚拟列表状态、两栏各自的内部滚动全都原样保留，读屏与 tab 顺序也稳定地按主次走。
- * 3. **折叠优先于份额**：礼物栏折叠着时它只有折叠头那么高（弹幕区拿走剩下的全部），
- *    但分割条仍在、仍可拖 —— 折叠态下拖动 / 微调就是「把这一栏拖开」，与点「展开」同一条路；
- *    反过来**展开态下把份额压到下限还想再压小就是「把这一栏收起」**（需求 2026-09-26），
- *    与点「收起」同一条路 —— 两个方向合起来就是「拖分割线也能开合」，不必非得点那枚箭头。
+ * 3. **开合是同一根轴上的两个区间**（需求 5.1–5.4，单轴模型）：**折叠 = 份额被压到下限
+ *    以下 + 这一栏按自己的最小高度裁剪**，展开 = 份额回到落盘那一份。两栏 grow 之和恒为 1
+ *    （`paneGrowOf`）。礼物栏折叠着时它只有总计条那么高、列表与芯片被裁掉（照旧挂载），
+ *    但分割条仍在、仍可拖。
+ * 4. **开合只在松手那一刻判**（需求 4.2）：拖动全程只改可视份额，一次都不改开合状态 ——
+ *    折叠态被拖开 = 展开、展开态压到下限以下 = 收起，两向都由松手那一份份额决定
+ *    （`paneFoldAfterDrag`），与点总计条右端那枚小箭头同一条路；**取消（ESC / pointercancel）
+ *    只还原份额**，不留中间态。键盘那条路没有拖动过程，按键当场判、当场落盘（`paneKeyboardStep`）。
  *
  * **触摸下这三条手势谁说了算**（2026-09-21 实测重写，细节见下面那个 `useEffect`）：
  * 浏览器在 touchstart 那一刻就把 `touch-action` 快照给手势识别器了，之后 JS 再改它、
@@ -42,25 +57,12 @@ import styles from "../app.module.css";
  * 一次实时值，直到偏好回执把 `ratio` 送到为止。
  */
 
-/** 份额的取值域（契约 §8 `ui.gift_pane_ratio`）：补丁越界会被 `BAD_REQUEST` 拒掉，所以拖动先在这里夹一次。 */
-export const PANE_RATIO_MIN = 0.1;
-export const PANE_RATIO_MAX = 0.9;
-/** 契约 §8 记的默认份额（`prefs` 一定给得出值，这里是它缺席时的兜底）。 */
-const PANE_RATIO_FALLBACK = 0.35;
-/** 方向键一次微调的步长。 */
-const KEY_STEP = 0.02;
 /** 键盘微调的落盘节流：连按只写最后一次（拖动那条路是松手写一次）。 */
 const KEY_COMMIT_MS = 350;
 /** 长按多久进入换位拖拽态（用户口径 0.5s）—— 也是「长按」与「拖动分割条 / 在列表里滚动」的分界。 */
 const LONG_PRESS_MS = 500;
 /** 按下后移动超过这个距离就不再算长按（那是在滚列表 / 选字，不是在换位）。 */
 const PRESS_SLOP = 8;
-
-const clampRatio = (value: number) =>
-  Math.min(PANE_RATIO_MAX, Math.max(PANE_RATIO_MIN, value));
-
-/** 落盘前收一下精度：像素级的分辨率存成 17 位小数只会让 `prefs.json` 难看。 */
-const roundRatio = (value: number) => Math.round(value * 1000) / 1000;
 
 interface Props {
   /** 礼物栏在不在上半（契约 §8 `ui.gift_pane_on_top`）。 */
@@ -71,17 +73,21 @@ interface Props {
   onRatio: (ratio: number) => void;
   /** 长按后拖到另一栏松手 → 两栏上下互换。 */
   onSwap: () => void;
-  /** 折叠态下拖动 / 微调把这一栏拖开时调一次（与点「展开」同一条路）。 */
+  /**
+   * 折叠态下拖动 / 微调把这一栏拖开时调一次（与点总计条右端那枚小箭头同一条路）。
+   * 拖动那条路只在**松手**时调（需求 4.2：拖动全程不改开合态）。
+   */
   onExpand: () => void;
   /**
    * 展开态下把份额拖（或微调）到 `PANE_RATIO_MIN` **还想再压小**时调一次
-   * （与点「收起」同一条路）。语义与 `onExpand` 对称：**份额到下限 = 收起** ——
+   * （与点那枚小箭头同一条路）。语义与 `onExpand` 对称：**份额压到下限 = 收起** ——
    * 用户把分割条一路压到头的意图是「这一栏不要了」，而不是「留 10% 在那儿」。
+   * 拖动那条路同样只在**松手**时调。
    */
   onCollapse: () => void;
   /** 弹幕字号缩放（`ui.font_scale`）：弹幕栏最小高度里的行盒部分跟着它缩。 */
   fontScale: number;
-  /** 礼物栏是不是折叠着（折叠 = 这一栏只有折叠头那么高）。 */
+  /** 礼物栏是不是折叠着（折叠 = 份额被压到下限以下 + 这一栏按最小高度裁剪）。 */
   giftCollapsed: boolean;
   /** 弹幕区。 */
   danmaku: ReactNode;
@@ -105,16 +111,16 @@ export function SplitPanes({
   gift,
 }: Props) {
   const hasGift = gift !== null && gift !== undefined;
-  const share = clampRatio(Number.isFinite(ratio) ? ratio : PANE_RATIO_FALLBACK);
+  const share = clampPaneRatio(Number.isFinite(ratio) ? ratio : PANE_RATIO_DEFAULT);
   /**
-   * 真正的 `flex-grow`：折叠态（或没有礼物栏）时礼物栏**不长**（它按内容 = 折叠头占位），
-   * 弹幕区拿走全部 —— 两个 grow 之和必须**恰好是 1**。
+   * 真正的 `flex-grow`：折叠态（或没有礼物栏）时礼物栏**不长**（份额压到下限以下，
+   * 高度由它的最小高度 = 实测的总计条兜住），弹幕区拿走全部 —— 两个 grow 之和必须**恰好是 1**。
    *
    * `flex-grow` 之和小于 1 时，Flexbox 只分配「和」那么多比例的自由空间（规范 §9.7），
    * 于是剩下的部分空着：第一版就踩了它 —— 折叠态下礼物栏 grow = 0、弹幕区 0.65，
    * 分区底部白白空掉 35%（实测 787px 的容器里空 263px）。
    */
-  const grow = hasGift && !giftCollapsed ? share : 0;
+  const grow = paneGrowOf(share, giftCollapsed, hasGift);
 
   const regionRef = useRef<HTMLDivElement>(null);
   const danmakuRef = useRef<HTMLDivElement>(null);
@@ -266,43 +272,35 @@ export function SplitPanes({
     el.dataset.grab = "true";
 
     const pointerId = event.pointerId;
-    /** 拖动前的那一份 grow（折叠态是 0）：拖动作废时原地还原的就是它。 */
+    /** 拖动前的那一份 grow（折叠态是 `PANE_COLLAPSED_SHARE`）：拖动作废时原地还原的就是它。 */
     const baseGrow = grow;
-    let latest = share;
-    let moved = false;
-    /** 这一次拖动里礼物栏的折叠状态（`giftCollapsed` 是按下那一刻的快照，拖动中不跟着变）。 */
-    let collapsed = giftCollapsed;
-    /** 按下那一刻它是不是折叠着：ESC / pointercancel 要还原到这一档（见 `abort`）。 */
+    /** 按下那一刻它是不是折叠着。**拖动全程不改开合态**（需求 4.2），所以这一档到松手时仍成立。 */
     const wasCollapsed = giftCollapsed;
+    let latest = share;
+    /**
+     * 指针给的份额**没被夹取、也没四舍五入**的那一份：松手时判开合用它，不用 `latest`
+     * —— 夹取会把「压到下限」与「刚好在下限之上」归到同一个数上（见 `paneFoldAfterDrag`）。
+     */
+    let latestRaw = share;
+    let moved = false;
 
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
       // 指针停在哪儿，分割条就跟到哪儿：礼物栏在下面时，指针上方是弹幕区。
-      // 这一式同时也把**方向**翻好了 —— 礼物栏在上时指针越往上它越矮，在下时越往下越矮，
-      // 于是下面的「越过下限」判据两栏通用，不必再分一次上下。
+      // 这一式同时也把**方向**翻好了 —— 礼物栏在上时指针越往上它越矮，在下时越往下越矮。
       const offset = moveEvent.clientY - rect.top;
       const raw = giftOnTop ? offset / usable : 1 - offset / usable;
-      latest = roundRatio(clampRatio(raw));
+      latestRaw = raw;
+      latest = roundPaneRatio(clampPaneRatio(raw));
+      // **只改可视份额，一次都不改开合状态**（需求 4.2）：折叠着也能被拖开（展开前也照拖，
+      // 拖到哪儿就长到哪儿 —— 折叠态的份额是压在下限以下的，这里写的是指针给的那一份），
+      // 展开着拖到下限也不会半路变成折叠。开合由**松手**时的 `paneFoldAfterDrag` 判一次。
+      // 改前的写法在 `move` 里当场 `onExpand()` / `onCollapse()`，于是「拖到一半被识别成
+      // 已收起、之后拖不动」——那一版的反悔分支也只是在补这个洞。
       if (!moved) {
         moved = true;
-        // 折叠态下「拖开」= 展开：折叠优先于份额，不展开这一栏根本拖不动。
-        if (collapsed) {
-          collapsed = false;
-          handlers.current.onExpand();
-        }
         setDragging(true);
-      } else if (!collapsed && raw <= PANE_RATIO_MIN) {
-        // 展开态下「压到底」= 收起：份额已经被夹在下限、指针还在往更小的那一侧走，
-        // 用户的意思就是「这一栏不要了」（与点「收起」同一条路）。一次拖动只收一次
-        // （`collapsed` 举起来就不再调），免得指针每动一像素都回写一遍状态。
-        collapsed = true;
-        handlers.current.onCollapse();
-      } else if (collapsed && !wasCollapsed && raw > PANE_RATIO_MIN) {
-        // 反悔了：刚收起又把指针拖回下限以内 ⇒ 重新展开。只在「按下时本来是展开的」这一档
-        // 成立 —— 按下时就折叠着的（第一下移动已经把它展开），反向拖不该再把它收回去。
-        collapsed = false;
-        handlers.current.onExpand();
       }
       liveRef.current = latest;
       applyShare(latest);
@@ -312,20 +310,31 @@ export function SplitPanes({
       if (upEvent.pointerId !== pointerId) return;
       releaseRef.current?.();
       if (!moved) return; // 只是点了一下分割条：什么都没发生，不写偏好
-      liveRef.current = latest;
+      // 松手定案（需求 4.2/4.3）：先看这一份份额要不要开合，再落盘份额（两条都是同一次操作）。
+      const fold = paneFoldAfterDrag(latestRaw, wasCollapsed);
+      if (fold === "collapse") {
+        // 收起：**先把实时值交还给 React**（不清掉 `liveRef`，下面那个 `useLayoutEffect`
+        // 会在下一次重渲染时把拖动中写下的那一份份额又贴回 DOM 上，等于把刚收起的这一栏
+        // 又撑开），再自己把几何落到折叠态上 —— 松手这一帧就已经是折叠的样子，不等调度。
+        // （随后 React 会把 grow 从按下前那一份改成 `PANE_COLLAPSED_SHARE`，写的也是同一个值。）
+        liveRef.current = null;
+        applyShare(PANE_COLLAPSED_SHARE);
+        handlers.current.onCollapse();
+      } else {
+        // 展开 / 不开合：留着实时值，让它在偏好回执到达之前一直贴在 DOM 上（改前同一套手法）。
+        liveRef.current = latest;
+        applyShare(latest);
+        if (fold === "expand") handlers.current.onExpand();
+      }
       handlers.current.onRatio(latest);
     };
 
-    /** ESC / pointercancel：撤销这一次拖动，回到已落盘的那一份（不写偏好）。 */
+    /**
+     * ESC / pointercancel：**只还原份额**（需求 4.3），不留中间态 —— 开合状态本来就没被
+     * 这一次拖动改过（改前要在这里把中途收起 / 展开的那一档拨回去，见 `move` 的注释）。
+     */
     const abort = () => {
       releaseRef.current?.();
-      // 开合状态也要还原：拖动途中收起 / 展开过而按下时是另一档的，ESC 之后得回到那一档 ——
-      // 否则「撤销这一次拖动」只撤回了份额，礼物栏却留在被这一拖改过的开合状态上。
-      if (collapsed !== wasCollapsed) {
-        collapsed = wasCollapsed;
-        if (wasCollapsed) handlers.current.onCollapse();
-        else handlers.current.onExpand();
-      }
       if (liveRef.current === null) return;
       liveRef.current = null;
       applyShare(baseGrow);
@@ -364,17 +373,13 @@ export function SplitPanes({
     event.preventDefault();
     // 方向键移动的是**分割条**：向上 ⇒ 上面那一栏变矮、下面那一栏变高。
     const growGift = up ? !giftOnTop : giftOnTop;
-    const base = liveRef.current ?? share;
-    // 已经停在下限还要往「把礼物栏压扁」那一侧按 = 收起（与拖动那条路同一条语义：
-    // 份额到下限 = 收起）。判据必须在下面那条 `next === base` 之前：夹在下限时
-    // `next` 与 `base` 相等，那是「按不动了」，不是「什么都没发生」。
-    if (!growGift && base <= PANE_RATIO_MIN) {
-      if (!giftCollapsed) handlers.current.onCollapse();
-      return;
-    }
-    const next = roundRatio(clampRatio(base + (growGift ? KEY_STEP : -KEY_STEP)));
-    if (next === base) return;
-    if (giftCollapsed) handlers.current.onExpand();
+    // 判据与拖动那条路同源（`pane-split.ts`）：到下限那一侧 = 收起、折叠态按一步先展开。
+    // 键盘这条**没有拖动过程**，所以按键当场判、当场落盘（拖动那条路是松手才判，需求 4.2）。
+    const step = paneKeyboardStep(liveRef.current ?? share, giftCollapsed, growGift);
+    if (step.fold === "collapse") handlers.current.onCollapse();
+    else if (step.fold === "expand") handlers.current.onExpand();
+    const next = step.ratio;
+    if (next === null) return;
     liveRef.current = next;
     applyShare(next);
     if (commitTimer.current !== null) return; // 连按只有最后一次落盘
@@ -510,13 +515,7 @@ export function SplitPanes({
       <div
         key={which}
         ref={isGift ? giftRef : danmakuRef}
-        className={[
-          styles.pane,
-          isGift ? styles.paneGift : styles.paneDanmaku,
-          isGift && giftCollapsed ? styles.paneGiftCollapsed : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
+        className={[styles.pane, isGift ? styles.paneGift : styles.paneDanmaku].join(" ")}
         data-testid={isGift ? "db-pane-gift" : "db-pane-danmaku"}
         data-pane={which}
         data-swap-drag={dragged ? "true" : undefined}

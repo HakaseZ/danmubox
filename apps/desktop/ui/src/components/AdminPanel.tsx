@@ -7,6 +7,7 @@ import {
 } from "react";
 
 import { ContextMenu, type MenuItem, type MenuPoint } from "./ContextMenu";
+import { ADMIN_PAGE, ADMIN_STEP } from "../admin-list";
 import type { AdminAction, AdminTab, AdminUser } from "../types";
 import styles from "../app.module.css";
 
@@ -64,13 +65,9 @@ const ACTION_OFF: Record<AdminTab, string> = {
   keywords: "删除屏蔽词",
 };
 
-/**
- * 名单**首屏**条数与滚到底一次补多少条（需求 2026-09-26）。
- * 与 `store.ts` 的 `ADMIN_PAGE` / `ADMIN_STEP` 同值 —— 前者是向上游要的条数，
- * 这里是屏蔽词那份**前端切片**的步长（屏蔽词上游没有分页，一次给完）。
- */
-const ADMIN_PAGE = 30;
-const ADMIN_STEP = 10;
+// 名单**首屏**条数与滚到底一次补多少条：与 store 共用 `admin-list.ts` 的同一对常量
+// （`ADMIN_PAGE` / `ADMIN_STEP`）——屏蔽词上游没有分页（一次给完），它的**前端切片**同样走这两枚，
+// 因此面板与 store 不再各写一份同名的常量、也就不会再漂移（`docs/ui.md` §4.9 的「先拉 30 条」已按真值 100 修正）。
 
 /** tabpanel 的 id：tab 的 `aria-controls` 与它的 `aria-labelledby` 靠它对上。 */
 const ADMIN_PANEL_ID = "db-admin-tabpanel";
@@ -440,9 +437,11 @@ export function AdminPanel({
   );
 
   /**
-   * 第 2 排（**只在批量模式下**、紧贴第 1 排下方，横向一排不竖排）：全选 / 已选 N 项 / 批量动作。
-   * 这一排把原来分居两处的「名单上方的全选头」与「表单下方的动作条」合到了一起（issue #5），
-   * testid 一个没动。全选与勾选都只作用**当前 tab**，动作条只提交当前 tab 的成员。
+   * 批量动作条（需求 6.1 / 6.2）：**只在批量模式下**、从**面板最底下向上展开一行**
+   * （160ms 滑入，`prefers-reduced-motion` 下不播，见 `.adminBatchBar`）——
+   * **不在列表中间插行**（不造成 UI 跳变、界面突然变高），长名单滚到任意位置它都**始终可见**
+   * （它不是 `.adminList` 的子节点，滚动权在名单自己手里，6.3）。全选与勾选都只作用**当前 tab**，
+   * 动作条只提交当前 tab 的成员；testid 一个没动。
    */
   const batchBar = batch ? (
     <div className={styles.adminBatchBar} data-testid="db-admin-batch-bar">
@@ -526,7 +525,10 @@ export function AdminPanel({
         </button>
       </div>
 
+      {/* tabpanel 是面板里**唯一可缩的一块**（`.adminTabPanel`：`flex: 1; min-height: 0`）：
+          头部与它下面的批量条因此都钉住不动，只有 `.adminList` 在内部滚动（6.2 / 6.3）。 */}
       <div
+        className={styles.adminTabPanel}
         id={ADMIN_PANEL_ID}
         role="tabpanel"
         aria-labelledby={adminTabId(tab)}
@@ -544,9 +546,8 @@ export function AdminPanel({
               {actionButton}
               {batchToggle}
             </div>
-            {batchBar}
             {errorRow(errors.silent)}
-            <div className={styles.adminList} onScroll={onListScroll}>
+            <div className={styles.adminList} data-testid="db-admin-list" onScroll={onListScroll}>
               {silent.length === 0 ? (
                 <span className={styles.previewLabel}>（名单为空）</span>
               ) : (
@@ -566,6 +567,7 @@ export function AdminPanel({
                 )
               )}
             </div>
+            {batchBar}
           </>
         )}
 
@@ -581,9 +583,8 @@ export function AdminPanel({
               {actionButton}
               {batchToggle}
             </div>
-            {batchBar}
             {errorRow(errors.blacklist)}
-            <div className={styles.adminList} onScroll={onListScroll}>
+            <div className={styles.adminList} data-testid="db-admin-list" onScroll={onListScroll}>
               {blacklist.length === 0 ? (
                 <span className={styles.previewLabel}>（名单为空）</span>
               ) : (
@@ -603,6 +604,7 @@ export function AdminPanel({
                 )
               )}
             </div>
+            {batchBar}
           </>
         )}
 
@@ -626,9 +628,8 @@ export function AdminPanel({
               {actionButton}
               {batchToggle}
             </div>
-            {batchBar}
             {errorRow(errors.keywords)}
-            <div className={styles.adminList} onScroll={onListScroll}>
+            <div className={styles.adminList} data-testid="db-admin-list" onScroll={onListScroll}>
               {keywords.length === 0 ? (
                 <span className={styles.previewLabel}>（还没有屏蔽词）</span>
               ) : (
@@ -644,6 +645,7 @@ export function AdminPanel({
                 )
               )}
             </div>
+            {batchBar}
           </>
         )}
       </div>

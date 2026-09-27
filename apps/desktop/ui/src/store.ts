@@ -11,6 +11,21 @@ import {
   insertIncoming,
   refreshMode,
 } from "./session-messages";
+// 房管名单分页的判据（水位 / 去重 / 在途锁 / 终点 / 作废）与共用常量住在这个纯模块里
+// （`node --test` 直接钉住，见 `admin-list.test.ts`）；store 只负责触发与落地复核。
+import {
+  ADMIN_PAGE,
+  ADMIN_STEP,
+  adminCanRequest,
+  adminClearInFlight,
+  adminMarkInFlight,
+  emptyAdminMetaRecord,
+  mergeAdminSlice,
+  reconcileAdminPages,
+  type AdminListKind,
+  type AdminListMeta,
+  type AdminMetaRecord,
+} from "./admin-list";
 import {
   adminDoneText,
   SEND_CONFIRM_TIMEOUT_MS,
@@ -20,6 +35,7 @@ import type {
   Account,
   AccountQr,
   AdminAction,
+  AdminListSlice,
   AdminTab,
   AdminUser,
   AnchorArea,
@@ -62,6 +78,16 @@ interface AppStore {
    */
   immersive: boolean;
   messages: Message[];
+  /**
+   * 补取到的头像：uid → 头像地址（契约 §5 `Message.face` 的**第二来源**，需求 §三 3.6）。
+   *
+   * 为什么单独一张表而不是回写 `messages`：同一 uid 的消息可能在补取**之后**才到
+   * （同一人连开两档大航海），回写只盖得住当时已经在列表里的那些行；查表则在渲染时求值，
+   * 后到的行自动拿到同一份结论。**空串也是一条结论**（问过了、上游没给）——
+   * 它是「不要再问」的标记，与「还没问过」（键不存在）不是一回事。
+   * 与 uid 一样是进程内、跨房间共用（头像与房间无关）；条数上限即本场出现过的发言人。
+   */
+  faces: Record<number, string>;
   /** 各房间的连接状态（`ConnState` + 一句话详情）。 */
   status: Record<number, { state: ConnState; detail: string }>;
   /** 各房间最近一次的观众数（协议 §10.7）；上游还没给过的一侧为 undefined。 */
@@ -91,10 +117,18 @@ interface AppStore {
 
   /** 各房间的本人身份（`room_session` 快照，随后由 `danmubox://session` 事件更新）。 */
   roomIdentities: Record<number, RoomSession>;
-  /** 房管面板三块数据（会话级：离开房间即清空）。 */
+  /**
+   * 房管面板三块数据。**本次会话内常驻**（6.16）：收起 / 重开面板不丢、直接复用缓存，
+   * 只在四个作废点（移除房间 / 切房 / 关房 / 断开）与换人时清空。
+   */
   adminSilent: AdminUser[];
   adminBlacklist: AdminUser[];
   adminKeywords: string[];
+  /**
+   * 两块**有上游分页**的名单的游标 / 终点 / 在途 / 已加载状态（前端派生，非契约字段）。
+   * 与列表一起被作废点整体清掉（6.11；判据在 `admin-list.ts`）。
+   */
+  adminMeta: AdminMetaRecord;
   /** 三块列表各自的读取错误：原样 code + message，失败不静默（contract §7）。 */
   adminErrors: { silent?: string; blacklist?: string; keywords?: string };
   /** 房管写操作进行中（按钮禁用，避免并发重复提交）。 */
@@ -208,6 +242,15 @@ interface AppStore {
   loadFollowed: () => Promise<boolean>;
   loadBalance: () => Promise<void>;
   /**
+   * 给「本该有头像却取不到」的行按 uid 补取头像（需求 §三 3.2 / 3.4 / 3.6）。
+   *
+   * 调用方（`RoomView`）只负责算出候选 uid（`faces.missingFaceUids`）；
+   * **同一 uid 只发一次**由这里收口：已有结论（含空串）、正在途中、或这一批里重复的都不再发。
+   * 失败不重试（命令层把「取不到」定义成空串，不是错误），也不弹错误条 ——
+   * 缺头像不是故障（需求 3.3）。
+   */
+  ensureFaces: (uids: number[]) => void;
+  /**
    * 列表页的**开播状态轮询**（契约 §4）：停在列表页时让状态自己跟上上游。
    *
    * **返回停止函数** —— 进房间页 / 组件卸载就调它停掉；重复调用先停上一轮（幂等）。
@@ -218,18 +261,24 @@ interface AppStore {
   loadRoomIdentity: (roomId: number) => Promise<void>;
   /**
    * 读房管三块列表：只读，无权限也放行，错误原样展示。返回**这一批有没有拿到**
-   * （三块全成 = true；各自失败各自留痕）—— 面板展开期的静默轮询按它判退避（第 8 条 A2）。
+   * （三块全成 = true；各自失败各自留痕）—— 后台静默轮询按它判退避（第 8 条 A2）。
    *
-   * **分段取**：`limit` 缺省 = 每块 `ADMIN_PAGE`（30）条；**重读时保留已加载水位**
-   * —— 已经翻到 80 条就不会被打回 30 条。屏蔽词上游没有分页，一次给完。
+   * **首波**（本次会话第一次）：三条只读列表**并发**取全（6.14），每条顺着上游的 `AdminListSlice`
+   * `next_offset` 补齐到 `done`（6.7 / 6.15）；之后压成串行（6.17）。**重读保留已加载水位**
+   * （6.10，按手上已有条数取），且**换房 / 重读用世代号作废在途响应**（6.12）。
+   * 屏蔽词上游没有分页，一次给完。
    */
   loadAdmin: (roomId: number, limit?: number) => Promise<boolean>;
-  /** 名单滚到底再补一段（`ADMIN_STEP` = 10 条）。屏蔽词是前端切片，不调上游。 */
+  /**
+   * 名单滚到底再补一段（`ADMIN_STEP` = 10 条，从上游口径的 `next_offset` 取）。
+   * **在途锁**：同一块已在取就忽略这次触底（6.9，滚动事件风暴压成串行）；已到终点直接返回。
+   * 屏蔽词是前端切片，不调上游。
+   */
   loadAdminMore: (roomId: number, tab: AdminTab) => Promise<void>;
   /**
    * 「这个对象在不在名单里」—— 房管面板按钮三态的依据。
    *
-   * 会先按房间**节流地取一次全量**，因此结论是权威的：只在已加载的那 30 条里查，
+   * 会先按房间**节流地取一次全量**，因此结论是权威的：只在已加载的那一批里查，
    * 会把「还没翻到的成员」误判成不在名单里（需求 2026-09-26：拉黑时目标常常
    * 根本不在直播间、也没被翻到）。
    */
@@ -241,8 +290,10 @@ interface AppStore {
   /** 执行一次房管写操作；调用方负责二次确认。成功返回 true。 */
   runAdmin: (roomId: number, action: AdminAction) => Promise<boolean>;
   /**
-   * 房管面板的**静默轮询**（issue202609242158 第 8 条 A2）：面板展开期间按周期重拉三块列表，
-   * 收起即停。返回停止函数；与列表页轮询同款链条式调度（不重叠、不可见整拍跳过、失败退避），
+   * 房管名单的**后台静默维护**（issue202609242158 第 8 条 A2；口径见需求 6.16）：
+   * **房间打开且有房管权限期间**按周期重拉三块（不再绑定「面板展开」——关掉面板也继续维护，
+   * 名单缓存在本次会话内常驻，重开面板直接复用、不触发整段重读）。可用降低频率来避免持续打上游。
+   * 返回停止函数；与列表页轮询同款链条式调度（不重叠、不可见整拍跳过、失败退避），
    * 落地前复核 `activeRoomId` 仍是它。
    */
   startAdminPolling: (roomId: number) => () => void;
@@ -321,6 +372,15 @@ const sendTimers = new Map<number, number>();
  * `pendingSeq` 进程内单调递增、号不复用，因此键永不冲突；退房时随缓冲一起清掉。
  */
 const echoedLocals = new Set<number>();
+
+/**
+ * 正在途中的头像取数（uid）。与 `faces` 的分工：`faces` 是**结论**（含空串），这里是**在途标记**。
+ *
+ * 放在模块级而不是 state 里：它在途期间不该引起任何重渲染，而「同一 uid 只问一次」
+ * 只需要一个进程内的事实。与 `echoedLocals` 同一手法（同为进程内、会话级侧表）。
+ * 失败 / 成功都会把它摘掉 —— 结论落进 `faces`，那里才是「不要再问」的判据。
+ */
+const faceInflight = new Set<number>();
 
 /** 摘掉一条待确认行的定时器（回播确认 / 判失败 / 离开房间都要）。 */
 function clearSendTimer(localId: number) {
@@ -797,10 +857,6 @@ async function runAnchorPoll(store: StoreApi<AppStore>, account: string, gen: nu
   scheduleAnchorPoll(store, account, delay, gen);
 }
 
-/** 房管三块名单的**首屏**条数：黑名单实测 `ps=100` 可一页返回 36 条，三块各先拿 100 条。 */
-const ADMIN_PAGE = 100;
-/** 名单滚到底一次补多少条。 */
-const ADMIN_STEP = 10;
 /**
  * 「取全量」时的条数上限（安全阀）。
  *
@@ -814,11 +870,172 @@ const ADMIN_FULL_THROTTLE_MS = 30_000;
 const adminFullAt: Record<number, number> = {};
 
 /**
- * 房管三块列表的**静默刷新周期**。
+ * 房管名单的**世代号**（口径照抄 `anchorRoomSeq` / `anchorReadAppliedSeq` 那一套）：
+ * 换房 / 重读 / 四个作废点都自增；在途的取数响应落地前复核它，号不对就整份丢弃（6.12）。
+ * 单靠「房间号比较」挡不住「同一房间重读时，旧响应把新一段盖回去」（基线缺陷）。
+ */
+let adminListGen = 0;
+
+/**
+ * 首波之后房管只读列表的**进程内串行链**：补一段 / 静默刷新一次只跑一个（6.17）。
+ * 首波（本会话第一次加载，三条只读列表之间）走 `Promise.all` 并发取全、**不**进这条链
+ * —— 6.14 的「优先于任何限速与串行约束」。用 Promise 链而不是 `Semaphore`：仓内没有
+ * `Semaphore` 先例，这里也只需要「一个接一个」。
+ */
+let adminReadChain: Promise<unknown> = Promise.resolve();
+
+function enqueueAdminRead<T>(job: () => Promise<T>): Promise<T> {
+  const run = adminReadChain.then(job, job);
+  adminReadChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/**
+ * 清空房管名单及其分页状态（列表 + 分页游标 + 在途 / 终点），并让在途响应失效（6.11 / 6.12）。
+ * 四个作废点（移除房间 / 切房 / 关房 / 断开）与换人共用它 —— 用返回值整体替换这几个切片，
+ * 漏一项就会留下一个还能继续翻的游标、或把上一房间的名单带进新房间。
+ */
+function wipeAdminLists(): Pick<
+  AppStore,
+  "adminSilent" | "adminBlacklist" | "adminKeywords" | "adminErrors" | "adminMeta"
+> {
+  adminListGen += 1;
+  return {
+    adminSilent: [],
+    adminBlacklist: [],
+    adminKeywords: [],
+    adminErrors: {},
+    adminMeta: emptyAdminMetaRecord(),
+  };
+}
+
+/**
+ * 把一段响应并进 store（去重 / 游标 / 终点的判据在 `admin-list.ts` 的 `mergeAdminSlice`），
+ * 返回落地后的 meta，供取数循环判断「还要不要继续翻」。
+ */
+function applyAdminSlice(
+  store: StoreApi<AppStore>,
+  kind: AdminListKind,
+  slice: AdminListSlice<AdminUser>,
+): AdminListMeta {
+  const state = store.getState();
+  const before = kind === "silent" ? state.adminSilent : state.adminBlacklist;
+  const merged = mergeAdminSlice(
+    { items: before, meta: state.adminMeta[kind] },
+    slice,
+    (user) => user.uid,
+  );
+  const adminMeta = { ...state.adminMeta, [kind]: merged.meta };
+  if (kind === "silent") {
+    store.setState({ adminSilent: merged.items, adminMeta });
+  } else {
+    store.setState({ adminBlacklist: merged.items, adminMeta });
+  }
+  return merged.meta;
+}
+
+/**
+ * 取数循环：从 **offset 0** 按已加载水位取一页，再顺着上游的 `next_offset` 补齐到 `done`
+ * （6.7 / 6.10 / 6.15）。首波与后台刷新共用它，区别只在调用方——首波三条列表并发，
+ * 之后串行（见 `loadAdmin`）。
  *
- * 改前是 60 秒 —— 用户 2026-09-26 判定「不对」：房管面板不是高频功能，
- * 无差别轮询既招风控（每拍都要翻几十页）又没打到真正需要的时点。放宽到 **5 分钟**，
- * 与「打开面板时拉一次」「写操作后重读」配合（需求 2026-09-26）。
+ * 落地复核（6.12）：每次 `await` 回来先看世代号与 `activeRoomId`，号不对就整段丢弃
+ * （不落地、也不再继续翻）。
+ *
+ * 返回这次取数**有没有出错**（`undefined` = 拿到）；错误只留痕，不吞掉已加载的那一段。
+ */
+async function fillAdminList(
+  store: StoreApi<AppStore>,
+  roomId: number,
+  gen: number,
+  kind: AdminListKind,
+  limit: number,
+  reconcile: boolean,
+): Promise<string | undefined> {
+  const read = (offset: number, want: number) =>
+    kind === "silent"
+      ? api.adminSilentList(roomId, offset, want)
+      : api.adminBlacklistList(roomId, offset, want);
+  // 首波（初次进房、该名单尚未取过）= 逐页**追加**，让面板随翻页渐进填充（旧行为）。
+  if (!reconcile) {
+    let offset = 0;
+    let want = limit;
+    for (;;) {
+      if (gen !== adminListGen || store.getState().activeRoomId !== roomId) return undefined;
+      let slice: AdminListSlice<AdminUser>;
+      try {
+        slice = await read(offset, want);
+      } catch (error) {
+        if (gen !== adminListGen) return undefined;
+        const text = describeError(error);
+        store.setState((state) => ({
+          adminMeta: { ...state.adminMeta, [kind]: adminClearInFlight(state.adminMeta[kind]) },
+          adminErrors: { ...state.adminErrors, [kind]: text },
+        }));
+        return text;
+      }
+      if (gen !== adminListGen || store.getState().activeRoomId !== roomId) return undefined;
+      const meta = applyAdminSlice(store, kind, slice);
+      if (meta.done) return undefined;
+      offset = meta.nextOffset;
+      want = ADMIN_STEP;
+    }
+  }
+  // 重读（静默刷新 / 写后重读）走**对账**：先把这次取回的整段页收口成一份名单，结束时
+  // 一次性原子替换旧列表 —— 上游已删除的条目（如刚解除禁言的人）被丢弃，不靠「追加 + 去重」
+  // 永远留着旧条目（旧实现重读只追加拿不到删除，违反 6.16「以远端为准」）。取数期间旧列表
+  // 保持可见（不闪空），最终整块替换，符合「缓存常驻、不触发整段重读」的精神。
+  const pages: AdminListSlice<AdminUser>[] = [];
+  let meta: AdminListMeta = store.getState().adminMeta[kind];
+  let offset = 0;
+  let want = limit;
+  for (;;) {
+    if (gen !== adminListGen || store.getState().activeRoomId !== roomId) return undefined;
+    let slice: AdminListSlice<AdminUser>;
+    try {
+      slice = await read(offset, want);
+    } catch (error) {
+      if (gen !== adminListGen) return undefined;
+      const text = describeError(error);
+      store.setState((state) => ({
+        adminErrors: { ...state.adminErrors, [kind]: text },
+      }));
+      return text;
+    }
+    if (gen !== adminListGen || store.getState().activeRoomId !== roomId) return undefined;
+    pages.push(slice);
+    // 仅取这一页的游标 / 终点用于驱动循环（条目留到结尾一次性对账）。
+    meta = mergeAdminSlice({ items: [], meta }, slice, (user) => user.uid).meta;
+    if (meta.done) break;
+    offset = meta.nextOffset;
+    want = ADMIN_STEP;
+  }
+  const reconciled = reconcileAdminPages(pages, (user) => user.uid);
+  // 原子替换：反映上游增删（删人即丢弃旧条目）。
+  if (kind === "silent") {
+    store.setState({
+      adminSilent: reconciled.items,
+      adminMeta: { ...store.getState().adminMeta, silent: reconciled.meta },
+    });
+  } else {
+    store.setState({
+      adminBlacklist: reconciled.items,
+      adminMeta: { ...store.getState().adminMeta, blacklist: reconciled.meta },
+    });
+  }
+  return undefined;
+}
+
+/**
+ * 房管名单的**后台静默维护周期**（口径见需求 6.16）。
+ *
+ * 改前是 60 秒且只在面板展开期跑 —— 用户 2026-09-26 判定「不对」，6.16 进一步改为
+ * 「房间打开且有权限期间始终后台维护，但不等于持续打上游」：本票把维护期从「面板展开」
+ * 改成「房间打开 + 有权限」（`RoomView` 的 `canAdmin`），频率保持 **5 分钟**，
+ * 与「进房预载」「写操作后重读」配合，且名单缓存在本次会话内常驻、重开面板不重读。
  */
 const ADMIN_REFRESH_MS = 300_000;
 const ADMIN_REFRESH_MAX_MS = ADMIN_REFRESH_MS * 8;
@@ -828,7 +1045,7 @@ let adminPollFailures = 0;
 /** 轮询世代号：口径与「我的直播间」那套完全一致（PR #30 评审修正，防换房时旧拍误停新表）。 */
 let adminPollGen = 0;
 
-/** 停掉房管面板轮询（收起面板 / 换房 / 卸载 / 重新 start 时都走它）。幂等。 */
+/** 停掉房管名单的后台轮询（失去权限 / 换房 / 卸载 / 重新 start 时都走它）。幂等。 */
 function stopAdminPolling() {
   adminPollGen += 1;
   if (adminPollTimer !== undefined) window.clearTimeout(adminPollTimer);
@@ -958,10 +1175,8 @@ function resetIdentityState(set: (partial: Partial<AppStore>) => void) {
     activeRoomId: undefined,
     messages: [],
     roomIdentities: {},
-    adminSilent: [],
-    adminBlacklist: [],
-    adminKeywords: [],
-    adminErrors: {},
+    // 房管名单连带分页游标 / 在途 / 终点一起作废（6.11）：换人后晚到的旧响应不得落地（6.12）。
+    ...wipeAdminLists(),
     adminBusy: false,
     emotes: [],
     ownedEmotes: [],
@@ -1039,6 +1254,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
   rooms: [],
   immersive: false,
   messages: [],
+  // 头像是按 uid 补取的，与房间无关：跨房间共用一张表，切房不清（清了会重复打上游）。
+  faces: {},
   status: {},
   roomStats: {},
   logs: [],
@@ -1056,6 +1273,7 @@ export const useApp = create<AppStore>((set, get, store) => ({
   adminSilent: [],
   adminBlacklist: [],
   adminKeywords: [],
+  adminMeta: emptyAdminMetaRecord(),
   adminErrors: {},
   adminBusy: false,
   anchorPanelFor: null,
@@ -1242,14 +1460,12 @@ export const useApp = create<AppStore>((set, get, store) => ({
       await api.roomsRemove(roomId);
       if (get().activeRoomId === roomId) {
         clearRoomTimers();
+        const wiped = wipeAdminLists();
         set((state) => ({
           activeRoomId: undefined,
           messages: [],
           roomIdentities: dropRoom(state.roomIdentities, roomId),
-          adminSilent: [],
-          adminBlacklist: [],
-          adminKeywords: [],
-          adminErrors: {},
+          ...wiped,
         }));
       }
       const rooms = await reloadRooms();
@@ -1281,10 +1497,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
       seeding: true,
       // 发送浮片只属于发出它的那个房间：切房即清（见 `send` 的落地复核，审计 P73）。
       lastSend: undefined,
-      adminSilent: [],
-      adminBlacklist: [],
-      adminKeywords: [],
-      adminErrors: {},
+      // 换房 = 名单作废点（6.11）：列表 + 分页游标 + 在途 / 终点一起清，并作废在途响应（6.12）。
+      ...wipeAdminLists(),
     });
     try {
       await syncSessionMessages(store, roomId);
@@ -1299,16 +1513,14 @@ export const useApp = create<AppStore>((set, get, store) => ({
 
   closeRoom() {
     clearRoomTimers();
+    const wiped = wipeAdminLists();
     set((state) => ({
       activeRoomId: undefined,
       // 离开房间页即离开沉浸态：这枚标志是房间页的界面状态，不跟着房间活到下一次进来
       // （重进同一房间是**新会话**，见 `docs/ui.md` §2.4）。
       immersive: false,
       messages: [],
-      adminSilent: [],
-      adminBlacklist: [],
-      adminKeywords: [],
-      adminErrors: {},
+      ...wiped,
       roomIdentities: state.activeRoomId === undefined
         ? state.roomIdentities
         : dropRoom(state.roomIdentities, state.activeRoomId),
@@ -1354,9 +1566,8 @@ export const useApp = create<AppStore>((set, get, store) => ({
       // 列表换成新会话的快照（见 `refresh`）。
       set((state) => ({
         roomIdentities: dropRoom(state.roomIdentities, roomId),
-        ...(state.activeRoomId === roomId
-          ? { adminSilent: [], adminBlacklist: [], adminKeywords: [], adminErrors: {} }
-          : {}),
+        // 断开 = 该房间会话结束 → 名单是作废点（6.11），连带分页游标与在途 / 终点一起清。
+        ...(state.activeRoomId === roomId ? wipeAdminLists() : {}),
       }));
       const rooms = await reloadRooms();
       if (rooms !== undefined) set((state) => ({ rooms: mergeRoomOrder(state.rooms, rooms) }));
@@ -1668,6 +1879,30 @@ export const useApp = create<AppStore>((set, get, store) => ({
     }
   },
 
+  ensureFaces(uids) {
+    const { faces } = get();
+    const wanted = uids.filter(
+      (uid) => uid > 0 && faces[uid] === undefined && !faceInflight.has(uid),
+    );
+    for (const uid of wanted) {
+      faceInflight.add(uid);
+      void api
+        .userFace(uid)
+        .then((face) => {
+          faceInflight.delete(uid);
+          // 空串照样落表：那是「问过了、上游没给」的结论，再问只会白打上游（需求 3.4）。
+          set((state) => ({ faces: { ...state.faces, [uid]: face } }));
+        })
+        .catch(() => {
+          // 命令层不该走到这里（取不到即空串，契约 §7）。真发生了也只当「没这个头像」：
+          // 落一条空串结论，免得同一行每次渲染都重发一次请求。不记 uid（推送用户标识不进
+          // 日志是全仓既有口径），失败原因由 `ipc.ts` 的 `call` 打到控制台。
+          faceInflight.delete(uid);
+          set((state) => ({ faces: { ...state.faces, [uid]: "" } }));
+        });
+    }
+  },
+
   startListStatusPolling() {
     // 幂等：重复 start 先停掉上一轮（React 严格模式下 effect 会跑两遍，卸载/重挂也走这里）。
     stopListStatusPolling();
@@ -1696,60 +1931,85 @@ export const useApp = create<AppStore>((set, get, store) => ({
   async loadAdmin(roomId, limit) {
     // 三块各自失败各自留痕：一块挂了不该把另外两块的列表也清空。
     const errors: AppStore["adminErrors"] = {};
-    // **保留已加载水位**：重读（5 分钟静默刷新 / 写后重读）按「手上已有多少条」取，
-    // 否则用户翻到 80 条会被打回 30 条 —— 那个体验比 412 还糟。
     const state0 = get();
+    // 本会话第一次（两块分页名单都还没取过）= **首波**：三条只读列表之间**并发**取全（6.14），
+    // 此阶段不受任何串行 / 限速约束。之后（缓存已在，6.16）= 后台刷新 / 写后重读，压成**串行**（6.17）。
+    const firstWave = !state0.adminMeta.silent.loaded && !state0.adminMeta.blacklist.loaded;
+    // 换房 / 重读用**世代号**作废在途响应（6.12）：本趟取数带上号，号不对的响应整份丢弃。
+    adminListGen += 1;
+    const gen = adminListGen;
+    // **保留已加载水位**（6.10）：按「手上已有多少条」取，否则用户翻到 80 条会被打回首屏。
     const want = (have: number) => Math.max(ADMIN_PAGE, have, limit ?? 0);
-    const [silent, blacklist, keywords] = await Promise.all([
-      api
-        .adminSilentList(roomId, 0, want(state0.adminSilent.length))
-        .catch((error: unknown) => {
-          errors.silent = describeError(error);
-          return undefined;
-        }),
-      api
-        .adminBlacklistList(roomId, 0, want(state0.adminBlacklist.length))
-        .catch((error: unknown) => {
-          errors.blacklist = describeError(error);
-          return undefined;
-        }),
-      api.adminKeywordsList(roomId).catch((error: unknown) => {
-        errors.keywords = describeError(error);
-        return undefined;
-      }),
-    ]);
-    // 落地复核（审计 P69）：三块是「当前房间」的会话级单例，await 期间切了房间就丢弃这一批
-    // —— A 打开面板后立刻切 B，B 的面板不该显示 A 的名单。丢弃不算失败，交回 true。
-    if (get().activeRoomId !== roomId) return true;
-    const ok = Object.keys(errors).length === 0;
-    set((state) => ({
-      adminSilent: silent?.items ?? state.adminSilent,
-      adminBlacklist: blacklist?.items ?? state.adminBlacklist,
-      adminKeywords: keywords ?? state.adminKeywords,
-      adminErrors: errors,
-    }));
-    return ok;
+    const silentWant = want(state0.adminSilent.length);
+    const blackWant = want(state0.adminBlacklist.length);
+
+    const fillSilent = () =>
+      fillAdminList(store, roomId, gen, "silent", silentWant, !firstWave);
+    const fillBlacklist = () =>
+      fillAdminList(store, roomId, gen, "blacklist", blackWant, !firstWave);
+    let keywordsErr: string | undefined;
+    const loadKeywords = () =>
+      api.adminKeywordsList(roomId).then(
+        (list) => {
+          // 落地复核同 6.12：晚到的屏蔽词不落进别的房间 / 别的世代。
+          if (gen === adminListGen && get().activeRoomId === roomId) set({ adminKeywords: list });
+        },
+        (error: unknown) => {
+          keywordsErr = describeError(error);
+        },
+      );
+
+    let silentErr: string | undefined;
+    let blackErr: string | undefined;
+    if (firstWave) {
+      // 首波：两条分页名单 + 屏蔽词三块**并发**（6.14）。
+      [silentErr, blackErr] = await Promise.all([fillSilent(), fillBlacklist(), loadKeywords()]);
+    } else {
+      // 首波之后：串行（6.17）——补一段 / 静默刷新一次只跑一个。
+      silentErr = await enqueueAdminRead(fillSilent);
+      blackErr = await enqueueAdminRead(fillBlacklist);
+      await enqueueAdminRead(loadKeywords);
+    }
+    if (silentErr !== undefined) errors.silent = silentErr;
+    if (blackErr !== undefined) errors.blacklist = blackErr;
+    if (keywordsErr !== undefined) errors.keywords = keywordsErr;
+
+    // 落地复核（审计 P69 / 6.12）：await 期间切了房间 / 被新一轮取数越过，就丢弃这一批的
+    // 错误与屏蔽词；名单本身由 `fillAdminList` 逐段复核后落地（号不对的那几段根本没写进去）。
+    // 丢弃不算失败，交回 true。
+    if (get().activeRoomId !== roomId || gen !== adminListGen) return true;
+    set({ adminErrors: errors });
+    return Object.keys(errors).length === 0;
   },
 
   async loadAdminMore(roomId, tab) {
     // 屏蔽词上游没有分页（一次给完），这里不动上游 —— 它走前端切片。
     if (tab === "keywords") return;
-    const offset =
-      tab === "silent" ? get().adminSilent.length : get().adminBlacklist.length;
+    const state0 = get();
+    if (state0.activeRoomId !== roomId) return;
+    // 在途锁 + 终点判定（6.9）：同一块已在取就忽略这次触底（滚动风暴压成串行）；
+    // 已翻完（done）直接返回，不再打上游。
+    if (!adminCanRequest(state0.adminMeta[tab])) return;
+    const gen = adminListGen;
+    // **从上游口径的 next_offset 取**（6.7），不是去重后的列表长度。
+    const offset = state0.adminMeta[tab].nextOffset;
+    set((state) => ({
+      adminMeta: { ...state.adminMeta, [tab]: adminMarkInFlight(state.adminMeta[tab]) },
+    }));
     try {
-      const slice =
+      // 首波之后的只读请求走同一条串行链（6.17）。
+      const slice = await enqueueAdminRead(() =>
         tab === "silent"
-          ? await api.adminSilentList(roomId, offset, ADMIN_STEP)
-          : await api.adminBlacklistList(roomId, offset, ADMIN_STEP);
-      if (get().activeRoomId !== roomId) return;
-      set((state) =>
-        tab === "silent"
-          ? { adminSilent: [...state.adminSilent, ...slice.items] }
-          : { adminBlacklist: [...state.adminBlacklist, ...slice.items] },
+          ? api.adminSilentList(roomId, offset, ADMIN_STEP)
+          : api.adminBlacklistList(roomId, offset, ADMIN_STEP),
       );
+      if (gen !== adminListGen || get().activeRoomId !== roomId) return;
+      applyAdminSlice(store, tab, slice);
     } catch (error) {
-      // 补一段失败**不**清掉已经加载的整段，只留痕。
+      if (gen !== adminListGen) return;
+      // 补一段失败**不**清掉已经加载的整段，只留痕，并松开在途锁（下次触底还能再试）。
       set((state) => ({
+        adminMeta: { ...state.adminMeta, [tab]: adminClearInFlight(state.adminMeta[tab]) },
         adminErrors: { ...state.adminErrors, [tab]: describeError(error) },
       }));
     }
@@ -1800,10 +2060,10 @@ export const useApp = create<AppStore>((set, get, store) => ({
   },
 
   startAdminPolling(roomId) {
-    // 幂等：重复 start 先停上一轮（面板重开 / 换房 / React 严格模式 effect 跑两遍都走这里）。
+    // 幂等：重复 start 先停上一轮（权限变化 / 换房 / React 严格模式 effect 跑两遍都走这里）。
     stopAdminPolling();
     const gen = adminPollGen;
-    // 打开面板时 `toggleAdminPanel` 已同步拉过一次，首拍因此按周期排，不再重复一次首拉。
+    // 进房 + 有权限时 `RoomView` 的 effect 已同步拉过一次（预载），首拍因此按周期排，不重复首拉。
     scheduleAdminPoll(store, roomId, ADMIN_REFRESH_MS, gen);
     // 停止函数带世代自查（口径同 `startAnchorPolling`）。
     return () => {

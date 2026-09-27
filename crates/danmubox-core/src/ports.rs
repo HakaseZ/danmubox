@@ -257,18 +257,19 @@ pub trait EmoteProvider: Send + Sync {
 pub trait RoomAdmin: Send + Sync {
     /// 当前禁言名单的**一段**（只读，**增量加载**用）。
     ///
-    /// `offset` = 调用方手上已有的条数，`limit` = 这次还要拿几条；返回
-    /// `(本次新增, 上游总数)`。
+    /// `offset` = **上游口径**的起点（调用方手上的下一游标），`limit` = 这次最多再拿几条；
+    /// 返回 [`AdminListSlice`]（`items` / `total` / `next_offset` / `done`）。
     ///
     /// 为什么要分页：该接口每页固定 10 条，一个真实房间有 481 条 = 49 次 POST；
     /// 一次调用把整份翻完（改前的做法）会连发几十次，被上游风控挡回 HTTP 412
-    /// 的验证页（`docs/protocol.md` A45）。**翻页与限速由适配器负责**，本层只表达意图。
+    /// 的验证页（`docs/protocol.md` A45）。**翻页、并发 / 串行与限速由适配器负责**，
+    /// 本层只表达意图（消费方无关：谁拿到 `next_offset` / `done` 都能续翻）。
     async fn silent_list(
         &self,
         room_id: i64,
         offset: i64,
         limit: i64,
-    ) -> Result<(Vec<SilentUser>, i64)>;
+    ) -> Result<AdminListSlice<SilentUser>>;
 
     /// 禁言一名观众。`hour`：`-1` 永久 / `0` 本场直播 / 其余为小时数；
     /// `msg` 是触发禁言的那条弹幕原文（上游可选）。
@@ -278,14 +279,14 @@ pub trait RoomAdmin: Send + Sync {
     async fn unmute(&self, room_id: i64, uid: i64) -> Result<()>;
 
     /// 房间黑名单的**一段**（只读，增量加载用）。语义与 [`Self::silent_list`] 完全相同：
-    /// `offset` = 已有条数、`limit` = 本次再拿几条，返回 `(本次新增, 上游总数)`。
-    /// 该接口按 `anchor_id` 寻址、每页 30 条。
+    /// `offset` = 上游口径的起点、`limit` = 本次最多再拿几条，返回 [`AdminListSlice`]。
+    /// 该接口按 `anchor_id` 寻址、基线是**幂等 `GET`**（`docs/protocol.md` A36 / A45）。
     async fn blacklist(
         &self,
         room_id: i64,
         offset: i64,
         limit: i64,
-    ) -> Result<(Vec<BlacklistedUser>, i64)>;
+    ) -> Result<AdminListSlice<BlacklistedUser>>;
 
     /// 把一名观众加入黑名单。
     async fn blacklist_add(&self, room_id: i64, uid: i64) -> Result<()>;
@@ -313,6 +314,25 @@ pub trait RoomCatalog: Send + Sync {
 pub trait WalletProvider: Send + Sync {
     /// 电池余额。
     async fn balance(&self) -> Result<i64>;
+}
+
+/// 按 uid 取用户资料 —— 当前只取头像（`docs/contract.md` §3 / §5 `Message.face`）。
+///
+/// 为什么需要它：大航海与 V1 礼物（以及缺头像的醒目留言）的**载荷里没有头像字段**
+/// （`docs/protocol.md` §10.6 / §10.2 / 附录 A12 / A13 / A8），而界面要求大航海必须有头像
+/// （`REQUIREMENTS.md` §三 3.1–3.6、§八 第 1 条），因此只能按 `Message.uid` 现取。
+///
+/// **取不到即空串**（需求 3.3）：上游非 0 code、网络失败、`uid <= 0` 三种情形对调用方**同解**——
+/// 都按「没有头像」处理，不报错、不阻塞上屏。这也正是本端口**唯一没有错误通道**的原因：
+/// 留一个永不 `Err` 的 `Result` 只会是假分支（`AGENT.md` §8 第 8 条），
+/// 失败原因由实现在 `tracing` 里记录。
+///
+/// **同一 uid 只问一次上游**（需求 3.4）：实现内做进程级缓存与在途合并；
+/// **上游非 0 code 不写缓存**，因此下一条消息还能再试。
+#[async_trait]
+pub trait UserProfile: Send + Sync {
+    /// 该 uid 的头像地址；取不到为空串（语义见 trait 说明）。
+    async fn face_of(&self, uid: i64) -> String;
 }
 
 /// 我自己的直播间（主播视角，`docs/contract.md` §3）。
@@ -357,4 +377,24 @@ pub enum AnchorLiveOutcome {
     Opened(StreamEndpoints),
     /// 被上游身份校验挡住，给出引导。
     Blocked(AnchorGate),
+}
+
+/// 分页只读名单的**一段**，[`RoomAdmin::silent_list`] / [`RoomAdmin::blacklist`] 的返回形状
+/// （`docs/contract.md` §3 / §7，`docs/ipc.md` §3.1）。
+///
+/// 四项语义（唯一权威是契约 §7）：
+///
+/// - `items`：这一段新增的条目（**不做**去重；去重是消费方的事，6.8）。
+/// - `total`：上游总数（`0` = 空名单或上游未给）。
+/// - `next_offset`：**上游口径**的下一次 `offset`（**不是**去重后的列表长度）——消费方据此
+///   继续补齐，不会在同段反复取回（6.7）。
+/// - `done`：`true` = 已到终点，不再打上游（6.9 / 6.13）；`false` = 还有下一段。
+///   单次响应体量封顶（适配器的 `MAX_PAGES`）时返回 `false` 与**真实** `next_offset`，
+///   由消费方后台继续补齐 —— 封顶因此不让条目永久取不到（6.15）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminListSlice<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+    pub next_offset: i64,
+    pub done: bool,
 }

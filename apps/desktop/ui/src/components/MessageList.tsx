@@ -4,6 +4,7 @@ import { useVirtualizer, type ReactVirtualizer } from "@tanstack/react-virtual";
 import { MessageRow } from "./MessageRow";
 import type { MenuPoint } from "./ContextMenu";
 import { aggregateRows } from "../aggregate";
+import type { FaceTable } from "../faces";
 import type { DisplayRow } from "../filtering";
 import type { Message, Prefs } from "../types";
 import styles from "../app.module.css";
@@ -16,6 +17,14 @@ interface Props {
    * 的事，不过去。
    */
   rows: DisplayRow[];
+  /**
+   * 补取到的头像（uid → 地址，`store.faces`；需求 §三 3.6）。
+   *
+   * 由本列表转交给 `MessageRow`，**不改列表本身**：它是查表而不是行数据，
+   * 头像后到时就地换图、行的 `local_id`（虚拟列表的 key）一个字都不动，
+   * 因此行不重建、行高也不跳（头像列宽由 CSS 固定，见 `MessageRow.avatarCol`）。
+   */
+  faces?: FaceTable;
   anchorUid?: number;
   prefs: Prefs;
   onMenu: (message: Message, at: MenuPoint) => void;
@@ -95,6 +104,7 @@ function pinToBottom(
 /** 聊天流。虚拟滚动 + 自动跟随/暂停规则见 docs/ui.md §2、§3。 */
 export function MessageList({
   rows,
+  faces,
   anchorUid,
   prefs,
   onMenu,
@@ -272,6 +282,7 @@ export function MessageList({
             >
               <MessageRow
                 row={listRows[item.index]}
+                faces={faces}
                 anchorUid={anchorUid}
                 prefs={prefs}
                 onMenu={onMenu}

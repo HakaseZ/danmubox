@@ -11,13 +11,14 @@
 //!
 //! 外加**节点轮换**（§15.3）：同一节点连续失败 2 次就换 `host_list` 下一项。
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use danmubox_core::ports::LiveSource;
+use danmubox_core::ports::{LiveSource, UserProfile};
 use danmubox_core::{
     Cancel, ConnState, Counters, Error, Message, MessageKind, MessageSink, Result, Room,
     RoomSession,
@@ -31,6 +32,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::cmd;
 use crate::http::{BiliHttp, REFERER_LIVE, UA};
+use crate::profile::BiliProfile;
 use crate::proto::{self, Decoded};
 
 /// 重连退避起点与上限（`docs/contract.md` §4）。
@@ -140,6 +142,146 @@ async fn guard_flush_when_due(deadline: Option<tokio::time::Instant>) {
     }
 }
 
+/// 缺头像的消息最多等多久才上屏（`REQUIREMENTS.md` §三 3.5 给的**硬上限**）。
+///
+/// 到期即照常投递（`face` 留空串），由界面那头行内惰性补取（需求 3.6）——
+/// 「等 600ms」与「一点都不等」之间只差首屏那一拍，绝不能因为等头像把弹幕卡住。
+const FACE_WAIT: Duration = Duration::from_millis(600);
+
+/// 「头像待补」的到期分支（需求 3.6）：队头等满了 [`FACE_WAIT`] 就放行它（`face` 留空）。
+///
+/// `deadline` 为 `None`（队列空）时返回一个**永不就绪**的 future —— 与
+/// [`guard_flush_when_due`] 同一手法，连接空闲时不为它多起一个定时器。
+async fn face_flush_when_due(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// 排在「头像待补」队列里的一条消息（需求 3.5）。
+struct FacePending {
+    message: Message,
+    /// 取数任务回填的槽位：`Some` 时里面的 `None` / `Some(face)` 分别表示「还在等」与「到位」
+    /// （`Some("")` = 上游没给，按无头像上屏）。**本来就带头像的消息没有槽位**，走到队头即放行。
+    slot: Option<Arc<StdMutex<Option<String>>>>,
+    /// 这一条的等待上限 = 到达时刻 + [`FACE_WAIT`]。
+    deadline: tokio::time::Instant,
+}
+
+impl FacePending {
+    /// 结果已到位（`""` 也算到位：那是「上游没给」的结论）。
+    fn filled(&self) -> bool {
+        self.slot
+            .as_ref()
+            .is_some_and(|slot| slot.lock().expect("face slot poisoned").is_some())
+    }
+
+    /// 可以上屏了吗：本来就带头像、结果到位、或已经等过头（需求 3.6 的超时先上屏）。
+    fn ready(&self, now: tokio::time::Instant) -> bool {
+        self.slot.is_none() || self.filled() || now >= self.deadline
+    }
+
+    /// 取走到位的结果；`None` = 还在等（或本来就不需要补），上屏时保持原样。
+    fn take_face(&self) -> Option<String> {
+        self.slot
+            .as_ref()
+            .and_then(|slot| slot.lock().expect("face slot poisoned").clone())
+    }
+}
+
+/// 「头像待补」队列（需求 §三 3.5 / 3.6）。
+///
+/// 三条口径：
+///
+/// 1. **按到达顺序放行**：队头不放行，后面的不许越过它 —— 否则一条大航海会把随后到达的弹幕
+///    甩到自己前面（界面按投递顺序落行，顺序一乱就是「时间线跳了一下」）。代价是队头最多把
+///    后面压 [`FACE_WAIT`]，此后一律放行（需求 3.6）。
+/// 2. **不阻塞收包循环**：本结构只登记，取数由调用方 `spawn`；队头「结果到位」或「到期」
+///    由 `select!` 的两个分支唤醒（[`face_flush_when_due`] 与 [`FaceWait::notify`]）。
+/// 3. **连接收尾一并放行**（[`FaceWait::take_pending`]）：断连时还压着的消息照投、`face` 留空，
+///    与 `cmd::GuardMerge::take_pending` 同一口径 —— 不然那条大航海会随断连一起消失。
+struct FaceWait {
+    queue: VecDeque<FacePending>,
+    /// 取数任务回填后唤醒读循环。没有它，队头只能等满 `deadline` 才上屏，
+    /// 需求 3.5 的「头像到位再上屏」就退化成「一律等 600ms」。
+    notify: Arc<Notify>,
+}
+
+impl Default for FaceWait {
+    fn default() -> Self {
+        Self {
+            queue: VecDeque::new(),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+}
+
+impl FaceWait {
+    /// 这条消息需要按 uid 补头像吗？返回要问的 uid。
+    ///
+    /// 只有 `guard` / `gift` / `superchat` 三类：其余 kind 的头像都有可靠来源
+    /// （弹幕取 `user.base.face`、互动取 protobuf / JSON 的用户对象），而**这三类**的载荷里
+    /// 没有头像字段（`docs/protocol.md` §10.6 / §10.2 / 附录 A8 / A12 / A13）。
+    ///
+    /// 已经有头像、或 uid 不可用（系统消息、游客弹幕的 `uid = 0`）→ `None`（**不问上游**）。
+    fn needs_face(message: &Message) -> Option<i64> {
+        if !message.face.is_empty() || message.uid <= 0 {
+            return None;
+        }
+        matches!(
+            message.kind,
+            MessageKind::Guard | MessageKind::Gift | MessageKind::Superchat
+        )
+        .then_some(message.uid)
+    }
+
+    /// 入列一条消息。返回 `Some(槽位)` = 调用方要 `spawn` 取数任务并把结果写进槽位；
+    /// `None` = 这条不需要补（走到队头即放行，但**照样排队**，见结构说明第 1 条）。
+    fn enqueue(
+        &mut self,
+        message: Message,
+        uid: Option<i64>,
+        now: tokio::time::Instant,
+    ) -> Option<Arc<StdMutex<Option<String>>>> {
+        let slot = uid.map(|_| Arc::new(StdMutex::new(None)));
+        self.queue.push_back(FacePending {
+            message,
+            slot: slot.clone(),
+            deadline: now + FACE_WAIT,
+        });
+        slot
+    }
+
+    /// 放行队头所有可以上屏的消息（结果到位 / 已到期 / 本来就带头像）。
+    fn flush(&mut self, now: tokio::time::Instant, sink: &MessageSink) {
+        while self.queue.front().is_some_and(|head| head.ready(now)) {
+            let pending = self.queue.pop_front().expect("刚看过队头");
+            sink.publish_message(with_face(pending));
+        }
+    }
+
+    /// 队头还压着的话，它最晚什么时候到期（`None` = 队列空，不 arm 定时器）。
+    fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.queue.front().map(|head| head.deadline)
+    }
+
+    /// 连接收尾：把还压着的消息全部放行（头像没到就留空），按到达顺序返回。
+    fn take_pending(&mut self) -> Vec<Message> {
+        self.queue.drain(..).map(with_face).collect()
+    }
+}
+
+/// 把到位的结果写回消息（没到 / 不需要补就原样返回）。
+fn with_face(pending: FacePending) -> Message {
+    let face = pending.take_face();
+    let mut message = pending.message;
+    if let Some(face) = face {
+        message.face = face;
+    }
+    message
+}
+
 /// WS 心跳包体：字面量，见 `docs/protocol.md` §8.1。
 const HEARTBEAT_BODY: &[u8] = b"[object Object]";
 
@@ -236,6 +378,13 @@ pub struct BiliLive {
     /// 互动（进场）同源去重器（`cmd::InteractMerge`）：与上面同一个理由活在这一层 ——
     /// 同一次进场的两条载荷同样可能分处两条连接。
     interact_merge: StdMutex<cmd::InteractMerge>,
+    /// 头像来源（`docs/contract.md` §3 `UserProfile`）：大航海 / V1 礼物 / 缺头像的 SC
+    /// 靠它按 uid 现取（需求 3.2–3.4）。取数本身在 [`BiliProfile`] 里带**进程级**缓存，
+    /// 因此本层每次连接各持一份也不影响「同一 uid 只问一次上游」。
+    ///
+    /// `Arc<dyn ...>` 而不是具体类型：单测要注入一个指向本地桩的实现 ——
+    /// 否则每喂一条大航海帧，测试就会真的去问一次上游（还要等 3 秒超时）。
+    profile: Arc<dyn UserProfile>,
 }
 
 impl BiliLive {
@@ -245,8 +394,12 @@ impl BiliLive {
 
     /// `cookie` 为完整 Cookie 串；`None` 即游客态。
     pub fn with_cookie(cookie: Option<String>) -> Result<Self> {
+        let http = BiliHttp::with_cookie(cookie)?;
         Ok(Self {
-            http: BiliHttp::with_cookie(cookie)?,
+            // 头像来源复用**同一个**客户端（连接池、Cookie 来源、超时都在它身上）：
+            // 为此再多建一个 reqwest 客户端只会多一处 Cookie 状态源。
+            profile: Arc::new(BiliProfile::from_http(http.clone())),
+            http,
             counters: Arc::new(Counters::default()),
             buvid3: Mutex::new(None),
             store: None,
@@ -257,14 +410,23 @@ impl BiliLive {
 
     /// 凭据来自凭据文件：登录态与游客态由文件内容决定（`docs/contract.md` §4.1）。
     pub fn with_store(store: Arc<danmubox_core::ConfigStore>) -> Result<Self> {
+        let http = BiliHttp::with_store(Arc::clone(&store))?;
         Ok(Self {
-            http: BiliHttp::with_store(Arc::clone(&store))?,
+            profile: Arc::new(BiliProfile::from_http(http.clone())),
+            http,
             counters: Arc::new(Counters::default()),
             buvid3: Mutex::new(None),
             store: Some(store),
             guard_merge: StdMutex::new(cmd::GuardMerge::new()),
             interact_merge: StdMutex::new(cmd::InteractMerge::new()),
         })
+    }
+
+    /// 仅测试：换掉头像来源（默认那份会真的去问上游）。
+    #[cfg(test)]
+    fn with_profile(mut self, profile: Arc<dyn UserProfile>) -> Self {
+        self.profile = profile;
+        self
     }
 
     pub fn counters(&self) -> Arc<Counters> {
@@ -443,8 +605,18 @@ impl BiliLive {
             })
         };
 
+        // 头像待补队列**每次连接一份**：压在里面的消息只等 600ms，跨连接没有意义。
+        let mut face_wait = FaceWait::default();
         let outcome = self
-            .read_loop(room_id, sink, cancel, &verify, limits, &mut read)
+            .read_loop(
+                room_id,
+                sink,
+                cancel,
+                &verify,
+                limits,
+                &mut read,
+                &mut face_wait,
+            )
             .await;
 
         session.cancel();
@@ -481,6 +653,28 @@ impl BiliLive {
             .deadline()
     }
 
+    /// 把一条归一化消息交给「头像待补」队列（或立即投递）。
+    ///
+    /// **绝不 `await`**：需要补头像时只 `spawn` 一个取数任务并登记槽位，读循环立刻回去读下一帧
+    /// —— 这是需求 3.5 的硬要求（等待不得阻塞收包循环）。放行由 `read_loop_inner` 的两个分支
+    /// 负责：队头到期（[`face_flush_when_due`]）与结果到位（[`FaceWait::notify`]）。
+    fn queue_message(&self, sink: &MessageSink, wait: &mut FaceWait, message: Message) {
+        let uid = FaceWait::needs_face(&message);
+        let slot = wait.enqueue(message, uid, tokio::time::Instant::now());
+        if let (Some(uid), Some(slot)) = (uid, slot) {
+            let profile = Arc::clone(&self.profile);
+            let notify = Arc::clone(&wait.notify);
+            tokio::spawn(async move {
+                // 取不到就是空串（需求 3.3）：这里没有错误分支，也**不许**失败重试
+                // （重试会让同一条消息的上游请求变成两次，去重在 `BiliProfile` 的缓存里）。
+                let face = profile.face_of(uid).await;
+                *slot.lock().expect("face slot poisoned") = Some(face);
+                notify.notify_one();
+            });
+        }
+        wait.flush(tokio::time::Instant::now(), sink);
+    }
+
     /// 互动（进场）：同一次进场的两条载荷只投第一条（`cmd::InteractMerge`，§10.4）。
     fn absorb_interact(&self, message: Message) -> Option<Message> {
         self.interact_merge
@@ -489,16 +683,25 @@ impl BiliLive {
             .absorb(tokio::time::Instant::now(), message)
     }
 
-    /// 读循环的外层：与 [`Self::read_loop_inner`] 只差**大航海按笔合并器**的收尾。
+    /// 读循环的外层：与 [`Self::read_loop_inner`] 只差**大航海按笔合并器**与
+    /// **头像待补队列**的收尾。
     ///
-    /// 合并器要在退出前把还压着的购买事件放出去（[`cmd::GuardMerge::take_pending`]），
-    /// 而内层有 5 条 `return` 出口（取消 / 认证超时 / 僵死 / 对端关闭 / 读失败），
-    /// 统一收在这一层才不会漏 —— 否则那条开通播报会随断连一起消失。
+    /// 两处都要在退出前把还压着的东西放出去（[`cmd::GuardMerge::take_pending`] 与
+    /// [`FaceWait::take_pending`]），而内层有 5 条 `return` 出口（取消 / 认证超时 / 僵死 /
+    /// 对端关闭 / 读失败），统一收在这一层才不会漏 —— 否则那条开通播报会随断连一起消失。
     ///
-    /// 合并器本身由 [`BiliLive`] 持有（**不随连接重建**，理由见那两个字段的注释），
-    /// 因此这一层只做收尾、不负责建。
+    /// 合并器本身由 [`BiliLive`] 持有（**不随连接重建**，理由见那两个字段的注释）；
+    /// **头像队列则是每次连接一份**（压在里面的消息只等 600ms，跨连接没有意义），
+    /// 由调用方建好传进来 —— 于是收尾处的两次放行都落在同一个队列上，
+    /// 单测也能直接观察它（与 `Limits` 注入同一理由）。
     ///
-    /// 签名与拆分前逐字一致：`ws::tests` 有 6 个用例直接调它。
+    /// 收尾顺序：先把合并器放出的购买事件**过一遍头像队列**（那条大航海同样要补头像），
+    /// 再把头像队列整个放行 —— 断连时不再等谁，`face` 留空照投。
+    ///
+    /// `#[allow(clippy::too_many_arguments)]`：入参就是「会话内五件套 + 入站流 + 头像队列」，
+    /// 收成结构只是把同一串东西换个地方写（与 [`Self::read_loop_inner`] 的取舍一致）。
+    /// 头像队列必须是**注入的**：它由调用方建、给单测直接观察（同 `Limits` 的理由）。
+    #[allow(clippy::too_many_arguments)]
     async fn read_loop<S>(
         &self,
         room_id: i64,
@@ -507,13 +710,14 @@ impl BiliLive {
         verify: &Notify,
         limits: &Limits,
         read: &mut S,
+        face_wait: &mut FaceWait,
     ) -> Attempt
     where
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
             + Unpin,
     {
         let attempt = self
-            .read_loop_inner(room_id, sink, cancel, verify, limits, read)
+            .read_loop_inner(room_id, sink, cancel, verify, limits, read, face_wait)
             .await;
         for message in self
             .guard_merge
@@ -521,6 +725,9 @@ impl BiliLive {
             .expect("guard merge poisoned")
             .take_pending(tokio::time::Instant::now())
         {
+            self.queue_message(sink, face_wait, message);
+        }
+        for message in face_wait.take_pending() {
             sink.publish_message(message);
         }
         attempt
@@ -533,7 +740,7 @@ impl BiliLive {
     /// 由它补上。
     ///
     /// 参数多是因为它同时握着「会话内五件套」（投递口 / 取消 / 认证回应通知 / 护栏阈值 /
-    /// 入站流）—— 收成结构只会让调用点更长，
+    /// 入站流）加上头像待补队列 —— 收成结构只会让调用点更长，
     /// 与 `send::build_params` 同一取舍（那里的 `#[allow]` 注释同样说明了这点）。
     #[allow(clippy::too_many_arguments)]
     async fn read_loop_inner<S>(
@@ -544,6 +751,7 @@ impl BiliLive {
         verify: &Notify,
         limits: &Limits,
         read: &mut S,
+        face_wait: &mut FaceWait,
     ) -> Attempt
     where
         S: futures_util::Stream<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
@@ -563,11 +771,26 @@ impl BiliLive {
             // 大航海按笔合并的到期时刻（`docs/protocol.md` §10.6）：只有真压着「等播报的
             // 购买事件」时才有值，没有时不 arm 分支 —— 移动端不该为此常驻唤醒。
             let guard_deadline = self.guard_deadline();
+            // 头像待补的两个唤醒源（需求 3.5 / 3.6）：
+            // - `face_deadline` 到期 → 队头等满 600ms，照常上屏（`face` 留空）；
+            // - `face_notify` 被取数任务叫醒 → 头像到位，立刻放行。
+            // `Notify` 的克隆是为了**租借互不打扰**：`notified()` 借的是这个局部 `Arc`，
+            // 分支体里 mutate `face_wait` 才不会与它冲突（`select!` 各分支的 future 在分支体
+            // 执行时仍然存活）；`notify_one` 有许可语义，因此不会漏掉「上一轮就绪」的唤醒。
+            let face_deadline = face_wait.deadline();
+            let face_notify = Arc::clone(&face_wait.notify);
             tokio::select! {
                 _ = guard_flush_when_due(guard_deadline) => {
                     if let Some(message) = self.flush_guard() {
-                        sink.publish_message(message);
+                        // 放出来的购买事件同样要补头像（它就是一条大航海行）。
+                        self.queue_message(sink, face_wait, message);
                     }
+                }
+                _ = face_flush_when_due(face_deadline) => {
+                    face_wait.flush(tokio::time::Instant::now(), sink);
+                }
+                _ = face_notify.notified() => {
+                    face_wait.flush(tokio::time::Instant::now(), sink);
                 }
                 _ = cancel.cancelled() => {
                     let end = if verified { End::Live } else { End::Cancelled };
@@ -652,7 +875,9 @@ impl BiliLive {
                                                     } else {
                                                         message
                                                     };
-                                                sink.publish_message(message);
+                                                // 走头像队列：缺头像的大航海 / V1 礼物 / SC
+                                                // 在这里等一次短时限（需求 3.5），其余消息照投。
+                                                self.queue_message(sink, face_wait, message);
                                             }
                                             // 大航海：同一笔购买的 `GUARD_BUY` 与
                                             // `USER_TOAST_MSG` 在这里合成**一条**播报
@@ -661,7 +886,7 @@ impl BiliLive {
                                                 if let Some(message) =
                                                     self.absorb_guard(message, source)
                                                 {
-                                                    sink.publish_message(message);
+                                                    self.queue_message(sink, face_wait, message);
                                                 }
                                             }
                                             Some(cmd::Dispatch::RoomStats {
@@ -681,8 +906,9 @@ impl BiliLive {
                                             }
                                             // `ROOM_CHANGE`：同样是「先投消息、再冒泡」——
                                             // 主播改了标题时，界面上挂着的旧标题要原地换掉
-                                            // （issue202609241553 第 6 条）。房间号取载荷里的
-                                            // `data.room_id`（不是连接的这个房间号）。
+                                            // （issue202609241553 第 6 条）。房间号以**连接上下文**
+                                            // 为准（`cmd.rs` 用 `dispatch` 的 `room_id`，不再是载荷里的
+                                            // `data.room_id`——后者可能是短号，与登记表 key 对不上）。
                                             Some(cmd::Dispatch::RoomTitle {
                                                 message,
                                                 room_id,
@@ -1456,7 +1682,15 @@ mod tests {
         let mut stream = Box::pin(futures_util::stream::iter(items));
 
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &mut FaceWait::default(),
+            )
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => {
@@ -1490,7 +1724,15 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &mut FaceWait::default(),
+            )
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "认证成功后应保持运行直到被取消");
@@ -1523,7 +1765,15 @@ mod tests {
         >());
         let started = Instant::now();
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut silent)
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut silent,
+                &mut FaceWait::default(),
+            )
             .await;
         match &outcome.end {
             End::AuthFailed(reason) => assert!(reason.contains("op=8"), "只描述事实：{reason}"),
@@ -1759,7 +2009,15 @@ mod tests {
             Box::pin(futures_util::stream::iter(items).chain(futures_util::stream::pending()));
         let started = Instant::now();
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &mut FaceWait::default(),
+            )
             .await;
         let End::Failed(reason) = &outcome.end else {
             panic!("一直没有入站帧必须判死，实际 {:?}", outcome.end);
@@ -1842,7 +2100,15 @@ mod tests {
             })
         };
         let outcome = live
-            .read_loop(1, &sink, &cancel, &verify, &limits, &mut stream)
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &mut FaceWait::default(),
+            )
             .await;
         canceller.await.unwrap();
         assert_eq!(outcome.end, End::Live, "有入站帧就不得判僵死");
@@ -1938,5 +2204,349 @@ mod tests {
             &[0, 0, 1, 1, 2, 2, 0],
             "同一节点连续失败 2 次就换下一项，轮完一轮回到首项：{seen:?}"
         );
+    }
+
+    /* ------------------------------------------------ 头像待补（需求 §三 3.2–3.6） */
+
+    /// 一条业务帧（`op=5` + 裸 JSON，`docs/protocol.md` §9）。
+    fn business_frame(cmd: &str, data: Value) -> WsMessage {
+        let body = serde_json::json!({ "cmd": cmd, "data": data }).to_string();
+        WsMessage::Binary(
+            proto::build_packet(proto::OP_NOTICE, proto::PROTOVER_JSON, body.as_bytes()).into(),
+        )
+    }
+
+    /// 合成（非真实）的资料响应：形状按社区文档（`code` + `data.face`）。
+    const ACC_FACE: &str = r#"{"code":0,"message":"0","data":{"mid":42,"face":"https://i0.hdslb.com/bfs/face/xyz.jpg"}}"#;
+
+    /// 一条缺头像的大航海播报（`USER_TOAST_MSG` 单独到达时立即投递，见
+    /// `guard_toast_alone_is_published_immediately`，因此它一定会走到头像队列）。
+    fn guard_toast_frame(uid: i64) -> WsMessage {
+        business_frame(
+            "USER_TOAST_MSG",
+            serde_json::json!({
+                "uid": uid, "username": "开舰长的人", "guard_level": 3, "num": 1,
+                "price": 138000, "start_time": 1, "payflow_id": "pf-1"
+            }),
+        )
+    }
+
+    /// 只有**大航海 / 礼物 / 醒目留言**且**还没有头像**时才按 uid 去问上游
+    /// （需求 3.2 / 3.3）：弹幕与互动的头像本来就有可靠来源，系统消息连 uid 都没有。
+    #[test]
+    fn only_guard_gift_and_superchat_without_a_face_ask_upstream() {
+        for (kind, uid, face, expected) in [
+            (MessageKind::Guard, 42, "", Some(42)),
+            (MessageKind::Gift, 42, "", Some(42)),
+            (MessageKind::Superchat, 42, "", Some(42)),
+            (MessageKind::Gift, 42, "https://i0.hdslb.com/x.png", None),
+            (MessageKind::Guard, 0, "", None),
+            (MessageKind::Danmaku, 42, "", None),
+            (MessageKind::Interact, 42, "", None),
+            (MessageKind::System, 0, "", None),
+        ] {
+            let mut message = Message::new(1, kind, 1);
+            message.uid = uid;
+            message.face = face.to_string();
+            assert_eq!(FaceWait::needs_face(&message), expected, "kind={kind:?}");
+        }
+    }
+
+    /// 需求 3.5：结果到位就立刻上屏，且**带着那个头像** —— 在它到位之前一条都不许先投。
+    #[tokio::test]
+    async fn face_wait_publishes_the_head_once_the_face_arrives() {
+        let (sink, bus) = test_sink();
+        let mut events = bus.subscribe();
+        let mut wait = FaceWait::default();
+        let mut message = Message::new(1, MessageKind::Guard, 1);
+        message.uid = 42;
+        let slot = wait
+            .enqueue(message, Some(42), tokio::time::Instant::now())
+            .expect("缺头像的大航海要补头像");
+
+        wait.flush(tokio::time::Instant::now(), &sink);
+        assert!(
+            events.try_recv().is_err(),
+            "头像还没到就不许先上屏（需求 3.5 的「头像到位再上屏」）"
+        );
+
+        *slot.lock().expect("face slot") = Some("https://i0.hdslb.com/bfs/face/xyz.jpg".into());
+        wait.flush(tokio::time::Instant::now(), &sink);
+        match events.try_recv() {
+            Ok(Event::Message(message)) => {
+                assert_eq!(message.kind, MessageKind::Guard);
+                assert_eq!(message.uid, 42);
+                assert_eq!(message.face, "https://i0.hdslb.com/bfs/face/xyz.jpg");
+            }
+            other => panic!("应当投出那一条大航海，实际 {other:?}"),
+        }
+    }
+
+    /// 需求 3.6：等满 600ms 就**照常上屏**（`face` 留空串），界面那头行内惰性补取。
+    ///
+    /// 用「把 now 推到 deadline 之后」代替真睡 600ms：判据是同一段代码里的同一次比较，
+    /// 睡与不睡看到的是同一个分支。
+    #[tokio::test]
+    async fn face_wait_releases_the_head_at_the_600ms_deadline() {
+        let (sink, bus) = test_sink();
+        let mut events = bus.subscribe();
+        let mut wait = FaceWait::default();
+        let now = tokio::time::Instant::now();
+        let mut message = Message::new(1, MessageKind::Guard, 1);
+        message.uid = 42;
+        let _slot = wait.enqueue(message, Some(42), now).expect("要补头像");
+
+        wait.flush(now + FACE_WAIT - Duration::from_millis(1), &sink);
+        assert!(events.try_recv().is_err(), "没到期就该继续等");
+
+        wait.flush(now + FACE_WAIT, &sink);
+        match events.try_recv() {
+            Ok(Event::Message(message)) => {
+                assert_eq!(message.kind, MessageKind::Guard);
+                assert!(message.face.is_empty(), "超时先上屏，头像留空串");
+            }
+            other => panic!("到期必须放行，实际 {other:?}"),
+        }
+    }
+
+    /// 队列**保序**：队头不放行，后面到达的消息不许越过它；放行时按到达顺序出去。
+    #[tokio::test]
+    async fn face_wait_keeps_the_arrival_order() {
+        let (sink, bus) = test_sink();
+        let mut events = bus.subscribe();
+        let mut wait = FaceWait::default();
+        let now = tokio::time::Instant::now();
+
+        let mut head = Message::new(1, MessageKind::Guard, 1);
+        head.uid = 42;
+        let mut tail = Message::new(1, MessageKind::Danmaku, 2);
+        tail.uid = 7;
+        tail.face = "https://i0.hdslb.com/bfs/face/danmaku.png".into();
+
+        let slot = wait.enqueue(head, Some(42), now).expect("队头要补头像");
+        assert!(
+            wait.enqueue(tail, None, now).is_none(),
+            "本来就有头像的消息不占槽位"
+        );
+
+        wait.flush(now, &sink);
+        assert!(
+            events.try_recv().is_err(),
+            "队头还在等，后面那条不许越过它（否则时间线会跳一下）"
+        );
+
+        *slot.lock().expect("face slot") = Some("https://i0.hdslb.com/bfs/face/xyz.jpg".into());
+        wait.flush(now, &sink);
+        let mut seen = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let Event::Message(message) = event {
+                seen.push((message.kind, message.face));
+            }
+        }
+        assert_eq!(
+            seen,
+            vec![
+                (
+                    MessageKind::Guard,
+                    "https://i0.hdslb.com/bfs/face/xyz.jpg".to_string()
+                ),
+                (
+                    MessageKind::Danmaku,
+                    "https://i0.hdslb.com/bfs/face/danmaku.png".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// 连接收尾（`read_loop` 那一段）：还压着的消息全部放行、按到达顺序、没到位的 `face` 留空。
+    #[tokio::test]
+    async fn face_wait_releases_everything_on_connection_end() {
+        let mut wait = FaceWait::default();
+        let now = tokio::time::Instant::now();
+        let mut first = Message::new(1, MessageKind::Guard, 1);
+        first.uid = 42;
+        let mut second = Message::new(1, MessageKind::Superchat, 2);
+        second.uid = 43;
+
+        let slot = wait.enqueue(first, Some(42), now).expect("要补头像");
+        let _other = wait.enqueue(second, Some(43), now).expect("要补头像");
+        *slot.lock().expect("face slot") = Some("https://i0.hdslb.com/bfs/face/xyz.jpg".into());
+
+        let released = wait.take_pending();
+        assert_eq!(released.len(), 2, "断连时压着的都要放出去");
+        assert_eq!(released[0].uid, 42);
+        assert_eq!(released[0].face, "https://i0.hdslb.com/bfs/face/xyz.jpg");
+        assert_eq!(released[1].uid, 43);
+        assert!(released[1].face.is_empty(), "没到位的按无头像上屏");
+        assert!(wait.take_pending().is_empty(), "放完即空");
+    }
+
+    /// 端到端（需求 3.5）：缺头像的大航海**先压在队列里**，头像到位后带着头像上屏 ——
+    /// 收包循环在这段时间里照旧跑（等待靠队列与 `select!` 唤醒，不是 `await` 在收包路径上）。
+    #[tokio::test]
+    async fn guard_row_waits_for_its_face_then_arrives_with_it() {
+        // 两处进程级缓存都会被这一步动到（WBI 密钥 + 头像），必须与其余用例串行；
+        // 顺便清空 —— 不然这个用例可能命中别的用例先填好的结论，断言就变成假绿。
+        let _cache_guard = crate::http::CACHE_TEST_LOCK.lock().await;
+        crate::http::reset_wbi_cache().await;
+        crate::profile::reset_face_cache().await;
+
+        let stub = crate::http::test_support::spawn_stub(
+            &[
+                (200, "application/json", crate::http::test_support::NAV_OK),
+                (200, "application/json", ACC_FACE),
+            ],
+            Duration::from_millis(120),
+        );
+        let http = BiliHttp::new()
+            .expect("客户端可建")
+            .with_nav_url(format!("{}/nav", stub.base))
+            .with_acc_info_url(format!("{}/acc", stub.base));
+        let live = BiliLive::new()
+            .expect("房间运行时")
+            .with_profile(Arc::new(BiliProfile::from_http(http)));
+
+        // 本用例要等几百毫秒的取数，而 `test_limits` 的僵死阈值是 120ms
+        // （那是给「帧间相隔毫秒」的用例用的）：这里把入站阈值放宽，只留时间轴。
+        let limits = Limits {
+            inbound_stale: Duration::from_secs(5),
+            ..test_limits()
+        };
+        let (sink, bus) = test_sink();
+        let mut events = bus.subscribe();
+        let cancel = Cancel::new();
+        let verify = Notify::new();
+        let items: Frames = vec![Ok(verify_frame(0)), Ok(guard_toast_frame(42))];
+        let mut stream =
+            Box::pin(futures_util::stream::iter(items).chain(futures_util::stream::pending()));
+
+        let canceller = {
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(700)).await;
+                cancel.cancel();
+            })
+        };
+        let outcome = live
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &mut FaceWait::default(),
+            )
+            .await;
+        canceller.await.unwrap();
+        assert_eq!(outcome.end, End::Live);
+
+        let mut guards = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let Event::Message(message) = event {
+                if message.kind == MessageKind::Guard {
+                    guards.push(message);
+                }
+            }
+        }
+        assert_eq!(guards.len(), 1, "那一条大航海播报必须上屏");
+        assert_eq!(
+            guards[0].face, "https://i0.hdslb.com/bfs/face/xyz.jpg",
+            "上屏时必须已经带上按 uid 现取的头像"
+        );
+        assert!(
+            stub.hits.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+            "确实问过一次上游"
+        );
+    }
+
+    /// 端到端（需求 3.6）：上游**迟迟不给**头像时，队头在 600ms 到期后照常上屏（`face` 留空），
+    /// 读循环没有被这个等待卡住 —— 桩慢 2 秒，而这条消息必须在 600ms 左右就出来。
+    #[tokio::test]
+    async fn a_slow_face_fetch_still_releases_the_row_at_the_deadline() {
+        let _cache_guard = crate::http::CACHE_TEST_LOCK.lock().await;
+        crate::http::reset_wbi_cache().await;
+        crate::profile::reset_face_cache().await;
+
+        let stub = crate::http::test_support::spawn_stub(
+            &[
+                (200, "application/json", crate::http::test_support::NAV_OK),
+                (200, "application/json", ACC_FACE),
+            ],
+            // 两跳都慢 2 秒：远长于 600ms 的上限（这一条测的就是「不等它」）。
+            Duration::from_secs(2),
+        );
+        let http = BiliHttp::new()
+            .expect("客户端可建")
+            .with_nav_url(format!("{}/nav", stub.base))
+            .with_acc_info_url(format!("{}/acc", stub.base));
+        let live = BiliLive::new()
+            .expect("房间运行时")
+            .with_profile(Arc::new(BiliProfile::from_http(http)));
+
+        // 同样放宽入站阈值：本用例的时间轴是 600ms 那档，不是毫秒级帧间隔。
+        let limits = Limits {
+            inbound_stale: Duration::from_secs(5),
+            ..test_limits()
+        };
+        let (sink, bus) = test_sink();
+        let published = Arc::new(StdMutex::new(Vec::new()));
+        let recorder = {
+            let published = Arc::clone(&published);
+            let mut events = bus.subscribe();
+            tokio::spawn(async move {
+                while let Ok(event) = events.recv().await {
+                    if let Event::Message(message) = event {
+                        published.lock().expect("lock poisoned").push(message);
+                    }
+                }
+            })
+        };
+        let cancel = Cancel::new();
+        let verify = Notify::new();
+        let items: Frames = vec![Ok(verify_frame(0)), Ok(guard_toast_frame(42))];
+        let mut stream =
+            Box::pin(futures_util::stream::iter(items).chain(futures_util::stream::pending()));
+
+        // 那条消息一上屏就收连接（它在 600ms 到期时必然先到；上游要 2 秒）。
+        let canceller = {
+            let cancel = cancel.clone();
+            let published = Arc::clone(&published);
+            tokio::spawn(async move {
+                until(
+                    || published.lock().expect("lock poisoned").len() == 1,
+                    Duration::from_millis(1500),
+                )
+                .await;
+                cancel.cancel();
+            })
+        };
+        let started = Instant::now();
+        let outcome = live
+            .read_loop(
+                1,
+                &sink,
+                &cancel,
+                &verify,
+                &limits,
+                &mut stream,
+                &mut FaceWait::default(),
+            )
+            .await;
+        canceller.await.unwrap();
+        assert_eq!(outcome.end, End::Live);
+        let seen = published.lock().expect("lock poisoned").clone();
+        assert_eq!(seen.len(), 1, "只有那一条大航海播报");
+        assert_eq!(seen[0].kind, MessageKind::Guard);
+        assert!(
+            seen[0].face.is_empty(),
+            "上游还没给就按无头像先上屏（需求 3.6）"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "上屏走的是 600ms 的上限，不是干等上游（实测 {:?}）",
+            started.elapsed()
+        );
+        recorder.abort();
     }
 }

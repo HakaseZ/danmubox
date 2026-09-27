@@ -56,8 +56,13 @@ export interface Message {
   reply_uname_color?: string;
   is_admin: boolean;
   /**
-   * 发送者头像 URL（契约 §5 新增字段，无则空串）。
+   * 发送者头像 URL（契约 §5；无则空串）。
    * 界面按**可选**消费：引擎侧尚未落地时是 `undefined`，与空串同样处理（不渲染头像）。
+   *
+   * **空串不是终态**（需求 §三 3.2 / 3.6）：大航海 / V1 礼物 / 缺头像的醒目留言的载荷里没有
+   * 头像字段，这类行到达时是空串，界面随后按 `uid` 补取一次（`store.faces` + `faces.ts`），
+   * 补到的地址在渲染时叠加（`displayFace`）。因此**不要**把空串理解成「这个人没有头像」——
+   * 那只是「这一条载荷没带、补取还没回来」。
    */
   face?: string;
   /** 进场回填的历史弹幕（上游 `data.room` 的最近 10 条，见 `history.rs` / 契约 §4.3），与实时弹幕区分展示。 */
@@ -206,13 +211,21 @@ export type AdminTab = "silent" | "blacklist" | "keywords";
 /**
  * 房管名单的**一段**（契约 §7）：`admin_silent_list` / `admin_blacklist_list` 的返回形状。
  *
- * `items` = 本次新增的条目（不含调用方已有的那一段），`total` = 上游总数 ——
- * 前端据此决定「还翻不翻」。改前一次返回整份名单，禁言那份每页只有 10 条，
- * 一个真实房间要连发 49 次 POST 并被风控挡回 412，因此改成分段取。
+ * - `items` = 本次这一段里的条目（不含调用方已有的那一段），前端按 uid 去重后追加（6.8）。
+ * - `total` = 上游总数。
+ * - `next_offset` = **上游口径**的「下一次要的 offset」（**不是**去重后的列表长度，6.7）；
+ *   前端据此继续补齐，直到 `done`。
+ * - `done === true` = 已到终点，不再打上游（6.9 / 6.13）。
+ *
+ * 改前一次返回整份名单，禁言那份每页只有 10 条，一个真实房间要连发 49 次 POST
+ * 并被风控挡回 412，因此改成分段取；`next_offset` / `done` 是「封顶不得让条目永久取不到」
+ * （6.15）的收口字段 —— 单次响应体量封顶 + 带回下一游标，由前端后台继续补齐。
  */
 export interface AdminListSlice<T> {
   items: T[];
   total: number;
+  next_offset: number;
+  done: boolean;
 }
 
 /**
@@ -410,7 +423,7 @@ export interface Prefs {
    */
   "ui.gift_pane_on_top": boolean;
   /**
-   * 礼物栏占共享分区高度的**份额**（契约 §8，0.10–0.90，默认 0.35）。
+   * 礼物栏占共享分区高度的**份额**（契约 §8，0.10–0.90，默认 0.25 = 礼物 : 弹幕 = 1 : 3）。
    * 与它在上面还是下面无关（换位不改比例）；落到像素时再被两栏最小高度夹一次
    * （礼物栏 ≥ 折叠头、弹幕区 ≥ 3 行），所以存的是指针意图而不是实测像素。
    */
@@ -455,7 +468,7 @@ export interface Prefs {
    *
    * 判据与形态全在 `aggregate.ts`（issue 202609211940 第 3 条）：**≥ 3 条**同键、同 5 秒窗口、
    * 参与观众去重后 **≥ 2 位不同 uid** 才折；折出来的那一行头像列画前 3 位观众的头像
-   * （错位 30% 堆叠），身份行改画「刷屏 ×N」，**一个用户名都不出现**。关掉即逐条显示
+   * （错位 34% 堆叠，`MessageRow` 的 `AVATAR_STACK_OFFSET`），身份行改画「刷屏 ×N」，**一个用户名都不出现**。关掉即逐条显示
    * （纯派生，不改缓冲，见 `docs/ui.md` §8.4）。
    */
   "ui.danmaku_aggregate": boolean;
@@ -672,10 +685,18 @@ export const KIND_LABEL: Record<MessageKind, string> = {
 };
 
 /**
- * 互动槽位（ui.interact_single_slot）浮层在**没有新互动消息**后多久自动淡出（毫秒）。
+ * 互动槽位（ui.interact_single_slot）浮层在**没有新互动消息**后多久开始淡出（毫秒）。
  * 下一条互动到达会重置这个计时，因此连续互动时浮层常驻、逐条接力顶替（docs/ui.md §4.8）。
  */
 export const INTERACT_SLOT_MS = 4000;
+
+/**
+ * 互动槽位淡出的时长（毫秒）：`INTERACT_SLOT_MS` 到点开始淡出，淡完**整块卸载** ——
+ * 两枚相加就是槽位的总寿命（`interact-slot.ts` 的 `INTERACT_SLOT_LIFE_MS`）。
+ * 组件按这对数排卸载定时器、CSS 按同一对数播 `interactSlotFade`，两边同时到点；
+ * 卸载即 `.chatWrap` 的预留归零、弹幕缩回补齐空出的那一段（docs/ui.md §4.8）。
+ */
+export const INTERACT_SLOT_FADE_MS = 300;
 
 /**
  * 互动槽位「新进旧出」的快速顶替过渡时长（毫秒）。新消息自下而上滑入、旧消息同时向上滑出，

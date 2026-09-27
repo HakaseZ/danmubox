@@ -1016,17 +1016,18 @@
 
 .paneGift {
   flex-grow: var(--gift-share);
-  /* 礼物栏不可被压到比它的**折叠头**更矮（契约 §8）：--gift-min-h 是 JS 实测的折叠头高度。
+  /* 礼物栏不可被压到比它的**总计条**更矮（契约 §8）：--gift-min-h 是 JS 实测的总计条高度。
      背景**与弹幕栏同色**（用户 2026-09-16 第 2 条：「一样的背景颜色」）：这一栏的行就是
      MessageRow（scope="gift"），行的底色必须与弹幕区逐行相同，因此这里不另刷 `--bg-elevated`
      —— 两栏的分界由分割条那条发丝线给出，不靠底色。 */
   min-height: var(--gift-min-h);
-}
-
-/* 折叠态：礼物栏 = 它的折叠头（折叠优先于份额），弹幕区拿走剩下的全部；
-   分割条仍在、仍可拖 —— 拖动会把这一栏拖开（SplitPanes 的 onExpand）。 */
-.paneGiftCollapsed {
-  flex: none;
+  /* **裁剪**：这一栏就是「份额给它的那一条带」，内容超出即裁掉（需求 5.1–5.4 的单轴模型）。
+     折叠态（份额被压到下限以下，React 写的 `--gift-share` = 0）因此只剩贴中心的总计条那一行，
+     而**列表与三枚芯片照旧挂载**、只是落在裁剪区外看不见 —— 展开只改份额，不重挂、不重取，
+     拉开的瞬间就呈现（`docs/ui.md` §5.4）。改前折叠靠 `flex: none` 按**内容**定高，
+     那要求列表与芯片在折叠时被卸载；模型统一之后两件事都不再成立。
+     裁剪在这一层而不是内层：这一栏在分区**上面**时，被裁掉的那一段正好落在弹幕区身上。 */
+  overflow: hidden;
 }
 
 /* 分割条：热区 8px（需求：拖动热区 ≥ 8px），看得见的那条线绝对定位在热区正中，
@@ -1174,26 +1175,31 @@
 }
 
 /* 槽位的**预留高度**：浮层浮在弹幕区底部，若不给它留位置，它必然压住最新一条弹幕
-   （用户 2026-09-26）。这里在 `.chatWrap` 底部让出一段 = 槽位高度（`--avatar + 8px`，
-   与 `.interactSlotRow` 同源）+ 上下各一道安全间距，浮层因此落在预留区里、压不到任何一行。
+   （用户 2026-09-26）。这里在 `.chatWrap` 底部让出一段 = **互动气泡自身的高度**
+   （`--avatar + 8px`，与 `.interactSlotRow` 同源，`.interactSlot` 的 `bottom: 0`
+   让气泡整条落在这段里）。需求 1.1 要的是「互动槽的**整体占用高度**不超过一条气泡的高度」，
+   所以**不再**在气泡上下各加一道安全间距（旧写法多留 24px 纯空白段）。
    ⚠ 留的是**外层** `.chatWrap` 的下内边距，不是 `.scroller` 的：滚动容器的
    `scrollHeight` / 贴底判据一个字节都不动（虚拟列表照旧按自己的口径贴底），
    变的只是它可见的那一段高度。
-   开关（`ui.interact_single_slot`）关掉时浮层不渲染，这段预留随之消失 ——
-   `data-interact-slot` 由 `RoomView` 按开关打在滚动容器那一层；第二选择器是同形态的
-   CSS 兜底（浮层在 DOM 里才生效），两者取值完全一致。 */
-.chatWrap[data-interact-slot="true"],
+   ⚠ **唯一判据是浮层在不在 DOM 里**（`:has()`），不看任何开关属性（需求 1.3）：
+   开关开着但还没有互动消息 ⇒ 不占空白；浮层到点被 `InteractSlot` 卸载
+   （`interact-slot.ts` 的寿命判定）⇒ 这条规则失效 ⇒ 预留归零 ⇒ 弹幕上移补齐
+   空出的那一段（需求 1.2 / 1.4）。 */
 .chatWrap:has(> .interactSlot) {
-  padding-bottom: calc(var(--avatar) + 8px + var(--sp-3) * 2);
+  padding-bottom: calc(var(--avatar) + 8px);
 }
 
 /* 互动/进场消息共用单槽位（`InteractSlot`，docs/ui.md §4.8）：浮于弹幕区底部偏左、
    轻量非侵入（pointer-events: none 不挡弹幕交互，仿官方网页直播间「互动消息」条的位置）。
-   它只是一条浮层，blast radius 小，不影响 `.chatArea` / `.scroller` 的滚动与贴底。 */
+   它只是一条浮层，blast radius 小，不影响 `.chatArea` / `.scroller` 的滚动与贴底。
+   `bottom: 0`：气泡**整条落在预留带里**（预留高度 = 气泡高，见上面那条规则）——
+   若还留着 `--sp-3` 那道间距，气泡顶边就会高出预留带 12px、重新压住最后一行弹幕，
+   而那 12px 也是需求 1.1 明令要去掉的多余占用。 */
 .interactSlot {
   position: absolute;
   left: var(--sp-3);
-  bottom: var(--sp-3);
+  bottom: 0;
   z-index: 5;
   /* 浮层本身不接交互，避免遮住下面的弹幕行点击/右键。 */
   pointer-events: none;
@@ -1203,8 +1209,11 @@
 }
 
 /* 胶囊底：半透明玻璃质感，沿用面板令牌，轻微阴影 + 圆角（pill）。
-   按消息 local_id 作 key 重挂时整块重启 `interactSlotLife`：出现后保持可见，
-   空闲 INTERACT_SLOT_MS 后整体淡出（fill forwards 维持隐藏），下一条到达瞬间恢复。 */
+   按消息 local_id 作 key 重挂时整块重启 `interactSlotFade`：出现后保持可见
+   （延迟期间不播放，元素就是不透明的常态），空闲 INTERACT_SLOT_MS 之后整体淡出
+   （fill forwards 维持隐藏），下一条到达瞬间恢复。
+   两个时长由组件按 `INTERACT_SLOT_MS` / `INTERACT_SLOT_FADE_MS` 注入，**JS 的卸载定时器
+   读同一对数**：淡出播完的那一刻整块离开 DOM，`.chatWrap` 的预留随之归零。 */
 .interactSlotBox {
   position: relative;
   overflow: hidden;
@@ -1214,7 +1223,7 @@
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(6px);
-  animation: interactSlotLife var(--slot-life-ms, 4300ms) ease forwards;
+  animation: interactSlotFade var(--slot-fade-ms, 300ms) ease var(--slot-idle-ms, 4000ms) forwards;
 }
 
 /* 槽位里的每一行（头像 + 文案）同一盒内重叠，便于「新进旧出」接力。 */
@@ -1260,14 +1269,15 @@
   }
 }
 
-/* 浮层生命周期：出现即满不透明，撑过 INTERACT_SLOT_MS 后淡出并维持隐藏（forwards）。
-   `--slot-life-ms` 由组件按 INTERACT_SLOT_MS + 300 注入，故这里只用 fallback。 */
-@keyframes interactSlotLife {
-  0%,
-  92% {
+/* 浮层生命周期：出现即满不透明（延迟期间不播放动画，元素就是不透明的常态），
+   空闲 INTERACT_SLOT_MS（= `--slot-idle-ms`）之后淡出，淡 `--slot-fade-ms` 并维持隐藏。
+   ⚠ 判「淡出播完了没有」**不能**在 JS 里比 `animationName`（CSS Modules 会哈希改名），
+   JS 侧按同一对数独立计时、到点直接卸载，见 `src/interact-slot.ts` 的文件头。 */
+@keyframes interactSlotFade {
+  from {
     opacity: 1;
   }
-  100% {
+  to {
     opacity: 0;
   }
 }
@@ -1461,9 +1471,10 @@
   width: auto;
 }
 
-/* 刷屏那几位发言者的头像：沿 X 轴依次向右错开 **30% 头像宽**（`AVATAR_STACK_OFFSET`，
-   MessageRow），后一张压在前一张上；容器宽 = 头像宽 + (张数 - 1) × 30%（`left` / `z-index`
-   由组件按**实际画出来的张数**现给：空 url 的观众不占位，几张就按几张错开）。
+/* 刷屏那几位发言者的头像：沿 X 轴依次向右错开 **34% 头像宽**（`AVATAR_STACK_OFFSET`，
+   MessageRow；每人因此露出 66%），后一张压在前一张上；容器宽 = 头像宽 + (张数 - 1) × 34%
+   （`left` / `z-index` 由组件按**实际画出来的张数**现给：空 url 的观众不占位，
+   几张就按几张错开）。低价礼物桶走的是同一套（同一个常量），两族的错开量不会各自漂移。
    绝对定位的每一片：`z-index` 递减 ⇒ **最左那张在最上层**，压住右边那几片的左半边。 */
 .avatarStack {
   position: relative;
@@ -1859,7 +1870,9 @@
 }
 
 /* 筛选条：三格分类金额（`icon + ¥金额`），点击切换筛选（多选并集）。
-   放在**远离**热区的外侧 —— 热区会吞掉它覆盖的那 8px 点击，三格密集点击不能让给它。 */
+   放在**远离**热区的外侧 —— 热区会吞掉它覆盖的那 8px 点击，三格密集点击不能让给它。
+   **它常驻**（需求 5.1 / 5.3）：三格恒为礼物 / SC / 大航海，进房即渲染、不等第一族消息到齐，
+   也不再随礼物栏开合挂载 / 卸载 —— 折叠时它只是落在 `.paneGift` 的裁剪区外。 */
 .giftPaneFilter {
   display: flex;
   flex: none;
@@ -1880,6 +1893,19 @@
   border-radius: var(--r-2);
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* 本场还没有这一族消息的那一格（需求 5.2）：**灰显，但照旧常驻、照旧可点击**
+   （点击只切 `ui.gift_pane_kinds`，与有没有数据无关）。**不置 `disabled`** ——
+   置了就等于把「这一族现在没数据」与「这一格按不动」混成一件事，用户也就没法预先选上它。
+   放在选中态那条规则之前：两枚属性同时成立时按源序由**选中态**（强调色填充）说话。 */
+.giftPaneChip[data-empty="true"]:not([aria-pressed="true"]) {
+  color: var(--fg-subtle);
+  border-style: dashed;
+}
+
+.giftPaneChip[data-empty="true"] .giftPaneIcon {
+  opacity: 0.5;
 }
 
 /* 选中的那一格：与房管面板「批量」那枚同一套**模式态**语言（强调色填充）。
@@ -2123,13 +2149,27 @@
   margin-bottom: var(--sp-2);
 }
 
-/* 房管面板（issue #3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表 */
+/* 房管面板（issue #3；结构见需求 6.1–6.3）：与输入区的弹出面板同处文档流，展开只挤压弹幕列表。
+   面板本身**不滚**（`overflow: hidden`）：滚动权交给 `.adminList`（`flex: 1 1 auto; min-height: 0`），
+   表单排、错误条与底部向上展开的批量条因此都是**不滚区** —— 名单也不再固定 240px 高（6.3）。
+   口径同 `.phrases` / `.picker` 的「固定行 + 可滚区」，不引入第二套做法。 */
 .adminPanel {
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
   padding: var(--sp-2) var(--sp-3);
   max-height: var(--panel-max-h);
-  overflow-y: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* tabpanel 是面板里**唯一可缩的一块**（`flex: 1 1 auto` + `min-height: 0`）：
+   头部与它下面的批量条都钉住不动，缩的只有名单那一块。 */
+.adminTabPanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 三块列表收成**横向 tab 轨道**（issue 2609132259 #1）：外观与表情分组的轨道同一套
@@ -2185,18 +2225,40 @@
   background: var(--accent);
 }
 
-/* 批量模式的**第 2 排**：全选 / 已选 N 项 / 批量动作。它紧贴第 1 排下方（issue #5 的「两排都贴顶」），
-   也是横向一排 —— 行内三样都不换行，360px 下按内容算得下（§9.1）。 */
+/* 批量动作条（需求 6.1 / 6.2）：**从面板最底下向上展开一行** —— 它是 `.adminTabPanel` 的
+   最后一个子节点（在 `.adminList` **之外**），因此长名单滚到任意位置它都**始终可见**，
+   也不会在列表中间插行、不让界面突然变高。行内三样（全选 / 已选 N 项 / 批量动作）横向一排
+   不换行，360px 下按内容算得下（§9.1）。
+   160ms 滑入：从下方滑上来，读作「向上展开一行」；动效偏好下不播（口径同本仓另几处）。 */
 .adminBatchBar {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin: var(--sp-2) 0 var(--sp-1);
+  margin: var(--sp-2) 0 0;
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--fs-2);
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--r-2);
+  animation: adminBatchIn 160ms ease-out;
+}
+
+@keyframes adminBatchIn {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adminBatchBar {
+    animation: none;
+  }
 }
 
 /* 名字格：放不下时默认**可横滑**（触屏 / 滚轮都能推，滚动条隐藏），
@@ -2267,13 +2329,17 @@
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
 }
 
-/* 名单使用两列等宽网格，每个条目占一格；名单自己滚，头部不会被一起滚走。 */
+/* 名单使用两列等宽网格，每个条目占一格；**名单自己滚**（面板不滚，见 `.adminPanel`），
+   头部与底部的批量条都不会被一起滚走。**不再固定 240px 高**：它在 `.adminTabPanel` 里
+   `flex: 1 1 auto; min-height: 0`，高度由面板限高与同排的表单 / 批量条一起决定 ——
+   面板限高生效时它吸收被压缩的那部分并在内部滚动（6.3）。 */
 .adminList {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-1);
   margin: var(--sp-2) 0 var(--sp-1);
-  max-height: 240px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 

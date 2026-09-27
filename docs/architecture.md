@@ -9,7 +9,7 @@
 | 表现层 | `apps/desktop/ui`（React + TS + Vite，运行在 Tauri WebView） | 虚拟列表渲染、过滤、交互、乐观更新 | 直接访问 ac站接口；持有 Cookie 明文 |
 | 消费面层 | `apps/desktop/src-tauri`、`danmubox-cli` | 把 core 的事件与命令翻译成自己的协议：Tauri IPC、终端文本 | 实现协议解包；直接持有 WS 连接；自带第二套领域模型 |
 | 引擎层 | `danmubox-core` | 领域模型、端口（trait）、事件总线、会话编排（每房间一个 `RoomRuntime` + 会话缓冲）、本地文件读写 | 依赖 `danmubox-bili`；依赖 `tauri`；出现任何 ac站 URL、字段下标、签名算法、protobuf 定义 |
-| 适配器层 | `danmubox-bili` | 实现 core 的全部八个端口（`crates/danmubox-core/src/ports.rs:87`–`296`）：协议编解码、WS 生命周期、鉴权/WBI/扫码、房间解析、表情、举报、关注、钱包、房管（禁言 / 黑名单 / 屏蔽词） | 定义领域模型；依赖 `tauri` 或任何 UI 框架 |
+| 适配器层 | `danmubox-bili` | 实现 core 的全部十个端口（`crates/danmubox-core/src/ports.rs:87`–`372`）：协议编解码、WS 生命周期、鉴权/WBI/扫码、房间解析、表情、举报、关注、钱包、房管（禁言 / 黑名单 / 屏蔽词）、按 uid 取头像、主播侧（我的直播间） | 定义领域模型；依赖 `tauri` 或任何 UI 框架 |
 
 依赖方向（规范性，契约 §3）：`danmubox-bili` → `danmubox-core`；`danmubox-cli` → `core` + `bili`；`apps/desktop/src-tauri` → `core` + `bili`。**`core` 不得依赖 `bili`，也不得依赖 `tauri`。**
 
@@ -69,7 +69,7 @@ graph LR
   lib["lib<br/>模块清单 + 公共再导出"]
   error["error<br/>DanmuboxError / Result"]
   model["model<br/>领域模型 + sort_followed"]
-  ports["ports<br/>八个端口 trait（§3）"]
+  ports["ports<br/>十个端口 trait（§3）"]
   bus["bus<br/>EventBus / MessageSink / Cancel"]
   session["session<br/>RoomRuntime + 会话缓冲"]
   paths["paths<br/>数据目录与文件路径"]
@@ -91,7 +91,7 @@ graph LR
 |---|---|---|
 | `lib` | crate 根：模块清单与公共再导出（`EventBus` / `Cancel` / `RoomRuntime` / `BufferCaps` / `Prefs` / 端口载荷类型等，`lib.rs:16`–`27`），以及 `now_ms()` 时钟（`lib.rs:30`） | 不放实现逻辑；不放上游知识 |
 | `model` | 契约 §5 的领域模型：`Message`（`kind` 六值）、`Room`、`RoomSession`、`Emote` / `EmotePackage` / `EmoteRef`、`FollowedRoom`、`SendOutcome`、`SilentUser` / `BlacklistedUser`、`ReportReason`，以及 `sort_followed` 排序规则 | 不含 IO；不含业务判断；不出现上游字段名 |
-| `ports` | 八个端口 trait 的定义（见 §3）与端口载荷：`SessionState`（`:22`）、`Account`（`:63`）、`QrChallenge` / `QrState` / `QrPoll`（`:41` / `:49` / `:80`）、`SendReport`（`:161`）、`EmoteToken`（`:187`）、`ReplyTarget`（`:204`） | 不含任何实现；不含 ac站类型 |
+| `ports` | 十个端口 trait 的定义（见 §3）与端口载荷：`SessionState`（`:22`）、`Account`（`:63`）、`QrChallenge` / `QrState` / `QrPoll`（`:41` / `:49` / `:80`）、`SendReport`（`:161`）、`EmoteToken`（`:187`）、`ReplyTarget`（`:204`）、`AdminListSlice`（`:395`） | 不含任何实现；不含 ac站类型 |
 | `bus` | 进程内事件扇出：`EventBus`（`broadcast`，容量 `DEFAULT_CAPACITY = 1024`，`bus.rs:80` / `:85`）、`Event`（消息 / 房间 / 关闭 / 状态 / 会话 / 观众数 / 开播状态，`bus.rs:65`）、`MessageSink`（去重、`local_id` 分配、计数，`bus.rs:165`）、`Cancel` 取消令牌（`bus.rs:301`）、`ConnState` / `StatusEvent` / `Counters` / `RoomStats`（`bus.rs:13` / `:19` / `:114` / `:34`） | 不缓存消息（缓冲在 `session`）；不做序列化 |
 | `session` | `RoomRuntime` 会话编排（`session.rs:320`）：身份 / collector / driver 三个受监督任务、`MessageBuffer` 环形缓冲、`HistoryQuery` 只读查询、手动重连信号；`close()` 广播关闭、取消、abort 三个任务并清空缓冲（`session.rs:527`） | 不解析协议（拿到的已是 `Message`）；不落盘 |
 | `paths` | 跨平台数据目录与文件路径：macOS / Windows / 其他三套 `data_dir()`（`paths.rs:8`）、`config_path()` / `prefs_path()`（`:16` / `:21`），`DANMUBOX_HOME` 覆盖 | 不做 IO；不解析文件内容 |
@@ -101,7 +101,7 @@ graph LR
 
 ### 2.2 `danmubox-bili` 模块划分
 
-全部十七个文件（`crates/danmubox-bili/src/`，含 crate 根 `lib.rs`）：
+全部十九个文件（`crates/danmubox-bili/src/`，含 crate 根 `lib.rs`）：
 
 | 模块 | 职责 | 实现的端口 |
 |---|---|---|
@@ -121,12 +121,13 @@ graph LR
 | `admin` | 房管：禁言名单与禁言 / 解禁、黑名单、屏蔽词 | `RoomAdmin` |
 | `follow` | 关注列表与直播状态补齐；返回前调用 `core::model::sort_followed` 排序 | `RoomCatalog` |
 | `wallet` | 电池余额（金瓜子 / 100） | `WalletProvider` |
+| `profile` | **按 uid 取用户资料（当前只取头像）**：`GET x/space/wbi/acc/info`（WBI 签名，取 `data.face`），**取不到即空串**、**进程级缓存 + 单飞**（同一 uid 只问一次上游，非 0 code 不写缓存），另有一个只读校准入口 `probe`（`danmubox-cli face`） | `UserProfile` |
 | `anchor` | **主播侧**（我自己的直播间）：`room_id_by_uid` 找自己直播间 + `get_info` 读标题 / 开播状态 / 分区、改标题、开播（三段式 + app 签名 `anchor.rs:72`）/ 下播；非 0 code 原样带回不赋语义（`anchor.rs:110`），**身份校验那两个码除外** —— 它们在这里转成引导产出 `AnchorGate`（认证页的拼装与 `data.qr` 的读取都只在本模块，`protocol.md` §18.5）。上游知识只在这个模块里（`crates/danmubox-bili/src/anchor.rs:1-40` 的模块文档列了七个端点与「本仓尚未实测」的范围） | `AnchorRoom` |
 | `redact` | 日志与错误文案的**唯一**脱敏出口：`redact()`，占位符 `***`（`redact.rs:20`） | —（被 `http` 等使用） |
 
 ## 3. 端口与适配器（重点）
 
-端口是 core 与 bili 之间**唯一**的接缝：core 只看见 trait 与 `model` 里的领域结构，bili 只负责把上游的原貌翻译成这些结构。端口恰好八个（`ports.rs:87`–`296`）。
+端口是 core 与 bili 之间**唯一**的接缝：core 只看见 trait 与 `model` 里的领域结构，bili 只负责把上游的原貌翻译成这些结构。端口恰好**十个**（`ports.rs:87`–`372`）。
 
 | 端口（契约 §3） | trait 与方法（`crates/danmubox-core/src/ports.rs`） | 输入 → 输出领域模型 | 实现落点 |
 |---|---|---|---|
@@ -135,10 +136,11 @@ graph LR
 | `DanmakuSender` | trait `:213`；`send` `:217` | `room_id` + 内容 / 颜色 / 模式 + 可选 `EmoteToken` / `ReplyTarget` → `SendReport`（`SendOutcome` + 上游原始 code / message） | `bili::send` |
 | `DanmakuReporter` | trait `:229`；`reasons` `:231`、`report` `:234` | 无输入 → `ReportReason[]`；`Message` + 理由 → 成功 / 失败 | `bili::report` |
 | `EmoteProvider` | trait `:238`；`emotes` `:240`、`owned` `:248` | `room_id` + `RoomSession`（我在该房间的粉丝牌与大航海等级、是否房管）→ `Emote[]`；`owned` → 主站表情 `Emote[]` | `bili::emote` |
-| `RoomAdmin` | trait `:257`；`silent_list(room_id, offset, limit) -> (Vec<SilentUser>, i64)`、`blacklist(room_id, offset, limit) -> (Vec<BlacklistedUser>, i64)` 为**分页增量**接口（翻页 + 限速由 `bili::admin` 负责，见 `admin.rs`）；其余 `mute` / `unmute` / `blacklist_add` / `blacklist_del` / `keywords` / `keyword_add` / `keyword_del` 均为单点写操作 | `room_id`（写操作另带 uid / 词）→ 名单数组或写操作结果 | `bili::admin` |
-| `RoomCatalog` | trait `:288`；`followed` `:290` | 无输入 → `FollowedRoom[]`（`live_status == 1` 置顶由实现内的 `core::model::sort_followed` 完成） | `bili::follow` |
-| `WalletProvider` | trait `:294`；`balance` `:296` | 无输入 → 余额数值 | `bili::wallet` |
-| `AnchorRoom` | trait `:307`；`own` `:310`、`set_title` `:313`、`go_live` `:319`、`end_live` `:322` | 无输入 → `OwnRoom`（`None` = 该账号没有开通直播间）；标题 → 写操作结果；无输入 → `StreamEndpoints`（开播成功）/ `AnchorGate`（开播被身份校验挡住，二选一）/ 写操作结果（下播） | `bili::anchor` |
+| `RoomAdmin` | trait `:257`；`silent_list(room_id, offset, limit)`、`blacklist(room_id, offset, limit)` 为**分页增量**接口（翻页 + 限速由 `bili::admin` 负责，见 `admin.rs`），返回形状与契约 §7 的 `AdminListSlice` 同形（`items` / `total` / `next_offset` / `done`：带出上游口径的下一游标与终点标记）；其余 `mute` / `unmute` / `blacklist_add` / `blacklist_del` / `keywords` / `keyword_add` / `keyword_del` 均为单点写操作 | `room_id`（写操作另带 uid / 词）→ 名单分页切片或写操作结果 | `bili::admin` |
+| `RoomCatalog` | trait `:308`；`followed` `:310` | 无输入 → `FollowedRoom[]`（`live_status == 1` 置顶由实现内的 `core::model::sort_followed` 完成） | `bili::follow` |
+| `WalletProvider` | trait `:314`；`balance` `:316` | 无输入 → 余额数值 | `bili::wallet` |
+| `UserProfile` | trait `:333`；`face_of(uid) -> String` `:335` | `uid` → 头像地址（空串 = 取不到，**没有错误通道**：需求把每一种失败都定义成空串） | `bili::profile` |
+| `AnchorRoom` | trait `:349`；`own` `:351`、`set_title` `:354`、`set_area` `:359`、`go_live` `:365`、`end_live` `:368`、`area_list` `:371` | 无输入 → `OwnRoom`（`None` = 该账号没有开通直播间）；标题 / 子分区 id → 写操作结果；无输入 → `StreamEndpoints`（开播成功）/ `AnchorGate`（开播被身份校验挡住，二选一）/ 写操作结果（下播）；`area_list` → 两级分区树 `AnchorArea[]` | `bili::anchor` |
 
 账号增删只有两条路（**没有** `create_profile` / `remove_profile`）：新增 = `begin_qr(None)` + `poll_qr` 确认时落盘（`ports.rs:103` / `:108`；账号名在确认后按昵称自动生成），删除 = `remove_account`（`ports.rs:120`，不许删最后一个）。
 
@@ -154,6 +156,7 @@ graph LR
 | `RoomAdmin` | 名单条目（uid、昵称等）与写操作的成败、上游 `code` 原文 | 房管接口路径与参数名、禁言时长取值、黑名单按主播 uid 而非房间号、CSRF 参数 |
 | `RoomCatalog` | `FollowedRoom` 的字段（房间号、昵称、头像、标题、`live_status`、分组名、开播时间） | 关注列表分页、未开播条目的补齐、直播状态字段位置 |
 | `WalletProvider` | 一个数值 | 余额接口与单位换算 |
+| `UserProfile` | 一个 uid 对应的头像地址（取不到即空串，不区分失败原因） | 端点路径、WBI 签名与参数集、响应字段路径（`data.face`）、`http://`→`https://` 的升级、失败缓存策略、取数超时 |
 | `AnchorRoom` | `OwnRoom` 的五个字段（房间号、标题、开播状态、分区 id 与分区名）、`StreamEndpoints` 的三组端点（`addr` / `code`）、`AnchorGate` 的 `kind` 与**上游下发的** `url` / `qr`（core 只见值、不拼装不解析）、写操作的成败与上游 `code` 原文 | 三段式开播的端点与顺序（`click/now` → `getHomePageLiveVersion` → `startLive`）、appkey / appsec 与 app 签名算法、`platform=pc_link`、`csrf` 取自 `bili_jct`、分区名的「父 · 子」拼法、非 0 code 的判定、身份校验那两个码与认证页地址 / `data.qr` 的形态 |
 
 上游改字段下标 / 签名 / 包结构 / 接口路径时，改动收敛为「重写 `bili` 内对应模块 + 调整该端口的映射」；跨层类型是契约 §5 的领域模型，不含上游标识（溯源：REQUIREMENTS.md §3）。

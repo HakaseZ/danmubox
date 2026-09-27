@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use danmubox_bili::{
-    BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliSender, BiliWallet,
+    BiliAdmin, BiliAuth, BiliEmotes, BiliFollow, BiliLive, BiliProfile, BiliSender, BiliWallet,
 };
 use danmubox_core::ports::{
     AuthProvider, DanmakuSender, EmoteProvider, LiveSource, QrState, RoomAdmin, RoomCatalog,
@@ -105,6 +105,16 @@ enum Command {
     AdminLists {
         /// 房间号 / 短号 / URL
         room: String,
+        /// 只读探针：只对禁言列表端点发**一次 GET**（带 Cookie、不带 csrf），打印
+        /// HTTP 状态 / content-type / 响应体开头；用来实测该端点收不收 GET
+        /// （`docs/protocol.md` 附录 A36）。只读、失败即停、不换参数重试。
+        #[arg(long)]
+        probe_silent_get: bool,
+    },
+    /// 只读校准：按 uid 取一次头像（`docs/protocol.md` 附录 A 的「按 uid 取头像」条目）
+    Face {
+        /// 目标用户 uid
+        uid: i64,
     },
 }
 
@@ -155,7 +165,35 @@ async fn main() -> Result<()> {
         Command::Follow => follow(&store).await?,
         Command::Emotes { room } => emotes(&store, &room).await?,
         Command::EmotesOwned => emotes_owned(&store).await?,
-        Command::AdminLists { room } => admin_lists(&store, &room).await?,
+        Command::AdminLists {
+            room,
+            probe_silent_get,
+        } => admin_lists(&store, &room, probe_silent_get).await?,
+        Command::Face { uid } => face(&store, uid).await?,
+    }
+    Ok(())
+}
+
+/// 按 uid 取一次头像并打印**上游原样的**结论（只读、不改任何状态）。
+///
+/// 这是 `docs/protocol.md` 附录 A「按 uid 取头像」条目的核对入口：要看的不是
+/// 「有没有头像」，而是端点与签名是否被接受、`code` 到底是多少、`data.face` 是什么形态。
+/// 传输失败 / 非 JSON 应答（例如风控验证页）走 `Err`，**原样打印后即止**，不换参数重试。
+async fn face(store: &Arc<ConfigStore>, uid: i64) -> Result<()> {
+    let profile = BiliProfile::with_store(Arc::clone(store))?;
+    match profile.probe(uid).await {
+        Ok(probe) => {
+            println!(
+                "# 按 uid 取头像：code={} message={:?}",
+                probe.code, probe.message
+            );
+            if probe.face.is_empty() {
+                println!("  data.face：空（上游没给，界面按无头像处理）");
+            } else {
+                println!("  data.face：{}", probe.face);
+            }
+        }
+        Err(err) => println!("# 按 uid 取头像失败（不重试）：{err}"),
     }
     Ok(())
 }
@@ -241,28 +279,52 @@ async fn emotes_owned(store: &Arc<ConfigStore>) -> Result<()> {
 /// 这里是**核对形状**用的调试入口，不该把整份名单翻完。
 const ADMIN_CLI_LIMIT: i64 = 200;
 
-async fn admin_lists(store: &Arc<ConfigStore>, room: &str) -> Result<()> {
+async fn admin_lists(store: &Arc<ConfigStore>, room: &str, probe_silent_get: bool) -> Result<()> {
     let live = BiliLive::with_store(Arc::clone(store))?;
     let resolved = live.resolve_room(room).await?;
     let admin = BiliAdmin::new(Arc::clone(store))?;
     println!("# 房管列表（房间 {}）", resolved.room_id);
 
+    if probe_silent_get {
+        // 只读探针（A36 补充）：只发**一次** GET、不解析业务 code、不重试；探完即返回，
+        // 不跟着再打三条列表接口 —— 这次运行只回答「这个端点收不收 GET」。
+        match admin.probe_silent_get(resolved.room_id).await {
+            Ok((status, content_type, head)) => println!(
+                "# 探针（禁言列表 GET）：HTTP {status}，content-type={content_type}，响应体开头：{head}"
+            ),
+            Err(err) => println!("# 探针（禁言列表 GET）未拿到响应：{err}"),
+        }
+        return Ok(());
+    }
+
     match admin
         .silent_list(resolved.room_id, 0, ADMIN_CLI_LIMIT)
         .await
     {
-        Ok((list, total)) => {
-            println!("禁言名单 {}/{} 条", list.len(), total);
-            for user in list {
+        Ok(slice) => {
+            println!(
+                "禁言名单 {}/{} 条（next_offset={} done={}）",
+                slice.items.len(),
+                slice.total,
+                slice.next_offset,
+                slice.done
+            );
+            for user in slice.items {
                 println!("  uid={} {} {}", user.uid, user.uname, user.face);
             }
         }
         Err(err) => println!("禁言名单失败：{err}"),
     }
     match admin.blacklist(resolved.room_id, 0, ADMIN_CLI_LIMIT).await {
-        Ok((list, total)) => {
-            println!("黑名单 {}/{} 条", list.len(), total);
-            for user in list {
+        Ok(slice) => {
+            println!(
+                "黑名单 {}/{} 条（next_offset={} done={}）",
+                slice.items.len(),
+                slice.total,
+                slice.next_offset,
+                slice.done
+            );
+            for user in slice.items {
                 println!("  uid={} {} {}", user.uid, user.uname, user.face);
             }
         }

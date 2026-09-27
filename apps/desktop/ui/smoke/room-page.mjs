@@ -60,7 +60,7 @@
 // 三条维护约定（拆之前就在，逐条保留）：
 //   1) 断言只依赖对外可观察的行为（DOM 文本 / 几何 / 副作用记录），**不依赖 CSS-module 类名**；
 //      定位一律走 `data-testid`（db-chat-scroll / db-msg-row / db-msg-time / db-msg-spam /
-//      db-msg-avatar-stack / db-context-menu / db-account / db-panel / db-gift-dock /
+//      db-msg-avatar-stack / db-context-menu / db-account / db-panel / db-gift-pane /
 //      db-follow-item），那是稳定的对外契约。
 //   2) 快照字段名是契约：`step1_*` … `step6_*` 的语义不得改（Main 按这套闭环），
 //      新增断言另起字段名（layout* / menu* / time* / gift* / follow* / account*）。

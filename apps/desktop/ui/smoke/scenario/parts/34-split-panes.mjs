@@ -1,8 +1,13 @@
 // 场景块：共享分区：分割条与长按换位
 //   splitter 弹幕区与礼物栏上下分区、分割条热区 ≥ 8px、拖动实时改比例且松手才落盘
-//   拖到极限时两栏最小高度成立（弹幕区 ≥ 3 行、礼物栏 ≥ 折叠头）且总量不溢出、比例重挂后保持
+//   默认份额 0.25（= 1 : 3）、**拖动全程开合态不变、松手才收起 / 展开**、ESC 只还原份额
+//   折叠态列表与三枚筛选芯片照旧挂载（被这一栏裁掉）、展开即刻可见且不重挂
+//   拖到极限时两栏最小高度成立（弹幕区 ≥ 3 行、礼物栏 ≥ 总计条）且总量不溢出、比例重挂后保持
 //   键盘 ↑↓ 微调（连按只落盘一次）、长按 0.5s 换位与三种取消路、切标签回来后本地状态复位
 //   ui.gift_panel 关掉后分区退化为弹幕区全高
+//
+// 开合态一律读 `db-gift-toggle` 的 `aria-expanded`：列表根 `db-gift-area` 自需求 5.1–5.4
+// （单轴模型）起**折叠也挂载**，拿它在场与否当开合会恒为真。
 //
 // 页内脚本片段：由 smoke/room-page.mjs **原样拼进** `window.__smoke_run` 的函数体，与相邻块共用同一条
 // 作用域（out / snap / byTestId / sleep / … 都是 10-harness.mjs 里的工具）。准入条件见 docs/testing.md §9.3。
@@ -37,9 +42,15 @@
       document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
       await sleep(300);
     }
-    // 归一形态：礼物栏折叠（点折叠头收起；它顺带收起别的面板）
-    if (byTestId("db-gift-area")) {
-      byTestId("db-gift-toggle").click();
+    // 归一形态：礼物栏折叠（点总计条右端那枚小箭头收起；它顺带收起别的面板）。
+    // 判据是 `aria-expanded`（不是列表根在不在场，见文件头）。
+    var giftToggleEl = byTestId("db-gift-toggle");
+    var giftExpandedNow = function () {
+      var el = byTestId("db-gift-toggle");
+      return el ? el.getAttribute("aria-expanded") : null;
+    };
+    if (giftExpandedNow() === "true") {
+      giftToggleEl.click();
       await sleep(350);
     }
     var panesBox0 = rect(byTestId("db-panes"));
@@ -57,22 +68,43 @@
     // 默认顺序：弹幕在上、礼物在下（契约 §8 的默认值 = 与改前一致的那个形态）
     out.splitterDefaultOrderGiftBelow =
       danmakuBox0.bottom <= splitBox0.top + 1 && splitBox0.bottom <= giftBox0.top + 1;
-    // 折叠态：礼物栏只有折叠头那么高（「礼物栏不小于它的折叠头」这条约束的常态）
-    out.splitterCollapsedGiftIsHeadHeight = !byTestId("db-gift-area") &&
+    // 折叠态：礼物栏只有总计条那么高（单轴模型里它就是「份额被压到下限以下 + 这一栏裁剪」
+    // 的样子 —— 高度由最小高度兜住，不是份额驱动的）
+    out.splitterCollapsedGiftIsHeadHeight = giftExpandedNow() === "false" &&
       Math.abs(giftBox0.height - headBox0.height) <= 1;
     out.splitterDefaultRatioPref = ratioAtEntry;
+    out.splitterDefaultRatioIsQuarter = Math.abs(ratioAtEntry - 0.25) < 1e-9;
     out.splitterDefaultOnTopPref = window.__prefs["ui.gift_pane_on_top"] === false;
+    // ---- 单轴模型（需求 5.1–5.4）：折叠态下礼物**列表与三枚筛选芯片照旧挂载**，
+    //      只是落在这一栏的裁剪区外（看不见）。两步判据：① DOM 里在；
+    //      ② 它们的盒子在礼物栏这一栏的矩形**之外**（这一栏 overflow: hidden，所以看不见）。
+    var foldFilterBox = rect(byTestId("db-gift-filter"));
+    var outsidePane = function (box, paneBox) {
+      if (!box || !paneBox) return null;
+      return box.top >= paneBox.bottom - 1 || box.bottom <= paneBox.top + 1;
+    };
+    out.splitterCollapsedKeepsChips = !!byTestId("db-gift-area") &&
+      !!byTestId("db-gift-scroll") && !!byTestId("db-gift-filter") &&
+      allByTestId("db-gift-chip").length === 3;
+    out.splitterCollapsedChipsClipped = outsidePane(foldFilterBox, giftBox0) === true;
+    // 「展开不重挂」的判据：给列表根与筛选条挂一个自定义属性，走完这一次开合它们必须还在
+    // （重挂会把它们带走 —— 那正是改前「展开才挂载」的形态）。
+    var giftAreaEl = byTestId("db-gift-area");
+    var giftFilterEl = byTestId("db-gift-filter");
+    if (giftAreaEl) giftAreaEl.setAttribute("data-smoke-keep", "list");
+    if (giftFilterEl) giftFilterEl.setAttribute("data-smoke-keep", "filter");
 
-    // ---- 拖动分割条（鼠标指针这一路）：实时改比例、折叠态下「拖开就展开」、松手才落盘 ----
+    // ---- 拖动分割条（鼠标指针这一路）：实时改比例、**全程不改开合态**、松手才落盘 ----
+    var dragFoldBefore = giftExpandedNow();
     firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid(), "mouse");
     firePointer(window, "pointermove", splitX, splitterMid() - 100, "mouse");
-    // 折叠态下的这一次移动会顺手把礼物栏**展开**（onExpand → setState），展开要等 React 重渲染
-    // 之后才看得见；同步读几何会读到展开前的那一帧（页面内派发没有真实输入那一趟往返）。
     await sleep(80);
     var midGiftBox = rect(byTestId("db-pane-gift"));
     out.splitterDragLiveGrewPx = Math.round(midGiftBox.height - giftBox0.height);
-    out.splitterDragLiveExpandsPane = !!byTestId("db-gift-area");
     out.splitterDragLiveGrew = midGiftBox.height > giftBox0.height + 80;
+    // 需求 4.2：拖动**全程**不改开合状态 —— 折叠着也照样被拖开（几何实时长起来），
+    // 但那一档开合状态一动不动（改前在这里就已经 onExpand 了）。
+    out.splitterDragKeepsFoldState = giftExpandedNow() === dragFoldBefore;
     // 拖动中**一帧都不写 store**：磁盘上还是进来时那一份
     out.splitterDragLiveWithoutStore = window.__prefs["ui.gift_pane_ratio"] === ratioAtEntry;
     firePointer(window, "pointerup", splitX, splitterMid() - 100, "mouse");
@@ -81,9 +113,20 @@
     out.splitterDraggedRatioShown = draggedRatio;
     out.splitterDragPersistsRatio = !!draggedRatio &&
       Math.abs(window.__prefs["ui.gift_pane_ratio"] - draggedRatio) < 0.02;
-    // 「涨了」要比**当时屏幕上的那一份**：折叠态下这一栏只有折叠头那么高（份额约 0.04），
-    // 而 ratioAtEntry 是「上次拖到哪儿」的意图、折叠时并没有落到屏幕上（0.35 那个数在
-    // 折叠态下看不见），拿它当基准会把「确实长大了」判成没长。
+    // 松手才判开合：折叠态被拖开 → 展开（与点那枚小箭头同一条路，需求 4.3 / 4.4）
+    out.splitterDragExpandsOnRelease = dragFoldBefore === "false" && giftExpandedNow() === "true";
+    // 展开**即刻可见**（需求 5.4）：三枚芯片的盒子回到礼物栏这一栏里（裁剪区收起来）；
+    // 且列表与筛选条还是**同两个节点**（`data-smoke-keep` 还在 ⇒ 没有被重新挂载）。
+    var grownFilterBox = rect(byTestId("db-gift-filter"));
+    var grownGiftBox = rect(byTestId("db-pane-gift"));
+    out.splitterExpandedChipsVisible = !!grownFilterBox && !!grownGiftBox &&
+      outsidePane(grownFilterBox, grownGiftBox) === false;
+    out.splitterExpandDoesNotRemount = byTestId("db-gift-area") !== null &&
+      byTestId("db-gift-area").getAttribute("data-smoke-keep") === "list" &&
+      byTestId("db-gift-filter").getAttribute("data-smoke-keep") === "filter";
+    // 「涨了」要比**当时屏幕上的那一份**：折叠态下这一栏只有总计条那么高（份额约 0.03），
+    // 而 ratioAtEntry 是「上次拖到哪儿」的意图、折叠时并没有落到屏幕上（0.25 或别的那个数
+    // 在折叠态下看不见），拿它当基准会把「确实长大了」判成没长。
     var shownAtEntry = giftBox0.height / (panesBox0.height - splitBox0.height);
     out.splitterDragGrewOnScreen = !!draggedRatio && draggedRatio > shownAtEntry + 0.05;
     snap();
@@ -123,7 +166,9 @@
       var remountProbe = {
         activeBefore: remountRoomId,
         other: otherRoomId,
-        giftBodyBefore: !!byTestId("db-gift-area"),
+        // 开合态读 `aria-expanded`（列表根折叠也挂载，见文件头）；顺带记下「它在场上」。
+        giftExpandBefore: giftExpandedNow(),
+        giftAreaMounted: !!byTestId("db-gift-area"),
         giftHeightBefore: Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10,
         headHeightBefore: Math.round(headBox0.height * 10) / 10,
         ratioPrefBefore: window.__prefs["ui.gift_pane_ratio"],
@@ -136,7 +181,8 @@
         })[0];
         return t ? t.getAttribute("data-room-id") : null;
       })();
-      remountProbe.giftBodyAfterOther = !!byTestId("db-gift-area");
+      remountProbe.giftExpandAfterOther = giftExpandedNow();
+      remountProbe.giftAreaAfterOther = !!byTestId("db-gift-area");
       tabByRoomId(remountRoomId).click();
       await sleep(900);
       remountProbe.activeAfterBack = (function () {
@@ -145,7 +191,8 @@
         })[0];
         return t ? t.getAttribute("data-room-id") : null;
       })();
-      remountProbe.giftBodyAfterBack = !!byTestId("db-gift-area");
+      remountProbe.giftExpandAfterBack = giftExpandedNow();
+      remountProbe.giftAreaAfterBack = !!byTestId("db-gift-area");
       remountProbe.giftHeightAfterBack = byTestId("db-pane-gift")
         ? Math.round(rect(byTestId("db-pane-gift")).height * 10) / 10 : null;
       remountProbe.ratioPrefAfterBack = window.__prefs["ui.gift_pane_ratio"];
@@ -154,7 +201,7 @@
     // 切房那一趟做得出来才算数（标签条上至少要有两枚、且能认出当前那一枚）；
     // 做不出就是夹具的事，明着写出来，不把它悄悄放过 —— 与 tabs 那一段的 tabsRendered 同一条口径。
     out.splitterRemountAvailable = remountAvailable;
-    out.splitterCollapsedAfterRemount = remountAvailable && !byTestId("db-gift-area") &&
+    out.splitterCollapsedAfterRemount = remountAvailable && giftExpandedNow() === "false" &&
       Math.abs(rect(byTestId("db-pane-gift")).height - headBox0.height) <= 1;
     byTestId("db-gift-toggle").click();
     await sleep(400);
@@ -168,8 +215,12 @@
     var rowHeights = rows().map(function (r) { return rect(r).height; });
     var minRow = Math.min.apply(null, rowHeights);
     var panesBox1 = rect(byTestId("db-panes"));
+    var upFoldBefore = giftExpandedNow();
     firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid());
     firePointer(window, "pointermove", splitX, panesBox1.top - 300);
+    await sleep(80);
+    // 往上拖到顶（份额被夹在 0.9）也**不改开合态**（需求 4.2）
+    out.splitterExtremeUpKeepsFoldState = giftExpandedNow() === upFoldBefore;
     firePointer(window, "pointerup", splitX, panesBox1.top - 300);
     await sleep(450);
     var upDanmaku = rect(byTestId("db-pane-danmaku"));
@@ -180,16 +231,46 @@
     out.splitterExtremeUpNoOverflow =
       Math.abs(upGift.height + upSplit.height + upDanmaku.height - panesBox1.height) <= 1;
     out.splitterExtremeUpClampedRatio = window.__prefs["ui.gift_pane_ratio"] === 0.9;
+    // 份额停在 0.9（在下限之上）⇒ 松手也不动开合，仍是展开
+    out.splitterExtremeUpStaysExpanded = giftExpandedNow() === "true";
 
-    // ---- 拖到极限（向下）：礼物栏不小于它的折叠头 ----
+    // ---- 拖到极限（向下）：礼物栏不小于它的总计条；**压到下限以下 = 松手收起**（需求 4.3）----
+    var downFoldBefore = giftExpandedNow();
     firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid());
     firePointer(window, "pointermove", splitX, panesBox1.bottom + 300);
+    await sleep(80);
+    // 已经压过下限了，但这一帧开合态还没变（收起来自**松手**那一下，不是拖动途中）
+    out.splitterPressedPastMinKeepsFold = downFoldBefore === "true" &&
+      giftExpandedNow() === "true" &&
+      window.__prefs["ui.gift_pane_ratio"] === 0.9;
     firePointer(window, "pointerup", splitX, panesBox1.bottom + 300);
     await sleep(450);
     var downGift = rect(byTestId("db-pane-gift"));
     var downHead = rect(byTestId("db-gift-total"));
     out.splitterExtremeDownKeepsHead = downGift.height >= downHead.height - 1 && downHead.height > 0;
     out.splitterExtremeDownClampedRatio = window.__prefs["ui.gift_pane_ratio"] === 0.1;
+    out.splitterPressedPastMinCollapsesOnRelease = giftExpandedNow() === "false" &&
+      Math.abs(downGift.height - downHead.height) <= 1;
+
+    // ---- 取消（ESC）：**只还原份额、不留中间态**（需求 4.3）----
+    //      起手是折叠（上一段刚收起、份额 0.1）→ 拖开（屏幕上的份额实时长起来）→ ESC：
+    //      几何回到起手那一份、开合**始终**是折叠、偏好一个数都没变。
+    var cancelPrefBefore = window.__prefs["ui.gift_pane_ratio"];
+    var cancelHeightBefore = rect(byTestId("db-pane-gift")).height;
+    firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid(), "mouse");
+    firePointer(window, "pointermove", splitX, splitterMid() - 140, "mouse");
+    await sleep(80);
+    var cancelMidBox = rect(byTestId("db-pane-gift"));
+    out.splitterCancelDraggedLive = cancelMidBox.height > cancelHeightBefore + 60;
+    out.splitterCancelKeepsFoldState = giftExpandedNow() === "false";
+    pressEscape();
+    await sleep(300);
+    out.splitterEscapeRestoresShareOnly =
+      Math.abs(window.__prefs["ui.gift_pane_ratio"] - cancelPrefBefore) < 1e-9 &&
+      giftExpandedNow() === "false" &&
+      Math.abs(rect(byTestId("db-pane-gift")).height - cancelHeightBefore) <= 1 &&
+      byTestId("db-panes").getAttribute("data-dragging") === null;
+    out.splitterCancelNoCrash = !!byTestId("db-room-header");
 
     // ---- 键盘可达：分割条可聚焦，↑↓ 每次微调 0.02，连按只有最后一次落盘 ----
     var splitterEl = byTestId("db-pane-splitter");
@@ -285,16 +366,12 @@
     var danmakuProbeBox = rect(danmakuProbeEl);
     out.swapTouchMoveFreeWhenIdle = paneTouchMoveProbe(danmakuProbeEl) === false;
     var dockBoxBeforeNextTap = rect(byTestId("db-gift-total"));
-    // 「折叠头开合」的量法 = 这一栏自己那两枚钩子：列表根 db-gift-area（**展开才在场上**，
-    // 见 docs/ui.md §5.3）与折叠头的 aria-expanded。**不能**拿 db-gift-body 当折叠状态：
-    // 那是**行内**的正文格（MessageRow 的 t("body")，同 §5.3 的钩子表），只有「本来就有礼物行」
-    // 时才存在；本段跑在送礼那几段之后、当前房间里礼物列表已空，开合两态都取不到它 ——
-    // 断言于是恒为 false（本轮首次真跑就是这么红的：swapDoesNotEatNextTap=false，
-    // 与「那一下 click 有没有被吞」无关）。
-    var giftFoldBeforeNextTap = [
-      !!byTestId("db-gift-area"),
-      byTestId("db-gift-toggle").getAttribute("aria-expanded"),
-    ];
+    // 「这一栏开合」的量法 = 总计条右端那枚小箭头的 `aria-expanded`（`docs/ui.md` §5.3 的钩子表）。
+    // **不能**拿列表根 `db-gift-area` 在不在场当开合：需求 5.1–5.4 之后它折叠也挂载，
+    // 两态都在场、判据恒为假。**也不能**拿 db-gift-body：那是**行内**的正文格
+    // （MessageRow 的 t("body")），只有「本来就有礼物行」时才存在；本段跑在送礼那几段之后、
+    // 当前房间里礼物列表已空，开合两态都取不到它（改前就是这么假失败的）。
+    var giftFoldBeforeNextTap = byTestId("db-gift-toggle").getAttribute("aria-expanded");
     firePointer(danmakuProbeEl, "pointerdown", splitX, danmakuProbeBox.top + 30);
     await sleep(620);
     out.swapTouchMoveOwnedWhenArmed = paneTouchMoveProbe(danmakuProbeEl) === true;
@@ -315,8 +392,8 @@
       dockBoxBeforeNextTap.top + dockBoxBeforeNextTap.height / 2);
     byTestId("db-gift-toggle").click();
     await sleep(400);
-    out.swapDoesNotEatNextTap = (!!byTestId("db-gift-area") !== giftFoldBeforeNextTap[0]) &&
-      (byTestId("db-gift-toggle").getAttribute("aria-expanded") !== giftFoldBeforeNextTap[1]);
+    out.swapDoesNotEatNextTap =
+      byTestId("db-gift-toggle").getAttribute("aria-expanded") !== giftFoldBeforeNextTap;
     snap();
 
     // ---- 关掉独立礼物栏：分区退化为弹幕区全高、分割条与礼物栏一起消失、换位随之停用 ----
@@ -359,7 +436,7 @@
     await sleep(300);
     out.splitterNoCrashWithoutGiftPane = !!byTestId("db-room-header");
 
-    // ---- 收尾：礼物栏开回来，并把两枚键恢复默认（份额 0.35、礼物在下）----
+    // ---- 收尾：礼物栏开回来，并把两枚键恢复默认（份额 0.25 = 契约 §8 的默认值、礼物在下）----
     if (!byTestId("db-panel")) {
       clickTool("筛选");
       await sleep(350);
@@ -387,13 +464,13 @@
     var panesBoxEnd = rect(byTestId("db-panes"));
     var splitBoxEnd = rect(byTestId("db-pane-splitter"));
     var targetY = panesBoxEnd.top + splitBoxEnd.height / 2 +
-      (panesBoxEnd.height - splitBoxEnd.height) * (1 - 0.35);
+      (panesBoxEnd.height - splitBoxEnd.height) * (1 - 0.25);
     firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid());
     firePointer(window, "pointermove", splitX, targetY);
     firePointer(window, "pointerup", splitX, targetY);
     await sleep(450);
-    out.splitterRestoredRatio = Math.abs(window.__prefs["ui.gift_pane_ratio"] - 0.35) < 0.02;
+    out.splitterRestoredRatio = Math.abs(window.__prefs["ui.gift_pane_ratio"] - 0.25) < 0.02;
     out.splitterRestoredOrder = window.__prefs["ui.gift_pane_on_top"] === false;
-    out.splitterRestoredShownRatio = Math.abs(shownRatio() - 0.35) < 0.02;
+    out.splitterRestoredShownRatio = Math.abs(shownRatio() - 0.25) < 0.02;
     snap();
 

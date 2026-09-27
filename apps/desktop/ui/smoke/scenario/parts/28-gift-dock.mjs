@@ -26,7 +26,11 @@
     out.giftDockInSharedRegion = !!dock && !!composer && !!panesEl && panesEl.contains(dock) &&
       (byTestId("db-pane-danmaku").compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
       (dock.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-    out.giftDockCollapsed = !!dock && !byTestId("db-gift-area");
+    // 开合态读总计条右端那枚小箭头的 `aria-expanded`（`docs/ui.md` §5.3 的钩子表）：
+    // 需求 5.1–5.4 之后礼物**列表与三枚芯片折叠也挂载**，`db-gift-area` 在场与否不再是开合。
+    var foldToggleEl = byTestId("db-gift-toggle");
+    out.giftDockCollapsed = !!dock && !!foldToggleEl &&
+      foldToggleEl.getAttribute("aria-expanded") === "false";
     out.giftDockFullWidth = !!dock && Math.abs(rect(dock).width - document.body.clientWidth) < 2;
     // 窄屏：折叠条只占一行，弹幕列表不被它挤掉
     put("giftDockCompact", !!dock && rect(dock).height <= 56);
@@ -49,10 +53,12 @@
     out.giftDockNoCrossUnitSum = giftSummary.indexOf(yuan(1168.7)) < 0 &&
       giftSummary.indexOf("1168.7") < 0 && giftSummary.indexOf("139.73") < 0 &&
       giftSummary.indexOf("139730") < 0 && giftSummary.indexOf("140730") < 0;
-    // db-gift-total 是礼物栏的**总计条**（data-pane-head，折叠态唯一一行；issue #8 之后由折叠头演变而来），不再是「容器里装着一枚按钮」
-    dock.click();
+    // db-gift-total 是礼物栏的**总计条**（data-pane-head，折叠态唯一一行；issue #8 之后由
+    // 折叠头演变而来），它**本身不是按钮、也不参与开合**（需求 4.4）——展开 / 收起的入口是
+    // 它右端那枚小箭头 `db-gift-toggle`（见 docs/ui.md §5.3）。所以展开要点那枚箭头。
+    byTestId("db-gift-toggle").click();
     await sleep(300);
-    out.giftDockExpands = !!byTestId("db-gift-area");
+    out.giftDockExpands = byTestId("db-gift-toggle").getAttribute("aria-expanded") === "true";
     out.giftChatWidthUnchanged = Math.abs(rect(byTestId("db-chat-scroll")).width - chatWidthBefore) < 2;
     // ---- 一条一行：折叠后的行数（连击那两条合成 1 行）就是礼物栏的行数 —— 改前那段
     //      「金额排行 + 内容详情」的两段式结构已随 2609152029 第 5 条删掉。
@@ -529,7 +535,11 @@
     // 展开/收起入口是它右端的 db-gift-toggle（见 docs/ui.md §5.3）。
     byTestId("db-gift-toggle").click();
     await sleep(350);
-    out.giftPanelOnlyRendersAllRows = allByTestId("db-gift-row").length === 5;
+    // 展开态下五行全在（需求 5.3 之后列表折叠也挂载，所以前面那半句必须带上：
+    // 不然这条断言在折叠态下也会绿，等于什么都没量到）。
+    out.giftPanelOnlyRendersAllRows =
+      byTestId("db-gift-toggle").getAttribute("aria-expanded") === "true" &&
+      allByTestId("db-gift-row").length === 5;
     // 回到默认（两枚都开）：同样先开面板再点开关；开面板那一下已经把展开的礼物栏收起来了，
     // 因此这里不再点多一次（连点会把礼物栏又展开，下一段的「默认形态」就不是折叠态了）。
     // 后面几段（面板互斥 / 多标签）因此跑在**默认形态**上：筛选面板开着、礼物栏折叠着。
@@ -537,7 +547,10 @@
     await sleep(300);
     out.giftSwitchBothBackOn = setGiftSwitch("弹幕包含礼物", true);
     await sleep(350);
-    out.giftRestoredToDefault = !!byTestId("db-gift-total") && !byTestId("db-gift-area") &&
+    // 默认形态 = 折叠（`aria-expanded="false"`，不是「列表不在场」——需求 5.1–5.4 之后
+    // 列表折叠也挂载）
+    out.giftRestoredToDefault = !!byTestId("db-gift-total") &&
+      byTestId("db-gift-toggle").getAttribute("aria-expanded") === "false" &&
       !!rowWith("投喂 小心心") && window.__prefs["ui.gift_in_danmaku"] === true &&
       window.__prefs["ui.gift_panel"] === true;
     snap();

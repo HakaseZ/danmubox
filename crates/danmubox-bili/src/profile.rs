@@ -18,8 +18,8 @@
 //!
 //! 1. **取不到即空串**（需求 3.3）：非 0 code、传输 / 解码失败、`uid <= 0` 都返回空串，
 //!    不报错、不阻塞上屏 —— 端口因此没有错误通道（见 [`UserProfile`] 的说明）。
-//! 2. **同一 uid 只问一次上游**（需求 3.4）：进程级缓存 + 在途合并（锁跨一次请求，
-//!    与 `http.rs` 的 `WBI_KEY_CACHE` 同一手法）。
+//! 2. **同一 uid 只问一次上游**（需求 3.4）：进程级缓存 + per-uid 在途锁（`FACE_LOCKS`，
+//!    与 `http.rs` 的 `WBI_KEY_CACHE` 同一「单飞」意图，但不把全局缓存锁跨网络请求持有）。
 //! 3. **失败不缓存**：非 0 code / 传输失败都不写槽位，下一条消息还能再试。
 
 use std::collections::HashMap;
@@ -35,9 +35,11 @@ use crate::http::BiliHttp;
 /// 取一次头像的**上限**。
 ///
 /// 与 `ws.rs` 的 `FACE_WAIT`（600ms）是两件事：那是「消费方愿意等多久才上屏」，
-/// 这里管的是**取数本身**。缓存锁在取数期间是持着的（单飞，见 [`UserProfile::face_of`]），
-/// 一次挂住的请求会让后面所有 uid 的取数排队，而 reqwest 客户端本体的 15s 超时太长，
-/// 因此在这一层再收一道。超时即空串（需求 3.3），下一条消息还能再试。
+/// 这里管的是**取数本身**。一次挂住的请求会让后面所有 uid 的取数排队，而 reqwest 客户端
+/// 本体的 15s 超时太长，因此在这一层再收一道。超时即空串（需求 3.3），下一条消息还能再试。
+///
+/// 注意「单飞」由 [`FACE_LOCKS`] 的 per-uid 锁保证，而不是把全局 `FACE_CACHE` 锁跨一次
+/// 网络请求持有 —— 那样会让**别的 uid** 的取数也被串行堵在后面（修「头像缓存持锁做网络请求」）。
 pub(crate) const FACE_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// 进程内头像缓存：`uid -> 头像地址`。
@@ -49,6 +51,16 @@ pub(crate) const FACE_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 /// 「这个 uid 问过一次并且拿到了」。
 static FACE_CACHE: LazyLock<tokio::sync::Mutex<HashMap<i64, String>>> =
     LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
+/// 每个 uid 一把「在途锁」：**同一 uid 串行（单飞），不同 uid 各用各的、并行不互斥**。
+///
+/// 这是「头像缓存持锁做网络请求」的修复核心：原先 [`FACE_CACHE`] 的全局锁跨一次
+/// `fetch_face` 的网络 `await`，于是任意两个不同 uid 的取数也被串行堵住。改成 per-uid 锁后，
+/// 全局缓存锁只在「极短的检查 / 写入」时持有（不含网络），不同 uid 真正并发打上游，
+/// 同一 uid 仍只打一次（需求 3.4）。表本身是 `std::sync::Mutex`（只做同步的查 / 插 `Arc`，
+/// 从不在持有时 `await`），`Arc` 指向的 `tokio::sync::Mutex` 才在 `await` 点持有。
+static FACE_LOCKS: LazyLock<std::sync::Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// 仅测试：清空进程级头像缓存（与 `http.rs` 的 [`crate::http::CACHE_TEST_LOCK`] 成对使用）。
 ///
@@ -193,15 +205,29 @@ impl UserProfile for BiliProfile {
         if uid <= 0 {
             return String::new();
         }
-        // 单飞：锁跨一次网络请求，并发到达的调用排队后只会看到已填好的槽位，
-        // 同一 uid 因此只打一次上游（需求 3.4；与 `http.rs` 的 `wbi_keys` 同一手法）。
-        let mut cache = FACE_CACHE.lock().await;
-        if let Some(face) = cache.get(&uid) {
-            return face.clone();
+        // ① 先快速看一眼持久缓存（极短持锁，**不含网络请求**）。
+        if let Some(face) = FACE_CACHE.lock().await.get(&uid).cloned() {
+            return face;
         }
-        match self.fetch_face(uid).await {
+        // ② 取该 uid 的「在途锁」：同一 uid 串行（单飞），不同 uid 各用各的、并行不互斥
+        //    —— 这就是把「跨网络的锁」从全局缓存锁换成 per-uid 锁的意义所在。
+        let slot = {
+            let mut locks = FACE_LOCKS.lock().expect("在途锁表");
+            locks
+                .entry(uid)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _held = slot.lock().await;
+        // ③ 二次核对：并发同 uid 的后来者拿到锁后先看缓存，避免重复打上游（需求 3.4）。
+        if let Some(face) = FACE_CACHE.lock().await.get(&uid).cloned() {
+            return face;
+        }
+        // ④ 真正打上游（此时只持 per-uid 锁，不挡别的 uid 的取数）。
+        let fetched = self.fetch_face(uid).await;
+        match fetched {
             Some(face) => {
-                cache.insert(uid, face.clone());
+                FACE_CACHE.lock().await.insert(uid, face.clone());
                 face
             }
             // 失败**不写缓存**：下一条消息（下一条大航海 / 礼物）还能再试。

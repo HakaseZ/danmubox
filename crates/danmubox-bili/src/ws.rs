@@ -422,6 +422,13 @@ impl BiliLive {
         })
     }
 
+    /// `ROOM_CHANGE` 后刷新标题：`getH5InfoByRoom` 是直播间标题的权威来源
+    /// （事件载荷的 `data.title` 在主播视角是变更前的旧值）。只打 H5 接口那一跳，
+    /// 不依赖进房那一跳的 `getRoomPlayInfo`。
+    pub async fn room_title(&self, room_id: i64) -> Result<String> {
+        self.http.room_title(room_id).await
+    }
+
     /// 仅测试：换掉头像来源（默认那份会真的去问上游）。
     #[cfg(test)]
     fn with_profile(mut self, profile: Arc<dyn UserProfile>) -> Self {
@@ -904,10 +911,12 @@ impl BiliLive {
                                                 sink.publish_message(message);
                                                 sink.publish_live_status(room_id, live_status);
                                             }
-                                            // `ROOM_CHANGE`：同样是「先投消息、再冒泡」——
-                                            // 主播改了标题时，界面上挂着的旧标题要原地换掉
-                                            // （issue202609241553 第 6 条）。房间号以**连接上下文**
-                                            // 为准（`cmd.rs` 用 `dispatch` 的 `room_id`，不再是载荷里的
+                                            // `ROOM_CHANGE`：先投「标题或分区变更」系统消息，再冒泡
+                                            // 一条 `RoomTitle` 事件让外壳去重拉权威标题
+                                            // （issue202609241553 第 6 条）。主播视角下事件本身的
+                                            // `data.title` 是旧值，外壳收到后改拉 `getH5InfoByRoom`，
+                                            // 界面标题才不慢一拍。房间号以**连接上下文**为准
+                                            // （`cmd.rs` 用 `dispatch` 的 `room_id`，不再是载荷里的
                                             // `data.room_id`——后者可能是短号，与登记表 key 对不上）。
                                             Some(cmd::Dispatch::RoomTitle {
                                                 message,

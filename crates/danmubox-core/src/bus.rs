@@ -75,10 +75,11 @@ pub enum Event {
     LiveStatus(LiveStatus),
     /// 房间**标题**变化（`ROOM_CHANGE`）。
     ///
-    /// 只带「哪个房间 + 新标题」，不带整条 `Room`：这条命令的载荷里只有这两个字段是可靠的
-    /// （参照实现 `HakaseZ/BiliLiveWatcher` 的 `ROOM_CHANGE.go` 只读 `data.room_id` / `data.title`）。
-    /// 整条 `Room` 由外壳用登记表补全后再发 `danmubox://room` —— 与 `LiveStatus` 那条同款，
-    /// **不新增对外事件名**。
+    /// 只带「哪个房间 + 事件里的标题」，不带整条 `Room`：`room_id` 是可靠的定位键；`title`
+    /// 仅作触发信号——**主播视角**下事件载荷的 `data.title` 是变更前的旧值（观众视角才可靠），
+    /// 因此外壳收到事件后会**重新拉取 `getH5InfoByRoom`** 取权威标题，而不是信任这个字段
+    /// （见 `apps/desktop/src-tauri/src/lib.rs` 的 `Event::RoomTitle` 处理）。整条 `Room`
+    /// 由外壳用登记表补全后再发 `danmubox://room` —— 与 `LiveStatus` 那条同款，**不新增对外事件名**。
     RoomTitle {
         room_id: i64,
         title: String,

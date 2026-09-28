@@ -1046,7 +1046,12 @@ async fn user_face(state: State<'_, AppState>, uid: i64) -> ApiResult<String> {
 ///
 /// `rooms` 是已登记房间（`AppState.rooms` 的同一份）：开播状态那条**先落登记表再推界面**
 /// （见下面 `Event::LiveStatus` 那一支）。
-fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus, rooms: Arc<Mutex<Rooms>>) {
+fn spawn_event_forwarder(
+    app: tauri::AppHandle,
+    bus: EventBus,
+    rooms: Arc<Mutex<Rooms>>,
+    store: Arc<ConfigStore>,
+) {
     let mut receiver = bus.subscribe();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -1086,26 +1091,42 @@ fn spawn_event_forwarder(app: tauri::AppHandle, bus: EventBus, rooms: Arc<Mutex<
                         ),
                     }
                 }
-                // `ROOM_CHANGE`（主播改了标题）：与上面同一条路子 —— 先把标题落进登记表，
-                // 再把**补全后的整条 `Room`** 推给界面，因此对外**不新增事件名**（仍是
-                // `danmubox://room`）。载荷里只带房间号与新标题（参照实现
-                // `HakaseZ/BiliLiveWatcher` 的 `ROOM_CHANGE.go`），其余字段照旧由登记表给出。
-                Ok(Event::RoomTitle { room_id, title }) => {
-                    let room = {
-                        let mut rooms = rooms.lock().expect("rooms poisoned");
-                        rooms.meta.get_mut(&room_id).map(|room| {
-                            room.title = title;
-                            room.clone()
-                        })
-                    };
-                    match room {
-                        Some(room) => {
-                            let _ = app.emit("danmubox://room", &room);
+                // `ROOM_CHANGE`（主播改了标题）：主播视角下事件载荷的 `data.title` 是**变更前**
+                // 的旧值（观众视角才可靠），所以**不信任事件里的标题**——收到事件后重新拉取
+                // 权威标题（`getH5InfoByRoom`，与进房初始标题同源），避免界面永远慢一拍。
+                // 重拉是异步的，标题会比「标题或分区变更」系统消息稍晚到；重拉失败则保持现状，
+                // 绝不回退到事件里的旧标题。对外**不新增事件名**（仍是 `danmubox://room`），
+                // 其余字段照旧由登记表给出。
+                Ok(Event::RoomTitle { room_id, .. }) => {
+                    let app = app.clone();
+                    let rooms = Arc::clone(&rooms);
+                    let store = Arc::clone(&store);
+                    tauri::async_runtime::spawn(async move {
+                        let title = match BiliLive::with_store(Arc::clone(&store)) {
+                            Ok(live) => live.room_title(room_id).await.ok(),
+                            Err(_) => None,
+                        };
+                        let room = {
+                            let mut rooms = rooms.lock().expect("rooms poisoned");
+                            match (rooms.meta.get_mut(&room_id), title.filter(|t| !t.is_empty())) {
+                                (Some(room), Some(title)) => {
+                                    room.title = title;
+                                    Some(room.clone())
+                                }
+                                // 重拉失败 / 未登记 / 标题为空：不回退到事件旧标题，跳过本次更新。
+                                _ => None,
+                            }
+                        };
+                        match room {
+                            Some(room) => {
+                                let _ = app.emit("danmubox://room", &room);
+                            }
+                            None => tracing::debug!(
+                                room_id = room_id,
+                                "标题重拉失败或未登记，跳过本次更新"
+                            ),
                         }
-                        // 没登记过的房间（比如主播自己的直播间没被加进列表）：不推半条假元信息，
-                        // 「我的直播间」面板那一侧另走 `anchor_room` 重读。
-                        None => tracing::debug!(room_id, "标题变更事件来自未登记的房间，忽略"),
-                    }
+                    });
                 }
                 Ok(Event::Session(session)) => {
                     let _ = app.emit("danmubox://session", &session);
@@ -1332,7 +1353,12 @@ pub fn run() {
 
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
-            spawn_event_forwarder(handle.clone(), state.bus.clone(), Arc::clone(&state.rooms));
+            spawn_event_forwarder(
+                handle.clone(),
+                state.bus.clone(),
+                Arc::clone(&state.rooms),
+                Arc::clone(&state.store),
+            );
 
             // 日志行 → danmubox://log
             tauri::async_runtime::spawn(async move {

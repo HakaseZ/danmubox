@@ -535,6 +535,20 @@ impl BiliHttp {
         Ok(value)
     }
 
+    /// 只取直播间标题（`getH5InfoByRoom`）。`ROOM_CHANGE` 后刷新标题用：
+    /// 事件载荷的 `data.title` 在主播视角是变更前的旧值（观众视角才可靠），
+    /// 必须以这个权威接口为准，否则界面永远慢一拍。只打 H5 接口那一跳，
+    /// 不依赖进房那一跳的 `getRoomPlayInfo`。
+    pub async fn room_title(&self, room_id: i64) -> Result<String> {
+        let value = self.room_h5_info(room_id).await?;
+        let data = value.get("data").unwrap_or(&Value::Null);
+        Ok(data
+            .pointer("/room_info/title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string())
+    }
+
     /// 取长连接票据与候选地址。游客态同样需要 `buvid` 与 WBI 签名。
     ///
     /// `buvid3` 与账号 Cookie **合成一条** `Cookie` 头（[`merge_cookie`]）：

@@ -197,11 +197,14 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
                         // `LIVE` / `PREPARING` 另带开播状态（协议 §10.7 的侧路）：
                         // 界面靠它把房间头 / 标签页 / 列表卡片的状态点在原地换掉，不必重连重刷。
                         status_update = *live;
-                        // `ROOM_CHANGE` 另带新标题：连上来的房间改了标题，把新标题冒泡给界面。
+                        // `ROOM_CHANGE` 另带标题变更信号：连上来的房间改了标题，需要刷新界面标题。
                         // 房间号**以连接上下文 `room_id` 为准**（`dispatch` 的入参），不取载荷里的
                         // `data.room_id`：后者在不同版本可能是短号，与登记表（`rooms.meta` 按真实
-                        // 房间号建键）对不上会静默丢更新——已连接房间改标题时弹幕界面/主界面标题
-                        // 不刷新正是这个根因。标题仍只认 `data.title`（分区不在事件里）。
+                        // 房间号建键）对不上会静默丢更新。
+                        // 注意：事件载荷的 `data.title` 在**主播视角**下是变更前的旧值（观众视角
+                        // 才可靠），所以这里只把它当作「需要刷新」的触发信号；真正的新标题由外壳
+                        // 收到事件后重新拉取 `getH5InfoByRoom` 得到（见 `lib.rs` 的 `Event::RoomTitle`
+                        // 处理），否则界面会永远慢一拍。
                         if *name == "ROOM_CHANGE" {
                             let title = value
                                 .pointer("/data/title")

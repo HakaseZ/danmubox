@@ -194,6 +194,9 @@ pub struct BiliHttp {
     nav_url: String,
     /// `getDanmuInfo` 端点。生产恒为 `EP_DANMU_INFO`；测试指到本地桩服务器以断言请求头。
     danmu_info_url: String,
+    /// 把**所有**请求（GET / POST）的主机替换成此基址，以便测试把整条写链路重定向到
+    /// 本地桩服务器断言。生产恒为 `None`（`with_req_base` 仅测试调用），不影响线上行为。
+    req_base: Option<String>,
     /// `getRoomPlayInfo` 端点。生产恒为 `EP_ROOM_PLAY_INFO`；测试指到本地桩服务器以**计数请求**
     /// （列表页的定期刷新靠它对每个房间只打一次，见 `room_live_status`）。
     play_info_url: String,
@@ -236,6 +239,7 @@ impl BiliHttp {
             danmu_info_url: EP_DANMU_INFO.to_string(),
             play_info_url: EP_ROOM_PLAY_INFO.to_string(),
             acc_info_url: EP_ACC_INFO.to_string(),
+            req_base: None,
         })
     }
 
@@ -268,6 +272,33 @@ impl BiliHttp {
     fn with_play_info_url(mut self, url: String) -> Self {
         self.play_info_url = url;
         self
+    }
+
+    /// 仅测试：把**所有**请求（GET / POST）的主机替换成 `base`，整条链路重定向到本地桩。
+    ///
+    /// 与 [`Self::with_nav_url`] 等单端点 seam 互补：写链路（如 `BiliAnchor::set_title`）
+    /// 同时打多个端点，需要一次把所有请求都指到同一台桩服务器，才能断言「`post_form`
+    /// 到底打到了哪个端点」。生产恒为 `None`，对线上行为零影响。
+    #[cfg(test)]
+    pub(crate) fn with_req_base(mut self, base: String) -> Self {
+        self.req_base = Some(base);
+        self
+    }
+
+    /// 测试 seam：把请求 URL 的主机换成 `req_base`（生产恒为 `None`，原样返回）。
+    fn rewrite_url(&self, url: &str) -> String {
+        let Some(base) = &self.req_base else {
+            return url.to_string();
+        };
+        // 取 `scheme://host` 之后的路径（含 query），拼到桩基址上。
+        let path = match url.split_once("://") {
+            Some((_, rest)) => match rest.split_once('/') {
+                Some((_, p)) => format!("/{p}"),
+                None => String::new(),
+            },
+            None => return url.to_string(),
+        };
+        format!("{base}{path}")
     }
 
     fn current_cookie(&self) -> Option<String> {
@@ -313,7 +344,7 @@ impl BiliHttp {
     ) -> reqwest::RequestBuilder {
         // 只记 URL，不记请求头与 body：凭据从不进日志；URL 本身要先过 `log_request` 脱敏。
         log_request("GET", url, None);
-        let mut req = self.client.get(url);
+        let mut req = self.client.get(self.rewrite_url(url));
         if let Some(cookie) = merge_cookie(cookie, buvid3) {
             req = req.header(COOKIE, cookie);
         }
@@ -712,7 +743,7 @@ impl BiliHttp {
     pub async fn post_form(&self, url: &str, body: &str) -> Result<Value> {
         // body 里含 csrf 与弹幕原文，一律不记；只记目标地址，且地址先过脱敏。
         log_request("POST", url, None);
-        let mut request = self.client.post(url).header(
+        let mut request = self.client.post(self.rewrite_url(url)).header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
         );

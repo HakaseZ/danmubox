@@ -48,7 +48,20 @@ const APPSEC: &str = "af125a0d5279fd576c1b4418a3e8276d";
 
 const EP_ROOM_ID_BY_UID: &str = "https://api.live.bilibili.com/room/v2/Room/room_id_by_uid";
 const EP_GET_INFO: &str = "https://api.live.bilibili.com/room/v1/Room/get_info";
+/// 旧版「更新直播间信息」端点。**改标题不再走它**（见 [`EP_UPDATE_PRE_LIVE`] 的取证注释），
+/// 仅剩改分区（`set_area`）在用。
 const EP_UPDATE: &str = "https://api.live.bilibili.com/room/v1/Room/update";
+/// 官方直播中心「开播设置」页改标题所走的端点（`updateRoomTitle` → `UpdatePreLiveInfo`）。
+///
+/// 取证（2026-09-28）：官方页面 `link.bilibili.com/p/center/index#/my-room/start-live`
+/// 的 bundle（`app.js` 模块 311 + chunk 87/88）里，改标题 UI 传
+/// `{platform:"pc", mobi_app:"pc", build:1, room_id, title}` POST 到本端点；
+/// 旧端点 `Room/update` 在 bundle 里仍存在（`updateRoomInfo`）但改标题 UI 不用它。
+/// 用户真机实测（稳定复现）：走本端点改标题，`ROOM_CHANGE` 事件带**新**标题；
+/// 走旧端点改标题，事件带**旧**标题（服务端房间快照不随旧端点写入失效——
+/// 这正是 issue202609242158 §3.1「改完预览跳回原标题」的根因）。
+const EP_UPDATE_PRE_LIVE: &str =
+    "https://api.live.bilibili.com/xlive/app-blink/v1/preLive/UpdatePreLiveInfo";
 const EP_STOP_LIVE: &str = "https://api.live.bilibili.com/room/v1/Room/stopLive";
 const EP_AREA_LIST: &str = "https://api.live.bilibili.com/room/v1/Area/getList";
 const EP_CLICK_NOW: &str = "https://api.bilibili.com/x/report/click/now";
@@ -208,14 +221,17 @@ impl AnchorRoom for BiliAnchor {
             return Err(Error::Upstream("该账号没有开通直播间".into()));
         };
         let csrf = self.csrf()?;
+        // 官方现行路径：`UpdatePreLiveInfo`（取证见 [`EP_UPDATE_PRE_LIVE`]）。
+        // 旧端点 `Room/update` 写入后服务端房间快照不失效——`ROOM_CHANGE` 事件与
+        // `get_info` 短时间内都还是旧标题（用户 2026-09-28 真机实测，稳定复现）。
         let value = self
             .post(
-                EP_UPDATE,
+                EP_UPDATE_PRE_LIVE,
                 &csrf,
-                update_params(room_id, "title", title.to_string()),
+                prelive_title_params(room_id, title.to_string()),
             )
             .await?;
-        ensure_ok(&value, "Room/update")?;
+        ensure_ok(&value, "UpdatePreLiveInfo")?;
         // 保存成功就地重读：其余字段以远端为准，**标题以本次请求为权威**
         //（`code==0` 即写成功；`get_info` 有服务端缓存，紧接着重读可能仍是旧标题
         // —— issue202609242158 第 3.1 条的「改完预览会跳回原标题」）。
@@ -352,7 +368,9 @@ impl AnchorRoom for BiliAnchor {
 
 /// `Room/update` 的业务参数（不含 `csrf` / `csrf_token`，那两个由 [`BiliAnchor::post`] 补）。
 ///
-/// **纯函数**，因此「改标题 / 改分区到底发什么字段」可以用固定向量钉住（见 `tests`）。
+/// **改标题已不走来这条端点**（2026-09-28 换 `UpdatePreLiveInfo`，见
+/// [`prelive_title_params`]），现在只服务改分区。
+/// **纯函数**，因此「改分区到底发什么字段」可以用固定向量钉住（见 `tests`）。
 /// 字段名与取值口径 2026-09-24 逐字核实过三处来源：
 /// - `Zeppelinpp/bilibili-streamer`（`src-tauri/src/services/bili_api.rs`）：`update_area` 发
 ///   `room_id` / `area_id` / `platform=pc_link`；**只有** `start_live` 才用 `area_v2`；
@@ -367,6 +385,22 @@ fn update_params(room_id: i64, field: &'static str, value: String) -> Vec<(&'sta
         ("room_id", room_id.to_string()),
         ("platform", "pc_link".to_string()),
         (field, value),
+    ]
+}
+
+/// `UpdatePreLiveInfo` 改标题的业务参数（不含 `csrf` / `csrf_token`，由 [`BiliAnchor::post`] 补）。
+///
+/// **纯函数**，字段名与取值可用固定向量钉住（见 `tests`）。来源：官方直播中心
+/// 「开播设置」页 bundle 逆向（2026-09-28，`app.js` 模块 311 的默认参数
+/// `d={platform:"pc",mobi_app:"pc",build:1}` + chunk 87/88 的调用点），非社区文档转述。
+/// `platform` 是 `pc`（**不是**旧端点 / `startLive` 的 `pc_link`），另带 `mobi_app=pc`、`build=1`。
+fn prelive_title_params(room_id: i64, title: String) -> Vec<(&'static str, String)> {
+    vec![
+        ("room_id", room_id.to_string()),
+        ("platform", "pc".to_string()),
+        ("mobi_app", "pc".to_string()),
+        ("build", "1".to_string()),
+        ("title", title),
     ]
 }
 
@@ -608,6 +642,7 @@ fn app_sign(params: &[(&str, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_support::spawn_stub;
     use serde_json::json;
 
     #[test]
@@ -743,10 +778,12 @@ mod tests {
     }
 
     /// 改分区 / 改标题的字段名口径（issue202609242158 第 2 条）：`Room/update` 改分区是
-    /// `area_id`（子分区 id），**不是** `startLive` 的 `area_v2`；改标题是 `title`。
+    /// `area_id`（子分区 id），**不是** `startLive` 的 `area_v2`。
     /// 三处来源逐字一致（见 `update_params` 注释）：两份参照实现 + `bilibili-API-collect`。
+    /// 改标题 2026-09-28 起不走 `Room/update`（换 `UpdatePreLiveInfo`，见下一个测试），
+    /// 本条只钉改分区。
     #[test]
-    fn update_params_pin_field_names_for_title_and_area() {
+    fn update_params_pin_field_names_for_area() {
         let area = update_params(777, "area_id", "40".to_string());
         assert_eq!(
             area,
@@ -760,10 +797,102 @@ mod tests {
             area.iter().all(|(k, _)| *k != "area_v2"),
             "改分区不许发 `area_v2`（那是 `startLive` 的字段名，发到这里会被当未知字段忽略）"
         );
+    }
 
-        let title = update_params(777, "title", "新标题".to_string());
-        assert!(title.contains(&("title", "新标题".to_string())));
-        assert!(title.iter().all(|(k, _)| *k != "area_id"));
+    /// 改标题走 `UpdatePreLiveInfo`：字段名与取值以官方直播中心 bundle 逆向为准
+    /// （2026-09-28，`app.js` 模块 311 + chunk 87/88）。`platform=pc`（不是旧端点的
+    /// `pc_link`），另带 `mobi_app=pc`、`build=1`。钉住这套向量，防止回落到旧端点形态。
+    #[test]
+    fn prelive_title_params_pin_official_shape() {
+        let title = prelive_title_params(777, "新标题".to_string());
+        assert_eq!(
+            title,
+            vec![
+                ("room_id", "777".to_string()),
+                ("platform", "pc".to_string()),
+                ("mobi_app", "pc".to_string()),
+                ("build", "1".to_string()),
+                ("title", "新标题".to_string()),
+            ]
+        );
+        assert!(
+            !title
+                .iter()
+                .any(|(k, _)| *k == "area_id" || *k == "area_v2"),
+            "改标题不带分区字段"
+        );
+    }
+
+    /// 派发层回归闸（CodeRabbit review / PR #37）：真正调一次 `set_title`，断言它打到的是
+    /// 官方现行端点 `EP_UPDATE_PRE_LIVE`，**不是**旧端点 `room/v1/Room/update`。
+    ///
+    /// `BiliHttp::with_req_base` 把整条链路（取 room_id → 改标题 POST → 重读 get_info）
+    /// 重定向到本地桩；只桩 JSON 成功响应，断言请求里出现了 `UpdatePreLiveInfo` 路径，
+    /// 且**不**出现旧端点路径——把端点从 `EP_UPDATE_PRE_LIVE` 错改回 `EP_UPDATE` 会让本测试变红。
+    #[tokio::test]
+    async fn set_title_dispatches_to_update_prelive_endpoint() {
+        // 按 set_title 的真实调用顺序回放：`own_room_id` → `UpdatePreLiveInfo` POST →
+        // `own()` 内部**再调一次** `own_room_id` → `get_info`（末份复用）。
+        let stub = spawn_stub(
+            &[
+                (
+                    200,
+                    "application/json",
+                    r#"{"code":0,"data":{"room_id":777}}"#,
+                ),
+                (200, "application/json", r#"{"code":0,"data":{}}"#),
+                (
+                    200,
+                    "application/json",
+                    r#"{"code":0,"data":{"room_id":777}}"#,
+                ),
+                (
+                    200,
+                    "application/json",
+                    r#"{"code":0,"data":{"title":"旧标题","live_status":0,"area_id":40,"area_name":"娱乐 · 视频唱见"}}"#,
+                ),
+            ],
+            std::time::Duration::ZERO,
+        );
+
+        let http = BiliHttp::new()
+            .expect("构建 http 客户端")
+            .with_req_base(stub.base.clone());
+        // `BiliAnchor` 字段对同级测试模块可见；凭据造一份完整档即可（桩不校验 cookie）。
+        let anchor = BiliAnchor {
+            http,
+            profile: Profile {
+                sessdata: "S".into(),
+                bili_jct: "J".into(),
+                dede_user_id: "1".into(),
+                ..Default::default()
+            },
+        };
+
+        let room = anchor
+            .set_title("  新标题  ")
+            .await
+            .expect("桩全绿，set_title 应当成功");
+
+        // 标题以本次请求（trim 后）为准（见 `with_requested_title`）。
+        assert_eq!(room.title, "新标题");
+        assert_eq!(room.room_id, 777);
+
+        // 关键断言：POST 打到了官方现行端点，且没打到旧端点。
+        let hit_prelive = stub
+            .headers
+            .lock()
+            .expect("桩请求头")
+            .iter()
+            .any(|block| block.contains("POST /xlive/app-blink/v1/preLive/UpdatePreLiveInfo"));
+        assert!(hit_prelive, "set_title 必须打到 UpdatePreLiveInfo");
+        let hit_legacy = stub
+            .headers
+            .lock()
+            .expect("桩请求头")
+            .iter()
+            .any(|block| block.contains("POST /room/v1/Room/update"));
+        assert!(!hit_legacy, "set_title 不得回落到旧端点 Room/update");
     }
 
     /// 改标题后重读撞上服务端缓存时，`title` 以**本次请求值**（trim 后）为准，其余字段以重读为准

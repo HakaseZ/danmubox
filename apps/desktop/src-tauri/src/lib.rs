@@ -52,6 +52,12 @@ struct Rooms {
     order: Vec<i64>,
     meta: HashMap<i64, Room>,
     runtimes: HashMap<i64, RoomRuntime>,
+    /// 每个房间的「标题刷新代次」。每次 `ROOM_CHANGE` 触发刷新时自增；
+    /// 异步重拉回来后，只有代次仍匹配且房间仍登记才写回标题，否则视为
+    /// 过期请求丢弃——避免连续两次刷新乱序返回时旧结果覆盖新结果，或房间
+    /// 被移除/替换后旧请求写回新注册（见 `spawn_event_forwarder` 的
+    /// `Event::RoomTitle` 分支，以及 `rooms_add` / `rooms_remove`）。
+    title_gen: HashMap<i64, u64>,
 }
 
 pub struct AppState {
@@ -362,6 +368,9 @@ async fn rooms_add(state: State<'_, AppState>, input: String) -> ApiResult<RoomV
     }
     let room_id = room.room_id;
     rooms.meta.insert(room_id, room);
+    // 重新登记（替换）同一房间时作废进行中的标题刷新代次，
+    // 避免旧请求写回新注册（见 `Rooms.title_gen`）。
+    rooms.title_gen.remove(&room_id);
     view(&state, &rooms, room_id).ok_or_else(|| ApiError {
         code: "INTERNAL".into(),
         message: "登记房间失败".into(),
@@ -374,6 +383,8 @@ async fn rooms_remove(state: State<'_, AppState>, room_id: i64) -> ApiResult<()>
         let mut rooms = state.rooms.lock().expect("rooms poisoned");
         rooms.order.retain(|id| *id != room_id);
         rooms.meta.remove(&room_id);
+        // 房间注销即作废其标题刷新代次，进行中的旧请求回来会判为过期。
+        rooms.title_gen.remove(&room_id);
         rooms.runtimes.remove(&room_id)
     };
     if let Some(runtime) = runtime {
@@ -1098,6 +1109,18 @@ fn spawn_event_forwarder(
                 // 绝不回退到事件里的旧标题。对外**不新增事件名**（仍是 `danmubox://room`），
                 // 其余字段照旧由登记表给出。
                 Ok(Event::RoomTitle { room_id, .. }) => {
+                    // 仅对「已登记」房间刷新；记下本次刷新代次并立即 +1，
+                    // 使任何更早发出的请求变成过期（详见 `Rooms.title_gen`）。
+                    let my_gen: u64 = {
+                        let mut rooms = rooms.lock().expect("rooms poisoned");
+                        if !rooms.meta.contains_key(&room_id) {
+                            // 未登记：不发起刷新，丢弃这条信号。
+                            continue;
+                        }
+                        let gen = rooms.title_gen.entry(room_id).or_insert(0);
+                        *gen += 1;
+                        *gen
+                    };
                     let app = app.clone();
                     let rooms = Arc::clone(&rooms);
                     let store = Arc::clone(&store);
@@ -1108,16 +1131,24 @@ fn spawn_event_forwarder(
                         };
                         let room = {
                             let mut rooms = rooms.lock().expect("rooms poisoned");
-                            match (
-                                rooms.meta.get_mut(&room_id),
-                                title.filter(|t| !t.is_empty()),
-                            ) {
-                                (Some(room), Some(title)) => {
-                                    room.title = title;
-                                    Some(room.clone())
+                            // 代次已前进（有更新的刷新发出）或房间已不在登记表中
+                            // （被移除 / 替换）→ 这是过期请求，丢弃，绝不回写旧标题。
+                            let still_valid = rooms.title_gen.get(&room_id) == Some(&my_gen)
+                                && rooms.meta.contains_key(&room_id);
+                            if !still_valid {
+                                None
+                            } else {
+                                match (
+                                    rooms.meta.get_mut(&room_id),
+                                    title.filter(|t| !t.is_empty()),
+                                ) {
+                                    (Some(room), Some(title)) => {
+                                        room.title = title;
+                                        Some(room.clone())
+                                    }
+                                    // 重拉失败 / 标题为空：不回退到事件旧标题，跳过本次更新。
+                                    _ => None,
                                 }
-                                // 重拉失败 / 未登记 / 标题为空：不回退到事件旧标题，跳过本次更新。
-                                _ => None,
                             }
                         };
                         match room {
@@ -1126,7 +1157,7 @@ fn spawn_event_forwarder(
                             }
                             None => tracing::debug!(
                                 room_id = room_id,
-                                "标题重拉失败或未登记，跳过本次更新"
+                                "标题重拉失败、房间已注销或请求已过期，跳过本次更新"
                             ),
                         }
                     });

@@ -1830,24 +1830,43 @@
    scope="gift"），列表就是 `MessageList`（`.chatArea` / `.scroller` / `.msgList`）——
    布局、底色、自动滚动全部与弹幕区同一套代码；这里的规则因此只剩**两条统计条**。
 
-   三段 = 总计条 / 列表 / 筛选条，**总计条永远贴屏幕中心（贴分割条）**、筛选条永远在外侧**
-   （需求 2026-09-26）。顺序由 `data-on-top` 翻 `flex-direction`，**不搬节点** ——
-   列表的滚动位置与虚拟列表状态不受礼物栏在上在下影响。
-   ⚠ 不能指望外层 `.panes` 的 `column-reverse`：它只翻两栏，栏内不受影响。 */
+   抽屉 = 把手（总计条，`.giftPaneTotal`，也是拖动热区）+ 兜（列表 + 筛选条，`.giftPaneBody`）：
+   **总计条永远贴屏幕中心（贴分割条）**、筛选条永远在外侧**（需求 2026-09-26）。
+   顺序由 `data-on-top` 翻 `flex-direction`，**不搬节点** —— 列表的滚动位置与虚拟列表状态
+   不受礼物栏在上在下影响。⚠ 不能指望外层 `.panes` 的 `column-reverse`：它只翻两栏，栏内不受影响。 */
+/* 礼物栏是一个**抽屉**：把手 + 兜两层。
+   把手 = `.giftPaneTotal`（总计条，也是拖动热区，永远贴分割条 / 中心）；
+   兜 = `.giftPaneBody`（列表 + 筛选条，同一只兜，筛选决定兜里显示哪些弹幕）。
+   折叠只把整只「兜」收起，把手照常可见 —— 用 `display:none` 而非 `overflow` 裁切，
+   因为后者在 Mac WKWebView / Android WebView 的合成路径里会被带 transform 的滚动列表
+   逃出裁剪区、画到弹幕区身上（issue 0928）；`display:none` 在所有引擎都 100% 不漏。
+   兜始终挂载、不卸载，所以展开瞬间即呈现、不重取（单轴模型需求 5.4）。 */
 .giftPane {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  /* 内层兜底裁剪：`.paneGift` 是高度靠 `min-height` 撑出的 flex 子项，它的 `overflow: hidden`
-     在部分 WebView（Mac WKWebView / Android WebView）的合成路径里不裁切，于是折叠态下
-     列表与三枚芯片溢出 48px 条外、画到弹幕区身上（issue 0928）。这一层是普通 flex 子项、
-     有确定高度，裁切在所有引擎都稳；消息右键菜单是 portal，不会被误裁。 */
-  overflow: hidden;
 }
 
 .giftPane[data-on-top="true"] {
-  flex-direction: column-reverse;
+  flex-direction: column-reverse; /* 把手永远贴分割条（中心），兜翻到外侧 */
+}
+
+.giftPaneBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.giftPane[data-on-top="true"] .giftPaneBody {
+  flex-direction: column-reverse; /* 筛选条永远在外侧（远离把手 / 热区） */
+}
+
+/* 折叠态：兜整体收起，只留把手（总计条）。`display:none` 而非 overflow 裁切 ——
+   见 `.giftPane` 上方那条注释：合成路径里 overflow 会被带 transform 的滚动列表逃出。 */
+.giftPane[data-collapsed="true"] .giftPaneBody {
+  display: none;
 }
 
 /* 总计条：`礼物 12条 ¥1,168.7` + 右端展开 / 收起图标。

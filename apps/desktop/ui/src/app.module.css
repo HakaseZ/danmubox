@@ -1839,6 +1839,11 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* 内层兜底裁剪：`.paneGift` 是高度靠 `min-height` 撑出的 flex 子项，它的 `overflow: hidden`
+     在部分 WebView（Mac WKWebView / Android WebView）的合成路径里不裁切，于是折叠态下
+     列表与三枚芯片溢出 48px 条外、画到弹幕区身上（issue 0928）。这一层是普通 flex 子项、
+     有确定高度，裁切在所有引擎都稳；消息右键菜单是 portal，不会被误裁。 */
+  overflow: hidden;
 }
 
 .giftPane[data-on-top="true"] {

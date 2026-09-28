@@ -1032,12 +1032,21 @@ export function RoomView({
                 >
                   {/* **就是房间头那枚返回键的 `<`**（同一条 path、同一套 24 盒 / 1.75 描边规范，
                       用户 2026-09-26：「不要用指代方向的三根线的箭头」），只是按 `data-dir`
-                      旋转 90°（展开态朝上 = 收起，收起态朝下 = 展开）。 */}
+                      旋转 90°（展开态 = 收起方向、收起态 = 展开方向；礼物栏在上/在下时方向相反，
+                      见 `data-on-top`：`giftPaneOnTop` 把 `data-dir` 整体翻一面）。 */}
                   <svg
                     className={styles.ctlIcon}
                     viewBox="0 0 24 24"
                     aria-hidden="true"
-                    data-dir={giftOpen ? "up" : "down"}
+                    data-dir={
+                      giftOpen
+                        ? giftPaneOnTop
+                          ? "down"
+                          : "up"
+                        : giftPaneOnTop
+                          ? "up"
+                          : "down"
+                    }
                   >
                     <path
                       d="M15 4.875 9 12l6 7.125"

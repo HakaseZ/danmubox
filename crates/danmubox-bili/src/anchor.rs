@@ -642,6 +642,7 @@ fn app_sign(params: &[(&str, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_support::spawn_stub;
     use serde_json::json;
 
     #[test]
@@ -820,6 +821,78 @@ mod tests {
                 .any(|(k, _)| *k == "area_id" || *k == "area_v2"),
             "改标题不带分区字段"
         );
+    }
+
+    /// 派发层回归闸（CodeRabbit review / PR #37）：真正调一次 `set_title`，断言它打到的是
+    /// 官方现行端点 `EP_UPDATE_PRE_LIVE`，**不是**旧端点 `room/v1/Room/update`。
+    ///
+    /// `BiliHttp::with_req_base` 把整条链路（取 room_id → 改标题 POST → 重读 get_info）
+    /// 重定向到本地桩；只桩 JSON 成功响应，断言请求里出现了 `UpdatePreLiveInfo` 路径，
+    /// 且**不**出现旧端点路径——把端点从 `EP_UPDATE_PRE_LIVE` 错改回 `EP_UPDATE` 会让本测试变红。
+    #[tokio::test]
+    async fn set_title_dispatches_to_update_prelive_endpoint() {
+        // 按 set_title 的真实调用顺序回放：`own_room_id` → `UpdatePreLiveInfo` POST →
+        // `own()` 内部**再调一次** `own_room_id` → `get_info`（末份复用）。
+        let stub = spawn_stub(
+            &[
+                (
+                    200,
+                    "application/json",
+                    r#"{"code":0,"data":{"room_id":777}}"#,
+                ),
+                (200, "application/json", r#"{"code":0,"data":{}}"#),
+                (
+                    200,
+                    "application/json",
+                    r#"{"code":0,"data":{"room_id":777}}"#,
+                ),
+                (
+                    200,
+                    "application/json",
+                    r#"{"code":0,"data":{"title":"旧标题","live_status":0,"area_id":40,"area_name":"娱乐 · 视频唱见"}}"#,
+                ),
+            ],
+            std::time::Duration::ZERO,
+        );
+
+        let http = BiliHttp::new()
+            .expect("构建 http 客户端")
+            .with_req_base(stub.base.clone());
+        // `BiliAnchor` 字段对同级测试模块可见；凭据造一份完整档即可（桩不校验 cookie）。
+        let anchor = BiliAnchor {
+            http,
+            profile: Profile {
+                sessdata: "S".into(),
+                bili_jct: "J".into(),
+                dede_user_id: "1".into(),
+                ..Default::default()
+            },
+        };
+
+        let room = anchor
+            .set_title("  新标题  ")
+            .await
+            .expect("桩全绿，set_title 应当成功");
+
+        // 标题以本次请求（trim 后）为准（见 `with_requested_title`）。
+        assert_eq!(room.title, "新标题");
+        assert_eq!(room.room_id, 777);
+
+        // 关键断言：POST 打到了官方现行端点，且没打到旧端点。
+        let hit_prelive = stub
+            .headers
+            .lock()
+            .expect("桩请求头")
+            .iter()
+            .any(|block| block.contains("POST /xlive/app-blink/v1/preLive/UpdatePreLiveInfo"));
+        assert!(hit_prelive, "set_title 必须打到 UpdatePreLiveInfo");
+        let hit_legacy = stub
+            .headers
+            .lock()
+            .expect("桩请求头")
+            .iter()
+            .any(|block| block.contains("POST /room/v1/Room/update"));
+        assert!(!hit_legacy, "set_title 不得回落到旧端点 Room/update");
     }
 
     /// 改标题后重读撞上服务端缓存时，`title` 以**本次请求值**（trim 后）为准，其余字段以重读为准

@@ -1108,7 +1108,10 @@ fn spawn_event_forwarder(
                         };
                         let room = {
                             let mut rooms = rooms.lock().expect("rooms poisoned");
-                            match (rooms.meta.get_mut(&room_id), title.filter(|t| !t.is_empty())) {
+                            match (
+                                rooms.meta.get_mut(&room_id),
+                                title.filter(|t| !t.is_empty()),
+                            ) {
                                 (Some(room), Some(title)) => {
                                     room.title = title;
                                     Some(room.clone())

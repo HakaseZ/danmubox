@@ -7,6 +7,8 @@ prefs.json.bak
 # Rust
 /target/
 **/target/
+/target-main/
+**/target-main/
 
 # 前端
 node_modules/

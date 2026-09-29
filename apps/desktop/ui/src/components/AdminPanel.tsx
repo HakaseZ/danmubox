@@ -257,7 +257,8 @@ export function AdminPanel({
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        batch ? singlePick(key) : enterBatchAndPick(key);
+        if (batch) singlePick(key);
+        else enterBatchAndPick(key);
       }}
       onMouseEnter={markScroll}
       onMouseLeave={clearScroll}

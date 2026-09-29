@@ -142,6 +142,15 @@
 
 ### Fixed
 
+- **礼物栏：折叠态漏出根治 + 拖动「拖开又拖回原位」归不了位 + 箭头方向口径（issue 2026-09-29）**：
+  ① **折叠态漏出**：礼物栏改成**抽屉**两层 —— **把手 = 总计条**（兼拖动热区，`data-pane-head`）、**兜 = `.giftPaneBody`**（`db-gift-pocket`，装列表 + 筛选条）。折叠 = **整只兜 `display: none`**，不再靠 `overflow: hidden` 裁剪：Mac WKWebView / Android WebView 的合成路径里，带 `transform` 的虚拟列表会逃出祖先裁剪区、画到弹幕区身上（09-28 首次截图、09-29 复现）。把手与兜都常驻挂载（`display: none` 不卸载），展开只改份额、不重挂不重取。拖动**中途**份额压到折叠端但未松手时兜会是 0 高，那一帧由 `.giftPane` 的 `overflow: hidden` 兜住（只兜这一帧，不承担折叠态）。
+  ② **拖动「拖开再拖回原位」归不了位**：实时份额曾被 `clampPaneRatio` 夹在 `0.10`，而折叠高度（≈ 48px）远在 10% 之下 —— 拖动中分割条最矮只能回到 10% 处。现把**实时那一份**下限压到 `0`（`--gift-share` = 0 即折叠几何，指针回到原点就回到折叠高度），**落盘那一份**仍夹 `0.10–0.90`（越界会被 IPC 以 `BAD_REQUEST` 拒掉）。
+  ③ **松手后界面停在 10% 高度而 `aria-expanded` 是 `false`**：`liveRef` 装的应是「要写进 `--gift-share` 的那份 grow」，但收尾直接贴了份额，而折叠态下 React 写的是 `grow = 0`；React **只在 style 值变化时才碰 DOM**，于是命令式写下的 ≥0.10 留在 DOM 上、与折叠态打架。现收尾把份额**折算回 `grow`** 再落 DOM，`useLayoutEffect` 也改为拿 `grow` 对齐（折叠态 `grow`（0）与份额（≥0.10）不是同一个数）。
+  ④ **箭头方向口径**（用户 2026-09-29）：**收起时箭头朝向弹幕、展开时朝向礼物** —— 与礼物区在上还是在下无关，`giftPaneOnTop` 一翻两个方向跟着翻（`data-dir` = `giftOpen === giftPaneOnTop ? "up" : "down"`）。
+  落点：`apps/desktop/ui/src/components/RoomView.tsx`（抽屉结构 + `data-collapsed` + 箭头）、`SplitPanes.tsx`（实时份额下限 0、收尾折算 grow、effect 按 grow 对齐）、`app.module.css`（`.giftPaneBody` / 折叠 `display: none` / `.giftPane` 的 `overflow: hidden` 只兜拖动中途那一帧）。
+  **实测**：本机 Playwright **真实指针序列**回放（按下 → 拖开 → **不松手**拖回 → 松手，礼物区在上 / 在下两种形态）—— 拖回持握高度与折叠高度差 **0.06px**、松手后 **0px**，箭头两态方向符合口径，**PASS**；该场景已沉淀为冒烟回归（`splitterRoundTripOpens` / `splitterRoundTripReturnsCollapsedHeld`（偏差读数 `splitterRoundTripHeldBackPx` 实测 0.1–0.2px）/ `splitterRoundTripStaysCollapsedAfterRelease`）。冒烟两个引擎 × 深浅两档 × 宽窄两档**全绿**（各 4490 项快照 / 56 张截图，零失败）；`smoke/scenario/parts/34-split-panes.mjs` 那条依赖旧机制（芯片盒子落在裁剪区外）的断言升级为对兜的直接断言（`splitterCollapsedPocketHidden` / `splitterCollapsedChipsInPocket` / `splitterExpandedPocketShown`）。
+  规格：`docs/ui.md` §5.3 / §5.4、`docs/contract.md` §8、`docs/testing.md` F-08.1。
+
 - **互动槽的占用高度与缩回：预留 = 气泡自身高度、空闲到点整块卸载（需求 §一 1.1–1.4，2026-09-27）**：
   改前有两条独立的毛病：① `.chatWrap` 的下内边距由**开关属性**驱动（`RoomView.tsx:922` 按 `ui.interact_single_slot` 打 `data-interact-slot="true"`，CSS 里两个选择器同值），于是**开关一开就常驻**这段高度 —— 还没有任何互动消息时也占着，且值 = 槽位高 `calc(var(--avatar) + 8px)` **加**上下各一道安全间距，比气泡本身多 24px 纯空白；② 浮层**从不卸载**（淡出靠 `animation: … forwards` 停在 `opacity: 0`，元素留在 DOM 里），预留因此永不回收、「弹幕缩回补齐」永远不会发生。
   现在：① **预留只认「浮层在不在 DOM 里」**（`.chatWrap:has(> .interactSlot)` 是唯一来源，`data-interact-slot` 整个删掉），值 = **互动气泡自身的高度**（`calc(var(--avatar) + 8px)`），浮层 `bottom: 0` 整条落在这段里 ⇒ 占用 == 一条气泡（需求 1.1 / 1.3）；② **空闲到点由 JS 计时卸载整块**（新常量 `INTERACT_SLOT_FADE_MS = 300`，寿命 = `INTERACT_SLOT_MS` + 它，淡出仍由 CSS 播）⇒ 卸载后 `:has()` 失效 ⇒ 预留归零 ⇒ 弹幕上移补齐空出的那一段（需求 1.2 / 1.4）。

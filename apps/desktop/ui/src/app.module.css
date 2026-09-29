@@ -1846,6 +1846,11 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* 拖动**过程中**兜会被压成 0 高（份额一路拖到折叠端、但还没松手，`data-collapsed`
+     尚未挂上）——那一帧筛选条会溢出兜底，靠这层裁住。**折叠态本身不靠它**：折叠走
+     `display:none`（见下面 `.giftPane[data-collapsed]` 那条），因为合成路径里
+     `overflow` 会被带 transform 的滚动列表逃出、漏到弹幕区身上（issue 0928）。 */
+  overflow: hidden;
 }
 
 .giftPane[data-on-top="true"] {

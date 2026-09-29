@@ -1,7 +1,8 @@
 // 场景块：共享分区：分割条与长按换位
 //   splitter 弹幕区与礼物栏上下分区、分割条热区 ≥ 8px、拖动实时改比例且松手才落盘
 //   默认份额 0.25（= 1 : 3）、**拖动全程开合态不变、松手才收起 / 展开**、ESC 只还原份额
-//   折叠态列表与三枚筛选芯片照旧挂载（被这一栏裁掉）、展开即刻可见且不重挂
+//   折叠 = **整只兜收起**（`db-gift-pocket` 走 `display: none`；兜里的列表与三枚芯片照旧挂载）、
+//   展开即刻可见且不重挂、**拖开又不松手拖回原位要回到折叠高度**（实时份额下限 = 0、落盘仍 0.10–0.90）
 //   拖到极限时两栏最小高度成立（弹幕区 ≥ 3 行、礼物栏 ≥ 总计条）且总量不溢出、比例重挂后保持
 //   键盘 ↑↓ 微调（连按只落盘一次）、长按 0.5s 换位与三种取消路、切标签回来后本地状态复位
 //   ui.gift_panel 关掉后分区退化为弹幕区全高
@@ -87,18 +88,23 @@
     out.splitterDefaultRatioPref = ratioAtEntry;
     out.splitterDefaultRatioIsQuarter = Math.abs(ratioAtEntry - 0.25) < 1e-9;
     out.splitterDefaultOnTopPref = window.__prefs["ui.gift_pane_on_top"] === false;
-    // ---- 单轴模型（需求 5.1–5.4）：折叠态下礼物**列表与三枚筛选芯片照旧挂载**，
-    //      只是落在这一栏的裁剪区外（看不见）。两步判据：① DOM 里在；
-    //      ② 它们的盒子在礼物栏这一栏的矩形**之外**（这一栏 overflow: hidden，所以看不见）。
-    var foldFilterBox = rect(byTestId("db-gift-filter"));
+    // ---- 抽屉模型（需求 5.1–5.4）：折叠 = **整只兜收起**、把手（总计条）留下。
+    //      两步判据：① 兜里的列表与三枚芯片**照旧挂载**（DOM 里在，不是卸载）；
+    //      ② 兜 `.giftPaneBody`（`db-gift-pocket`）自己被 `display: none` 收掉 ——
+    //      **不用 `overflow` 裁剪**：合成路径里带 transform 的滚动列表会逃出祖先裁剪区、
+    //      漏到弹幕区身上（2026-09-28 / 09-29 用户两次截图），`display: none` 在所有引擎都不漏。
     var outsidePane = function (box, paneBox) {
       if (!box || !paneBox) return null;
       return box.top >= paneBox.bottom - 1 || box.bottom <= paneBox.top + 1;
     };
+    var foldPocketEl = byTestId("db-gift-pocket");
     out.splitterCollapsedKeepsChips = !!byTestId("db-gift-area") &&
       !!byTestId("db-gift-scroll") && !!byTestId("db-gift-filter") &&
       allByTestId("db-gift-chip").length === 3;
-    out.splitterCollapsedChipsClipped = outsidePane(foldFilterBox, giftBox0) === true;
+    out.splitterCollapsedPocketHidden = !!foldPocketEl &&
+      getComputedStyle(foldPocketEl).display === "none";
+    out.splitterCollapsedChipsInPocket = !!foldPocketEl && !!byTestId("db-gift-filter") &&
+      foldPocketEl.contains(byTestId("db-gift-filter"));
     // 「展开不重挂」的判据：给列表根与筛选条挂一个自定义属性，走完这一次开合它们必须还在
     // （重挂会把它们带走 —— 那正是改前「展开才挂载」的形态）。
     var giftAreaEl = byTestId("db-gift-area");
@@ -133,6 +139,9 @@
     var grownGiftBox = rect(byTestId("db-pane-gift"));
     out.splitterExpandedChipsVisible = !!grownFilterBox && !!grownGiftBox &&
       outsidePane(grownFilterBox, grownGiftBox) === false;
+    // 兜重新显形（`display: none` 撤掉）—— 与折叠态的 `splitterCollapsedPocketHidden` 成对。
+    out.splitterExpandedPocketShown = !!byTestId("db-gift-pocket") &&
+      getComputedStyle(byTestId("db-gift-pocket")).display !== "none";
     out.splitterExpandDoesNotRemount = byTestId("db-gift-area") !== null &&
       byTestId("db-gift-area").getAttribute("data-smoke-keep") === "list" &&
       byTestId("db-gift-filter").getAttribute("data-smoke-keep") === "filter";
@@ -511,5 +520,46 @@
     out.splitterRestoredRatio = Math.abs(window.__prefs["ui.gift_pane_ratio"] - 0.25) < 0.02;
     out.splitterRestoredOrder = window.__prefs["ui.gift_pane_on_top"] === false;
     out.splitterRestoredShownRatio = Math.abs(shownRatio() - 0.25) < 0.02;
+    snap();
+
+    // ---- 「拖开、**不松手**又拖回原位」必须回到**折叠高度**（2026-09-29 用户报的「归不了位」）----
+    //      实时份额曾被 `clampPaneRatio` 夹在 0.10，而折叠高度（≈ 48px）在 10% 之下 ⇒ 拖动中
+    //      分割条最矮只能停在 10% 处、**回不到折叠高度**。这里按住分割条往上拖 130px（撑开），
+    //      **不松手**原路拖回按下点：持握时就该 ≈ 折叠高度；松手后仍应停在折叠态（不是 10%）。
+    //      ⚠ 量的是**礼物栏高度**（不是份额）：折叠态份额被压在下限以下、`--gift-share` 写 0，
+    //      只有高度才是两态都能对账的那个数。
+    if (giftExpandedNow() === "true") {
+      byTestId("db-gift-toggle").click();
+      await sleep(350);
+    }
+    var rtCollapsedH = rect(byTestId("db-pane-gift")).height;
+    var rtY = splitterMid();
+    firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, rtY, "mouse");
+    firePointer(window, "pointermove", splitX, rtY - 130, "mouse");
+    await sleep(60);
+    out.splitterRoundTripOpens = rect(byTestId("db-pane-gift")).height > rtCollapsedH + 80;
+    firePointer(window, "pointermove", splitX, rtY - 65, "mouse");
+    firePointer(window, "pointermove", splitX, rtY, "mouse");
+    await sleep(60);
+    var rtHeldH = rect(byTestId("db-pane-gift")).height;
+    firePointer(window, "pointerup", splitX, rtY, "mouse");
+    await sleep(400);
+    var rtAfterH = rect(byTestId("db-pane-gift")).height;
+    out.splitterRoundTripHeldBackPx = Math.round((rtHeldH - rtCollapsedH) * 10) / 10;
+    out.splitterRoundTripReturnsCollapsedHeld = Math.abs(rtHeldH - rtCollapsedH) <= 2;
+    out.splitterRoundTripStaysCollapsedAfterRelease = giftExpandedNow() === "false" &&
+      Math.abs(rtAfterH - rtCollapsedH) <= 2;
+    // 收尾：把这一栏开回 0.25（与上面那条收尾同一口径），别给后面的片段留一个折叠态 / 被拖到 0.10 的份额
+    byTestId("db-gift-toggle").click();
+    await sleep(350);
+    var rtBoxEnd = rect(byTestId("db-panes"));
+    var rtSplitEnd = rect(byTestId("db-pane-splitter"));
+    var rtTargetY = rtBoxEnd.top + rtSplitEnd.height / 2 +
+      (rtBoxEnd.height - rtSplitEnd.height) * (1 - 0.25);
+    firePointer(byTestId("db-pane-splitter"), "pointerdown", splitX, splitterMid());
+    firePointer(window, "pointermove", splitX, rtTargetY);
+    firePointer(window, "pointerup", splitX, rtTargetY);
+    await sleep(450);
+    out.splitterRoundTripRestoredRatio = Math.abs(window.__prefs["ui.gift_pane_ratio"] - 0.25) < 0.02;
     snap();
 

@@ -1032,12 +1032,15 @@ export function RoomView({
                 >
                   {/* **就是房间头那枚返回键的 `<`**（同一条 path、同一套 24 盒 / 1.75 描边规范，
                       用户 2026-09-26：「不要用指代方向的三根线的箭头」），只是按 `data-dir`
-                      旋转 90°（展开态朝上 = 收起、收起态朝下 = 展开）。 */}
+                      旋转 90°。**方向的口径（用户 2026-09-29）：收起时箭头朝向弹幕、展开时朝向
+                      礼物** —— 与礼物区在上还是在下无关，所以 `giftPaneOnTop` 一翻，两个方向
+                      跟着翻：礼物在下时收起朝上（弹幕在上）/ 展开朝下；礼物在上时反过来。
+                      等价写法 `giftOpen === giftPaneOnTop ? "up" : "down"`。 */}
                   <svg
                     className={styles.ctlIcon}
                     viewBox="0 0 24 24"
                     aria-hidden="true"
-                    data-dir={giftOpen ? "up" : "down"}
+                    data-dir={giftOpen === giftPaneOnTop ? "up" : "down"}
                   >
                     <path
                       d="M15 4.875 9 12l6 7.125"
@@ -1052,7 +1055,7 @@ export function RoomView({
               </div>
               {/* 兜：列表 + 筛选条，同一只抽屉里。折叠时整只兜 `display:none`（见 CSS），
                   列表与筛选条照旧挂载、不卸载 —— 展开瞬间即呈现、不重取（单轴模型需求 5.4）。 */}
-              <div className={styles.giftPaneBody} data-testid="db-gift-body">
+              <div className={styles.giftPaneBody} data-testid="db-gift-pocket">
               {/* 列表**常驻**（需求 5.3）：不再随礼物栏开合挂载 / 卸载 —— 折叠只是把兜收起，
                   列表照旧在场上（display:none 看不见）。因此展开不需要重新挂载、也不需要重新请求，
                   拉开的瞬间就呈现（需求 5.4）。`key` 与弹幕区那一份同一个理由：换房时整份实例重来。 */}

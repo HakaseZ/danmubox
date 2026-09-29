@@ -161,10 +161,13 @@ export function SplitPanes({
   }, []);
 
   // 拖动中的实时值每帧都补在 DOM 上（见文件头的第 4 段）。
+  // ⚠ **比的是 `grow`、不是 `share`**：`liveRef` 装的一直是「要写进 `--gift-share` 的那份
+  // grow」，而折叠态下 `grow`（0）与份额（≥0.1）不是同一个数。拿 `share` 比会在折叠态的
+  // 收尾上判成「还没对上」而反复贴回份额值，把界面按在 10% 高度出不来（2026-09-29 issue）。
   useLayoutEffect(() => {
     const live = liveRef.current;
     if (live === null) return;
-    if (Math.abs(live - share) < 1e-6) {
+    if (Math.abs(live - grow) < 1e-6) {
       liveRef.current = null; // 偏好回执到了：inline style 从此就是同一个值
       return;
     }
@@ -292,18 +295,25 @@ export function SplitPanes({
       const offset = moveEvent.clientY - rect.top;
       const raw = giftOnTop ? offset / usable : 1 - offset / usable;
       latestRaw = raw;
+      // **实时几何**（写进 DOM 的那一份）**下限压在 0**、不是 `PANE_RATIO_MIN`：
+      // 折叠那一端（`--gift-share` = 0 = 只剩总计条）才是这条轴真正的端点，分割条必须
+      // 1:1 跟着指针一路走到它。压到 0.1 会让「拖开再拖回原位」停在 10% 高度上、回不到
+      // 折叠高度（2026-09-29 用户报的「拖回去归不了位 / 还有收不起来的情况」）——
+      // 折叠高度（≈ 48px）本来就在 10% 之下，夹在 0.1 等于把这一端从拖动里挖掉了。
+      const live = roundPaneRatio(Math.min(PANE_RATIO_MAX, Math.max(0, raw)));
+      // **落盘**那一份另算：域仍是 0.1–0.9（越界会被 IPC 以 `BAD_REQUEST` 拒掉），
+      // 它与 `latestRaw` 一起供**松手**时判开合（需求 4.2/4.3）。
       latest = roundPaneRatio(clampPaneRatio(raw));
       // **只改可视份额，一次都不改开合状态**（需求 4.2）：折叠着也能被拖开（展开前也照拖，
-      // 拖到哪儿就长到哪儿 —— 折叠态的份额是压在下限以下的，这里写的是指针给的那一份），
-      // 展开着拖到下限也不会半路变成折叠。开合由**松手**时的 `paneFoldAfterDrag` 判一次。
-      // 改前的写法在 `move` 里当场 `onExpand()` / `onCollapse()`，于是「拖到一半被识别成
-      // 已收起、之后拖不动」——那一版的反悔分支也只是在补这个洞。
+      // 拖到哪儿就长到哪儿），展开着拖到下限也不会半路变成折叠。开合由**松手**时的
+      // `paneFoldAfterDrag` 判一次。改前的写法在 `move` 里当场 `onExpand()` / `onCollapse()`，
+      // 于是「拖到一半被识别成已收起、之后拖不动」——那一版的反悔分支也只是在补这个洞。
       if (!moved) {
         moved = true;
         setDragging(true);
       }
-      liveRef.current = latest;
-      applyShare(latest);
+      liveRef.current = live;
+      applyShare(live);
     };
 
     const up = (upEvent: PointerEvent) => {
@@ -321,9 +331,16 @@ export function SplitPanes({
         applyShare(PANE_COLLAPSED_SHARE);
         handlers.current.onCollapse();
       } else {
-        // 展开 / 不开合：留着实时值，让它在偏好回执到达之前一直贴在 DOM 上（改前同一套手法）。
-        liveRef.current = latest;
-        applyShare(latest);
+        // 展开 / 不开合：把落盘那一份**折算回 grow** 再贴回 DOM，让它在偏好回执到达之前
+        // 一直贴在 DOM 上（`liveRef` 装的一直是 grow，见上面那条 effect）。
+        // ⚠ 直接贴 `latest`（份额）在「折叠态拖开又拖回折叠区间」这一种收尾上是错的：
+        // 那时 `giftCollapsed` 仍是 true、React 写的 `--gift-share` 是 `PANE_COLLAPSED_SHARE`
+        // （0），而 React **只在 style 值变化时才碰 DOM** —— 命令式写下的 ≥0.1 会留在 DOM 上，
+        // 与折叠态打架，界面停在 10% 高度、`aria-expanded` 却是 false（2026-09-29 用户报的
+        // 「还有收不起来的情况」）。折算成 grow 之后两边写的是同一个数（折叠 → 0）。
+        const collapsedNow = fold === "expand" ? false : wasCollapsed;
+        liveRef.current = paneGrowOf(latest, collapsedNow, hasGift);
+        applyShare(liveRef.current);
         if (fold === "expand") handlers.current.onExpand();
       }
       handlers.current.onRatio(latest);

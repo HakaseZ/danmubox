@@ -170,7 +170,10 @@ export function AdminPanel({
     setMenu(null);
   };
   const singlePick = (key: string) => {
-    const willClear = picked.length === 1 && picked.includes(key);
+    // 用**当前列表**的勾选数判断「取消后是否归零退出批量」：列表刷新后 `picked` 里可能
+    // 还留着已不在名单里的 stale key（见 `pickedKeys` 注释），用全局 `picked.length` 会算错、
+    // 导致最后一个可见选中清掉后 batch bar 卡在「已选 0 项」退不出去。
+    const willClear = pickedKeys.length === 1 && pickedKeys.includes(key);
     togglePick(key);
     if (willClear) setBatch(false);
   };

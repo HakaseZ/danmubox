@@ -317,7 +317,7 @@ fn decode_stream(data, depth):
 
 `POPULARITY_CHANGE`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`WATCHED_CHANGE`、`ONLINE_RANK_V2`、`ONLINE_RANK_COUNT`
 
-> 点赞（`LIKE_INFO_V3_CLICK` / `LIKE_INFO_V3_UPDATE`）**不再属于**计数类：按需求进互动层（`like_info`），`data` 带 `uname` / `like_text`（如「为主播点赞了」），经 `ui.interact_single_slot` 浮层显示最新一条（高频不刷屏）；同时仍计 `counter_updates`（保留点赞数统计）。来源 `bilibili-API-collect` 的 `message_stream.md`。
+> 点赞（`LIKE_INFO_V3_CLICK`）**不再属于**计数类：按需求进互动层（`like_info`），`data` 带 `uname` / `like_text`（如「为主播点赞了」），经 `ui.interact_single_slot` 浮层显示最新一条（高频不刷屏）；同时仍计 `counter_updates`（保留点赞数统计）。`LIKE_INFO_V3_UPDATE` 是聚合计数事件（只带 `click_count`，无 `uname` / `uid` / `face`），**已知但直接丢弃**：不产生 `Message`，不进入缓冲、不计入 `counter_updates`，也不计入 `unknown_cmd`（见 §10.0「已知但直接丢弃」段落）。来源 `bilibili-API-collect` 的 `message_stream.md`。
 
 其中 `WATCHED_CHANGE.data.num`（累计看过）与 `ONLINE_RANK_COUNT.data.online_count`（在线人数）除计数外还要**冒泡给界面**（`cmd.rs:150-167` 的 `Dispatch::RoomStats` → 契约 §5 `RoomStats`），其余几条只计数。
 
@@ -591,7 +591,7 @@ fn decode_stream(data, depth):
 | `ROOM_CHANGE` | 房间信息变更（标题 / 分区 / 封面） | 固定文案「标题或分区变更」（与 `LIVE` / `PREPARING` 同口径，**不解析载荷猜文案**） | 仅当房间内存态字段确实变化时写入并广播 |
 | `CUT_OFF` | 直播间被切断 | 固定文案 | 写入缓冲；触发界面断流提示 |
 | `POPULARITY_CHANGE` | 人气值变化 | 人气数值 | **高频**：只更新房间内存计数，**不写入会话缓冲**（`cmd.rs:145-146`）。`op=3` 心跳回应携带同一口径的值，只记 `debug` 日志（`ws.rs:629-630`）；人气值的展示口径见 [`ui.md`](ui.md) §3.1 |
-| `LIKE_INFO_V3_UPDATE` | 点赞计数更新 | 点赞计数描述 | **已移出计数类**：与 `LIKE_INFO_V3_CLICK` 一同进互动层（见 §10.0 注、`like_info`） |
+| `LIKE_INFO_V3_UPDATE` | 点赞计数更新 | 点赞计数描述 | **已知但直接丢弃**：不产生 `Message`，不进入缓冲、不计入 `counter_updates` 或 `unknown_cmd`（见 §10.0 注、`dispatch`） |
 | `ROOM_REAL_TIME_MESSAGE_UPDATE` | 关注数 / 粉丝数等实时计数更新 | 计数描述 | **高频**：仅更新房间内存计数，**不写入会话缓冲** |
 | `WATCHED_CHANGE` | 累计看过人数变化 | `data.num` | 只更新计数，不入缓冲；`data.num` 作为**累计看过**冒泡给界面（`cmd.rs:157`，`Dispatch::RoomStats`） |
 | `ONLINE_RANK_COUNT` | 在线人数变化 | `data.online_count` / `data.count` | 只更新计数，不入缓冲；`data.online_count` 作为**在线人数**冒泡给界面（`cmd.rs:152`，`Dispatch::RoomStats`） |

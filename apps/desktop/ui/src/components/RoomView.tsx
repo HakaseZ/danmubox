@@ -998,19 +998,19 @@ export function RoomView({
            空态文案在 `empty` 上（判据「哪一套行算本场」留在调用方）。 */
         gift={
           giftPanel ? (
-            /* 礼物栏内部就这三段：总计条 / 列表 / 筛选条，由 `.giftPane` 一个容器排。
-               **总计条永远贴屏幕中心（贴分割条）**、筛选条永远在外侧，顺序靠
-               `flex-direction` 翻转（`data-on-top`）—— 与 `.panes` 翻两栏同一套口径，
+            /* 礼物栏是一个**抽屉**：把手 + 兜两层。
+               把手 = `.giftPaneTotal`（总计条，也是拖动热区，永远贴分割条 / 中心）；
+               兜 = `.giftPaneBody`（列表 + 筛选条，**同一只兜**，筛选决定兜里显示哪些弹幕）。
+               折叠只把整只「兜」收起（display:none），把手照常可见 —— 用户 2026-09-29：
+               热区是把手、弹幕与筛选都在兜里、热区控兜的开关。
+               兜内顺序靠 `flex-direction` 翻转（`data-on-top`）—— 与 `.panes` 翻两栏同一套口径，
                不搬节点：列表的滚动位置与虚拟列表状态不受礼物栏在上在下影响。
-               ⚠ 不能指望外层 `.panes` 的 `column-reverse` 把这里也翻过来：它只翻两栏。
-
-               三段**都常驻**（需求 5.1 / 5.3）：折叠时这一栏只有总计条那么高，列表与筛选条
-               落在 `.paneGift` 的裁剪区外（`overflow: hidden`），展开即呈现（需求 5.4）。
-               「收起」的入口是总计条右端那枚图标（另一条路是拖动分割线，见 SplitPanes）。 */
+               ⚠ 不能指望外层 `.panes` 的 `column-reverse` 把这里也翻过来：它只翻两栏。 */
             <div
               className={styles.giftPane}
               data-testid="db-gift-pane"
               data-on-top={giftPaneOnTop ? "true" : undefined}
+              data-collapsed={giftOpen ? undefined : "true"}
             >
               {/* 总计条：贴中心、折叠态唯一看得见的一条；**它就是拖动热区**（见 SplitPanes）。
                   文案 `礼物 12条 ¥1,168.7`；开启筛选后只给条数（金额已在筛选条上分列）。
@@ -1032,12 +1032,15 @@ export function RoomView({
                 >
                   {/* **就是房间头那枚返回键的 `<`**（同一条 path、同一套 24 盒 / 1.75 描边规范，
                       用户 2026-09-26：「不要用指代方向的三根线的箭头」），只是按 `data-dir`
-                      旋转 90°（展开态朝上 = 收起，收起态朝下 = 展开）。 */}
+                      旋转 90°。**方向的口径（用户 2026-09-29）：收起时箭头朝向弹幕、展开时朝向
+                      礼物** —— 与礼物区在上还是在下无关，所以 `giftPaneOnTop` 一翻，两个方向
+                      跟着翻：礼物在下时收起朝上（弹幕在上）/ 展开朝下；礼物在上时反过来。
+                      等价写法 `giftOpen === giftPaneOnTop ? "up" : "down"`。 */}
                   <svg
                     className={styles.ctlIcon}
                     viewBox="0 0 24 24"
                     aria-hidden="true"
-                    data-dir={giftOpen ? "up" : "down"}
+                    data-dir={giftOpen === giftPaneOnTop ? "up" : "down"}
                   >
                     <path
                       d="M15 4.875 9 12l6 7.125"
@@ -1050,11 +1053,12 @@ export function RoomView({
                   </svg>
                 </button>
               </div>
-              {/* 列表**常驻**（需求 5.3）：不再随礼物栏开合挂载 / 卸载 —— 折叠只是把份额压到
-                  下限以下、这一栏按最小高度裁剪，列表照旧在场上（在裁剪区外看不见）。
-                  因此展开不需要重新挂载、也不需要重新请求，拉开的瞬间就呈现（需求 5.4）。
-                  `key` 与弹幕区那一份同一个理由：换房时整份实例重来（本地状态复位那条 effect
-                  改的只是 `giftOpen`，列表不再靠卸载复位了）。 */}
+              {/* 兜：列表 + 筛选条，同一只抽屉里。折叠时整只兜 `display:none`（见 CSS），
+                  列表与筛选条照旧挂载、不卸载 —— 展开瞬间即呈现、不重取（单轴模型需求 5.4）。 */}
+              <div className={styles.giftPaneBody} data-testid="db-gift-pocket">
+              {/* 列表**常驻**（需求 5.3）：不再随礼物栏开合挂载 / 卸载 —— 折叠只是把兜收起，
+                  列表照旧在场上（display:none 看不见）。因此展开不需要重新挂载、也不需要重新请求，
+                  拉开的瞬间就呈现（需求 5.4）。`key` 与弹幕区那一份同一个理由：换房时整份实例重来。 */}
               <MessageList
                 key={room.room_id}
                 rows={giftRows}
@@ -1100,6 +1104,7 @@ export function RoomView({
                     </button>
                   );
                 })}
+              </div>
               </div>
             </div>
           ) : null

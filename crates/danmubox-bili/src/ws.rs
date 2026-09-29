@@ -220,9 +220,13 @@ impl Default for FaceWait {
 impl FaceWait {
     /// 这条消息需要按 uid 补头像吗？返回要问的 uid。
     ///
-    /// 只有 `guard` / `gift` / `superchat` 三类：其余 kind 的头像都有可靠来源
-    /// （弹幕取 `user.base.face`、互动取 protobuf / JSON 的用户对象），而**这三类**的载荷里
-    /// 没有头像字段（`docs/protocol.md` §10.6 / §10.2 / 附录 A8 / A12 / A13）。
+    /// 默认只有 `guard` / `gift` / `superchat` 三类需要现取；但 `interact` 也要纳入——
+    /// 互动里**点赞**（`LIKE_INFO_V3_CLICK`）的载荷只有 `uname` / `uid` / `like_text`，
+    /// 没有头像字段（`message_stream.md` 实测），而**关注 / 进场 / 分享**的 `interact`
+    /// 已自带 `uinfo.base.face`（或 protobuf `user_info.base.face`），被下面第一行
+    /// `!message.face.is_empty()` 拦掉、不会重复问。所以放开 `interact` 后，真正去问上游的
+    /// 只有「face 为空」的那一条点赞（需求：所有点赞按 uid 现取头像，来源
+    /// `UserProfile::face_of` → `x/space/wbi/acc/info`，`profile.rs`）。
     ///
     /// 已经有头像、或 uid 不可用（系统消息、游客弹幕的 `uid = 0`）→ `None`（**不问上游**）。
     fn needs_face(message: &Message) -> Option<i64> {
@@ -231,7 +235,7 @@ impl FaceWait {
         }
         matches!(
             message.kind,
-            MessageKind::Guard | MessageKind::Gift | MessageKind::Superchat
+            MessageKind::Guard | MessageKind::Gift | MessageKind::Superchat | MessageKind::Interact
         )
         .then_some(message.uid)
     }
@@ -2231,18 +2235,27 @@ mod tests {
         )
     }
 
-    /// 只有**大航海 / 礼物 / 醒目留言**且**还没有头像**时才按 uid 去问上游
-    /// （需求 3.2 / 3.3）：弹幕与互动的头像本来就有可靠来源，系统消息连 uid 都没有。
+    /// 只有**大航海 / 礼物 / 醒目留言 / 互动**且**还没有头像**时才按 uid 去问上游
+    /// （需求 3.2 / 3.3）：互动里的点赞（`LIKE_INFO_V3_CLICK`）payload 不含头像，要按
+    /// uid 现取；但关注 / 进场 / 分享的互动已自带 `uinfo.base.face`，不会重复问。弹幕头像
+    /// 本来就有可靠来源；系统消息连 uid 都没有。
     #[test]
-    fn only_guard_gift_and_superchat_without_a_face_ask_upstream() {
+    fn guard_gift_superchat_and_interact_without_a_face_ask_upstream() {
         for (kind, uid, face, expected) in [
             (MessageKind::Guard, 42, "", Some(42)),
             (MessageKind::Gift, 42, "", Some(42)),
             (MessageKind::Superchat, 42, "", Some(42)),
+            // 互动：缺头像的点赞按 uid 现取；已带 face 的关注 / 进场 / 分享不重复问。
+            (MessageKind::Interact, 42, "", Some(42)),
+            (
+                MessageKind::Interact,
+                42,
+                "https://i0.hdslb.com/x.png",
+                None,
+            ),
             (MessageKind::Gift, 42, "https://i0.hdslb.com/x.png", None),
             (MessageKind::Guard, 0, "", None),
             (MessageKind::Danmaku, 42, "", None),
-            (MessageKind::Interact, 42, "", None),
             (MessageKind::System, 0, "", None),
         ] {
             let mut message = Message::new(1, kind, 1);

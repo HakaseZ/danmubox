@@ -377,14 +377,22 @@
 
     // ---- 几何：内容不足视口高度时整体贴底（直播弹幕自下往上读，最新一条紧贴输入区）
     // 此刻列表只有历史 1 条 + 实时 3 条，远未填满视口，正好测「富余空间去了哪」。
-    // 贴底时 未尾行.bottom 与滚动容器.bottom 之间只剩容器的 padding-bottom（8px）。
+    // 「贴底」= 贴到**内容区**的底，不是贴到滚动盒子的底 —— 尾行.bottom 与滚动容器.bottom
+    // 之间的差就是容器此刻的 `padding-bottom`。⚠ 它**不是**一个常数：2026-09-29 起互动气泡的
+    // 那条预留就落在内容末尾（`.scroller` 的 `padding-bottom`），气泡在场时这一格是
+    // 「8px 呼吸位 + 预留」，不在场时只有那 8px —— 拿固定值判会在气泡在场时假红。
     var scrollerShort = byTestId("db-chat-scroll");
+    var shortPadBottom = scrollerShort
+      ? parseFloat(getComputedStyle(scrollerShort).paddingBottom) || 0
+      : 0;
     var lastRowShort = rows()[rows().length - 1];
-    out.layoutShortContentBottomGap = lastRowShort
+    out.layoutShortContentBottomGap = lastRowShort && scrollerShort
       ? Math.round(scrollerShort.getBoundingClientRect().bottom - lastRowShort.getBoundingClientRect().bottom)
       : null;
+    out.layoutShortContentPadBottom = Math.round(shortPadBottom * 10) / 10;
     out.layoutShortContentPinnedBottom =
-      out.layoutShortContentBottomGap !== null && out.layoutShortContentBottomGap <= 12;
+      out.layoutShortContentBottomGap !== null && !!scrollerShort &&
+      Math.abs(out.layoutShortContentBottomGap - shortPadBottom) <= 2;
     // 停一下让跑脚本的进程抓一张「内容不足视口时贴底」的截图
     snap();
     await sleep(900);

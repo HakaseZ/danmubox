@@ -1162,6 +1162,27 @@
   position: relative;
 }
 
+/* ---- 互动槽的两枚长度令牌 ----------------------------------------------------------
+   **必须注册成 `<length>`**：注册后它在**声明处**（`.chatWrap`）就把 em 算成 px，再往下继承；
+   不注册就是普通自定义属性、`calc(var(--avatar) + 8px)` 会在**使用处**按使用元素的字号重解。
+   差别很要命：`--interact-slot-reserve` 要被 `.scroller` 用（`padding-bottom`），而弹幕区自己
+   会把字号再乘 `ui.font_scale`（文件头令牌段），气泡则**不吃**这根滑杆 —— 不注册的话两者
+   在拉字号时必然岔开（预留比气泡高 / 矮）。注册之后，`.scroller` 拿到的正是改前写在
+   `.chatWrap` 上的那个 px。
+   `initial-value: 0px` + 老引擎降级：不认 `@property` 时退化成普通自定义属性，按使用处解析
+   （弹幕区那一份会跟着字号滑杆走），与文件已有的降级口径一致 —— 只影响间距口感，不塌布局。 */
+@property --interact-slot-h {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --interact-slot-reserve {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
 /* `.chatArea` 外面的那一层（`RoomView` 的 `db-chat-wrap`）：把双击判据绑在「弹幕区」这一块上
    ——礼物栏与输入区不参与。它不画任何东西、也不改任何尺寸口径，只是把「唯一的 flex-1 生长区」
    这句话往上传一层（`flex: 1` + `min-height: 0` 与 `.chatArea` 逐字相同），
@@ -1172,34 +1193,45 @@
   display: flex;
   flex-direction: column;
   position: relative;
+  /* 气泡的行高（与 `.interactSlotRow` 同源）；它与上下边界各留 4px 间隙 —— 用户 2026-09-29：
+     「互动下方加 2px 不贴输入框」、同日补「上下都 4px 对称」。 */
+  --interact-slot-h: calc(var(--avatar) + 8px);
+  --interact-slot-gap: 4px; /* 气泡底边 → 输入框 / 分割条 */
+  --interact-slot-pad: 4px; /* 气泡顶边 → 弹幕内容（槽位专用呼吸位，替代外层 `--sp-2`） */
 }
 
-/* 槽位的**预留高度**：浮层浮在弹幕区底部，若不给它留位置，它必然压住最新一条弹幕
-   （用户 2026-09-26）。这里在 `.chatWrap` 底部让出一段 = **互动气泡自身的高度**
-   （`--avatar + 8px`，与 `.interactSlotRow` 同源，`.interactSlot` 的 `bottom: 0`
-   让气泡整条落在这段里）。需求 1.1 要的是「互动槽的**整体占用高度**不超过一条气泡的高度」，
-   所以**不再**在气泡上下各加一道安全间距（旧写法多留 24px 纯空白段）。
-   ⚠ 留的是**外层** `.chatWrap` 的下内边距，不是 `.scroller` 的：滚动容器的
-   `scrollHeight` / 贴底判据一个字节都不动（虚拟列表照旧按自己的口径贴底），
-   变的只是它可见的那一段高度。
-   ⚠ **唯一判据是浮层在不在 DOM 里**（`:has()`），不看任何开关属性（需求 1.3）：
-   开关开着但还没有互动消息 ⇒ 不占空白；浮层到点被 `InteractSlot` 卸载
-   （`interact-slot.ts` 的寿命判定）⇒ 这条规则失效 ⇒ 预留归零 ⇒ 弹幕上移补齐
-   空出的那一段（需求 1.2 / 1.4）。 */
+/* 槽位的**预留**（用户 2026-09-29 换口径）：留在**滚动内容的末尾**（`.scroller` 的
+   `padding-bottom`），而不再留在外层盒子的边上。这处之差决定了两件事能不能同时成立：
+   · **盒子之外**（改前）：那一段是**死区**，内容永远画不进去 ⇒ 向上翻查时弹幕走到那里就被
+     **截断**，底下永远吊着一条空白。
+   · **内容末尾**（现在）：贴底时空出这条带 ⇒ 最新一条不被气泡压住；向上翻查时先前的行会
+     **继续滚进这条带** ⇒ 只有气泡自身那点面积压在它们上面，其余照常显示（用户要的正是对这
+     一带「不截断、只遮挡气泡那一小块」）。
+   值 = 气泡实际占的那条带（行高 + `--interact-slot-gap`）+ 槽位专用的 `--interact-slot-pad` 呼吸位 —— 改前这两者是
+   拆在两处的（`.chatWrap` 的 27px + `.scroller` 自己的 8px），现在合成一个值、落在同一个属性
+   上，总和不变、气泡的视觉位置不动。
+   ⚠ **唯一判据仍是浮层在不在 DOM 里**（`:has()`），不看任何开关属性（需求 1.3）：
+   开关开着但还没有互动消息 ⇒ 不占空白；浮层到点被 `InteractSlot` 卸载（见 `interact-slot.ts`
+   的寿命判定）⇒ 这两条规则失效 ⇒ 预留退回 `.scroller` 原本的 `--sp-2`。
+   ⚠ 副作用：`scrollHeight` 从此会多这一截（改前是刻意回避的 —— 那时留的是外层盒子的边距），
+   虚拟列表的贴底判据要按「内容末尾自带一段空白」重看一遍。 */
 .chatWrap:has(> .interactSlot) {
-  padding-bottom: calc(var(--avatar) + 8px);
+  --interact-slot-reserve: calc(var(--interact-slot-h) + var(--interact-slot-gap) + var(--interact-slot-pad));
+}
+
+.chatWrap:has(> .interactSlot) .scroller {
+  padding-bottom: var(--interact-slot-reserve);
 }
 
 /* 互动/进场消息共用单槽位（`InteractSlot`，docs/ui.md §4.8）：浮于弹幕区底部偏左、
    轻量非侵入（pointer-events: none 不挡弹幕交互，仿官方网页直播间「互动消息」条的位置）。
    它只是一条浮层，blast radius 小，不影响 `.chatArea` / `.scroller` 的滚动与贴底。
-   `bottom: 0`：气泡**整条落在预留带里**（预留高度 = 气泡高，见上面那条规则）——
-   若还留着 `--sp-3` 那道间距，气泡顶边就会高出预留带 12px、重新压住最后一行弹幕，
-   而那 12px 也是需求 1.1 明令要去掉的多余占用。 */
+   `bottom: var(--interact-slot-gap)`：气泡浮在下边界**之上 4px**（用户 2026-09-29「不贴输入框」、同日改 4px 对称）；
+   这道间隙已经算进槽位预留，所以气泡整条仍落在空出来的那条带里。 */
 .interactSlot {
   position: absolute;
   left: var(--sp-3);
-  bottom: 0;
+  bottom: var(--interact-slot-gap);
   z-index: 5;
   /* 浮层本身不接交互，避免遮住下面的弹幕行点击/右键。 */
   pointer-events: none;
@@ -1226,14 +1258,16 @@
   animation: interactSlotFade var(--slot-fade-ms, 300ms) ease var(--slot-idle-ms, 4000ms) forwards;
 }
 
-/* 槽位里的每一行（头像 + 文案）同一盒内重叠，便于「新进旧出」接力。 */
+/* 槽位里的每一行（头像 + 文案）同一盒内重叠，便于「新进旧出」接力。
+   行高与预留用同一枚令牌（`--interact-slot-h`）——两者必须是同一个数，否则字号一拉
+   气泡和给它让出来的那条带就对不上了。 */
 .interactSlotRow {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 4px 12px 4px 4px;
   box-sizing: border-box;
-  height: calc(var(--avatar) + 8px);
+  height: var(--interact-slot-h);
   white-space: nowrap;
 }
 
@@ -1830,19 +1864,48 @@
    scope="gift"），列表就是 `MessageList`（`.chatArea` / `.scroller` / `.msgList`）——
    布局、底色、自动滚动全部与弹幕区同一套代码；这里的规则因此只剩**两条统计条**。
 
-   三段 = 总计条 / 列表 / 筛选条，**总计条永远贴屏幕中心（贴分割条）**、筛选条永远在外侧**
-   （需求 2026-09-26）。顺序由 `data-on-top` 翻 `flex-direction`，**不搬节点** ——
-   列表的滚动位置与虚拟列表状态不受礼物栏在上在下影响。
-   ⚠ 不能指望外层 `.panes` 的 `column-reverse`：它只翻两栏，栏内不受影响。 */
+   抽屉 = 把手（总计条，`.giftPaneTotal`，也是拖动热区）+ 兜（列表 + 筛选条，`.giftPaneBody`）：
+   **总计条永远贴屏幕中心（贴分割条）**、筛选条永远在外侧**（需求 2026-09-26）。
+   顺序由 `data-on-top` 翻 `flex-direction`，**不搬节点** —— 列表的滚动位置与虚拟列表状态
+   不受礼物栏在上在下影响。⚠ 不能指望外层 `.panes` 的 `column-reverse`：它只翻两栏，栏内不受影响。 */
+/* 礼物栏是一个**抽屉**：把手 + 兜两层。
+   把手 = `.giftPaneTotal`（总计条，也是拖动热区，永远贴分割条 / 中心）；
+   兜 = `.giftPaneBody`（列表 + 筛选条，同一只兜，筛选决定兜里显示哪些弹幕）。
+   折叠只把整只「兜」收起，把手照常可见 —— 用 `display:none` 而非 `overflow` 裁切，
+   因为后者在 Mac WKWebView / Android WebView 的合成路径里会被带 transform 的滚动列表
+   逃出裁剪区、画到弹幕区身上（issue 0928）；`display:none` 在所有引擎都 100% 不漏。
+   兜始终挂载、不卸载，所以展开瞬间即呈现、不重取（单轴模型需求 5.4）。 */
 .giftPane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* 拖动**过程中**兜会被压成 0 高（份额一路拖到折叠端、但还没松手，`data-collapsed`
+     尚未挂上）——那一帧筛选条会溢出兜底，靠这层裁住。**折叠态本身不靠它**：折叠走
+     `display:none`（见下面 `.giftPane[data-collapsed]` 那条），因为合成路径里
+     `overflow` 会被带 transform 的滚动列表逃出、漏到弹幕区身上（issue 0928）。 */
+  overflow: hidden;
+}
+
+.giftPane[data-on-top="true"] {
+  flex-direction: column-reverse; /* 把手永远贴分割条（中心），兜翻到外侧 */
+}
+
+.giftPaneBody {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
 }
 
-.giftPane[data-on-top="true"] {
-  flex-direction: column-reverse;
+.giftPane[data-on-top="true"] .giftPaneBody {
+  flex-direction: column-reverse; /* 筛选条永远在外侧（远离把手 / 热区） */
+}
+
+/* 折叠态：兜整体收起，只留把手（总计条）。`display:none` 而非 overflow 裁切 ——
+   见 `.giftPane` 上方那条注释：合成路径里 overflow 会被带 transform 的滚动列表逃出。 */
+.giftPane[data-collapsed="true"] .giftPaneBody {
+  display: none;
 }
 
 /* 总计条：`礼物 12条 ¥1,168.7` + 右端展开 / 收起图标。
@@ -2357,6 +2420,13 @@
   border-radius: var(--r-2);
 }
 
+/* 「批量」图标钮（禁言右侧那枚，现移至输入栏最左）：未选态灰底（与输入框同色系
+   `--bg-input`），悬停洗色沿用 `.ctlRound` 的 `--hover-wash`；打开态交给 `.adminToggleOn`
+   的强调色填充（`:not(.adminToggleOn)` 限定只作用未选态，避免覆盖打开态）。 */
+.adminBatchToggle:not(.adminToggleOn) {
+  background: var(--bg-input);
+}
+
 /* 第 1 排（所有 tab、两种模式都是同一排，issue #5）：输入框 + 该 tab 的主操作 + 批量图标钮。
    贴在 tabpanel 顶部，横向一排；批量模式下第 2 排（`.adminBatchBar`）紧跟在它正下方。 */
 .adminForm {
@@ -2595,6 +2665,13 @@
 /* 行内的一句说明文字（回复条 / @ 提示 / 面板空态 / 房管面板的计数）：只占内容宽度，不参与伸缩。 */
 .previewLabel {
   flex: none;
+}
+
+/* 批量动作条：左侧依次是全选 / 已选 N 项，`.previewLabel` 用 `margin-right: auto` 把
+   **后面的「批量动作」单独顶到最右**（issue：批量按钮跟在计数后不清晰）。三处 tab 共用
+   同一条 `batchBar`，布局一致，批量动作都落在该 tab 最右端。 */
+.adminBatchBar .previewLabel {
+  margin-right: auto;
 }
 
 /* 快捷短语面板（需求 §2.2；item 8 / item 11 重排）。面板自上而下两段：

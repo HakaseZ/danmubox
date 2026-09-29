@@ -62,6 +62,7 @@
 
 ### Changed
 
+- **互动槽位预留高度改落在滚动内容的末尾（2026-09-29；分支 `fix/interact-slot-reserve`）**：浮层在 DOM 里时，预留不再挂在外层 `.chatWrap` 的 `padding-bottom`（那是盒子外的死区，翻查时内容永远画不进去），改为 `.chatWrap:has(> .interactSlot) .scroller` 的 `padding-bottom` —— 贴底时最新一条不被气泡压住，向上翻查时先前的行仍**滚进这一带**、只有气泡自身那点面积挡着。两枚长度令牌（`--interact-slot-h` / `--interact-slot-reserve`）注册成 `@property` 的 `<length>`（否则弹幕区乘 `ui.font_scale` 与气泡不吃滑杆会岔开）；预留**只在浮层真的在 DOM 里时**才留（`:has()`，不看开关属性），卸载后退回 `.scroller` 原本的 `--sp-2`。气泡与上下边界各留 4px（下边界不贴输入框、上边界留呼吸位）。文档：`docs/contract.md` §8、`docs/ui.md` §4.8 / §9.1。
 - **文档横向收口：命令数 / 端口数与跨票口径按代码真值校正**（2026-09-27；只改文档与一处注释，**无行为变化**）：
   - **命令数 38 → 43**：`docs/ipc.md` §2 / §3 与 `docs/contract.md` §7 的声明按 `apps/desktop/src-tauri/src/lib.rs` 的 `generate_handler!`（`lib.rs:1345-1389`，43 项）逐条点数重算 —— **34 条 `async fn` + 9 条同步 `fn`**；§3.1「实现锚点」表补齐此前漏登记的 `anchor_room` / `anchor_title_set` / `anchor_area_list` / `anchor_area_set` / `anchor_live_set` / `user_face` 六条，并把整表与 §3 正文里的 `lib.rs:NNN` 指针按合并后的真值重指（锚点口径统一为 `fn` 所在行，即 `#[tauri::command]` 的下一行）。
   - **端口数「八个 / 九个」→ 十个**：`docs/architecture.md` §1 / §2.1 / §3 与 `docs/contract.md` §3 按 `crates/danmubox-core/src/ports.rs` 逐个点 trait 定为 **十个**（`ports.rs:87`–`372`，本批新增 `UserProfile`）；§3 端口表的 `ports.rs:NNN` 与 `docs/architecture.md` §3 的 trait / 方法行号同步校正。**`danmubox-bili` 模块数十八 → 十九**（`crates/danmubox-bili/src/` 现有 19 个文件，新增 `profile.rs`）。
@@ -141,6 +142,41 @@
 - **删掉「互动消息自动消失」开关 `ui.interact_auto_hide`**（2026-09-26）：单槽位这枚键已经把「看不看互动」说完，再留一枚叠加的开关只会让用户不知道该拨哪一枚。整条链一并删除：偏好键（Rust `prefs.rs` 与前端 `types.ts`）、`INTERACT_AUTO_HIDE_MS` 常量、`filtering.interactAutoHidden` 判据、`store` 那批到点定时器与已无写入方的 `interactTick` 字段（含 `App.tsx` 的订阅与依赖）、`MessageRow` 的 `.autoHide` 淡出与 `@keyframes interactFade`、`FilterBar` 那枚复选框，以及四处冒烟里的相关读数。**「互动」勾选项改为绑定 `ui.interact_single_slot`** 作为新展示的开关：开 = 浮层呈现（含预留高度），关 = 互动消息**完全不显示**（列表与浮层都不画，预留高度一并收回）。`MessageKind` / `KindArr` 类型域保留 `interact`（防存量 `prefs.json` 里 `filter.kinds` 含它时校验失败）。规格：`docs/contract.md` §8、`docs/ui.md` §4.8、`docs/testing.md`。
 
 ### Fixed
+
+- **互动气泡：预留改落在滚动内容的末尾 + 气泡下方 2px（issue202609281323 第 2 条，2026-09-29）**：
+  改前互动槽的预留是 `.chatWrap:has(> .interactSlot)` 的 `padding-bottom` —— 那一段在**滚动盒子之外**，
+  是永远画不进内容的**死区**：贴底时最新一条确实不被气泡压住，但**向上翻查时弹幕走到那里就被截断**，
+  底下永远吊着一条空白（用户 2026-09-29：「被这个区域截断」，并点明改前加这条正是为了不让气泡遮住
+  最新一条）。现改为落在**滚动内容的末尾**（判据仍是 `:has(> .interactSlot)`，但挂在 `.scroller` 的
+  `padding-bottom` 上）：贴底时同样空出这条带 ⇒ 最新一条不被气泡压住；**向上翻查时先前的行会继续滚进
+  这一带** ⇒ 只有气泡自身那点面积压着它们，其余照常显示 —— 即用户要的「仅气泡挡住弹幕内容，
+  空白区域不挡」。同时气泡 `bottom: 0` → `bottom: 2px`（「互动下方加 2px，不贴在输入框上」）。
+  预留值 = 气泡实际占的那条带（行高 + 2px 间隙）+ 原本就有的 `--sp-2` 呼吸位 —— 改前这两者拆在两处
+  （`.chatWrap` 的 27px + `.scroller` 自己的 8px），现在合成一个值落在同一个属性上，**总和不变、
+  气泡的视觉位置不动**。
+  ⚠ 两枚长度令牌 `--interact-slot-h` / `--interact-slot-reserve` **注册成 `<length>`**（`@property`）：
+  预留要被 `.scroller` 用，而弹幕区会把字号再乘 `ui.font_scale`、气泡**不吃**这根滑杆 —— 不注册就是
+  普通自定义属性、`calc(var(--avatar) + 8px)` 会在**使用处**按缩放后的字号重解，两个值必然岔开。
+  落点：`app.module.css`（`@property` 两枚 + `.chatWrap` 上的声明 + `.scroller` 的预留规则 +
+  `.interactSlot` 的 `bottom` + `.interactSlotRow` 改用同一枚令牌）、`smoke/scenario/parts/38-title-slot.mjs`
+  （③④⑤ 段按新几何重写：预留落在内容末尾、外层边距为 0、间隙 2px、预留覆盖气泡那条带、
+  **贴底尾行不被压**、**翻查时有行滚进这一带**、卸载后退回基线）、`21-room-header.mjs`
+  （`layoutShortContentPinnedBottom` 由「gap ≤ 12」改成「gap == 容器当前的 `padding-bottom`」——
+  气泡在场时这一格是「8px + 预留」，拿固定值判会假红）。
+  **实测**：chromium + webkit 两引擎 × 深浅两档 × 宽窄两档**全绿**（各 4518 项快照 / 56 张截图，零失败）；
+  关键读数 `interactSlotPadPx` 36.9 / `interactSlotWrapPadPx` 0 / `interactSlotBubblePx` 26.9 /
+  `interactSlotGapPx` 2 / `interactSlotLatestRowClearOfBubble` true /
+  `interactSlotContentReachesUnderBubble` true / `interactSlotReserveBackToBaseline` true。
+  规格：`docs/ui.md` §4.8、`docs/contract.md` §8。
+
+- **礼物栏：折叠态漏出根治 + 拖动「拖开又拖回原位」归不了位 + 箭头方向口径（issue 2026-09-29）**：
+  ① **折叠态漏出**：礼物栏改成**抽屉**两层 —— **把手 = 总计条**（兼拖动热区，`data-pane-head`）、**兜 = `.giftPaneBody`**（`db-gift-pocket`，装列表 + 筛选条）。折叠 = **整只兜 `display: none`**，不再靠 `overflow: hidden` 裁剪：Mac WKWebView / Android WebView 的合成路径里，带 `transform` 的虚拟列表会逃出祖先裁剪区、画到弹幕区身上（09-28 首次截图、09-29 复现）。把手与兜都常驻挂载（`display: none` 不卸载），展开只改份额、不重挂不重取。拖动**中途**份额压到折叠端但未松手时兜会是 0 高，那一帧由 `.giftPane` 的 `overflow: hidden` 兜住（只兜这一帧，不承担折叠态）。
+  ② **拖动「拖开再拖回原位」归不了位**：实时份额曾被 `clampPaneRatio` 夹在 `0.10`，而折叠高度（≈ 48px）远在 10% 之下 —— 拖动中分割条最矮只能回到 10% 处。现把**实时那一份**下限压到 `0`（`--gift-share` = 0 即折叠几何，指针回到原点就回到折叠高度），**落盘那一份**仍夹 `0.10–0.90`（越界会被 IPC 以 `BAD_REQUEST` 拒掉）。
+  ③ **松手后界面停在 10% 高度而 `aria-expanded` 是 `false`**：`liveRef` 装的应是「要写进 `--gift-share` 的那份 grow」，但收尾直接贴了份额，而折叠态下 React 写的是 `grow = 0`；React **只在 style 值变化时才碰 DOM**，于是命令式写下的 ≥0.10 留在 DOM 上、与折叠态打架。现收尾把份额**折算回 `grow`** 再落 DOM，`useLayoutEffect` 也改为拿 `grow` 对齐（折叠态 `grow`（0）与份额（≥0.10）不是同一个数）。
+  ④ **箭头方向口径**（用户 2026-09-29）：**收起时箭头朝向弹幕、展开时朝向礼物** —— 与礼物区在上还是在下无关，`giftPaneOnTop` 一翻两个方向跟着翻（`data-dir` = `giftOpen === giftPaneOnTop ? "up" : "down"`）。
+  落点：`apps/desktop/ui/src/components/RoomView.tsx`（抽屉结构 + `data-collapsed` + 箭头）、`SplitPanes.tsx`（实时份额下限 0、收尾折算 grow、effect 按 grow 对齐）、`app.module.css`（`.giftPaneBody` / 折叠 `display: none` / `.giftPane` 的 `overflow: hidden` 只兜拖动中途那一帧）。
+  **实测**：本机 Playwright **真实指针序列**回放（按下 → 拖开 → **不松手**拖回 → 松手，礼物区在上 / 在下两种形态）—— 拖回持握高度与折叠高度差 **0.06px**、松手后 **0px**，箭头两态方向符合口径，**PASS**；该场景已沉淀为冒烟回归（`splitterRoundTripOpens` / `splitterRoundTripReturnsCollapsedHeld`（偏差读数 `splitterRoundTripHeldBackPx` 实测 0.1–0.2px）/ `splitterRoundTripStaysCollapsedAfterRelease`）。冒烟两个引擎 × 深浅两档 × 宽窄两档**全绿**（各 4490 项快照 / 56 张截图，零失败）；`smoke/scenario/parts/34-split-panes.mjs` 那条依赖旧机制（芯片盒子落在裁剪区外）的断言升级为对兜的直接断言（`splitterCollapsedPocketHidden` / `splitterCollapsedChipsInPocket` / `splitterExpandedPocketShown`）。
+  规格：`docs/ui.md` §5.3 / §5.4、`docs/contract.md` §8、`docs/testing.md` F-08.1。
 
 - **互动槽的占用高度与缩回：预留 = 气泡自身高度、空闲到点整块卸载（需求 §一 1.1–1.4，2026-09-27）**：
   改前有两条独立的毛病：① `.chatWrap` 的下内边距由**开关属性**驱动（`RoomView.tsx:922` 按 `ui.interact_single_slot` 打 `data-interact-slot="true"`，CSS 里两个选择器同值），于是**开关一开就常驻**这段高度 —— 还没有任何互动消息时也占着，且值 = 槽位高 `calc(var(--avatar) + 8px)` **加**上下各一道安全间距，比气泡本身多 24px 纯空白；② 浮层**从不卸载**（淡出靠 `animation: … forwards` 停在 `opacity: 0`，元素留在 DOM 里），预留因此永不回收、「弹幕缩回补齐」永远不会发生。

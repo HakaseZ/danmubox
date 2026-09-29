@@ -32,12 +32,12 @@ const SYSTEM_CMDS: [(&str, &str, Option<i32>); 5] = [
 /// 计数类命令：**不写入会话缓冲**（`docs/protocol.md` §10.7），
 /// 只更新房间内存计数。其中 `ONLINE_RANK_COUNT` / `WATCHED_CHANGE` 携带的
 /// 两个观众数（在线人数 / 累计看过）要冒泡给界面，见 `Dispatch::RoomStats`。
-const COUNTER_CMDS: [&str; 7] = [
+// 点赞（`LIKE_INFO_V3_*`）已移出本表：按需求进互动层（`like_info`），不再只计数
+// （来源 `bilibili-API-collect` 的 `message_stream.md`，`data` 带 `uname` / `like_text`）。
+const COUNTER_CMDS: [&str; 5] = [
     "POPULARITY_CHANGE",
     "ROOM_REAL_TIME_MESSAGE_UPDATE",
     "WATCHED_CHANGE",
-    "LIKE_INFO_V3_CLICK",
-    "LIKE_INFO_V3_UPDATE",
     "ONLINE_RANK_V2",
     "ONLINE_RANK_COUNT",
 ];
@@ -145,10 +145,20 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
         "INTERACT_WORD" => interact_json(room_id, value),
         "INTERACT_WORD_V2" => interact_v2(room_id, value, counters),
         // 进场特效：名字走 `uinfo.base.name`（实测载荷里没有 `uname`，但有 `uinfo`），
-        // 因此能直接复用互动解析。文案由界面统一成「XX 进入直播间」——
-        // 载荷里那个 `copy_writing` 模板（`"<%昵称%> 来了"`）留给上网页端用，
-        // 两条进场路径的文案在这里保持一致。
+        // 因此能直接复用互动解析。文案由 `interact_content` 统一成「XX 进入直播间」
+        // （`msg_type` 缺省按进场 1）。
         "ENTRY_EFFECT" => interact_json(room_id, value),
+        // 点赞进互动层（不再只是计数）：参考文档 `message_stream.md` 的 `data`
+        // 带 `uname` / `like_text`；浮层只显最新一条，高频也不刷屏。
+        // `LIKE_INFO_V3_CLICK` 是带名字的真实点赞（有 `uid`，头像按 uid 现取）；
+        // `LIKE_INFO_V3_UPDATE` 只是聚合计数事件（只带 `click_count`，没有 `uname` /
+        // `uid` / `face`），进互动层只会冒出「无名无头像」的一条——直接丢弃，不进缓冲、
+        // 不计 `counter_updates`、不算 `unknown_cmd`（点赞活跃度仍由 CLICK 统计）。
+        "LIKE_INFO_V3_CLICK" => like_info(room_id, value, counters),
+        "LIKE_INFO_V3_UPDATE" => {
+            tracing::debug!("丢弃点赞聚合计数事件 LIKE_INFO_V3_UPDATE");
+            None
+        }
         // 大航海：这两条是**同一笔购买**的两条载荷（§10.6），各自的 `price` 语义不同
         // （见 [`GuardSource`]）—— 归一出 `Dispatch::Guard`，投递前还必须按笔合并。
         "GUARD_BUY" => {
@@ -615,7 +625,23 @@ fn superchat(room_id: i64, value: &Value) -> Option<Message> {
     Some(message)
 }
 
-/// 互动（进场等，JSON 形态）。`content` 留空：文案属展示层，见 `docs/ui.md`。
+/// `msg_type` → 互动中文文案。来源 `bilibili-API-collect` 的 `message_stream.md`：
+/// `INTERACT_WORD` 的 `data.msg_type` 为 1=进场 / 2=关注 / 3=分享；
+/// `INTERACT_WORD_V2` 的 protobuf `msg_type`（tag 5）同口径。
+/// 其余未知枚举按 `docs/protocol.md` §15.2 用「互动 + 数值」兜底，**禁止臆造语义**。
+/// `uname` 为空时回落「有人」（避免「 进入直播间」这类空主体文案）。
+fn interact_content(msg_type: i64, uname: &str) -> String {
+    let who = if uname.is_empty() { "有人" } else { uname };
+    match msg_type {
+        1 => format!("{who} 进入直播间"),
+        2 => format!("{who} 关注了主播"),
+        3 => format!("{who} 分享了直播间"),
+        other => format!("互动{other}"),
+    }
+}
+
+/// 互动（进场等，JSON 形态）。`content` 由 `msg_type` 决定（见 `interact_content`）；
+/// `ENTRY_EFFECT` 不携带 `msg_type`，按进场（1）处理。
 ///
 /// 昵称优先取 `data.uname`；`ENTRY_EFFECT` 没有该字段，回落到
 /// `data.uinfo.base.name`（2026-09-11 实测）。头像走**同一个** `uinfo.base`：
@@ -638,6 +664,10 @@ fn interact_json(room_id: i64, value: &Value) -> Option<Message> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // `msg_type` 区分进场 / 关注 / 分享（`message_stream.md`：1/2/3）；
+    // `ENTRY_EFFECT` 无该字段，按进场（1）处理；未知值由 `interact_content` 兜底。
+    let msg_type = data.get("msg_type").and_then(Value::as_i64).unwrap_or(1);
+    message.content = interact_content(msg_type, &message.uname);
     Some(message)
 }
 
@@ -704,6 +734,38 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
     message.face = decoded.face();
     message.medal_level = medal_level;
     message.medal_name = medal_name;
+    // `msg_type` 区分进场 / 关注 / 分享（参考文档 `message_stream.md`：1/2/3），
+    // 未知值由 `interact_content` 按 `docs/protocol.md` §15.2 兜底「互动 + 数值」。
+    message.content = interact_content(decoded.msg_type as i64, &message.uname);
+    Some(message)
+}
+
+/// 点赞（`LIKE_INFO_V3_CLICK`）：参考文档 `message_stream.md` 的 `data` 携带
+/// `uname` / `like_text`（如「为主播点赞了」）与 `uid`。按需求进互动层
+/// （`docs/ui.md` §4.8 的浮层只显最新一条，高频也不刷屏），不再只作计数丢弃
+/// （原 `COUNTER_CMDS` 分支已移除）。保留原计数口径：点赞数仍计入房间统计
+/// （`LIKE_INFO_V3_UPDATE` 这种只带 `click_count` 的聚合事件已在 `dispatch` 直接丢弃）。
+fn like_info(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> {
+    let data = value.get("data")?;
+    let uname = data
+        .get("uname")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut message = Message::new(room_id, MessageKind::Interact, danmubox_core::now_ms());
+    message.uid = data.get("uid").and_then(Value::as_i64).unwrap_or(0);
+    message.uname = uname.clone();
+    let like_text = data
+        .get("like_text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    message.content = if like_text.is_empty() {
+        format!("{uname} 为主播点赞了")
+    } else {
+        format!("{uname} {like_text}")
+    };
+    Counters::bump(&counters.counter_updates);
     Some(message)
 }
 
@@ -1526,6 +1588,60 @@ mod tests {
         assert_eq!(message.face, "https://i0.hdslb.com/bfs/face/entry.png");
     }
 
+    #[test]
+    fn interact_json_maps_msg_type_to_content() {
+        // 参考文档 `message_stream.md`：msg_type 1=进场 / 2=关注 / 3=分享。
+        let c = counters();
+        let follow = message(
+            7,
+            &json!({"cmd": "INTERACT_WORD", "data": {"uid": 9, "uname": "小关注", "msg_type": 2}}),
+            &c,
+        )
+        .expect("关注要解出来");
+        assert_eq!(follow.kind, MessageKind::Interact);
+        assert_eq!(follow.content, "小关注 关注了主播");
+
+        let share = message(
+            7,
+            &json!({"cmd": "INTERACT_WORD", "data": {"uid": 9, "uname": "小分享", "msg_type": 3}}),
+            &c,
+        )
+        .expect("分享要解出来");
+        assert_eq!(share.content, "小分享 分享了直播间");
+
+        // `ENTRY_EFFECT` 不携带 msg_type，按进场处理。
+        let entry = message(
+            7,
+            &json!({"cmd": "ENTRY_EFFECT", "data": {"uid": 9, "uinfo": {"base": {"name": "进场的人"}}}}),
+            &c,
+        )
+        .expect("进场要解出来");
+        assert_eq!(entry.content, "进场的人 进入直播间");
+
+        // 未知 msg_type 走「互动 + 数值」兜底，不臆造。
+        let unknown = message(
+            7,
+            &json!({"cmd": "INTERACT_WORD", "data": {"uid": 9, "uname": "某人", "msg_type": 99}}),
+            &c,
+        )
+        .expect("未知互动要解出来");
+        assert_eq!(unknown.content, "互动99");
+    }
+
+    #[test]
+    fn like_info_enters_interact_layer() {
+        // 点赞进互动层，文案来自 data.like_text（「为主播点赞了」）。
+        let c = counters();
+        let like = message(
+            7,
+            &json!({"cmd": "LIKE_INFO_V3_CLICK", "data": {"uid": 5, "uname": "点赞侠", "like_text": "为主播点赞了"}}),
+            &c,
+        )
+        .expect("点赞要进互动层");
+        assert_eq!(like.kind, MessageKind::Interact);
+        assert_eq!(like.content, "点赞侠 为主播点赞了");
+    }
+
     /// 同一次进场上游推两条载荷（`ENTRY_EFFECT` + `INTERACT_WORD(_V2)`）：只投一条。
     /// `docs/protocol.md` §10.4 的「不重复计数」此前只有文档、没有代码兜着
     /// （用户 2026-09-22 报的第 1 条）。
@@ -2307,12 +2423,11 @@ mod tests {
 
     #[test]
     fn counter_cmds_update_counts_without_entering_the_buffer() {
+        // 纯计数命令（不含点赞：点赞已按需求进互动层，见 `like_info`）。
         let c = counters();
         for cmd in [
             "POPULARITY_CHANGE",
             "WATCHED_CHANGE",
-            "LIKE_INFO_V3_CLICK",
-            "LIKE_INFO_V3_UPDATE",
             "ONLINE_RANK_V2",
             "ONLINE_RANK_COUNT",
             "ROOM_REAL_TIME_MESSAGE_UPDATE",
@@ -2323,12 +2438,29 @@ mod tests {
                 "{cmd} 按 protocol.md §10.7 不得产生消息"
             );
         }
-        assert_eq!(c.snapshot().counter_updates, 7);
+        assert_eq!(c.snapshot().counter_updates, 5);
         assert_eq!(
             c.snapshot().unknown_cmd,
             0,
             "已识别的计数命令（含 ONLINE_RANK_COUNT）不算未知"
         );
+    }
+
+    #[test]
+    fn like_info_counts_while_entering_interact_layer() {
+        // 点赞按需求进互动层（不再只是计数）：产生 `Message(kind=Interact)`，
+        // 同时仍计入房间点赞数（counter_updates）。
+        let c = counters();
+        let produced = dispatch(
+            1,
+            &json!({"cmd": "LIKE_INFO_V3_CLICK", "data": {"uid": 5, "uname": "点赞侠", "like_text": "为主播点赞了"}}),
+            &c,
+        );
+        assert!(
+            matches!(produced, Some(Dispatch::Message(_))),
+            "点赞应进互动层"
+        );
+        assert_eq!(c.snapshot().counter_updates, 1);
     }
 
     #[test]

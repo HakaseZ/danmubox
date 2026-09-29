@@ -427,7 +427,7 @@ export function AdminPanel({
   const batchToggle = (
     <button
       type="button"
-      className={`${styles.ctlRound}${batch ? ` ${styles.adminToggleOn}` : ""}`}
+      className={`${styles.ctlRound} ${styles.adminBatchToggle}${batch ? ` ${styles.adminToggleOn}` : ""}`}
       data-testid="db-admin-batch"
       aria-pressed={batch}
       aria-label={batch ? "退出批量处理" : "批量处理"}
@@ -556,6 +556,7 @@ export function AdminPanel({
         {tab === "silent" && (
           <>
             <div className={styles.adminForm}>
+              {batchToggle}
               <input
                 className={styles.adminInput}
                 value={muteUid}
@@ -563,7 +564,6 @@ export function AdminPanel({
                 onChange={(event) => setMuteUid(event.target.value)}
               />
               {actionButton}
-              {batchToggle}
             </div>
             {errorRow(errors.silent)}
             <div className={styles.adminList} data-testid="db-admin-list" onScroll={onListScroll}>
@@ -593,6 +593,7 @@ export function AdminPanel({
         {tab === "blacklist" && (
           <>
             <div className={styles.adminForm}>
+              {batchToggle}
               <input
                 className={styles.adminInput}
                 value={blackUid}
@@ -600,7 +601,6 @@ export function AdminPanel({
                 onChange={(event) => setBlackUid(event.target.value)}
               />
               {actionButton}
-              {batchToggle}
             </div>
             {errorRow(errors.blacklist)}
             <div className={styles.adminList} data-testid="db-admin-list" onScroll={onListScroll}>
@@ -630,6 +630,7 @@ export function AdminPanel({
         {tab === "keywords" && (
           <>
             <div className={styles.adminForm}>
+              {batchToggle}
               <input
                 className={styles.adminInput}
                 value={word}
@@ -645,7 +646,6 @@ export function AdminPanel({
                 }}
               />
               {actionButton}
-              {batchToggle}
             </div>
             {errorRow(errors.keywords)}
             <div className={styles.adminList} data-testid="db-admin-list" onScroll={onListScroll}>

@@ -2420,6 +2420,13 @@
   border-radius: var(--r-2);
 }
 
+/* 「批量」图标钮（禁言右侧那枚，现移至输入栏最左）：未选态灰底（与输入框同色系
+   `--bg-input`），悬停洗色沿用 `.ctlRound` 的 `--hover-wash`；打开态交给 `.adminToggleOn`
+   的强调色填充（`:not(.adminToggleOn)` 限定只作用未选态，避免覆盖打开态）。 */
+.adminBatchToggle:not(.adminToggleOn) {
+  background: var(--bg-input);
+}
+
 /* 第 1 排（所有 tab、两种模式都是同一排，issue #5）：输入框 + 该 tab 的主操作 + 批量图标钮。
    贴在 tabpanel 顶部，横向一排；批量模式下第 2 排（`.adminBatchBar`）紧跟在它正下方。 */
 .adminForm {

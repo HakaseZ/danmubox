@@ -150,7 +150,15 @@ pub fn dispatch(room_id: i64, value: &Value, counters: &Counters) -> Option<Disp
         "ENTRY_EFFECT" => interact_json(room_id, value),
         // 点赞进互动层（不再只是计数）：参考文档 `message_stream.md` 的 `data`
         // 带 `uname` / `like_text`；浮层只显最新一条，高频也不刷屏。
-        "LIKE_INFO_V3_CLICK" | "LIKE_INFO_V3_UPDATE" => like_info(room_id, value, counters),
+        // `LIKE_INFO_V3_CLICK` 是带名字的真实点赞（有 `uid`，头像按 uid 现取）；
+        // `LIKE_INFO_V3_UPDATE` 只是聚合计数事件（只带 `click_count`，没有 `uname` /
+        // `uid` / `face`），进互动层只会冒出「无名无头像」的一条——直接丢弃，不进缓冲、
+        // 不计 `counter_updates`、不算 `unknown_cmd`（点赞活跃度仍由 CLICK 统计）。
+        "LIKE_INFO_V3_CLICK" => like_info(room_id, value, counters),
+        "LIKE_INFO_V3_UPDATE" => {
+            tracing::debug!("丢弃点赞聚合计数事件 LIKE_INFO_V3_UPDATE");
+            None
+        }
         // 大航海：这两条是**同一笔购买**的两条载荷（§10.6），各自的 `price` 语义不同
         // （见 [`GuardSource`]）—— 归一出 `Dispatch::Guard`，投递前还必须按笔合并。
         "GUARD_BUY" => {
@@ -732,10 +740,11 @@ fn interact_v2(room_id: i64, value: &Value, counters: &Counters) -> Option<Messa
     Some(message)
 }
 
-/// 点赞（`LIKE_INFO_V3_CLICK` / `LIKE_INFO_V3_UPDATE`）：参考文档 `message_stream.md`
-/// 的 `data` 携带 `uname` / `like_text`（如「为主播点赞了」）。按需求进互动层
+/// 点赞（`LIKE_INFO_V3_CLICK`）：参考文档 `message_stream.md` 的 `data` 携带
+/// `uname` / `like_text`（如「为主播点赞了」）与 `uid`。按需求进互动层
 /// （`docs/ui.md` §4.8 的浮层只显最新一条，高频也不刷屏），不再只作计数丢弃
-/// （原 `COUNTER_CMDS` 分支已移除）。保留原计数口径：点赞数仍计入房间统计。
+/// （原 `COUNTER_CMDS` 分支已移除）。保留原计数口径：点赞数仍计入房间统计
+/// （`LIKE_INFO_V3_UPDATE` 这种只带 `click_count` 的聚合事件已在 `dispatch` 直接丢弃）。
 fn like_info(room_id: i64, value: &Value, counters: &Counters) -> Option<Message> {
     let data = value.get("data")?;
     let uname = data

@@ -2667,6 +2667,13 @@
   flex: none;
 }
 
+/* 批量动作条：左侧依次是全选 / 已选 N 项，`.previewLabel` 用 `margin-right: auto` 把
+   **后面的「批量动作」单独顶到最右**（issue：批量按钮跟在计数后不清晰）。三处 tab 共用
+   同一条 `batchBar`，布局一致，批量动作都落在该 tab 最右端。 */
+.adminBatchBar .previewLabel {
+  margin-right: auto;
+}
+
 /* 快捷短语面板（需求 §2.2；item 8 / item 11 重排）。面板自上而下两段：
    **固定的「加一条」行** + 可滚的芯片区，面板高度是定值（--panel-h，见上面的共用块）。
    短语再多也只让芯片区滚，「加一条」那一行与整个输入区都不动（用户 #8）。 */

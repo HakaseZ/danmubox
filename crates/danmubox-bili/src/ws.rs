@@ -235,10 +235,7 @@ impl FaceWait {
         }
         matches!(
             message.kind,
-            MessageKind::Guard
-                | MessageKind::Gift
-                | MessageKind::Superchat
-                | MessageKind::Interact
+            MessageKind::Guard | MessageKind::Gift | MessageKind::Superchat | MessageKind::Interact
         )
         .then_some(message.uid)
     }
@@ -2250,7 +2247,12 @@ mod tests {
             (MessageKind::Superchat, 42, "", Some(42)),
             // 互动：缺头像的点赞按 uid 现取；已带 face 的关注 / 进场 / 分享不重复问。
             (MessageKind::Interact, 42, "", Some(42)),
-            (MessageKind::Interact, 42, "https://i0.hdslb.com/x.png", None),
+            (
+                MessageKind::Interact,
+                42,
+                "https://i0.hdslb.com/x.png",
+                None,
+            ),
             (MessageKind::Gift, 42, "https://i0.hdslb.com/x.png", None),
             (MessageKind::Guard, 0, "", None),
             (MessageKind::Danmaku, 42, "", None),

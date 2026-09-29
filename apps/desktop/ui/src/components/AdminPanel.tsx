@@ -160,6 +160,21 @@ export function AdminPanel({
       value.includes(key) ? value.filter((item) => item !== key) : [...value, key],
     );
 
+  /**
+   * 单点某行：**非批量态** = 进入批量模式并同时选中该项；**批量态** = 切换该项，
+   * 若取消后勾选归零则退出批量模式（回到非批量、无选中态）。
+   */
+  const enterBatchAndPick = (key: string) => {
+    setBatch(true);
+    setPicked((value) => (value.includes(key) ? value : [...value, key]));
+    setMenu(null);
+  };
+  const singlePick = (key: string) => {
+    const willClear = picked.length === 1 && picked.includes(key);
+    togglePick(key);
+    if (willClear) setBatch(false);
+  };
+
   const toggleAll = () =>
     setPicked((value) =>
       allPicked
@@ -215,13 +230,17 @@ export function AdminPanel({
   };
 
   /**
-   * 行：每行一项；批量模式下整行都是选中热区，点击或按 Enter / Space 切换高亮。
+   * 行：房管名单为两列网格（`.adminList`，见 `app.module.css`），每个条目占一格；
+   * 批量模式下整行都是选中热区，点击或按 Enter / Space 切换高亮。
    *
    * 名字超宽默认可横滑；**只有悬停 / 键盘聚焦的那一行**才跑马灯（需求 2026-09-26）——
    * 几十行一起滚会很吵，`prefers-reduced-motion` 下也自动停。
    * 完整文本始终在 `title` 上，任何形态下都取得到。
    *
-   * 单点动作仍在**右键菜单**里（issue #4）—— 菜单项在**打开那一刻**连同对象一起定下
+   * **单点选择（2026-09-29）**：非批量态点某行 = 进入批量模式 + 同时选中该项
+   * （等价「先点批量钮、再点该项」两步合一）；再点同一项 = 取消选中；勾选归零即退出批量。
+   * 单点动作（解除禁言 / 移出黑名单 / 删词）仍在**右键菜单**里，但**仅非批量态**弹出——
+   * 进批量后右键不再保留（批量态只走点选 / 取消）。菜单项在**打开那一刻**连同对象一起定下
    * （挂到 state 上），菜单开着时名单被重读也不改它。行级 testid 与改前一致。
    */
   const row = (key: string, testid: string, label: string, items: MenuItem[]) => (
@@ -233,25 +252,25 @@ export function AdminPanel({
       role={batch ? "checkbox" : undefined}
       aria-checked={batch ? picked.includes(key) : undefined}
       tabIndex={batch ? 0 : undefined}
-      title="右键可操作"
-      onClick={batch ? () => togglePick(key) : undefined}
-      onKeyDown={
-        batch
-          ? (event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              togglePick(key);
-            }
-          : undefined
-      }
+      title={batch ? "点击切换选中" : "右键可操作"}
+      onClick={batch ? () => singlePick(key) : () => enterBatchAndPick(key)}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        batch ? singlePick(key) : enterBatchAndPick(key);
+      }}
       onMouseEnter={markScroll}
       onMouseLeave={clearScroll}
       onFocus={markScroll}
       onBlur={clearScroll}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenu({ at: { x: event.clientX, y: event.clientY }, items });
-      }}
+      onContextMenu={
+        batch
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              setMenu({ at: { x: event.clientX, y: event.clientY }, items });
+            }
+      }
     >
       {/* 名字格：不放不下就跑马灯；轨道是**两份完全相同的拷贝**首尾相接，
           动画走 `-50%`（正好一份），循环处没有断口 —— 口径与房间头标题逐字同源。 */}

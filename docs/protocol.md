@@ -315,7 +315,9 @@ fn decode_stream(data, depth):
 
 **计数类命令：不产生 `Message`**，只更新房间内存计数并计入 `counter_updates`（`cmd.rs:35-45`、`cmd.rs:145-146`；逐条策略见 §10.7）：
 
-`POPULARITY_CHANGE`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`WATCHED_CHANGE`、`LIKE_INFO_V3_CLICK`、`LIKE_INFO_V3_UPDATE`、`ONLINE_RANK_V2`、`ONLINE_RANK_COUNT`
+`POPULARITY_CHANGE`、`ROOM_REAL_TIME_MESSAGE_UPDATE`、`WATCHED_CHANGE`、`ONLINE_RANK_V2`、`ONLINE_RANK_COUNT`
+
+> 点赞（`LIKE_INFO_V3_CLICK` / `LIKE_INFO_V3_UPDATE`）**不再属于**计数类：按需求进互动层（`like_info`），`data` 带 `uname` / `like_text`（如「为主播点赞了」），经 `ui.interact_single_slot` 浮层显示最新一条（高频不刷屏）；同时仍计 `counter_updates`（保留点赞数统计）。来源 `bilibili-API-collect` 的 `message_stream.md`。
 
 其中 `WATCHED_CHANGE.data.num`（累计看过）与 `ONLINE_RANK_COUNT.data.online_count`（在线人数）除计数外还要**冒泡给界面**（`cmd.rs:150-167` 的 `Dispatch::RoomStats` → 契约 §5 `RoomStats`），其余几条只计数。
 
@@ -476,7 +478,7 @@ fn decode_stream(data, depth):
 
 | 归一化字段 | 来源（语义槽位） | 说明 | 校准状态 |
 |---|---|---|---|
-| `content` | 互动类型的描述文本 | 由 `msg_type`（或等价枚举）映射为中文描述；未知枚举用「互动」+ 原始数值 | 待实测校准（A10） |
+| `content` | 互动类型的描述文本 | 由 `msg_type` 映射为中文描述（1=进场 / 2=关注 / 3=分享，来源 `bilibili-API-collect` 的 `message_stream.md`）；未知枚举用「互动」+ 原始数值 | 已解决（2026-09-29，A10） |
 | `uid` / `uname` | 触发用户槽位（JSON：`data.uid` / `data.uname` 回落 `data.uinfo.base.name`，`cmd.rs:558-562`） | `INTERACT_WORD_V2` 需经 protobuf 解码后再取 | 待实测校准（A10、A11） |
 | `medal_level` / `medal_name` / `guard_level` | 触发用户粉丝牌槽位 | 无则零值 | 待实测校准（A4） |
 | `face` | pb：`user_info.base.face`（tag 22 → `2: face`）；JSON：`data.uinfo.base.face` | 均与昵称同层；取不到为空串 | pb 路径已实测（A11、A14） |
@@ -494,7 +496,7 @@ fn decode_stream(data, depth):
 |---|---|---|---|---|
 | 1 | `uid` | varint | 触发用户 UID | `Message.uid` |
 | 2 | `uname` | string | 触发用户昵称 | `Message.uname` |
-| 5 | `msg_type` | varint | 互动类型（进入 / 关注 / 分享等） | 映射为 `Message.content` 文案（映射表待实测，A10） |
+| 5 | `msg_type` | varint | 互动类型（进入 / 关注 / 分享等） | 映射为 `Message.content` 文案（1=进场 / 2=关注 / 3=分享，来源 `message_stream.md`；未知按 §15.2 兜底） |
 | 6 | `roomid` | varint | 房间号；仍以连接上下文为准 | 仅日志/校验 |
 | 7 | `timestamp` | varint（64 位） | 秒级时间戳 | `Message.ts` 备选 |
 | 8 | `timestamp_millisecond` | varint（64 位） | 毫秒级时间戳 | `Message.ts` 首选 |
@@ -589,11 +591,11 @@ fn decode_stream(data, depth):
 | `ROOM_CHANGE` | 房间信息变更（标题 / 分区 / 封面） | 固定文案「标题或分区变更」（与 `LIVE` / `PREPARING` 同口径，**不解析载荷猜文案**） | 仅当房间内存态字段确实变化时写入并广播 |
 | `CUT_OFF` | 直播间被切断 | 固定文案 | 写入缓冲；触发界面断流提示 |
 | `POPULARITY_CHANGE` | 人气值变化 | 人气数值 | **高频**：只更新房间内存计数，**不写入会话缓冲**（`cmd.rs:145-146`）。`op=3` 心跳回应携带同一口径的值，只记 `debug` 日志（`ws.rs:629-630`）；人气值的展示口径见 [`ui.md`](ui.md) §3.1 |
-| `LIKE_INFO_V3_UPDATE` | 点赞计数更新 | 点赞计数描述 | 同 `LIKE_INFO_V3_CLICK`：只更新计数 |
+| `LIKE_INFO_V3_UPDATE` | 点赞计数更新 | 点赞计数描述 | **已移出计数类**：与 `LIKE_INFO_V3_CLICK` 一同进互动层（见 §10.0 注、`like_info`） |
 | `ROOM_REAL_TIME_MESSAGE_UPDATE` | 关注数 / 粉丝数等实时计数更新 | 计数描述 | **高频**：仅更新房间内存计数，**不写入会话缓冲** |
 | `WATCHED_CHANGE` | 累计看过人数变化 | `data.num` | 只更新计数，不入缓冲；`data.num` 作为**累计看过**冒泡给界面（`cmd.rs:157`，`Dispatch::RoomStats`） |
 | `ONLINE_RANK_COUNT` | 在线人数变化 | `data.online_count` / `data.count` | 只更新计数，不入缓冲；`data.online_count` 作为**在线人数**冒泡给界面（`cmd.rs:152`，`Dispatch::RoomStats`） |
-| `LIKE_INFO_V3_CLICK` | 点赞信息更新 | 点赞计数描述 | 同上；高频时按时间窗节流广播 |
+| `LIKE_INFO_V3_CLICK` | 点赞信息更新 | 点赞计数描述 | **进互动层**（`like_info`）：`data.uname` + `data.like_text` 拼成 `Message.content`；高频由 `ui.interact_single_slot` 浮层只显最新一条 |
 | `ONLINE_RANK_V2` | 高能榜 / 在线榜更新 | 榜单摘要 | 只更新内存态并驱动界面侧栏，不入缓冲 |
 | `NOTICE_MSG` | 平台公告 / 房间公告 | 公告文本 | 去重后写入缓冲；与 `LIVE` / `PREPARING` 同房间同秒时合并展示 |
 | `STOP_LIVE_ROOM_LIST` | 停播房间列表（全站广播） | 固定文案 + 房间数 | 已列入「已知但直接丢弃」（§10.0） |
@@ -1061,7 +1063,7 @@ stateDiagram-v2
 | A15 | **部分解决**：认证回应与认证包同帧头（`protover=1`）；线上稳定观测到 `code=0` 表示成功。非 0 取值集合仍缺样本 |
 | A5 | `Message.is_admin`（房管标记） | 发送者是否房管的判定字段名与取值形态 | 需一条**已知房管**的发言样本 | **已解决（2026-09-12）**：**`info[2][2]` 就是房管标记**（1 = 房管，0 = 否）。判据是一次天然的跨房间对照——同一个用户在**他担任房管**的那个房间里发布的弹幕 `info[2][2]` 全为 `1`，在另两个**他不是房管**的房间发布的弹幕全为 `0`。另有两条独立来源：SC 载荷自带 `user_info.manager`；历史条目自带顶层 `isadmin`（后者亦经同一次对照证实）。三条来源现在都已落到实现里（`cmd.rs` / `history.rs`） | `cmd.rs`、`history.rs`、§10.1 |
 | A8 / A9 / A12 / A13 | **未解决**：本轮未出现礼物、SC、大航海样本，字段名仍待采集 |
-| A10 | **未解决**：`msg_type` 的枚举与文案映射仍缺对照样本 |
+| A10 | **已解决（2026-09-29）**：`msg_type` 枚举与文案映射来源 `bilibili-API-collect` 的 `message_stream.md` —— `INTERACT_WORD` 的 `data.msg_type` 为 1=进场 / 2=关注 / 3=分享（`INTERACT_WORD_V2` 的 protobuf `msg_type` tag 5 同口径）；未知值按 §15.2 用「互动 + 数值」兜底，不臆造。实现见 `cmd.rs` 的 `interact_content` / `like_info` |
 | A19 | **部分解决**：`host_list[].host` 可直接拼 `wss://<host>/sub`，首节点连接成功 |
 | A20 | **部分解决**：实测到上游会主动断开 TLS（`peer closed connection without sending TLS close_notify`），客户端按 5000ms 退避重连成功；缺失 HTTP 心跳的判死时间仍缺样本 |
 | A25 | **已解决**：`msg/send` 的表单 body 形态（含 `w_rid` 与 `csrf` / `csrf_token`）被上游接受 |

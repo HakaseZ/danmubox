@@ -62,6 +62,7 @@
 
 ### Changed
 
+- **互动槽位预留高度改落在滚动内容的末尾（2026-09-29；分支 `fix/interact-slot-reserve`）**：浮层在 DOM 里时，预留不再挂在外层 `.chatWrap` 的 `padding-bottom`（那是盒子外的死区，翻查时内容永远画不进去），改为 `.chatWrap:has(> .interactSlot) .scroller` 的 `padding-bottom` —— 贴底时最新一条不被气泡压住，向上翻查时先前的行仍**滚进这一带**、只有气泡自身那点面积挡着。两枚长度令牌（`--interact-slot-h` / `--interact-slot-reserve`）注册成 `@property` 的 `<length>`（否则弹幕区乘 `ui.font_scale` 与气泡不吃滑杆会岔开）；预留**只在浮层真的在 DOM 里时**才留（`:has()`，不看开关属性），卸载后退回 `.scroller` 原本的 `--sp-2`。气泡与上下边界各留 4px（下边界不贴输入框、上边界留呼吸位）。文档：`docs/contract.md` §8、`docs/ui.md` §4.8 / §9.1。
 - **文档横向收口：命令数 / 端口数与跨票口径按代码真值校正**（2026-09-27；只改文档与一处注释，**无行为变化**）：
   - **命令数 38 → 43**：`docs/ipc.md` §2 / §3 与 `docs/contract.md` §7 的声明按 `apps/desktop/src-tauri/src/lib.rs` 的 `generate_handler!`（`lib.rs:1345-1389`，43 项）逐条点数重算 —— **34 条 `async fn` + 9 条同步 `fn`**；§3.1「实现锚点」表补齐此前漏登记的 `anchor_room` / `anchor_title_set` / `anchor_area_list` / `anchor_area_set` / `anchor_live_set` / `user_face` 六条，并把整表与 §3 正文里的 `lib.rs:NNN` 指针按合并后的真值重指（锚点口径统一为 `fn` 所在行，即 `#[tauri::command]` 的下一行）。
   - **端口数「八个 / 九个」→ 十个**：`docs/architecture.md` §1 / §2.1 / §3 与 `docs/contract.md` §3 按 `crates/danmubox-core/src/ports.rs` 逐个点 trait 定为 **十个**（`ports.rs:87`–`372`，本批新增 `UserProfile`）；§3 端口表的 `ports.rs:NNN` 与 `docs/architecture.md` §3 的 trait / 方法行号同步校正。**`danmubox-bili` 模块数十八 → 十九**（`crates/danmubox-bili/src/` 现有 19 个文件，新增 `profile.rs`）。

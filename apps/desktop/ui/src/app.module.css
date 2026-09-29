@@ -1193,10 +1193,11 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  /* 气泡的行高（与 `.interactSlotRow` 同源）与它和下边界之间那道间隙 —— 用户 2026-09-29：
-     「互动下方加 2px，不贴在输入框上」。 */
+  /* 气泡的行高（与 `.interactSlotRow` 同源）；它与上下边界各留 4px 间隙 —— 用户 2026-09-29：
+     「互动下方加 2px 不贴输入框」、同日补「上下都 4px 对称」。 */
   --interact-slot-h: calc(var(--avatar) + 8px);
-  --interact-slot-gap: 2px;
+  --interact-slot-gap: 4px; /* 气泡底边 → 输入框 / 分割条 */
+  --interact-slot-pad: 4px; /* 气泡顶边 → 弹幕内容（槽位专用呼吸位，替代外层 `--sp-2`） */
 }
 
 /* 槽位的**预留**（用户 2026-09-29 换口径）：留在**滚动内容的末尾**（`.scroller` 的
@@ -1206,7 +1207,7 @@
    · **内容末尾**（现在）：贴底时空出这条带 ⇒ 最新一条不被气泡压住；向上翻查时先前的行会
      **继续滚进这条带** ⇒ 只有气泡自身那点面积压在它们上面，其余照常显示（用户要的正是对这
      一带「不截断、只遮挡气泡那一小块」）。
-   值 = 气泡实际占的那条带（行高 + 2px 间隙）+ 原本就有的 `--sp-2` 呼吸位 —— 改前这两者是
+   值 = 气泡实际占的那条带（行高 + `--interact-slot-gap`）+ 槽位专用的 `--interact-slot-pad` 呼吸位 —— 改前这两者是
    拆在两处的（`.chatWrap` 的 27px + `.scroller` 自己的 8px），现在合成一个值、落在同一个属性
    上，总和不变、气泡的视觉位置不动。
    ⚠ **唯一判据仍是浮层在不在 DOM 里**（`:has()`），不看任何开关属性（需求 1.3）：
@@ -1215,7 +1216,7 @@
    ⚠ 副作用：`scrollHeight` 从此会多这一截（改前是刻意回避的 —— 那时留的是外层盒子的边距），
    虚拟列表的贴底判据要按「内容末尾自带一段空白」重看一遍。 */
 .chatWrap:has(> .interactSlot) {
-  --interact-slot-reserve: calc(var(--interact-slot-h) + var(--interact-slot-gap) + var(--sp-2));
+  --interact-slot-reserve: calc(var(--interact-slot-h) + var(--interact-slot-gap) + var(--interact-slot-pad));
 }
 
 .chatWrap:has(> .interactSlot) .scroller {
@@ -1225,8 +1226,8 @@
 /* 互动/进场消息共用单槽位（`InteractSlot`，docs/ui.md §4.8）：浮于弹幕区底部偏左、
    轻量非侵入（pointer-events: none 不挡弹幕交互，仿官方网页直播间「互动消息」条的位置）。
    它只是一条浮层，blast radius 小，不影响 `.chatArea` / `.scroller` 的滚动与贴底。
-   `bottom: var(--interact-slot-gap)`：气泡浮在下边界**之上 2px**（用户 2026-09-29：不要贴住
-   下面的输入框 / 分割条）；这道间隙已经算进上面的预留，所以气泡整条仍落在空出来的那条带里。 */
+   `bottom: var(--interact-slot-gap)`：气泡浮在下边界**之上 4px**（用户 2026-09-29「不贴输入框」、同日改 4px 对称）；
+   这道间隙已经算进槽位预留，所以气泡整条仍落在空出来的那条带里。 */
 .interactSlot {
   position: absolute;
   left: var(--sp-3);

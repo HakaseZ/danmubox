@@ -6,7 +6,7 @@
 //      那条（快速顶替），且整段里只该有这一个浮层。
 //   ③ 预留（2026-09-29 换口径）：预留不再「等于互动气泡自身的高度」、也不再挂在外层盒子上 ——
 //      它落在**滚动内容的末尾**（`.scroller` 的 `padding-bottom`），且必须**不小于**气泡实际占的
-//      那条带（行高 + 它与下边界之间那道 2px）。⚠ 改前那条「预留 == 气泡高」钉的是旧口径：
+//      那条带（行高 + 它与下边界之间那道 4px）。⚠ 改前那条「预留 == 气泡高」钉的是旧口径：
 //      那时这一带是**盒子之外的死区**，剪不断理还乱的是翻查时内容永远画不进去。
 //   ④ 翻查（2026-09-29 需求）：贴底时最新一行停在气泡之上（不被压住）；**向上翻**时先前的行会
 //      **滚进这一带** ⇒ 只有气泡自身那点面积压着它们，其余照常显示 —— 而不是被这条带截断。
@@ -86,12 +86,12 @@
       // **搬了家**：外层盒子的下内边距必须是 0（留那儿 = 盒子外的死区 = 翻查被截断），
       // 那段空间必须在滚动内容的末尾。
       out.interactSlotReserveLivesInScrollContent = tsWrapPad === 0 && tsPad > 0;
-      // 气泡与下边界之间那道 2px（用户 2026-09-29：「互动下方加 2px，不贴在输入框上」）。
+      // 气泡与下边界之间那道 4px（用户 2026-09-29「互动下方加 2px 不贴输入框」、同日改上下对称 4px）。
       var tsGapPx = tsSlotRect && tsWrapRect
         ? Math.round((tsWrapRect.bottom - tsSlotRect.bottom) * 10) / 10
         : 0;
       out.interactSlotGapPx = tsGapPx;
-      out.interactSlotGapIs2 = !!tsSlotRect && !!tsWrapRect && Math.abs(tsGapPx - 2) <= 1;
+      out.interactSlotGapIs4 = !!tsSlotRect && !!tsWrapRect && Math.abs(tsGapPx - 4) <= 1;
       // 预留必须**不小于**气泡实际占的那条带（行高 + 那道间隙）—— 否则贴底时气泡又压住最新一条。
       // （改前钉的是「预留 == 气泡高」，那时还没有这道间隙。）
       out.interactSlotReserveCoversBubble = !!tsBoxRect && !!tsWrapRect &&

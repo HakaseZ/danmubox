@@ -135,7 +135,7 @@
         tsLastRowRect.bottom <= tsSlot3Rect.top + 1;
       // 向上翻一点点 —— 预留若留在外层盒子（改前那样），那条带是**永远画不进内容的死区**；
       // 现在必须有某行跨进这一带（⇒ 只有气泡自身那点面积会压住它们，其余照常显示）。
-      var tsScrollDelta = !!tsScroller2
+      var tsScrollDelta = tsScroller2
         ? Math.min(90, tsScroller2.scrollHeight - tsScroller2.clientHeight)
         : 0;
       if (tsScroller2) {

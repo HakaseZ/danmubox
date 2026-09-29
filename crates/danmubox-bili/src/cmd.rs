@@ -828,15 +828,6 @@ impl InteractMerge {
     /// 过一遍互动消息；返回**现在就该投递**的那一条（同源重复时为 `None`）。
     pub fn absorb(&mut self, now: Instant, message: Message) -> Option<Message> {
         self.prune(now);
-        // `uid` 为 0 的互动消息（如部分 `LIKE_INFO_V3_CLICK` 点赞事件不带 `uid`，
-        // `like_info` 解析时 `unwrap_or(0)`）无法用 `(room_id, uid)` 可靠去重：一旦照常
-        // 塞进 `seen`，5s 窗口内之后的所有同类消息都会被误判成「同一次进场」压掉，
-        // 表现为「点赞全不显示」。这类无 uid 的互动直接投递，限流交给 UI 浮层
-        // （`interact_single_slot` 只显最新一条、高频不刷屏）。进场类（`ENTRY_EFFECT` /
-        // `INTERACT_WORD(_V2)`）必然带真实观众 `uid`，不会落到这里。
-        if message.uid == 0 {
-            return Some(message);
-        }
         let key = (message.room_id, message.uid);
         if self.seen.contains_key(&key) {
             tracing::debug!(

@@ -293,7 +293,7 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `smoke/scenario/fixtures.mjs` | Node 侧：夹具 → 页内数据（**唯一**读 `smoke/fixtures/*.json` 的地方），序列化成页内的 `__SMOKE_DATA` |
 | `smoke/scenario/parts/00-mock.mjs` | 页内 IPC 替身（`__TAURI_INTERNALS__`）与测试钩子（`__emit` / `__mk` / `__addRoom*` …） |
 | `smoke/scenario/parts/10-harness.mjs` | 页内共享工具（`out` / `snap` / `byTestId` / `sleep` / `pressKey` …） |
-| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（`20…36`，共 17 份），**按文件名升序**依次执行 |
+| `smoke/scenario/parts/2x-3x-*.mjs` | 按主题切的场景块（`20…39`，共 20 份），**按文件名升序**依次执行 |
 | `smoke/scenario/parts/90-epilogue.mjs` | 页内收尾（把 `run` 命令接上 `window.__smoke_run`） |
 
 各 part 是**页内脚本的原文**（不是模板字符串里的字符串）：组装器 `readFileSync` 读出后原样拼接，所以片段里写反引号 / 反斜杠 / `${` 都与浏览器里一致 —— **不要**把它们塞回模板字符串。
@@ -315,11 +315,12 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `30-immersive.mjs` | 沉浸模式 |
 | `31-admin.mjs` | `admin` / `panels` 五面板互斥 |
 | `32-top-scroll-account.mjs` | 滚到顶部不被头部压住 / `account` 账号区与账号对话框 |
-| `33-room-tabs.mjs` | 标签条：主播名与圆点 / 拖动排序 / 横向滚动 / 不画滚动条 |
+| `33-room-tabs.mjs` | 标签条：主播名与圆点 / 拖动排序 / 横向滚动 / 不画滚动条（`tabStrip*`）/ **鼠标滚轮横滚**（`tabWheelBlockRan` 一组：`tabWheelVerticalScrolls` 竖向滚轮推大 `scrollLeft`、`tabWheelVerticalOwned` 接手时 `preventDefault`、`tabWheelScrollsAgainAfterReset` 归零后再滚仍变、`tabWheelHorizontalNotOwned` `deltaX` 主导不接管、`tabWheelCtrlNotOwned` `ctrlKey` 不接管、`tabWheelNoSwallowAtEnd` 到最右端再滚不吞事件、`tabWheelNoOverflowNotOwned` 没溢出（临时抻宽造出 `max <= 0`）同样不吞；值字段 `tabWheelOverflowPx` / `tabWheelDeltaPx` / `tabWheelHorizontalScrollLeftPx` / `tabWheelAtEndScrollLeftPx`） |
 | `34-split-panes.mjs` | `splitter` 分割条与长按换位 |
 | `35-cheap-gift.mjs` | `cheapgift` / `switchscope` 两枚低价礼物开关 |
 | `36-status-poll.mjs` | 开播 / 下播状态自动更新（实时事件 + 列表页周期） |
 | `37-anchor-room.mjs` | 「我的直播间」（issue202609241553）：按钮只在「有直播间」的行、贴右端隔离；打开对话框预取各账号房间（`anchorPrefetchOnOpen`）；跨账号管理（`anchorAlt*`）；标题 / 两级联动分区 / **分区改动即存**（`anchorAreaSetCalled`）；开播·下播独占一行；开播被身份校验挡住弹提示框（`anchorGate*`）、开播成功后推流参数（`anchorConfig*`）；读失败与没开通直播间（`anchorNoRoom*`）；**ROOM_CHANGE 自动更新标题**（`anchorTitleUpdatedByRoomChange`） |
+| `39-no-scrollbars.mjs` | 全局不画滚动条（`noScrollbar*` 一组）：全量扫描，可竖向滚的元素逐个断言「滚动条盒宽 = 0」+ `scrollbar-width` 计算值为 `none`；表情 / 短语 / 筛选 / 房管四面板走真实路径打开后各扫一遍（短语面板内容不够就地补齐）；弹幕流滚动能力没丢 |
 
 | 夹具 | 出处 | 覆盖什么 |
 |---|---|---|

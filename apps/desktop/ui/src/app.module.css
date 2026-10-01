@@ -248,44 +248,22 @@
 
 /* 多房间标签页（需求 §2.8）。标签条自己横向滚动：开再多也不压缩单枚标签的可读宽度
    （`flex: 0 0 auto` 关掉收缩 + `--tab-min-w` 给出下限，见 `.tab` / `.tabActive`）。
-   横向滚动**不配滚动条**，见下面 `scrollbar-width` 那一行。 */
+   横向滚动**不配滚动条**：滚动条已由 `index.css` 全局不画（理由与两个历史 bug 记在那里）；
+   这里额外要「不画」的理由是 —— macOS 的覆盖式滚动条浮在内容**之上**，横滚时滑块正好
+   压在标签文字上（用户 2026-09-16：「顶部 tab 滚动的时候不要有滑块，会挡住」）。 */
 .tabs {
   display: flex;
   gap: var(--sp-1);
   padding: var(--sp-1) var(--sp-2) 0;
   overflow-x: auto;
-  /* **这条标签条一个滚动条 / 滑块都不画**（用户 2026-09-16 第 1 条：「顶部 tab 滚动的时候
-     不要有滑块，会挡住，能隐藏掉吗」）：macOS 用的是**覆盖式**滚动条，它不占位、浮在内容
-     **之上** —— 标签条横滚时那条滑块正好压在标签文字上。
-     滚动能力一项不减：滚轮 / 触控盘 / 触摸 pan（`touch-action: pan-x`，见下）/ 拖动排序照旧；
-     能滚的容器不靠滚动条自证可滚，这里靠标签被切掉一半与拖动。
-     两套写法都要，缺一不可（现网 Android WebView 是 Chromium 113–133，正好跨过新 API 的线）：
-       · `scrollbar-width: none` —— Chromium ≥121 / Safari ≥18.2 的路径；
-       · `.tabs::-webkit-scrollbar { display: none }` —— 更老的 WebKit / Blink（见下面那条规则）。
-     后一条正面撞上 index.css 里「不许给 ::-webkit-scrollbar 写样式」的硬规矩（2026-09-12 的
-     「内容右侧回缩」「窗口右边缘拖不动」两个 bug 都出自定制滚动条）。这条窄例外成立的三条理由
-     写在 index.css 那段注释里：`display: none` 之后它**宽高都是 0、一个像素都不画**，
-     既挤不动内容，也不在窗口右缘站着 —— 那两条 bug 的前提（占位 + 常驻可见）都不成立。 */
-  scrollbar-width: none;
-  /* 原来这里有一条 `scrollbar-gutter: stable`（与 `.listPage` 同一口径，为的是「出滚动条时
-     整条标签条不跳一下」）。它随之删掉：本条滚动条**永不绘制**，槽恒为 0（WebKit 与 Chromium
-     实测：`display: none` 之后横向槽 0px，有 / 无这条 gutter 没有任何差别），
-     留着只是噪音；而没有滚动条也就没有可跳的那一下。 */
+  /* 滚动能力一项不减：滚轮 / 触控盘 / 触摸 pan（`touch-action: pan-x`，见下）/ 拖动排序照旧；
+     能滚的容器不靠滚动条自证可滚，这里靠标签被切掉一半与拖动。 */
   /* 横向滑到两端后不再把滚动链甩给外层（拖动 / 惯性滚动的越界链会先落到父级），就地截断。 */
   overscroll-behavior-x: contain;
   /* 触摸的横向滑动 = **滚标签条**（原生 pan），不是拖拽排序：浏览器一旦接管手势就回一个
      `pointercancel`，那次按压随之作废。触摸要排序得先**按住**（App.tsx 的 `TAB_HOLD_MS`）。 */
   touch-action: pan-x;
   border-bottom: 1px solid var(--border);
-}
-
-/* 上面那条 `scrollbar-width` 的兜底路径（老 WebKit / Blink 不认 `scrollbar-width`）。
-   `display: none` 在 Blink / WebKit 里就是「这个容器不画滚动条」：槽宽按 0 算，
-   滑块与轨道一个像素都不画。**只许写 display: none** —— 一旦在这里写宽度 / 圆角 / 颜色，
-   就会真的把 macOS 的覆盖式滚动条换成占位的经典条，正好踩中 index.css 记的那两个 bug。
-   本仓先例：`.adminRail`（房管面板的横向 tab 轨道）一直就是这一条。 */
-.tabs::-webkit-scrollbar {
-  display: none;
 }
 
 /* 拖拽态：整场手势归拖动（被拖项半透明、插入位指示条、光标 grabbing）。
@@ -355,23 +333,19 @@
 
 /* ---------------------------------------------------------------- 房间列表页 */
 
-/* 列表页是**居中的滚动容器**：滚动条（下面的 ::-webkit-scrollbar 把它定成 10px 的经典条）
-   只吃内容盒的右侧，`margin: 0 auto` 的居中块因此右宽左窄正好一个滚动条宽 ——
+/* 列表页是**居中的滚动容器**：Windows / Android 的经典滚动条常驻占位，只吃内容盒的右侧，
+   `margin: 0 auto` 的居中块因此右宽左窄正好一个滚动条宽 ——
    用户 2026-09-12 报的「主页好像没有居中？右边的边距好像稍微宽一些」就是这个。
-   `scrollbar-gutter: stable both-edges` 在两侧对称预留，左右到内容的距离因此相等；
-   `stable` 同时挡住「内容长到出滚动条时整块内容跳一下」。 */
+   滚动条现在**全局不画**（见 `index.css`）：盒宽恒为 0，既不吃内容盒右侧（左右边距本身就
+   对称），也不再压住窗口右缘那条 resize 热区；原先那条「两侧对称预留空槽」的声明
+   随之删掉 —— 槽恒为 0，预留失去对象，而滚动条永不出现，也就没有
+   「内容长到出滚动条时整块内容跳一下」需要挡。 */
 .listPage {
   padding: var(--sp-5);
   max-width: 760px;
   margin: 0 auto;
   width: 100%;
   overflow-y: auto;
-  scrollbar-gutter: stable both-edges;
-  /* 滚动条从窗口最右缘往里让 4px：那一条是窗口自己的边缘热区（拖拽改窗口宽度的落点）。
-     边框是透明的，只占位不改观感；两侧同宽，配合 both-edges 的槽，左右仍然对称。 */
-  /* `both-edges`：两侧对称预留滚动条的槽 —— 覆盖式滚动条下它是 0（不占宽、看不见），
-     万一落到「经典滚动条」的引擎（别的平台 / 别的内核），左右也仍然对称、
-     而且「有没有滚动条都不跳」。见 index.css 里那条「不写滚动条样式」的注释。 */
 }
 
 /* 页头一行：左「弹幕框」标题、右**主题按钮**（用户 2026-09-13 #10 + #7）。
@@ -1365,8 +1339,6 @@
 .scroller {
   position: absolute;
   inset: 0;
-  /* 与 .listPage 同一口径：有滚动条时也不许整块内容横移（覆盖式滚动条下为 0） */
-  scrollbar-gutter: stable;
   overflow-y: auto;
   padding: var(--sp-2) var(--sp-3);
   /* 内容不足视口高度时整体贴底（直播弹幕自下往上读，官方聊天栏同样贴底）。
@@ -2237,18 +2209,14 @@
 
 /* 三块列表收成**横向 tab 轨道**（issue 2609132259 #1）：外观与表情分组的轨道同一套
    （选中 = 强调色下边 + 底色抬起 + 字重加粗，`:focus-visible` 另给），方向改成横排 ——
-   房管面板通栏，横排比竖排省高度。轨道自己横向滚（窄屏三个 tab 放不下时不必挤压关闭按钮）。 */
+   房管面板通栏，横排比竖排省高度。轨道自己横向滚（窄屏三个 tab 放不下时不必挤压关闭按钮）。
+   不画滚动条：全局规则已在 `index.css`（那里有理由与两个历史 bug），这里不再重复声明。 */
 .adminRail {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
   min-width: 0;
   overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.adminRail::-webkit-scrollbar {
-  display: none;
 }
 
 .adminTab {
@@ -2324,20 +2292,16 @@
   }
 }
 
-/* 名字格：放不下时默认**可横滑**（触屏 / 滚轮都能推，滚动条隐藏），
+/* 名字格：放不下时默认**可横滑**（触屏 / 滚轮都能推），
    悬停或键盘聚焦且真的放不下（`data-scroll`，由 JS 在被指到时量一次）才跑马灯。
-   完整文本始终在 `title` 上，任何形态下都取得到。 */
+   完整文本始终在 `title` 上，任何形态下都取得到。
+   不画滚动条：全局规则已在 `index.css`（那里有理由与两个历史 bug），这里不再重复声明。 */
 .adminName {
   flex: 1;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
-  scrollbar-width: none;
-}
-
-.adminName::-webkit-scrollbar {
-  display: none;
 }
 
 /* 跑马灯态：容器改 `hidden`，否则横滑与位移会互相打架。 */
@@ -2533,10 +2497,8 @@
      「左边也加入上下滚动」——上一版轨道按内容撑高，组一多就把面板顶高、把网格挤窄）。 */
   height: var(--emote-grid-h);
   overflow-y: auto;
-  /* 滚动条的槽恒定预留：出不出滚动条都不改轨道的宽度，**因此不会把网格挤窄**。
-     不认这条属性的老引擎退化成「滚动条出现/消失时宽度差一条滚动条」，
-     而轨道在 5 个分组下始终是溢出状态，宽度本来就是恒定的。 */
-  scrollbar-gutter: stable;
+  /* 滚动条恒 0 宽：不会占轨道宽度，**因此也不会挤窄右边的网格**，
+     也就不需要为它预留空槽（那条声明已随全局规则删掉，见 `index.css`）。 */
   padding-right: var(--sp-2);
   border-right: 1px solid var(--border);
 }

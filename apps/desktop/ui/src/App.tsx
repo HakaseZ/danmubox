@@ -25,6 +25,15 @@ const TAB_DRAG_THRESHOLD_PX = 5;
  */
 const TAB_HOLD_MS = 400;
 
+/**
+ * `deltaMode === 1`（按**行**滚动）时一行折多少 px。
+ * 取 16：一行就是「正文一行的高度」这个量级（本 UI 正文行高 21px，粗略取一档），
+ * 而 16 也是浏览器自身 LINE 滚动的惯用步长（Chrome / Firefox 行滚一档约 16px、
+ * 常见 `-webkit-` 行高倍数滚出来也是这个数）。照这个折，Windows 上「滚轮一咔哒」
+ * 挪过的距离就和用户在同一台机器上滚别处列表的体感一致，不会挪得太碎也不会跳半个屏。
+ */
+const TAB_WHEEL_LINE_PX = 16;
+
 /** 一次按压 / 拖动（`pointerdown` 那一刻建，松手 / 取消 / 卸载时拆）。 */
 interface TabPress {
   pointerId: number;
@@ -67,11 +76,20 @@ interface RoomTabsProps {
  * **为什么不用 HTML5 拖放**：`draggable` / `dragstart` 在触摸下根本不发（桌面与移动会分叉成
  * 两套代码），而指针事件鼠标与触摸同一条流，还能与「点一下切房间」共用同一个按下序列。
  *
- * 三种手势的判定：
+ * 四种手势的判定：
  * ① 位移没到 `TAB_DRAG_THRESHOLD_PX` 就松手 = **点击**（切房间）；
  * ② 鼠标横着越过阈值 = **拖动排序**（被拖项半透明 + 插入位指示条）；
  * ③ 触摸横着滑动 = **滚标签条**（`touch-action: pan-x` 让浏览器接管，并回一个 `pointercancel`
- *    把这次按压作废）；触摸要排序得先按住 `TAB_HOLD_MS` 再拖。
+ *    把这次按压作废）；触摸要排序得先按住 `TAB_HOLD_MS` 再拖；
+ * ④ 滚轮 = **滚标签条**（纵向的那一格换算成横向位移，见下面那段 `wheel`）。
+ *
+ * **④ 为什么要 JS 接管而不是交给原生**：Windows 的鼠标滚轮只发 `deltaY`，而标签条是
+ * 单行 `overflow-x: auto` —— 纵向压根没有可滚的量，`deltaY` 到了这里「没处可去」，
+ * 浏览器只会把它冒泡给祖先去滚（外层能纵向滚的容器反而跟着动），标签条本身纹丝不动。
+ * Mac 触控板自带 `deltaX`、触摸有 `pan-x` 的横向 pan，那两端本来就滚得动；缺的正是
+ * 鼠标这一路。所以要自己挂一条 `wheel`：把 `deltaY` 折成 `scrollLeft` 的增量。
+ * （`deltaX` 更大的情况一律放行 —— 那是触控板横滑，浏览器原生的 1:1 已经是对的，
+ * 接管反而会和原生叠成双倍。）
  *
  * **触摸排序为什么要挂一条原生 `touchmove`（而不是只靠 CSS / `pointermove`）**：
  * 浏览器在 **touchstart 那一刻**就把 touch-action 快照下来交给自己手势识别器了 ——
@@ -245,6 +263,45 @@ function RoomTabs({ rooms, status, activeRoomId, onOpen, onReorder }: RoomTabsPr
     };
     strip.addEventListener("touchmove", onTouchMove, { passive: false });
     return () => strip.removeEventListener("touchmove", onTouchMove);
+  }, []);
+
+  /**
+   * Windows 鼠标滚轮的横向滚动（原理见本组件文件头 ④）：把「只有 deltaY」的那一格
+   * 折成 `scrollLeft` 的增量。
+   *
+   * 三条理由决定了它必须长这个样子：
+   * · 必须**原生**注册：React 的 `onWheel` 同样走根容器上的 passive 监听，passive 上
+   *   `preventDefault()` 是空操作（控制台还会报一条 ignored 警告）；
+   * · 必须**挂载时**就注册（依赖数组 `[]`，读 `pressRef` / `stripRef` 而不是 state）：
+   *   这里一次都不该因为重渲染而重挂监听 —— 房间列表每次快照更新都会重渲染本组件；
+   * · 只在**真的滚了之后**才 `preventDefault()`：没溢出（房间少）或已经滚到头时把事件
+   *   放还外层，不做「吃掉但不滚」的黑洞。
+   */
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const onWheel = (event: WheelEvent) => {
+      // ① ctrl+滚轮 = 浏览器缩放（触控板上则是捏合）：那是全局手势，绝不接管。
+      if (event.ctrlKey) return;
+      // ② 横向分量更大 = 触控板横滑，原生那条路本来就是 1:1：交给它，
+      //    接管了反而会与原生横滚叠在一起变成双倍位移。
+      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      const max = strip.scrollWidth - strip.clientWidth;
+      // ③ 没溢出就不吞事件：房间少的时候标签条根本不用滚，把事件放回去，
+      //    外层能滚动的祖先容器还能照旧滚（而不是被这里吃掉变成什么都不动）。
+      if (max <= 0) return;
+      // deltaMode: 0 = 像素、1 = 行、2 = 页。像素一比一；行折 `TAB_WHEEL_LINE_PX`；
+      // 页 = 一屏（`clientWidth`），这也是标签条「翻页」的自然含义。
+      const step =
+        event.deltaMode === 0 ? 1 : event.deltaMode === 1 ? TAB_WHEEL_LINE_PX : strip.clientWidth;
+      const before = strip.scrollLeft;
+      strip.scrollLeft = Math.min(Math.max(before + event.deltaY * step, 0), max);
+      // ④ 只有真的挪动了才拦：滚到头之后把事件放还外层 —— 否则就成了「吃掉但不滚」，
+      //    用户会觉得滚轮在这条上失效（另一处在滚）或者整页卡住。
+      if (strip.scrollLeft !== before) event.preventDefault();
+    };
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => strip.removeEventListener("wheel", onWheel);
   }, []);
 
   useEffect(

@@ -1004,7 +1004,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 语义 | `role="tablist"` + `aria-orientation="vertical"`，每个 tab `role="tab"` + `aria-selected` + `aria-controls="db-emote-panel"`；网格是 `role="tabpanel"` + `aria-labelledby`（指向当前 tab 的 id）。选中态挂在 `[aria-selected="true"]` 上，屏幕阅读器读到的与眼睛看到的同一处来源 |
 | 选中态 | **三处同时变**才读得出是 tab：左侧 2px 强调色条 + 底色抬起（`--bg-input`）+ 字重加粗。只换底色或只加下划线都会被读成「一排按钮」 |
 | 键盘 | roving tabindex：只有选中的那个 tab 可 Tab 到（`tabindex=0`，其余 `-1`），进入后 `↑` / `↓` 循环换组、`Home` / `End` 跳首尾，焦点跟着选中项走；`:focus-visible` 有独立描边 |
-| 滚动 | **两列各自滚、且都与网格同高**（`height: var(--emote-grid-h)`）：组多时轨道自己上下滚，表情多时网格自己滚。轨道的滚动条按 §9.2 的全局规则**盒宽恒为 0、一个像素都不画**，为它预留空槽的 `scrollbar-gutter` 也已删除 —— 滚动条盒宽恒为 0，故槽恒为 0，出不出滚动条都不改轨道宽度，**因此不挤窄右边的网格**（冒烟按 `panelEmoteRailScrollable` / `panelEmoteRailKeepsGridWidth` 断言） |
+| 滚动 | **两列各自滚、且都与网格同高**（`height: var(--emote-grid-h)`）：组多时轨道自己上下滚，表情多时网格自己滚。轨道的滚动条按 §9.2 的全局规则**盒宽恒为 0、一个像素都不画**，为它预留空槽的 `scrollbar-gutter` 也已删除（盒宽恒为 0 ⇒ 槽恒为 0），出不出滚动条都不改轨道宽度，**因此不挤窄右边的网格**（冒烟按 `panelEmoteRailScrollable` / `panelEmoteRailKeepsGridWidth` 断言） |
 | 关面板 | **顶上没有关闭按钮**（三个面板都不带标题与关闭，`db-panel-close` 这个钩子**整个界面都不再提供**）：① 再点一次工具行的「表情」；② 点**面板与输入区之外**的任何地方（`pointerdown` 捕获阶段监听；面板在文档流里、不带遮罩，所以点哪儿都能收）。**判据是「面板之外」，不是「输入区之外」**（面板与输入区是兄弟节点，只判输入区会把面板内部的按下当成外面，真鼠标点 tab 先发 `pointerdown`、面板当场卸载）。因此三块都算「里面」：输入区、展开中的面板、面板自己弹出的右键菜单（短语的「编辑 / 删除」）。冒烟按 `panelSurvivesTabSwitch` / `panelStaysOnInsidePress` / `panelClosesOnChatPress` 断言（复现必须补一次真实的 `pointerdown`：`.click()` 只发 click 事件、绕过那条监听） |
 
 | 分组（`package_kind`） | 说明 |

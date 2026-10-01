@@ -1467,7 +1467,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 **滚动能力一项不减**：只是不画条、不留槽。去掉条之后「这里还能滚」靠**内容被切边**自证（弹幕流另有「N 条新消息 · 回到最新」，§7.2）。
 
-**三处 `scrollbar-gutter: stable` 一并删除**（`.listPage` / `.scroller` / `.emoteRail`）：滚动条盒宽恒为 0 → 槽恒为 0，留着等于给一条永远不存在的滚动条预留空槽。判据不变（右边缘与左右留白不因内容溢出而变），冒烟按 `listPageRightEdgeStable` / `listPageMarginsSymmetric` 断言。
+**三处 `scrollbar-gutter` 一并删除**（`.listPage` 是 `stable both-edges`，`.scroller` / `.emoteRail` 是 `stable`）：滚动条盒宽恒为 0 → 槽恒为 0，留着等于给一条永远不存在的滚动条预留空槽。判据不变（右边缘与左右留白不因内容溢出而变），冒烟按 `listPageRightEdgeStable` / `listPageMarginsSymmetric` 断言。
 
 **两套取值、来源标注与对比度**（`app.module.css` 令牌段逐行同款标注；日后拿取色器核过实物，把对应行从【B】改成【A】并写明核验方式与日期，**不许**把【B+】的推算值悄悄升级成【A】）：
 

@@ -193,17 +193,34 @@
     out.adminFormRowNoWrap = !!adminFormRow &&
       getComputedStyle(adminFormRow).flexWrap === "nowrap";
     // ---- item 4：批量图标钮（第 1 排末尾）—— 同样是图标钮，aria-pressed 说明它是**模式**；
-    //      打开态从透明底换成强调色填充（与工具行的选中态同一套语言）。
+    //      关闭态 = 输入框同色系的灰底（`--bg-input`），打开态换成强调色填充（与工具行的选中态
+    //      同一套语言；打开那一半由下面 `adminBatchOnIsAccentFill` 验）。
     var adminBatchBgOff = adminFormBatch
       ? getComputedStyle(adminFormBatch).backgroundColor : null;
+    // 令牌的**计算色**。`createElement` 探针这套写法在别的切片里叫 `cssColorOf` —— 那是各切片
+    // 自己在**共用同一条作用域**里 `var` 出来的，同名会互相覆盖，所以这里另起一个名字。
+    var adminColorOfToken = function (name) {
+      var colorProbe = document.createElement("span");
+      colorProbe.style.color = "var(" + name + ")";
+      document.body.appendChild(colorProbe);
+      var probeValue = getComputedStyle(colorProbe).color;
+      colorProbe.parentNode.removeChild(colorProbe);
+      return probeValue;
+    };
     out.adminBatchIsIconButton = !!adminFormBatch &&
       adminFormBatch.innerText.trim() === "" &&
       !!adminFormBatch.querySelector("svg") &&
       (adminFormBatch.getAttribute("aria-label") || "").length > 0 &&
       (adminFormBatch.getAttribute("title") || "").length > 0 &&
       adminFormBatch.getAttribute("aria-pressed") === "false";
-    out.adminBatchOffIsTransparent = adminBatchBgOff === "rgba(0, 0, 0, 0)" ||
-      adminBatchBgOff === "transparent";
+    // 「关闭态透明」是**旧口径**：2026-09-29 的 PR #38 给 `.adminBatchToggle:not(.adminToggleOn)`
+    // 加了 `background: var(--bg-input)`（CSS 注释写明「未选态灰底」是有意设计），但那一次既没同步
+    // 这条断言（旧名 `adminBatchOffIsTransparent`），也没同步 `docs/ui.md` 的口径 —— 它从那天起
+    // 一路红到今天，与本批改动无关（干净的 `main` 上跑同一场景同样红）。这里对齐到**实现**：
+    // 关闭态 = `--bg-input`，不再要求透明。
+    out.adminBatchOffUsesInputFill = !!adminFormBatch &&
+      adminBatchBgOff === adminColorOfToken("--bg-input");
+    out.adminBatchOffBg = adminBatchBgOff;
     // 走一遍三个 tab：切过去之后**只有这一块**的列表在 DOM 里（行数由 adminPanelItemCounts 记账）
     var adminWalk = async function () {
       var seen = {};

@@ -320,7 +320,7 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `35-cheap-gift.mjs` | `cheapgift` / `switchscope` 两枚低价礼物开关 |
 | `36-status-poll.mjs` | 开播 / 下播状态自动更新（实时事件 + 列表页周期） |
 | `37-anchor-room.mjs` | 「我的直播间」（issue202609241553）：按钮只在「有直播间」的行、贴右端隔离；打开对话框预取各账号房间（`anchorPrefetchOnOpen`）；跨账号管理（`anchorAlt*`）；标题 / 两级联动分区 / **分区改动即存**（`anchorAreaSetCalled`）；开播·下播独占一行；开播被身份校验挡住弹提示框（`anchorGate*`）、开播成功后推流参数（`anchorConfig*`）；读失败与没开通直播间（`anchorNoRoom*`）；**ROOM_CHANGE 自动更新标题**（`anchorTitleUpdatedByRoomChange`） |
-| `39-no-scrollbars.mjs` | 全局不画滚动条（`noScrollbar*` 一组）：全量扫描，可竖向滚的元素逐个断言「滚动条盒宽 = 0」+ `scrollbar-width` 计算值为 `none`；表情 / 短语 / 筛选 / 房管四面板走真实路径打开后各扫一遍（短语面板内容不够就地补齐）；弹幕流滚动能力没丢 |
+| `39-no-scrollbars.mjs` | 全局不画滚动条（`noScrollbar*` 一组）：全量扫描，**竖轴 / 横轴都挑**（ `scrollHeight > clientHeight` 且 `overflowY` 可滚，或 `scrollWidth > clientWidth` 且 `overflowX` 可滚），逐轴断言「滚动条盒 = 0」+ `scrollbar-width` 计算值为 `none`；表情 / 短语 / 筛选 / 房管四面板走真实路径打开后各扫一遍（短语面板内容不够就地补齐；房管面板开之前要**自己把 `is_admin` 身份发回来** —— 否则 ⋯ 菜单里没有「房管面板」那一项）；`.adminRail` / `.adminName` 另有一层**定点覆盖**（`noScrollbarAdminRailPolicy` / `noScrollbarAdminNamePolicy` / `noScrollbarAdminHorizCovered`）：这两个容器原先各自写死的 `::-webkit-scrollbar { display: none }` 已删、现在靠全局那一条兜住，且它们是否溢出由夹具决定、量不到几何，故改读 `scrollbar-width` 计算值；弹幕流滚动能力没丢。**各面板是否溢出（ `*OverflowPx` / `*ScrollerCount`）一律只记值不作闸门** —— 它随视口变化（宽屏一行排得多就不溢出），挂成闸门会给出与需求无关的红 |
 
 | 夹具 | 出处 | 覆盖什么 |
 |---|---|---|

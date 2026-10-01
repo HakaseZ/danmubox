@@ -459,6 +459,110 @@
     }
     out.tabDragBlockRan = tabDragBlockRan;
 
+    // ---- #18（本批追加）：标签条**鼠标滚轮横向滚动**。
+    //      溢出之后，鼠标滚轮（竖向那一路）应当横向滚它 —— 实现是一条挂在 db-room-tabs 上的
+    //      **原生非 passive** wheel 监听：ctrlKey（捏合缩放）/ 横向主导（|deltaX| > |deltaY|）/
+    //      没有溢出 三种情况一律**不接管**，其余按 deltaMode 归一化后推 scrollLeft，
+    //      且**只有真的推动了才 preventDefault** —— 推到头还吞事件的话，父级 / 页面就再也
+    //      滚不动了（触摸板上「滚过头」会整块卡死），所以这也是一条边界。
+    //      判据全走对外可观察面：真实 WheelEvent 派发到标签条上，读 scrollLeft 与 defaultPrevented。
+    var tabWheelBlockRan = false;
+    try {
+      var wheelStrip = byTestId("db-room-tabs");
+      // 准入前提①：标签条真的在画面上（上一段之后房间页可能停在沉浸模式 / 列表页）
+      if (!wheelStrip || getComputedStyle(wheelStrip).display === "none" ||
+          rect(wheelStrip).width < 1) {
+        throw new Error("标签条不可见（房间页没停在可见状态？）");
+      }
+      // 准入前提②：标签条**真的溢出** —— 不溢出时「不接管」才是正解，什么都量不出来。
+      // 上一段开过 20 个房间；若这一刻没溢出（房间被关掉了？），这里自己再补一批并刷一次
+      // rooms_list（走的是真实路径：⋯ → 刷新连接），而不是拿一个不溢出的标签条假绿。
+      var wheelOverflow = function () { return wheelStrip.scrollWidth - wheelStrip.clientWidth; };
+      var wheelRefresh = async function () {
+        byTestId("db-header-more").click();
+        await sleep(250);
+        var item = buttonWith(byTestId("db-context-menu"), "刷新连接");
+        if (item) item.click();
+        await sleep(900);
+        return !!item;
+      };
+      if (wheelOverflow() <= 0) {
+        window.__addRooms(20);
+        await wheelRefresh();
+      }
+      out.tabWheelOverflowPx = Math.round(wheelOverflow() * 10) / 10;
+      if (wheelOverflow() <= 0) {
+        throw new Error("标签条没溢出（__addRooms 没生效？）：滚轮横滚没有可观察面");
+      }
+      /** 派发一枚真实 WheelEvent 到标签条上（监听挂在这个元素上），把事件本身交回来。 */
+      var wheelFire = async function (opts) {
+        var ev = new WheelEvent("wheel", {
+          bubbles: true, cancelable: true, deltaMode: 0,
+          deltaX: opts.deltaX || 0, deltaY: opts.deltaY || 0, ctrlKey: !!opts.ctrlKey,
+        });
+        wheelStrip.dispatchEvent(ev);
+        await sleep(180);
+        return ev;
+      };
+
+      // ---- ① 竖向滚轮 → 横向滚标签条
+      wheelStrip.scrollLeft = 0;
+      await sleep(200);
+      var wheelFrom = wheelStrip.scrollLeft;
+      var wheelV1 = await wheelFire({ deltaY: 120 });
+      out.tabWheelVerticalScrolls = wheelFrom === 0 && wheelStrip.scrollLeft > wheelFrom;
+      // 真的推动了 ⇒ 事件被接管（只有真的移动了才 preventDefault）
+      out.tabWheelVerticalOwned = wheelV1.defaultPrevented === true;
+      // 归零之后**再滚一次**仍然要变（同 tabStripScrollsWithHiddenScrollbar 的口径）：
+      // 只验一次会漏掉「第一次是碰巧 / 滚完就卡住」这两种
+      wheelStrip.scrollLeft = 0;
+      await sleep(200);
+      var wheelV2 = await wheelFire({ deltaY: 120 });
+      out.tabWheelScrollsAgainAfterReset = wheelStrip.scrollLeft > 0 &&
+        wheelV2.defaultPrevented === true;
+      out.tabWheelDeltaPx = Math.round(wheelStrip.scrollLeft * 10) / 10;
+
+      // ---- ② 反面对照：**横向主导**的事件不接管（交给原生横滚）
+      wheelStrip.scrollLeft = 0;
+      await sleep(200);
+      var wheelXBefore = wheelStrip.scrollLeft;
+      var wheelX = await wheelFire({ deltaX: 120 });
+      // 判据落在 defaultPrevented 上：监听只在**真的接手**时才 preventDefault。
+      // 合成 wheel 会不会触发引擎自己的原生横滚由引擎决定（不受控），所以「scrollLeft 不变」
+      // 只作为**值**记进快照，不作闸门 —— 免得拿引擎差异当产品问题。
+      out.tabWheelHorizontalNotOwned = wheelX.defaultPrevented === false;
+      out.tabWheelHorizontalScrollLeftPx =
+        Math.round((wheelStrip.scrollLeft - wheelXBefore) * 10) / 10;
+      // ctrlKey（捏合缩放）同理不接管
+      var wheelC = await wheelFire({ deltaY: 120, ctrlKey: true });
+      out.tabWheelCtrlNotOwned = wheelC.defaultPrevented === false;
+
+      // ---- ③ 到头之后**不再吞事件**：滚到最右端再滚一次，事件必须放行
+      wheelStrip.scrollLeft = wheelStrip.scrollWidth;
+      await sleep(250);
+      var wheelAtEnd = wheelStrip.scrollLeft;
+      var wheelEnd = await wheelFire({ deltaY: 240 });
+      out.tabWheelAtEndScrollLeftPx = Math.round(wheelAtEnd * 10) / 10;
+      out.tabWheelNoSwallowAtEnd = wheelEnd.defaultPrevented === false &&
+        wheelStrip.scrollLeft === wheelAtEnd;
+      wheelStrip.scrollLeft = 0;
+      await sleep(200);
+      snap();
+      tabWheelBlockRan = true;
+    } catch (e) {
+      out.tabWheelBlockError = String((e && e.stack) || e);
+      // 出错也要把断言字段**写出来**（docs/testing.md §9.3 ③）：字段缺席 = 断言静默不跑，
+      // 那比红更难发现。
+      out.tabWheelVerticalScrolls = false;
+      out.tabWheelVerticalOwned = false;
+      out.tabWheelScrollsAgainAfterReset = false;
+      out.tabWheelHorizontalNotOwned = false;
+      out.tabWheelCtrlNotOwned = false;
+      out.tabWheelNoSwallowAtEnd = false;
+      snap();
+    }
+    out.tabWheelBlockRan = tabWheelBlockRan;
+
     // 收尾就停在**未连接（灰）**那一档：最后那张截图因此看得到灰点（两处都是灰的）。
     snap();
 

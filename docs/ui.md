@@ -221,7 +221,7 @@
 | 项 | 规则 |
 |---|---|
 | 标签条 | **只在房间页里渲染**（列表页已有「已连接房间」卡片列表，§2.2）。已打开房间的标签，按打开顺序排列；激活标签高亮，标签上的圆点与房间头那颗**同一个东西**（同一判据、同一套 `--live-*` 令牌，见 §3.1）；标签的 `title` 里带这颗点的文字。标签上的名字是**主播名**（`anchor_uname`，取不到才退回直播间标题，标题也没有才退到「房间 <号>」——口径同 §2.2），**不显示房间号** |
-| 标签条滚动 | 开再多也**不把单枚标签挤窄**：每枚标签有自己的最小宽度（`--tab-min-w` = **96px**：状态点 8 + 间距 4 + 左右内边距 16 + 边框 2 = 30px 的「壳」，余下 66px 在 `--fs-2` 下约 4–5 个汉字），`flex: 0 0 auto` 关掉 flex 收缩；超出的部分由标签条**横向滚动**（`overflow-x: auto`；`overscroll-behavior-x: contain` 就地截断越界滚动链）。触摸的横滑是**滚动**（`touch-action: pan-x`），不是拖动排序。**这条滚动条不画**：macOS 是覆盖式滚动条，浮在内容之上，横滚时那条滑块正好压在标签文字上 —— 用 `scrollbar-width: none` 加 `.tabs::-webkit-scrollbar { display: none }`（两条都要：现网 Android WebView 是 Chromium 113–133，正好跨过新 API 的线）把它整个隐藏。可滚靠的是标签被切边 + 拖动排序 + 滚轮 / 触控盘 / 触摸 pan，**不靠**滚动条自证；`scrollbar-gutter: stable` 不再使用（滚动条永不绘制 → 槽恒为 0）。冒烟按 `tabStripScrollbarThicknessPx` / `tabStripNoScrollbarSpace` / `tabStripScrollsWithHiddenScrollbar` 断言 |
+| 标签条滚动 | 开再多也**不把单枚标签挤窄**：每枚标签有自己的最小宽度（`--tab-min-w` = **96px**：状态点 8 + 间距 4 + 左右内边距 16 + 边框 2 = 30px 的「壳」，余下 66px 在 `--fs-2` 下约 4–5 个汉字），`flex: 0 0 auto` 关掉 flex 收缩；超出的部分由标签条**横向滚动**（`overflow-x: auto`；`overscroll-behavior-x: contain` 就地截断越界滚动链）。**滚轮 = 横滚**（补齐 Windows 端）：Windows 鼠标滚轮只产生 `deltaY`，而标签条只有横向可滚（纵向没有溢出），原生无处可去 —— 纵向滚轮量由一条挂在标签条上的**原生非 passive `wheel` 监听**换算成 `scrollLeft`。必须**原生**注册：React 的 `onWheel` 走根容器上的 passive 监听，`preventDefault()` 是空操作（与同组件那条拖动排序用的非 passive `touchmove` 同一种形态）。三条**不接管**（都在读写 `scrollLeft` 与 `preventDefault()` **之前**早退）：`ctrlKey`（缩放 / 捏合）、横向分量绝对值大于纵向分量（触控板横滑交给原生，保 1:1 手感，也避免与原生横滚叠成双倍）、标签条没溢出（`scrollWidth - clientWidth <= 0`，冒烟临时抻宽 `clientWidth` 造出这一前提）；且**只有真的挪动了 `scrollLeft` 才 `preventDefault()`**（滚到头被 clamp 回原值，事件放还外层）。换算按 `deltaMode`：0 = 像素 ×1、1 = 行 × `TAB_WHEEL_LINE_PX`（16）、2 = 页 × `clientWidth`；直接写 `scrollLeft`、**不用** `scrollBy({ behavior: "smooth" })`（会排队、连滚手感拖沓），故位移**同步**生效。触摸的横滑仍是**滚动**（`touch-action: pan-x`），不是拖动排序；Mac 触控板横滑、移动端手指 pan、鼠标拖动排序、点击切房间**全部照旧**。范围：**只限顶部房间标签条**，**不含**房管面板的分组 tab 轨道（§4.9）—— 只有这里有可能超出。**这条滚动条不画**：走 §9.2 那条**全局**规则（全站都不画），不再是 `.tabs` 的窄例外。可滚靠的是标签被切边 + 拖动排序 + 滚轮 / 触控盘 / 触摸 pan，**不靠**滚动条自证。冒烟按 `tabStripScrollbarThicknessPx` / `tabStripNoScrollbarSpace` / `tabStripScrollsWithHiddenScrollbar` 断言；滚轮那一组按 `tabWheelVerticalScrolls` / `tabWheelVerticalOwned` / `tabWheelScrollsAgainAfterReset` / `tabWheelHorizontalNotOwned` / `tabWheelCtrlNotOwned` / `tabWheelNoSwallowAtEnd` / `tabWheelNoOverflowNotOwned` 断言（清单见 `docs/testing.md`） |
 | 拖动排序 | **指针事件**（鼠标与触摸同一套；HTML5 拖放在触摸下不发 `dragstart`，因此不用）：鼠标横向拖过 **5px** 阈值才进入拖拽态，低于阈值松手仍是**点击**（切房间）；触摸要**先按住 400ms** 才算「拿起来」（横着一划仍然是**滚动**：`touch-action: pan-x` 让浏览器接管手势并回一个 `pointercancel`，那次按压随之作废）。拖动中被拖那一枚半透明（`data-dragging`）、目标位插一根强调色指示条（`db-tab-drop`）。松手重排 store 的 `rooms`（`moveRoom`，不是就地改写），**`activeRoomId` 不变** —— 拖的是排列，不是切房间：拖动之后浏览器补发的那一下 `click` 被吞掉，**且只有「真的挪过」才吞** —— 原地长按再松手是慢点，仍按点击切房间。**触摸下「滚动 / 拖动」的分工靠一条常驻的非 passive `touchmove`**：浏览器在 **touchstart 那一刻**就把 `touch-action` 快照给手势识别器了，拿起来之后再改 CSS（`.tabsDragging { touch-action: none }`）或在 `pointermove` 上 `preventDefault()` 都拦不住已经起跑的手势。那条挂在标签条上的监听只在「拿起来之后」`preventDefault()`，没拿起来时一次都不拦。拖动中标签条**不做边缘自动滚动**：要跨过一屏以外的位置，先滚到目标附近再拖（拖到首位 / 末尾本身是支持的，落点按标签中点判、下标两侧夹取）。边界：只有一个房间时整条标签条不渲染；拖动中被拖的房间被关掉（上游快照不再包含它）则整次作废、顺序不动 |
 | 顺序的作用域 | **会话内有效**：不新增偏好键、不跨重启保留（房间列表本身是会话态，`rooms_list` 才是集合的事实来源）。上游快照落地时只改**集合** —— 已有的房间按界面现有顺序留住，新出现的房间排到末尾（`store.mergeRoomOrder`）；否则切一次房间就会重拉一次快照，拖过的顺序当场弹回上游那一份 |
 | 多标签共存 | 已打开的房间保留各自的长连接与**会话缓冲**；切换标签只切换**渲染**，不断开、不清空缓冲。**界面本地状态一律重置**：弹出面板（表情 / 短语 / 筛选）与房管面板、房管确认条、右键菜单、举报条、礼物栏的折叠与否、弹幕列表的滚动位置与「跟随」开关，全部回到初始值 —— 只有**输入草稿按房间各留一份**（正文 + 回复目标 + @，§6.5.1）。**不是**把整页重挂（重挂会连草稿一起丢） |
@@ -721,7 +721,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 - **三个 tab**：`role=tablist` + 三个 `role=tab` + `role=tabpanel`，与表情分组**同一套 WAI-ARIA tabs 口径**（`aria-selected` / `aria-controls` / roving tabindex；←→ 换 tab、Home / End 跳首尾，焦点跟着选中项走；选中态挂在 `aria-selected` 上，另有 `:focus-visible`）。tab 文案**就是名单名**（「禁言」/「黑名单」/「屏蔽词」），**不带计数**——条数由名单自己的芯片数给出，不在 tab 上另算一份。**一次只渲染当前 tab 的那一块**（第 1 排 + 错误条 + 名单 + 底部的批量条），所以任一时刻面板里最多只有一条错误条。
 - **单点动作在右键菜单里**：名单行内不再挂动作按钮（与消息行同一条口径），右键名单行弹出该 tab 对应的那一个动作（`db-context-menu`）。
-- **批量**：**第 1 排末尾**的批量图标钮（`data-testid="db-admin-batch"`，`aria-pressed`，打开时从透明底换成强调色填充；图标是「清单 + 勾」——两行「勾 + 名字」，正是打开批量后名单的样子，规范同 §3.1）打开后**点行即选中**（行高亮 = 已选中，**不挂复选框**；键盘 `Tab` 聚焦后 Enter / Space 同样切换），面板**最底部向上展开一行**动作条（`data-testid="db-admin-batch-bar"`）：该 tab 的「全选」/「取消全选」（`db-admin-select-all`）、「已选 N 项」、该 tab 的批量动作（`db-admin-batch-action`）。批量只作用当前 tab，**换 tab / 关批量即清空勾选**；勾选数按**当前列表**算——写成功后重读三块，已经不在名单里的勾选自动落下去，「已选 N 项」与按下的对象因此永远一致。
+- **批量**：**第 1 排末尾**的批量图标钮（`data-testid="db-admin-batch"`，`aria-pressed`，**关闭态灰底**（`--bg-input`，与输入框同色系；2026-09-29 起，**不再是透明底** —— 旧口径从那一刻起作废），打开换成强调色填充；图标是「清单 + 勾」——两行「勾 + 名字」，正是打开批量后名单的样子，规范同 §3.1）打开后**点行即选中**（行高亮 = 已选中，**不挂复选框**；键盘 `Tab` 聚焦后 Enter / Space 同样切换），面板**最底部向上展开一行**动作条（`data-testid="db-admin-batch-bar"`）：该 tab 的「全选」/「取消全选」（`db-admin-select-all`）、「已选 N 项」、该 tab 的批量动作（`db-admin-batch-action`）。批量只作用当前 tab，**换 tab / 关批量即清空勾选**；勾选数按**当前列表**算——写成功后重读三块，已经不在名单里的勾选自动落下去，「已选 N 项」与按下的对象因此永远一致。
 - **数据预载与刷新（无手动刷新按钮）**：**连上有房管权限的房间就把三块加载好**（`RoomView` 里依赖 `[canAdmin, room.room_id]` 的 effect——身份是异步到的，`isAdmin` 必须在依赖里，否则进房那一帧按无权限渲染、这一批数据永远不拉），这一趟就是 6.14 的**首波**（三条只读列表**并发取全**）。**维护期 = 房间打开且有权限期间**（需求 6.16）：按 5 分钟周期静默重拉三块（原 60 秒周期、以及「只在面板展开期跑」都已废弃：房管面板不是高频功能，无差别轮询既招风控、又无谓打上游），链条式调度（不重叠）、不可见整拍跳过、失败按 5 → 10 → 20 → 40 分钟封顶退避、成功复位，失去权限 / 切房 / 卸载即停，落地前复核 `activeRoomId` 仍是它（防串房）。**名单缓存在本次会话内常驻**：收起 / **重开面板不触发整段重读**（直接复用缓存，靠上面的后台维护保持新鲜），只在四个作废点（移除房间 / 切房 / 关房 / 断开）与换人时清空。写操作成功后自动重读三块（以远端为准，不在本地猜上游怎么变）。
 - **增量加载（水位 / 去重 / 在途锁 / 终点）**：三块各先拉 **100 条**（`ADMIN_PAGE`——本文旧版写「30 条」、`store.ts` 早已是 100，属常量漂移，已按代码真值统一），名单滚到底再补 **10 条**直到翻完（屏蔽词上游无分页，前端切片）。**水位按上游口径**：续翻用 `AdminListSlice.next_offset`，**不是**去重后的列表长度——否则会在同一段反复取回、永远翻不完（6.7）。**追加前按 uid 去重**，列表有界（≤ 上游 `total`，6.8）。**「补一段」加在途锁与终点判定**：同一块已在取就忽略这次触底（滚动风暴压成串行），`done` 为真不再打上游（6.9）。**重读保留已加载水位**——按手上已有的条数取，用户翻到一半不会被打回首屏（6.10）。**首波之后串行**：三条只读列表在首波（并发取全）完成之后压成串行 / 节流（6.17）。禁言那份每页只有 10 条，适配器内部翻页 + 限速（150–250ms / 页），一次翻完整份会连发几十次 POST 被上游风控挡回 HTTP 412（契约 §7 的 `admin_silent_list` 因此改成分段取；单次响应体量封顶时返回 `done: false` 与下一游标，由前端后台继续补齐，封顶不会让条目永久取不到，6.15）。
 - **换房 / 重读作废在途响应**：取数带**世代号**（口径同 `anchorRoomSeq`），换房 / 重读 / 四个作废点自增；晚到的旧响应整份丢弃，不混进新列表、不覆盖整段重读（6.12）。
@@ -1004,7 +1004,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 语义 | `role="tablist"` + `aria-orientation="vertical"`，每个 tab `role="tab"` + `aria-selected` + `aria-controls="db-emote-panel"`；网格是 `role="tabpanel"` + `aria-labelledby`（指向当前 tab 的 id）。选中态挂在 `[aria-selected="true"]` 上，屏幕阅读器读到的与眼睛看到的同一处来源 |
 | 选中态 | **三处同时变**才读得出是 tab：左侧 2px 强调色条 + 底色抬起（`--bg-input`）+ 字重加粗。只换底色或只加下划线都会被读成「一排按钮」 |
 | 键盘 | roving tabindex：只有选中的那个 tab 可 Tab 到（`tabindex=0`，其余 `-1`），进入后 `↑` / `↓` 循环换组、`Home` / `End` 跳首尾，焦点跟着选中项走；`:focus-visible` 有独立描边 |
-| 滚动 | **两列各自滚、且都与网格同高**（`height: var(--emote-grid-h)`）：组多时轨道自己上下滚，表情多时网格自己滚。轨道用 `scrollbar-gutter: stable` 预留滚动条的槽，出不出滚动条都不改轨道宽度，**因此不挤窄右边的网格**（冒烟按 `panelEmoteRailScrollable` / `panelEmoteRailKeepsGridWidth` 断言） |
+| 滚动 | **两列各自滚、且都与网格同高**（`height: var(--emote-grid-h)`）：组多时轨道自己上下滚，表情多时网格自己滚。轨道的滚动条按 §9.2 的全局规则**盒宽恒为 0、一个像素都不画**，为它预留空槽的 `scrollbar-gutter` 也已删除（盒宽恒为 0 ⇒ 槽恒为 0），出不出滚动条都不改轨道宽度，**因此不挤窄右边的网格**（冒烟按 `panelEmoteRailScrollable` / `panelEmoteRailKeepsGridWidth` 断言） |
 | 关面板 | **顶上没有关闭按钮**（三个面板都不带标题与关闭，`db-panel-close` 这个钩子**整个界面都不再提供**）：① 再点一次工具行的「表情」；② 点**面板与输入区之外**的任何地方（`pointerdown` 捕获阶段监听；面板在文档流里、不带遮罩，所以点哪儿都能收）。**判据是「面板之外」，不是「输入区之外」**（面板与输入区是兄弟节点，只判输入区会把面板内部的按下当成外面，真鼠标点 tab 先发 `pointerdown`、面板当场卸载）。因此三块都算「里面」：输入区、展开中的面板、面板自己弹出的右键菜单（短语的「编辑 / 删除」）。冒烟按 `panelSurvivesTabSwitch` / `panelStaysOnInsidePress` / `panelClosesOnChatPress` 断言（复现必须补一次真实的 `pointerdown`：`.click()` 只发 click 事件、绕过那条监听） |
 
 | 分组（`package_kind`） | 说明 |
@@ -1133,7 +1133,7 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 | 状态 | 进入条件 | 行为 | 退出条件 |
 |---|---|---|---|
 | 跟随最新 `following` | 进入房间且 `ui.auto_scroll = true`；点击「回到最新」；滚动到距底 ≤ 8px | 每次 flush 后定位到列表底部；隐藏「回到最新」 | 距底 > 8px |
-| 用户暂停 `paused` | 上滑 / 拖动滚动条使距底 > 8px | 冻结视口位置；新消息不改动 `scrollTop`；显示「N 条新消息 · 回到最新」 | 点击「回到最新」；滚回距底 ≤ 8px |
+| 用户暂停 `paused` | 上滑 / 滚轮上滚使距底 > 8px（滚动条全站不画，没有可拖的滑块，§9.2） | 冻结视口位置；新消息不改动 `scrollTop`；显示「N 条新消息 · 回到最新」 | 点击「回到最新」；滚回距底 ≤ 8px |
 | 悬停暂停 `hovered` | `ui.pause_on_hover = true` 且鼠标进入聊天流区域 | 与 `paused` 相同的冻结行为，但不显示「回到最新」 | 鼠标离开后回到进入前的状态；触控设备不进入该状态 |
 | 非激活标签 `background` | 该房间不是当前标签 | 不入渲染队列；连接保持、会话缓冲照常追加 | 切回该标签 |
 
@@ -1445,9 +1445,29 @@ Android 的系统返回**先在应用内消化，兜底才退出应用**。原�
 
 浅色主题（`ui.theme`）**不是第二套样式**：只在 `:root[data-theme="light"]` 里给这些槽位换一组值，组件规则一行都不用改。`:root` 是**深色基座**（不另开 `:root[data-theme="dark"]`，也**没有** `@media (prefers-color-scheme: dark)`——系统解析只发生在 `App.tsx`，同一份值只有一个来源）。原生控件跟随主题：`index.css` 给 `accent-color: var(--accent)`（含 `color-scheme`）。新增样式时不得再写字面颜色 / 间距 / 圆角 / 字号——要新值就先加令牌。**长度令牌（`--row-line` / `--avatar` / `--badge-h` / `--emote` / `--time-col` / `--tap-min` / `--panel-max-h*` / `--sheet-max-h`）不许出现在主题块里**：`--row-line` 被 `@property` 注册后若在 `:root` 显式赋值，`1.5em` 会按根字号（16px）算成 24px 再继承下去，行内三个尺度就此脱钩；`--avatar` 的 `:root` 默认值也必须永远能解析出值，否则行外共用的头像会按原图 512 渲染（回归断言见 `testing.md` §9）。
 
-**滚动条**：`index.css` **不写** `::-webkit-scrollbar` 一族样式 —— 一旦给滚动条写样式（哪怕只是宽度或圆角），WebKit 就会把 macOS 原生的**覆盖式**滚动条（不占宽、自动隐藏）换成**经典**滚动条（占宽、常驻）。两个现象都由它引起：① 窗口高度缩到内容装不下时，滚动条出现并吃掉内容右侧一条 → 「元素右侧往中间回缩」；② 它贴在窗口最右缘，吃掉那几像素的 resize 命中区 → 「窗口右边缘拖不动」。需要「有没有滚动条都不跳」的容器（`.listPage` / `.scroller`）改用 `scrollbar-gutter: stable`（`.listPage` 还带 `both-edges`：居中容器的左右对称）。冒烟按 `listPageRightEdgeStable` / `listPageMarginsSymmetric` 断言。
+**滚动条：全站不画。** `index.css` 落下两条声明，作用于全部元素与伪元素 —— **缺一不可**：
 
-**唯一的窄例外（需求 §2.3）**：只允许**「自己横向滚、纵向不滚」且要的是「彻底不画」而不是「换个样子画」**的容器写 `::-webkit-scrollbar { display: none }`（配 `scrollbar-width: none`），目前**在册只有一处** —— `.tabs`（房间标签条，§2.3 的「标签条滚动」）。理由是滑块不得压在标签文字上，而 macOS 的覆盖式滚动条恰恰浮在内容之上（隐藏它只能用这两条写法）。它不违反「`index.css` 不写 `::-webkit-scrollbar`」那条硬规矩的三条依据：① `display: none` 让滚动条**宽高都为 0、一个像素都不画**（实测 WebKit：同一页给 A 写 `height: 14px` → A 横向槽 14px，A 再加 `display: none` → 槽 0px），既不挤内容也没有常驻轨道 ——两个现象的前提（占位 + 常驻可见）不成立；② 例外**按选择器**生效、不是文档级开关，同一页里没写这两条的容器仍是覆盖式（实测同一文档：写了样式的 A 槽 14px、没写的 B 槽 0px），`.adminRail` 早就在用同一条写法；③ 该容器只横向滚，生不出站在窗口右缘的竖条。**边界**：例外只许 `display: none`，想在滚动条上写宽度 / 圆角 / 颜色前，必须先在 `index.css` 那段注释里补一份同等分量的论证。
+| 声明 | 管哪条引擎路径 |
+|---|---|
+| `*, *::before, *::after { scrollbar-width: none }` | 标准属性这一档（Chromium ≥121 / Safari ≥18.2） |
+| `::-webkit-scrollbar { display: none }` | 更老的 WebKit / Blink —— 现网 Android WebView 是 Chromium 113–133，横跨这条线的两侧 |
+
+只写前一条则旧 WebView 上照旧画条，只写后一条则新引擎上照旧画条，故两条都要有。
+
+**这是「去除」，不是「隐藏」**：`display: none` 之后滚动条**盒宽为 0、一个像素都不画** —— 不占布局宽度，也不参与命中测试。`scrollbar-color: transparent` / `opacity: 0` / `::-webkit-scrollbar-thumb { background: transparent }` 那一类才是隐藏：槽还在、宽度还占、内容照样被挤 —— 那正是用户要排除的「仅隐藏」。
+
+**只许 `display: none`，不许写别的滚动条样式**（宽度 / 圆角 / 颜色一律不许）：一旦给滚动条写样式，WebKit 就把 macOS 的**覆盖式**滚动条（不占宽、自动隐藏）换成**经典**滚动条（占宽、常驻），踩回下面这两个历史 bug。
+
+| 历史 bug（真实教训，勿复现） | 由什么引起 |
+|---|---|
+| ① 窗口高度缩到内容装不下时，滚动条出现并吃掉内容右侧一条 → 「元素右侧往中间回缩」 | 给 `::-webkit-scrollbar` 一族写了样式（哪怕只是宽度或圆角），覆盖式条被换成占位的经典条 |
+| ② 滚动条贴在窗口最右缘，吃掉那几像素的 resize 命中区 → 「窗口右边缘拖不动」 | 同上，且该条常驻可见 |
+
+**不做平台分叉**：macOS / Windows / Android **一套规则**，不按 `data-os` 分叉（为什么选它、否决了什么、代价见 `CHANGELOG.md` 对应条目）。macOS 上的代价只是「滚动 / 悬停时不再闪出那条覆盖式滑块」—— 覆盖式条本来就不占宽，故宽度与布局一处不动。
+
+**滚动能力一项不减**：只是不画条、不留槽。去掉条之后「这里还能滚」靠**内容被切边**自证（弹幕流另有「N 条新消息 · 回到最新」，§7.2）。
+
+**三处 `scrollbar-gutter` 一并删除**（`.listPage` 是 `stable both-edges`，`.scroller` / `.emoteRail` 是 `stable`）：滚动条盒宽恒为 0 → 槽恒为 0，留着等于给一条永远不存在的滚动条预留空槽。判据不变（右边缘与左右留白不因内容溢出而变），冒烟按 `listPageRightEdgeStable` / `listPageMarginsSymmetric` 断言；**全站**那一档按 `noScrollbarZeroGutterEverywhere`（全量扫描：可滚的元素——**竖轴与横轴都挑**——滚动条盒全为 0、且 `scrollbar-width` 计算值为 `none` 或空串）与 `noScrollbarChatNoGutter` 断言；`.adminRail` / `.adminName` 这两个原先各自写死 `display: none` 的横向容器，改按 `noScrollbarAdminHorizCovered` 断言「全局那条规则够得到它们」（清单见 `docs/testing.md`）。
 
 **两套取值、来源标注与对比度**（`app.module.css` 令牌段逐行同款标注；日后拿取色器核过实物，把对应行从【B】改成【A】并写明核验方式与日期，**不许**把【B+】的推算值悄悄升级成【A】）：
 

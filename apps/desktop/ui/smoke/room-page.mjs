@@ -56,6 +56,8 @@
 //   cheapgift / switchscope 两枚低价礼物开关    → 35-cheap-gift.mjs
 //   开播 / 下播状态自动更新                     → 36-status-poll.mjs
 //   「我的直播间」展开区与身份校验提示框        → 37-anchor-room.mjs
+//   标签条鼠标滚轮横滚                          → 33-room-tabs.mjs（tabWheel* 一组）
+//   全局不画滚动条（全量扫描 + 滚动能力不减）   → 39-no-scrollbars.mjs
 //
 // 三条维护约定（拆之前就在，逐条保留）：
 //   1) 断言只依赖对外可观察的行为（DOM 文本 / 几何 / 副作用记录），**不依赖 CSS-module 类名**；
@@ -106,6 +108,7 @@ const BLOCKS = [
   "36-status-poll.mjs",
   "37-anchor-room.mjs",
   "38-title-slot.mjs",
+  "39-no-scrollbars.mjs",
 ];
 const MOCK_PART = "00-mock.mjs";
 const HARNESS_PART = "10-harness.mjs";

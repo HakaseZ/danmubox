@@ -315,7 +315,7 @@ node smoke/run-headless.mjs --precheck         # 不启浏览器的预检闸（�
 | `30-immersive.mjs` | 沉浸模式 |
 | `31-admin.mjs` | `admin` / `panels` 五面板互斥 |
 | `32-top-scroll-account.mjs` | 滚到顶部不被头部压住 / `account` 账号区与账号对话框 |
-| `33-room-tabs.mjs` | 标签条：主播名与圆点 / 拖动排序 / 横向滚动 / 不画滚动条（`tabStrip*`）/ **鼠标滚轮横滚**（`tabWheelBlockRan` 一组：`tabWheelVerticalScrolls` 竖向滚轮推大 `scrollLeft`、`tabWheelVerticalOwned` 接手时 `preventDefault`、`tabWheelScrollsAgainAfterReset` 归零后再滚仍变、`tabWheelHorizontalNotOwned` `deltaX` 主导不接管、`tabWheelCtrlNotOwned` `ctrlKey` 不接管、`tabWheelNoSwallowAtEnd` 到最右端再滚不吞事件；值字段 `tabWheelOverflowPx` / `tabWheelDeltaPx` / `tabWheelHorizontalScrollLeftPx` / `tabWheelAtEndScrollLeftPx`） |
+| `33-room-tabs.mjs` | 标签条：主播名与圆点 / 拖动排序 / 横向滚动 / 不画滚动条（`tabStrip*`）/ **鼠标滚轮横滚**（`tabWheelBlockRan` 一组：`tabWheelVerticalScrolls` 竖向滚轮推大 `scrollLeft`、`tabWheelVerticalOwned` 接手时 `preventDefault`、`tabWheelScrollsAgainAfterReset` 归零后再滚仍变、`tabWheelHorizontalNotOwned` `deltaX` 主导不接管、`tabWheelCtrlNotOwned` `ctrlKey` 不接管、`tabWheelNoSwallowAtEnd` 到最右端再滚不吞事件、`tabWheelNoOverflowNotOwned` 没溢出（临时抻宽造出 `max <= 0`）同样不吞；值字段 `tabWheelOverflowPx` / `tabWheelDeltaPx` / `tabWheelHorizontalScrollLeftPx` / `tabWheelAtEndScrollLeftPx`） |
 | `34-split-panes.mjs` | `splitter` 分割条与长按换位 |
 | `35-cheap-gift.mjs` | `cheapgift` / `switchscope` 两枚低价礼物开关 |
 | `36-status-poll.mjs` | 开播 / 下播状态自动更新（实时事件 + 列表页周期） |

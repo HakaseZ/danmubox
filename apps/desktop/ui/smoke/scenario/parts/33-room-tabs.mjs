@@ -545,6 +545,35 @@
       out.tabWheelAtEndScrollLeftPx = Math.round(wheelAtEnd * 10) / 10;
       out.tabWheelNoSwallowAtEnd = wheelEnd.defaultPrevented === false &&
         wheelStrip.scrollLeft === wheelAtEnd;
+
+      // ---- ④ 第三种「不吞」：标签条**没溢出**时同样放行（票 1 三条早退之一：`max <= 0`）。
+      //      造这个前提**不改房间数**：临时把 strip 用**行内 width** 抻到远宽于内容
+      //      （.tabs 自己不写 width、靠 flex stretch 撑满，行内样式压得住），于是
+      //      scrollWidth 取「内容宽与 clientWidth 的较大者」⇒ max <= 0，正落进那条早退。
+      //      之所以挑这条而不是「把房间掉到只剩两个」：它验的是**这条分支本身**，
+      //      与标签名长度 / 字体 / 语言无关 —— 掉房间那条的前提会被名字长度牵着走。
+      //      ⚠ 用完必须还原（finally）：这一改会让 .shell 横向溢出，带歪后面几段的几何。
+      var wheelSavedWidth = wheelStrip.style.width;
+      var wheelFlatPremise = false;
+      var wheelFlatNotOwned = false;
+      try {
+        wheelStrip.style.width = "5000px";
+        await sleep(150);
+        // 准入前提**自证**：抻宽若没把 max 压到 0（哪天 .tabs 自己写了 width），
+        // 这条就是红的而不是「静默验了个别的」。
+        wheelFlatPremise = wheelStrip.scrollWidth - wheelStrip.clientWidth <= 0;
+        wheelStrip.scrollLeft = 0;
+        await sleep(150);
+        var wheelFlat = await wheelFire({ deltaY: 120 });
+        wheelFlatNotOwned = wheelFlatPremise && wheelFlat.defaultPrevented === false &&
+          wheelStrip.scrollLeft === 0;
+      } finally {
+        if (wheelSavedWidth) wheelStrip.style.width = wheelSavedWidth;
+        else wheelStrip.style.removeProperty("width");
+      }
+      out.tabWheelNoOverflowPremise = wheelFlatPremise;
+      out.tabWheelNoOverflowNotOwned = wheelFlatNotOwned;
+
       wheelStrip.scrollLeft = 0;
       await sleep(200);
       snap();
@@ -559,6 +588,7 @@
       out.tabWheelHorizontalNotOwned = false;
       out.tabWheelCtrlNotOwned = false;
       out.tabWheelNoSwallowAtEnd = false;
+      out.tabWheelNoOverflowNotOwned = false;
       snap();
     }
     out.tabWheelBlockRan = tabWheelBlockRan;
